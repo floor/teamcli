@@ -533,7 +533,10 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
       [join(helperRoot, 'helper-config.json')]: { kind: 'file', mode: 0o600, size: 512 },
       [lobby]: { kind: 'dir', mode: 0o755, size: 64 },
       [frame]: { kind: 'dir', mode: 0o700, size: 96 },
-      [config]: { kind: 'file', mode: 0o600, size: configText.length },
+      // The config embeds the run's temp home, whose path length is platform-specific (macOS
+      // /private/var/folders/… vs Linux /tmp/…: 1031 vs 875 bytes on CI), so report the size
+      // as if the home were a fixed path — the page's example output must hold byte for byte.
+      [config]: { kind: 'file', mode: 0o600, size: configText.split(home).join('/home/user').length },
       [signer]: { kind: 'socket', mode: 0o660, size: 0 },
       [mailbox]: { kind: 'dir', mode: 0o700, size: 64 },
       [audit]: { kind: 'file', mode: 0o600, size: 46 },

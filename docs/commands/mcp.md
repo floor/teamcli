@@ -68,7 +68,7 @@ helper  /usr/local/teamcli-helper
   app/                ok    the bridge script is deployed
   helper-config.json  ok    0600, owner-held (its contents are not read here)
 bridge  ~/.config/team/lobby/mcp-1
-  config          ok    0600, 1031 bytes
+  config          ok    0600, 827 bytes
   seats           ok    beacon -> seat-beacon-1 (seat-beacon-1)
   bridge process  ok    running
   signer socket   ok    ~/.config/team/lobby/mcp-1/signer.sock accepts connections
@@ -201,7 +201,7 @@ ok    signer socket: ~/.config/team/lobby/mcp-1/signer.sock accepts connections 
 ok    bin/bun: executable
 ok    app/: the bridge script is deployed
 ok    helper-config.json: 0600, owner-held (its contents are not read here)
-ok    ~/.config/team/lobby/mcp-1: config: 0600, 1031 bytes
+ok    ~/.config/team/lobby/mcp-1: config: 0600, 827 bytes
 ok    ~/.config/team/lobby/mcp-1: seats: beacon -> seat-beacon-1 (seat-beacon-1)
 ok    ~/.config/team/lobby/mcp-1: bridge process: running
 ok    ~/.config/team/lobby/mcp-1: signer socket: ~/.config/team/lobby/mcp-1/signer.sock accepts connections
