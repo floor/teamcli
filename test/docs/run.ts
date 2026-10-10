@@ -1,6 +1,8 @@
 // Runs one command reference page's examples. The commands are the real ones, in process: the
 // world, the home and the caller are handed in, so no example reaches herdr, a CLI, or the owner's
-// home. A `$ ` line is run, the lines under it must match byte for byte.
+// home. A `$ ` line is run, the lines under it must match byte for byte — so a fixture value
+// derived from a path's length (a size, a count, a width) must canonicalize the path first: the
+// temp home differs in length macOS vs Linux (TMPDIR=<short dir> reproduces ubuntu locally).
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
