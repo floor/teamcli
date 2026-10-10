@@ -200,6 +200,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `issues.shape` | `issues` | 1 | a record is not a task, or the task file is not a list | `team issues` |
 | `issues.invocation` | `issues` | 2 | the invocation can't be read | `team issues extra` |
 | `issues.not-a-repo` | `issues` | 2 | not inside a git repository | `team issues` |
+| `mcp.clear` | `mcp` | 0 | the bridge is clear: doctor found nothing missing | `team mcp doctor` |
+| `mcp.up` | `mcp` | 0 | every observed bridge leg is up | `team mcp status` |
+| `mcp.down` | `mcp` | 1 | at least one leg is down or unknown | `team mcp status` |
+| `mcp.missing` | `mcp` | 1 | doctor found something missing | `team mcp doctor` |
+| `mcp.not-set-up` | `mcp` | 1 | no bridge configuration exists in the lobby folder | `team mcp status` |
+| `mcp.invocation` | `mcp` | 2 | the invocation can't be read | `team mcp` |
 | `messages.none` | `messages` | 0 | nothing is waiting | `team messages` |
 | `messages.shown` | `messages` | 0 | a waiting message was shown and its receipt was written | `team messages` |
 | `messages.file` | `messages` | 1 | the team file can't be read | `team messages` |

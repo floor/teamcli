@@ -485,6 +485,89 @@
         }
       ],
       "hidden": false,
+      "name": "mcp",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "doctor",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team mcp doctor [--json]"
+          ]
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "status",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team mcp status [--json]"
+          ]
+        }
+      ],
+      "usage": [
+        "team mcp status [--json]",
+        "team mcp doctor [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
       "name": "messages",
       "positionals": [],
       "subcommands": [],

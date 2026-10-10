@@ -11,6 +11,7 @@ import type { AddSources } from '../../src/commands/add.ts';
 import type { CheckSources } from '../../src/check/team.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { DownLaunch, DownSources } from '../../src/commands/down.ts';
+import type { McpSources, PathStat } from '../../src/commands/mcp.ts';
 import type { RemoveSources } from '../../src/commands/remove.ts';
 import type { StatusSources } from '../../src/commands/status.ts';
 import type { Launch, UpSources } from '../../src/commands/up.ts';
@@ -231,6 +232,7 @@ export type World = {
   statusSources(): StatusSources;
   watchSources(): WatchSources;
   doctorSources(): DoctorSources;
+  mcpSources(): McpSources;
   /** The recorded npm, GitHub and Linear answers the release page's examples replay. */
   releaseFetch(): Fetch;
   /** The release page's stand-in for the Keychain read: a fixed, deliberate non-real key. */
@@ -493,6 +495,68 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     machine,
   });
 
+  // A machine where the MCP bring-up ran and every leg is up: one helper under the install root,
+  // one bridge under the lobby, one front answering. Nothing here reads a real socket, a real
+  // HTTP endpoint or a real process — every answer is a fixture — so a page's example output is
+  // the same everywhere and needs no network.
+  const mcpSources = (): McpSources => {
+    const helperRoot = '/usr/local/teamcli-helper';
+    const lobby = join(home, '.config', 'team', 'lobby');
+    const frame = join(lobby, 'mcp-1');
+    const config = join(frame, 'bridge.json');
+    const signer = join(frame, 'signer.sock');
+    const mailbox = join(frame, 'mailbox');
+    const audit = join(frame, 'audit.jsonl');
+    // A real Ed25519 SPKI key: the config parser reads it as the deployed loader does.
+    const publicKey = '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXPtFj070wFMReZCEIEoqh6h0qjuWZy4l0lwzQcPVQTM=\n-----END PUBLIC KEY-----\n';
+    const configText = `${JSON.stringify({
+      version: 1,
+      wss_url: 'wss://mcp.example.test/connector',
+      connector_token: 'AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM',
+      queue_hmac_key: 'CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk',
+      relay_public_keys: { 'relay-a': publicKey },
+      seats: [
+        { alias: 'beacon', route: 'seat-beacon-1', key_id: 'seat-beacon-1', public_key: publicKey },
+      ],
+      signer_socket: signer,
+      mailbox_dir: mailbox,
+      audit_file: audit,
+    }, null, 2)}\n`;
+    const stats: Record<string, PathStat> = {
+      [helperRoot]: { kind: 'dir', mode: 0o755, size: 96 },
+      [join(helperRoot, 'keys')]: { kind: 'dir', mode: 0o700, size: 64 },
+      [join(helperRoot, 'queue')]: { kind: 'dir', mode: 0o700, size: 64 },
+      [join(helperRoot, 'state')]: { kind: 'dir', mode: 0o700, size: 64 },
+      [join(helperRoot, 'sock')]: { kind: 'dir', mode: 0o750, size: 64 },
+      [join(helperRoot, 'bin', 'bun')]: { kind: 'file', mode: 0o755, size: 57_000_000 },
+      [join(helperRoot, 'app', 'src', 'connector', 'bridge-main.ts')]: { kind: 'file', mode: 0o644, size: 12_345 },
+      [join(helperRoot, 'helper-config.json')]: { kind: 'file', mode: 0o600, size: 512 },
+      [lobby]: { kind: 'dir', mode: 0o755, size: 64 },
+      [frame]: { kind: 'dir', mode: 0o700, size: 96 },
+      // The config embeds the run's temp home, whose path length is platform-specific (macOS
+      // /private/var/folders/… vs Linux /tmp/…: 1031 vs 875 bytes on CI), so report the size
+      // as if the home were a fixed path — the page's example output must hold byte for byte.
+      [config]: { kind: 'file', mode: 0o600, size: configText.split(home).join('/home/user').length },
+      [signer]: { kind: 'socket', mode: 0o660, size: 0 },
+      [mailbox]: { kind: 'dir', mode: 0o700, size: 64 },
+      [audit]: { kind: 'file', mode: 0o600, size: 46 },
+    };
+    return {
+      home: () => home,
+      helperRoot: () => helperRoot,
+      now,
+      listDir: (path) => (path === lobby ? ['mcp-1'] : null),
+      stat: (path) => stats[path] ?? null,
+      readText: (path) => (path === config ? configText : null),
+      readTail: (path) => (path === audit ? '{"ts":"2026-10-04T08:55:00Z","event":"ws-open"}\n' : null),
+      countSuffix: (dir) => (dir === join(mailbox, 'outbound') ? 2 : dir === join(mailbox, 'inbound') ? 0 : null),
+      probeSocket: async () => 'ok',
+      probeHttp: async () => 401,
+      certExpiry: async () => ({ validTo: '2027-01-02T09:00:00Z', authorized: true }),
+      processRunning: () => true,
+    };
+  };
+
   const downSources = (): DownSources => ({
     sessionRunning: () => (herdr === 'none' ? null : herdr === 'running'),
     agents: () => (herdr === 'running' ? agents() : []),
@@ -628,6 +692,7 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
       };
     },
     doctorSources,
+    mcpSources,
     releaseFetch(): Fetch {
       return (url) => Promise.resolve(releaseAnswers(url));
     },

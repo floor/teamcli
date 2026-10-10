@@ -1361,6 +1361,48 @@
     },
     {
       "code": 0,
+      "command": "mcp",
+      "id": "mcp.clear",
+      "meaning": "the bridge is clear: doctor found nothing missing",
+      "trigger": "team mcp doctor"
+    },
+    {
+      "code": 0,
+      "command": "mcp",
+      "id": "mcp.up",
+      "meaning": "every observed bridge leg is up",
+      "trigger": "team mcp status"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.down",
+      "meaning": "at least one leg is down or unknown",
+      "trigger": "team mcp status"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.missing",
+      "meaning": "doctor found something missing",
+      "trigger": "team mcp doctor"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.not-set-up",
+      "meaning": "no bridge configuration exists in the lobby folder",
+      "trigger": "team mcp status"
+    },
+    {
+      "code": 2,
+      "command": "mcp",
+      "id": "mcp.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team mcp"
+    },
+    {
+      "code": 0,
       "command": "messages",
       "id": "messages.none",
       "meaning": "nothing is waiting",

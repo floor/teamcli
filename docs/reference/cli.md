@@ -304,6 +304,66 @@ Usage:
 
 None.
 
+## `mcp`
+
+Hidden: no
+
+Usage:
+
+    team mcp status [--json]
+    team mcp doctor [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `doctor`
+
+Hidden: no
+
+Usage:
+
+    team mcp doctor [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `status`
+
+Hidden: no
+
+Usage:
+
+    team mcp status [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `messages`
 
 Hidden: no

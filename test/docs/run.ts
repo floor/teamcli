@@ -1,6 +1,8 @@
 // Runs one command reference page's examples. The commands are the real ones, in process: the
 // world, the home and the caller are handed in, so no example reaches herdr, a CLI, or the owner's
-// home. A `$ ` line is run, the lines under it must match byte for byte.
+// home. A `$ ` line is run, the lines under it must match byte for byte — so a fixture value
+// derived from a path's length (a size, a count, a width) must canonicalize the path first: the
+// temp home differs in length macOS vs Linux (TMPDIR=<short dir> reproduces ubuntu locally).
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { basename, dirname, join } from 'node:path';
@@ -15,6 +17,7 @@ import { pr } from '../../src/commands/pr.ts';
 import { runDoctor } from '../../src/commands/doctor.ts';
 import { runDown } from '../../src/commands/down.ts';
 import { runInit } from '../../src/commands/init.ts';
+import { runMcp } from '../../src/commands/mcp.ts';
 import { runRemove } from '../../src/commands/remove.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
@@ -213,6 +216,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'init':
       // No login is probed in a doc run: the skeleton's seat is claude-code's, deterministically.
       return runInit(rest, io, fixture.home, undefined, { loggedIn: () => false });
+    case 'mcp':
+      return runMcp(rest, io, world.mcpSources());
     case 'remove':
       return runRemove(rest, io, world.removeSources());
     case 'send': {

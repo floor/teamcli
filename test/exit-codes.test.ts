@@ -20,6 +20,7 @@ import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { commits } from '../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
+import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
 import { plantMessage, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { runIssues } from '../src/commands/issues.ts';
@@ -2850,6 +2851,72 @@ scene('send.listed', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['--list'], owner, sendHost(place)), 'lead  claude-code');
 });
+
+// --- team mcp: a synthetic helper, bridge and front, under the scene's own temp base. The tree
+// is real (modes, sizes and the config's bytes are read as the command reads them), while the
+// probes that would touch the machine — the socket, the two HTTP requests, the certificate and
+// the bridge process — are fixture answers. Nothing here reaches a live bridge.
+
+const MCP_NOW = new Date('2026-10-10T12:00:00Z');
+const MCP_PUBLIC_KEY = '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXPtFj070wFMReZCEIEoqh6h0qjuWZy4l0lwzQcPVQTM=\n-----END PUBLIC KEY-----\n';
+
+function mcpSynthetic(place: Place, over: Partial<McpSources> = {}): McpSources {
+  const helper = join(place.base, 'helper');
+  mkdirSync(helper, { mode: 0o755 });
+  for (const dir of ['keys', 'queue', 'state']) mkdirSync(join(helper, dir), { recursive: true, mode: 0o700 });
+  mkdirSync(join(helper, 'sock'), { recursive: true, mode: 0o750 });
+  mkdirSync(join(helper, 'bin'), { recursive: true });
+  mkdirSync(join(helper, 'app', 'src', 'connector'), { recursive: true });
+  writeFileSync(join(helper, 'bin', 'bun'), '#!/bin/sh\n', { mode: 0o755 });
+  writeFileSync(join(helper, 'app', 'src', 'connector', 'bridge-main.ts'), '// deployed\n', { mode: 0o644 });
+  writeFileSync(join(helper, 'helper-config.json'), '{}\n', { mode: 0o600 });
+  const lobby = join(place.home, '.config', 'team', 'lobby');
+  const frame = join(lobby, 'mcp-1');
+  mkdirSync(frame, { recursive: true, mode: 0o700 });
+  const signer = join(frame, 'signer.sock');
+  const mailbox = join(frame, 'mailbox');
+  const audit = join(frame, 'audit.jsonl');
+  writeFileSync(join(frame, 'bridge.json'), `${JSON.stringify({
+    version: 1,
+    wss_url: 'wss://bridge.example.test/connector',
+    connector_token: 'AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM',
+    queue_hmac_key: 'CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk',
+    relay_public_keys: { 'relay-a': MCP_PUBLIC_KEY },
+    seats: [{ alias: 'probe', route: 'seat-probe-1', key_id: 'seat-probe-1', public_key: MCP_PUBLIC_KEY }],
+    signer_socket: signer,
+    mailbox_dir: mailbox,
+    audit_file: audit,
+  }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(signer, '', { mode: 0o600 });
+  mkdirSync(mailbox, { mode: 0o700 });
+  writeFileSync(audit, '{"ts":"2026-10-10T11:59:00Z","event":"ws-open"}\n', { mode: 0o600 });
+  return {
+    ...realSources,
+    home: () => place.home,
+    helperRoot: () => helper,
+    now: () => MCP_NOW,
+    // The signer socket's file kind and mode, which a plain file cannot carry on the test's host.
+    stat: (path) => (path === signer ? { kind: 'socket', mode: 0o660, size: 0 } : realSources.stat(path)),
+    probeSocket: async () => 'ok',
+    probeHttp: async () => 401,
+    certExpiry: async () => ({ validTo: '2027-01-02T09:00:00Z', authorized: true }),
+    processRunning: () => true,
+    ...over,
+  };
+}
+
+async function mcpRan(place: Place, argv: string[], over: Partial<McpSources> = {}): Promise<Ran> {
+  const io = testIo(place.root, owner);
+  const code = await runMcp(argv, io, mcpSynthetic(place, over));
+  return { code, out: io.out, err: io.err };
+}
+
+scene('mcp.up', async (place) => show(await mcpRan(place, ['status']), 'state: up'));
+scene('mcp.down', async (place) => show(await mcpRan(place, ['status'], { processRunning: () => false }), 'state: down'));
+scene('mcp.not-set-up', async (place) => show(await mcpRan(place, ['status'], { listDir: () => [] }), 'state: not-set-up'));
+scene('mcp.clear', async (place) => show(await mcpRan(place, ['doctor']), 'nothing missing'));
+scene('mcp.missing', async (place) => show(await mcpRan(place, ['doctor'], { listDir: () => [] }), 'no bridge configuration'));
+scene('mcp.invocation', async (place) => show(await mcpRan(place, []), 'a subcommand is required'));
 
 // Outcomes that are listed and kept, and that no scene can produce. An edit the earlier checks
 // have already validated reads here (add.prepared, add.locked, add.not-restored, approve.revalidate,

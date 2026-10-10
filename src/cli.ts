@@ -29,6 +29,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   release: () => import('./commands/release.ts'),
   usage: () => import('./commands/usage.ts'),
   broker: () => import('./commands/broker.ts'),
+  mcp: () => import('./commands/mcp.ts'),
 };
 
 // The usage below the opening sentence: `team --help`'s first line is package.json's
