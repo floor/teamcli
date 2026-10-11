@@ -19,6 +19,7 @@ import type { Host } from '../launch/execute.ts';
 import { downPlan, type DownSeat } from '../launch/plan.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
+import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { emptySession, readState, updateState, withLock } from '../state.ts';
 import { paneStillRunning, realSources as downSources, stateOf, stateOfPane, typeExit, type DownSources } from './down.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
@@ -435,6 +436,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     }
 
     let kept: string | null = null;
+    let rewrote: string | null = null;
     if (!temporary) {
       const refused = withLock(dir, () => {
         const text = readFileSync(path, 'utf8');
@@ -442,6 +444,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         if (next === text) return null;
         const wrote = writeTeamFile(path, next);
         if (!wrote.ok) return wrote.errors;
+        rewrote = next;
         if (args.flags.has('keep')) kept = next;
         return null;
       });
@@ -451,6 +454,17 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         }
         // exit: remove.locked
         return 2;
+      }
+    }
+    if (rewrote !== null) {
+      // The reach projection follows the file: a removed seat leaves `reach-roster.json` with it
+      // (omission is the revocation signal), and a seat `--keep` stopped stays — the grant is
+      // the file's, not the seat's runtime state. A projection problem is a log line, never a
+      // refusal: the removal itself is done.
+      const refreshed = validateTeamFile(rewrote);
+      if (refreshed.ok && sources.home) {
+        const projectionNote = reachProjectionNote(writeReachProjection(refreshed.team, sources.home));
+        if (projectionNote) logLine(dir, 'remove', describeCaller(caller), projectionNote, sources.now());
       }
     }
     if (kept !== null) {

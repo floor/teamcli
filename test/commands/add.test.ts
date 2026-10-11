@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
@@ -445,6 +445,71 @@ describe('team add', () => {
     const after = loadTeamFile(project, { home });
     expect(after.ok && approvalDifferences(after.team, project, home)).toEqual([]);
     expect(after.ok && after.team.seats.find((seat) => seat.name === 'worker')?.stopped).toBe(false);
+  });
+
+  // The reach seam's command paths: `add` and `remove` write the team file, then regenerate the
+  // projection the bridge and the seat-shuttle daemon read (`src/reach/projection.ts`). The
+  // writer itself is covered in test/seat-reach.test.ts; these two hold the call sites.
+  const REACHED = FILE.replace(
+    '    # the seat stays in this order',
+    '    reach:\n      to: [grokbot]\n    # the seat stays in this order',
+  );
+
+  function reachLobby(): string {
+    const lobby = join(home, '.config', 'team', 'lobby');
+    mkdirSync(lobby, { recursive: true });
+    chmodSync(lobby, 0o700);
+    return lobby;
+  }
+
+  function projected(lobby: string): string[] {
+    const file = JSON.parse(readFileSync(join(lobby, 'reach-roster.json'), 'utf8')) as { seats: { alias: string }[] };
+    return file.seats.map((seat) => seat.alias);
+  }
+
+  test('an added grant lands in the reach projection, keyed by the seat name', async () => {
+    const lobby = reachLobby();
+    approve(REACHED);
+    expect(await runAdd(['worker'], testIo(project, owner), sources(world()))).toBe(0);
+    expect(JSON.parse(readFileSync(join(lobby, 'reach-roster.json'), 'utf8'))).toEqual({
+      version: 1,
+      seats: [{ alias: 'worker', route: 'worker', key_id: 'seat-worker-1', guard_dir: join(lobby, 'guard-floor-worker'), reach: ['grokbot'] }],
+    });
+  });
+
+  test('the projection follows the file across --keep and a full removal', async () => {
+    const lobby = reachLobby();
+    approve(REACHED.replace('\n    stopped: true', ''));
+    const removeSources: RemoveSources = {
+      sessionRunning: () => true,
+      agents: () => [],
+      alive: () => false,
+      screen: () => ({ kind: 'idle' }),
+      screenText: () => undefined,
+      status: () => 'idle',
+      now: () => NOW,
+      sleep: async () => {},
+      launch: {
+        typeText: () => true,
+        sendKey: () => true,
+        pressEnter: () => true,
+        agentPanes: () => [],
+        closeWorkspace: () => true,
+        stopSession: () => false,
+        deleteSession: () => false,
+        kill: () => false,
+        sleep: async () => {},
+        now: () => NOW,
+      },
+      foreground: () => [],
+      home,
+    };
+    // `--keep` stops the seat but keeps its line: the grant is the file's, so it stays projected.
+    expect(await runRemove(['worker', '--keep'], testIo(project, owner), removeSources)).toBe(0);
+    expect(projected(lobby)).toEqual(['worker']);
+    // The removed seat leaves the file, and the projection with it: omission is the revocation.
+    expect(await runRemove(['worker'], testIo(project, owner), removeSources)).toBe(0);
+    expect(projected(lobby)).toEqual([]);
   });
 
   test('refuses a seat the approved file does not hold, and a caller who may not change the team', async () => {
