@@ -1,9 +1,11 @@
+import { isAbsolute } from 'node:path';
 import { CLIS } from '../../clis.ts';
+import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
 import type { Check } from '../check.ts';
-import type { Mode, Seat } from '../types.ts';
+import type { Mode, Seat, SeatReach } from '../types.ts';
 import type { LeadMark, Section } from './section.ts';
 import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
@@ -52,6 +54,19 @@ export const seats: Section = {
         stopped: { type: 'boolean' },
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         count: { type: 'integer', minimum: 1 },
+        reach: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            to: { type: 'array', minItems: 1, items: { enum: FRONTS }, $comment: 'the fronts this seat may be reached from; owner-only, default off' },
+            alias: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$', $comment: 'the projection alias; defaults to the name, lowercased' },
+            route: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$', $comment: 'the bridge\'s relay-side route; defaults to the alias' },
+            key_id: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$', $comment: 'defaults to seat-<alias>-1' },
+            guard_dir: { type: 'string', minLength: 1, $comment: 'absolute; where the seat\'s public key is read; defaults to <lobby>/guard-floor-<alias>' },
+          },
+          required: ['to'],
+          $comment: 'one seat\'s reach grant; projected into reach-roster.json by up, add and remove (src/reach/projection.ts)',
+        },
       },
       required: ['role', 'name', 'cli', 'vendor', 'model', 'version', 'launch'],
       $comment: 'account must name a key of budgets.accounts; label defaults to the model and version; a seat with count is neither lead',
@@ -78,7 +93,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'mode',
-      'parked', 'stopped', 'count', 'leads',
+      'parked', 'stopped', 'count', 'leads', 'reach',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -123,6 +138,9 @@ function readSeats(
     if (leads && name && leadsField) marks.push({ name, line: leadsField.value.line });
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     const label = check.text(fields.get('label'), `${at}: label`);
+    // The owner-only reach grant. In the seat's digest like every other field: a grant reaches
+    // the bridge and the shuttle daemon only through an owner's approval of the file.
+    const reach = readReach(fields.get('reach'), at, check);
     // Left out, the herdr title is the model and version. A written label wins, so a file that
     // already names one keeps the title, and the fingerprint, it had.
     if (!role || !name || !cli || !vendor || !model || !version || !launch || !display) {
@@ -141,10 +159,12 @@ function readSeats(
         ...(account ? { account } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
+        ...(reach ? { reach } : {}),
       });
     }
   }
   reportCollisions(seats, 'name', check);
+  reportReach(seats, check);
   return seats;
 }
 
@@ -190,6 +210,91 @@ function reportCollisions(seats: DraftSeat[], field: 'name', check: Check): void
     if (!first) seen.set(seat[field], seat);
     else if (first.line !== seat.line || first.instance === seat.instance) {
       check.fail(seat.line, `two seats have the ${field} "${seat[field]}" (the other is on line ${first.line}${first.count > 1 || seat.count > 1 ? ', after count is expanded' : ''})`);
+    }
+  }
+}
+
+// The reach grant as written. Only `to` is required: the other four have one default each, and
+// the projection is where they are filled in (`src/reach/projection.ts`), so a default can never
+// drift between the digest — which holds exactly what the file wrote — and the projection.
+function readReach(entry: YamlEntry | undefined, at: string, check: Check): SeatReach | undefined {
+  if (!entry) return undefined;
+  const fields = check.fields(entry.value, `${at}: reach`, ['to', 'alias', 'route', 'key_id', 'guard_dir']);
+  const to: string[] = [];
+  const toEntry = fields.get('to');
+  if (!toEntry) {
+    if (entry.value.kind === 'map' || (entry.value.kind === 'scalar' && entry.value.value === null)) {
+      check.fail(entry.value.line, `${at}: reach.to is required: at least one front`);
+    }
+  } else {
+    const items = check.list(toEntry, `${at}: reach.to`);
+    if (items.length === 0 && (toEntry.value.kind === 'seq' || (toEntry.value.kind === 'scalar' && toEntry.value.value === null))) {
+      check.fail(toEntry.value.line, `${at}: reach.to is required: at least one front`);
+    }
+    for (const item of items) {
+      if ((FRONTS as readonly string[]).includes(item.value)) to.push(item.value);
+      else check.fail(item.line, `${at}: reach.to "${item.value}" must be one of: ${FRONTS.join(', ')}`);
+    }
+  }
+  const alias = readReachName(fields.get('alias'), `${at}: reach.alias`, REACH_ALIAS, check);
+  const route = readReachName(fields.get('route'), `${at}: reach.route`, REACH_ROUTE, check);
+  const keyId = readReachName(fields.get('key_id'), `${at}: reach.key_id`, REACH_ROUTE, check);
+  const guardDir = readReachGuardDir(fields.get('guard_dir'), at, check);
+  return {
+    to,
+    ...(alias !== undefined ? { alias } : {}),
+    ...(route !== undefined ? { route } : {}),
+    ...(keyId !== undefined ? { keyId } : {}),
+    ...(guardDir !== undefined ? { guardDir } : {}),
+  };
+}
+
+function readReachName(entry: YamlEntry | undefined, name: string, rule: RegExp, check: Check): string | undefined {
+  const value = check.text(entry, name);
+  if (value === undefined || !entry) return undefined;
+  if (!rule.test(value)) {
+    check.fail(entry.value.line, `${name} "${value}" takes letters, digits, ".", "_" and "-" (a letter or digit first, 64 at most)`);
+    return undefined;
+  }
+  return value;
+}
+
+function readReachGuardDir(entry: YamlEntry | undefined, at: string, check: Check): string | undefined {
+  const value = check.text(entry, `${at}: reach.guard_dir`);
+  if (value === undefined || !entry) return undefined;
+  if (!isAbsolute(value)) {
+    check.fail(entry.value.line, `${at}: reach.guard_dir must be an absolute path`);
+    return undefined;
+  }
+  return value;
+}
+
+/** The projection's rules on the built seats: every granted seat's alias must satisfy the
+ *  readers' rule — the defaults can outgrow it only here (a long name, a key_id of `seat-<alias>-1`
+ *  past 64 characters) — and two seats must not land on one alias, the readers' duplicate rule.
+ *  The projection holds at most REACH_MAX_SEATS seats. */
+function reportReach(seats: DraftSeat[], check: Check): void {
+  const seen = new Map<string, DraftSeat>();
+  let granted = 0;
+  for (const seat of seats) {
+    const reach = seat.reach;
+    if (!reach) continue;
+    granted += 1;
+    if (granted > REACH_MAX_SEATS) {
+      check.fail(seat.line, `reach: the projection holds at most ${REACH_MAX_SEATS} seats — this seat is number ${granted}`);
+      continue;
+    }
+    const alias = (reach.alias ?? seat.name).toLowerCase();
+    if (!REACH_ALIAS.test(alias)) {
+      check.fail(seat.line, `seat "${seat.name}": the reach alias "${alias}" takes letters, digits, ".", "_" and "-" (a letter or digit first, 64 at most)`);
+    }
+    if (reach.keyId === undefined && `seat-${alias}-1`.length > 64) {
+      check.fail(seat.line, `seat "${seat.name}": the default reach key_id "seat-${alias}-1" is longer than 64; name a shorter alias or a key_id`);
+    }
+    const first = seen.get(alias);
+    if (first === undefined) seen.set(alias, seat);
+    else {
+      check.fail(seat.line, `two seats reach the same alias "${alias}" (the other is on line ${first.line}${first.count > 1 || seat.count > 1 ? ', after count is expanded' : ''})`);
     }
   }
 }

@@ -21,6 +21,21 @@ export type BudgetAccount = {
   check: string | null;
 };
 
+/**
+ * A seat's `reach` block, the owner's grant that this seat's signed replies may be served to the
+ * named fronts (the seat auto-discovery seam). Kept exactly as the file wrote it — alias, route,
+ * key_id and guard_dir are derived at projection time, one default each in
+ * `src/reach/projection.ts` — and it is part of the seat's digest, so writing or editing a grant
+ * needs a new approval.
+ */
+export type SeatReach = {
+  to: string[];
+  alias?: string;
+  route?: string;
+  keyId?: string;
+  guardDir?: string;
+};
+
 export type Seat = {
   role: string;
   name: string;
@@ -47,6 +62,8 @@ export type Seat = {
   mode: Mode;
   parked: boolean;
   stopped: boolean;
+  /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
+  reach?: SeatReach;
   // The entry's `name` and `count` as written, and this seat's place in it (1 for the first).
   declared: string;
   count: number;
