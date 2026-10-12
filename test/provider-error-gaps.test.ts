@@ -81,3 +81,15 @@ describe('a reset time the classifier cannot read', () => {
     expect(inWindow(cut, '11:00')).toBe(true);
   });
 });
+
+describe('both sentences in one window', () => {
+  // Provider error is the earlier stage, so it wins whichever sentence is above the
+  // other, and the reset time on the 429 line is not reported.
+  test('connection lost above the 429 line is a provider error', () => {
+    expect(readScreen('claude-code', `${LOST}\n${LIMIT}\n${claudeBox('')}`)).toEqual({ kind: 'provider error' });
+  });
+
+  test('connection lost below the 429 line is still a provider error', () => {
+    expect(readScreen('claude-code', `${LIMIT}\n${LOST}\n${claudeBox('')}`)).toEqual({ kind: 'provider error' });
+  });
+});
