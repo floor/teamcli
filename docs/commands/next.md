@@ -37,6 +37,7 @@ recorded one.
 | --- | --- | --- |
 | a record was claimed, or the caller's live lease was renewed | the record: the `team issues` block, one record, nothing else on stdout | 0 |
 | a lease was released, or there was nothing to take or to release | `team next: released <id>`, or `team next: nothing is takeable` / `team next: nothing is assigned to you` / `team next: nothing is held` | 0 |
+| the wait ended on a stop signal, or a clock that did not advance | `team next: stopped waiting` | 0 |
 | refused: not a seat on its recorded pane, the team file can't be read or its policy is refused, the task file is missing or not a list, nothing was taken and a record is not a task, or the broker path refused | `team next: <reason>` | 1 |
 | the invocation can't be read, or this folder is not a git checkout | `team next: <problem>`, with the usage for the invocation | 2 |
 
