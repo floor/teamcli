@@ -65,20 +65,28 @@ describe('provider errors on other CLIs', () => {
 });
 
 describe('a reset time the classifier cannot read', () => {
-  // The stage matches "Your limit will reset at " with a trailing space. The window trims
-  // each line first, so a phrase with nothing after it is not that stage, and the idle box
-  // under it is what the screen reads. A trailing space on the phrase trims away too.
+  // The stage matches "Your limit will reset at" with no trailing space. A 429 line that
+  // names no time is a rate limit, and so is one whose time has wrapped onto the next row.
+  // The time on that next row is not read, so the reset is null.
   const phrase = 'API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at';
 
-  test('nothing after the reset phrase is idle, trailing space included', () => {
-    expect(readScreen('claude-code', `${phrase}\n${claudeBox('')}`)).toEqual({ kind: 'idle' });
-    expect(readScreen('claude-code', `${phrase} \n${claudeBox('')}`)).toEqual({ kind: 'idle' });
+  test('nothing after the reset phrase is a rate limit with no time, trailing space included', () => {
+    expect(readScreen('claude-code', `${phrase}\n${claudeBox('')}`)).toEqual({ kind: 'rate limit', reset: null });
+    expect(readScreen('claude-code', `${phrase} \n${claudeBox('')}`)).toEqual({ kind: 'rate limit', reset: null });
   });
 
-  test('a reset time wrapped onto the next line is idle and the time is not read', () => {
+  test('a reset time wrapped onto the next line is a rate limit and the time is not read', () => {
     const cut = `${phrase}\n11:00\n${claudeBox('')}`;
-    expect(readScreen('claude-code', cut)).toEqual({ kind: 'idle' });
     expect(inWindow(cut, '11:00')).toBe(true);
+    expect(readScreen('claude-code', cut)).toEqual({ kind: 'rate limit', reset: null });
+  });
+
+  test('a transcript that only mentions the reset phrase stays idle', () => {
+    const screen = `The note says Your limit will reset at dawn, and the prompt is back.\n${claudeBox('')}`;
+    expect(inWindow(screen, 'Your limit will reset at')).toBe(true);
+    expect(screen.includes('API Error: Request rejected (429)')).toBe(false);
+    expect(screen.includes('Usage limit reached')).toBe(false);
+    expect(readScreen('claude-code', screen)).toEqual({ kind: 'idle' });
   });
 });
 
