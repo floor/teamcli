@@ -1,10 +1,35 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { judgeMerge, readMerge } from '../src/end/condition.ts';
+import { resultPathProblem } from '../src/end/until.ts';
 import { gitEnv } from './helpers.ts';
+
+describe('a result path stays inside the project', () => {
+  test('an absolute path and a .. segment are refused, and a link is not followed', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'team-path-')));
+    const outside = join(root, '..', 'outside.txt');
+    try {
+      writeFileSync(outside, 'secret\n');
+      symlinkSync(outside, join(root, 'alias'));
+      expect(resultPathProblem(root, '/tmp/out.md')).toContain('relative to the project');
+      expect(resultPathProblem(root, '~/out.md')).toContain('relative to the project');
+      expect(resultPathProblem(root, 'C:/out.md')).toContain('relative to the project');
+      expect(resultPathProblem(root, '../outside.txt')).toContain('relative to the project');
+      expect(resultPathProblem(root, 'notes/../../outside.txt')).toContain('relative to the project');
+      expect(resultPathProblem(root, 'notes/../inside.txt')).toContain('relative to the project');
+      expect(resultPathProblem(root, 'notes/out.md')).toBeNull();
+      // `alias` points at a file outside the project. The check reads the path as written
+      // and does not follow the link, so the name is inside the project.
+      expect(resultPathProblem(root, 'alias')).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { force: true });
+    }
+  });
+});
 
 describe('merged, from the branch\'s own commits', () => {
   test('a fresh branch, one only brought up to date, and a real merge', () => {
@@ -98,6 +123,13 @@ describe('read from a repository', () => {
       ownNow: 1,
       detail: 'the branch still has commits of its own',
     });
+  });
+
+  test('a branch that starts with a dash is refused', () => {
+    setup();
+    const read = readMerge(project, '-not-a-branch', 'main', true);
+    expect(read).toMatchObject({ verdict: 'unproven', ownNow: 0 });
+    expect(read.detail).toContain('nothing is removed');
   });
 
   test('a deleted branch and a failed fetch are unproven', () => {
