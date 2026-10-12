@@ -187,6 +187,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   let notice: string | undefined;
   let silent = false;
   let announced = false;
+  // The first 'gone' for a pane this pid recorded is remembered here, and the heartbeat
+  // continues. The watch ends only when the next pass says 'gone' again. A pass that finds the
+  // pane, or where herdr cannot say, forgets it.
+  let paneGoneOnce = false;
   try {
     for (;;) {
       // The file is read again on every pass, so a seat parked or stopped since is seen.
@@ -332,11 +336,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         await closeEnded({ team, root, dir, session, live, sources, say, io, told });
       }
       const place = placedWatch(dir, session, sources.pid, sources.ownPane);
-      if (place === 'end') {
+      if (place === 'end' && paneGoneOnce) {
         tell(`the watch's pane is gone; the watch ends with it`, true);
         break;
       }
-      beatWatch(dir, session, sources.pid, sources.now().toISOString(), place);
+      paneGoneOnce = place === 'end';
+      beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place);
       if (!(await sources.wait(inForce.interval))) break;
     }
   } finally {

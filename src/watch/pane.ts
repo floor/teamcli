@@ -34,8 +34,9 @@ export function ownWatchPane(session: string, pid: number): WatchPlace | 'gone' 
 }
 
 /** Where this pass's heartbeat should record the process. `'end'` is a pane this pid already
- *  recorded and herdr no longer has. A watch that never recorded one — started by hand — keeps
- *  going, and so does a pass where herdr cannot say. */
+ *  recorded and herdr no longer has, on this pass alone. The watch ends only when the next pass
+ *  says `'end'` again. A watch that never recorded one — started by hand — keeps going, and so
+ *  does a pass where herdr cannot say. */
 export function placedWatch(
   dir: string,
   session: string,

@@ -75,15 +75,30 @@ describe('the watch and its pane', () => {
   test('a watch that recorded its pane ends when that pane is gone', async () => {
     execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
     writeFileSync(join(root, '.agents/team.yaml'), EXAMPLE);
-    let seen = false;
+    let seen = 0;
     const io = testIo(root, { kind: 'owner' });
-    const code = await runWatch(FILE, io, watchSources(2, {
-      ownPane: () => (seen ? 'gone' : ((seen = true), { pane: 'w9:p1', workspace: 'w9' })),
+    const code = await runWatch(FILE, io, watchSources(3, {
+      ownPane: () => (++seen === 1 ? { pane: 'w9:p1', workspace: 'w9' } : 'gone'),
     }));
     expect(code).toBe(0);
+    expect(seen).toBe(3);
     expect(io.out).toContain('the watch\'s pane is gone; the watch ends with it');
     expect(io.out).toContain('the watch of "acme-web" stopped');
     expect(readState(join(root, '.agents')).sessions['acme-web']?.watch).toBeUndefined();
+  });
+
+  test('gone once, then found: keeps running', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+    writeFileSync(join(root, '.agents/team.yaml'), EXAMPLE);
+    let seen = 0;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runWatch(FILE, io, watchSources(3, {
+      ownPane: () => (++seen === 2 ? 'gone' : { pane: 'w9:p1', workspace: 'w9' }),
+    }));
+    expect(code).toBe(0);
+    expect(seen).toBe(3);
+    expect(io.out).not.toContain('pane is gone');
+    expect(io.out).toContain('the watch of "acme-web" stopped');
   });
 
   test('a watch that never recorded a pane keeps running', async () => {

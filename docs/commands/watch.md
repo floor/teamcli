@@ -83,9 +83,10 @@ is read.
 The watch ends with its pane. `up` starts it in the session's watchdog workspace, and once this
 process has seen itself there it records that pane. A hangup — what closing the pane sends —
 stops the watch the same way Ctrl-C does, and the record is cleared. A process that is still
-running after its pane is gone stops on its next pass. A watch started by hand records no pane
-and keeps running. While a recorded pane is gone and that process is still running, `team doctor`
-names the process by its name and its pid and the repair is to stop it and run `team up`.
+running after its pane is gone stops when the next pass finds it gone again. A watch started by
+hand records no pane and keeps running. While a recorded pane is gone and that process is still
+running, `team doctor` names the process by its name and its pid and the repair is to stop it
+and run `team up`.
 `remove --keep` and `add` close the seat's workspace, not the watchdog's.
 
 ## Flags
