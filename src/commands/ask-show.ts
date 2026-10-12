@@ -10,12 +10,14 @@ import type { Command, Io } from '../io.ts';
 export const USAGE = `Usage: team ask-show <request_id> --ask <path> --marker <path> --key <path>
 
 Prints the question from the ask file when the marker's HMAC matches that question and
-this request id. A marker that does not verify prints nothing of the question. The key
-file is the marker key, base64url of 32 bytes. Whoever can read that file may run this:
-there is no team-file check and no herdr call.
+this request id, and expires_at is not yet past. The same 5 seconds of clock skew the
+guard allows still counts as in time. A marker that does not verify, or an ask that has
+expired, prints nothing of the question. The key file is the marker key, base64url of 32
+bytes. Whoever can read that file may run this: there is no team-file check and no herdr
+call.
 
-Exits 0 when the question is printed, 1 when the marker does not verify or a file cannot
-be read, 2 when the invocation cannot be read.
+Exits 0 when the question is printed, 1 when the marker does not verify, the ask has
+expired, or a file cannot be read, 2 when the invocation cannot be read.
 `;
 
 /** Domain prefix of the marker HMAC, including the trailing NUL. */
@@ -23,6 +25,9 @@ export const MARKER_DOMAIN = 'TeamCLI:ask-marker:v1\0';
 
 /** Fields the mac covers, in this order. `mac` itself is not an input. */
 export const MARKER_FIELDS = ['v', 'request_id', 'question_sha256', 'expires_at'] as const;
+
+/** How far past expires_at still counts as in time. The guard's CLOCK_SKEW_MS is the same 5s. */
+export const CLOCK_SKEW_MS = 5_000;
 
 const ASK_HEADER = 'TeamCLI signed ask v1\n';
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -67,7 +72,7 @@ export function markerMac(key: Buffer, body: MarkerBody): string {
   return createHmac('sha256', key).update(markerSigningBytes(body)).digest('hex');
 }
 
-export async function runAskShow(argv: string[], io: Io): Promise<number> {
+export async function runAskShow(argv: string[], io: Io, now: Date = new Date()): Promise<number> {
   const args = readArgs(argv, ['ask', 'marker', 'key'], []);
   if (args.error) return invocation(io, args.error);
   const requestId = args.rest[0];
@@ -101,6 +106,13 @@ export async function runAskShow(argv: string[], io: Io): Promise<number> {
   const given = Buffer.from(marker.mac, 'hex');
   if (mac.length !== given.length || !timingSafeEqual(mac, given)) return refused(io, 'the marker does not verify');
 
+  const expires = Date.parse(marker.expires_at);
+  const at = now.getTime();
+  if (!Number.isFinite(expires) || new Date(expires).toISOString() !== marker.expires_at || !Number.isFinite(at)) {
+    return refused(io, 'the marker does not verify');
+  }
+  if (at > expires + CLOCK_SKEW_MS) return expired(io);
+
   io.stdout(ask.question.endsWith('\n') ? ask.question : `${ask.question}\n`);
   // exit: ask-show.shown
   return 0;
@@ -110,6 +122,12 @@ function invocation(io: Io, message: string): number {
   io.stderr(`team ask-show: ${message}\n${USAGE}`);
   // exit: ask-show.invocation
   return 2;
+}
+
+function expired(io: Io): number {
+  io.stderr('team ask-show: the ask has expired\n');
+  // exit: ask-show.expired
+  return 1;
 }
 
 function refused(io: Io, message: string): number {

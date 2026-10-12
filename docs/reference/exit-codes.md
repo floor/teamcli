@@ -108,6 +108,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `approve.placed` | `approve` | 2 | a path would trust the project's parent | `team approve` |
 | `approve.revalidate` | `approve` | 2 | the file does not validate | `team approve` |
 | `ask-show.shown` | `ask-show` | 0 | the question is printed | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
+| `ask-show.expired` | `ask-show` | 1 | the marker matches and the ask is past expires_at plus 5 seconds | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.refused` | `ask-show` | 1 | the marker does not verify, or a file cannot be read | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.invocation` | `ask-show` | 2 | the invocation cannot be read | `team ask-show` |
 | `broker.stopped` | `broker` | 0 | the broker served until it was stopped | `team broker` |

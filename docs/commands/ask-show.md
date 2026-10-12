@@ -1,7 +1,9 @@
 # team ask-show
 
 Prints the question from a signed ask when the marker's HMAC matches that question and the
-request id. A marker that does not verify prints no question.
+request id, and `expires_at` is not yet past. The same 5 seconds of clock skew the guard
+allows still counts as in time. A marker that does not verify, or an ask that has expired,
+prints no question.
 
 ## Synopsis
 
@@ -26,7 +28,8 @@ request id. A marker that does not verify prints no question.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the marker matches | the question, on stdout | 0 |
+| the marker matches, and `expires_at` plus 5 seconds is still ahead | the question, on stdout | 0 |
+| the ask is past `expires_at` plus 5 seconds | one `team ask-show: the ask has expired` line, on stderr; no question | 1 |
 | the marker does not verify, or a file cannot be read | one `team ask-show: …` line, on stderr; no question | 1 |
 | the invocation cannot be read | `team ask-show: …` and the usage | 2 |
 

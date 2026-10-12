@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'bun:test';
-import { markerMac, questionDigest, runAskShow, USAGE, type MarkerBody } from '../src/commands/ask-show.ts';
+import { CLOCK_SKEW_MS, markerMac, questionDigest, runAskShow, USAGE, type MarkerBody } from '../src/commands/ask-show.ts';
 import { testIo } from './helpers.ts';
 
 /** Fixed vector. The key is 32 bytes of 0x42. The guard copies this mac. */
@@ -18,6 +18,7 @@ const VECTOR = {
   mac: '8d53d07c074d438d6676e20b45b11ea021b54e30d36d840b48e4f7a41223cbce',
 };
 
+const IN_TIME = new Date(VECTOR.expiresAt);
 const ASK = `TeamCLI signed ask v1\n${JSON.stringify({ question: VECTOR.question, request_id: VECTOR.requestId })}\n`;
 const MARKER = `{"v":1,"request_id":"${VECTOR.requestId}","question_sha256":"${VECTOR.digest}","expires_at":"${VECTOR.expiresAt}","mac":"${VECTOR.mac}"}`;
 
@@ -59,6 +60,7 @@ test('a matching marker prints the question and nothing of the key', async () =>
   const code = await runAskShow(
     [VECTOR.requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'],
     io,
+    IN_TIME,
   );
   expect(code).toBe(0);
   expect(io.out).toBe('Status?\n');
@@ -100,7 +102,7 @@ test('a key generated in the test verifies, and its bytes stay off the streams',
   writeFileSync(join(dir, 'marker.json'), `${JSON.stringify({ ...body, mac })}\n`);
   writeFileSync(join(dir, 'key.txt'), encoded);
   const io = testIo(dir);
-  expect(await runAskShow([requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'], io)).toBe(0);
+  expect(await runAskShow([requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'], io, IN_TIME)).toBe(0);
   expect(io.out).toBe('Generated?\n');
   expect(`${io.out}${io.err}`).not.toContain(encoded);
 });
@@ -111,9 +113,27 @@ test('an ask may carry extra fields', async () => {
   place(dir, ask);
   const io = testIo(dir);
   expect(
-    await runAskShow([VECTOR.requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'], io),
+    await runAskShow([VECTOR.requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'], io, IN_TIME),
   ).toBe(0);
   expect(io.out).toBe('Status?\n');
+});
+
+test('five seconds past expires_at still prints, and one millisecond later does not', async () => {
+  expect(CLOCK_SKEW_MS).toBe(5_000);
+  const expires = Date.parse(VECTOR.expiresAt);
+  const dir = root();
+  place(dir);
+  const args = [VECTOR.requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'];
+  const within = testIo(dir);
+  expect(await runAskShow(args, within, new Date(expires + CLOCK_SKEW_MS))).toBe(0);
+  expect(within.out).toBe('Status?\n');
+  const past = testIo(dir);
+  expect(await runAskShow(args, past, new Date(expires + CLOCK_SKEW_MS + 1))).toBe(1);
+  expect(past.out).toBe('');
+  expect(past.err).toBe('team ask-show: the ask has expired\n');
+  expect(`${past.out}${past.err}`).not.toContain('Status?');
+  expect(`${past.out}${past.err}`).not.toContain(VECTOR.key);
+  expect(`${past.out}${past.err}`).not.toContain(VECTOR.mac);
 });
 
 test('a missing ask file is one line and not the question', async () => {

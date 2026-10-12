@@ -2834,9 +2834,9 @@ function askShowFiles(place: Place, marker = `${ASK_SHOW_MARKER}\n`): void {
   writeFileSync(join(place.root, 'key.txt'), 'QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\n');
 }
 
-async function askShown(place: Place, argv: string[]): Promise<Ran> {
+async function askShown(place: Place, argv: string[], now = new Date('2026-10-12T18:00:00.000Z')): Promise<Ran> {
   const io = testIo(place.root);
-  const code = await runAskShow(argv, io);
+  const code = await runAskShow(argv, io, now);
   return { code, out: io.out, err: io.err };
 }
 
@@ -2845,6 +2845,14 @@ scene('ask-show.shown', async (place) => {
   return show(
     await askShown(place, ['req-ask-show-v1', '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt']),
     'Status?',
+  );
+}, false);
+scene('ask-show.expired', async (place) => {
+  askShowFiles(place);
+  const past = new Date(Date.parse('2026-10-12T18:00:00.000Z') + 5_001);
+  return show(
+    await askShown(place, ['req-ask-show-v1', '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'], past),
+    'the ask has expired',
   );
 }, false);
 scene('ask-show.refused', async (place) => {

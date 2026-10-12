@@ -178,7 +178,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'answer':
       return runAnswer(rest, io, answerHost(fixture.home));
     case 'ask-show':
-      return runAskShow(rest, io);
+      return runAskShow(rest, io, new Date(spec.now));
     // The broker page's one runnable line is the file-source refusal, which precedes the
     // credential read — no keychain, no socket, no peer on the page's fixture. The command's own
     // refusals that need a broker source are shown as text on the page instead: their sentences

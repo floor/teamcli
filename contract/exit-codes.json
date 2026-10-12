@@ -718,6 +718,13 @@
     {
       "code": 1,
       "command": "ask-show",
+      "id": "ask-show.expired",
+      "meaning": "the marker matches and the ask is past expires_at plus 5 seconds",
+      "trigger": "team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt"
+    },
+    {
+      "code": 1,
+      "command": "ask-show",
       "id": "ask-show.refused",
       "meaning": "the marker does not verify, or a file cannot be read",
       "trigger": "team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt"
