@@ -389,8 +389,10 @@ describe('a file the watch would not read', () => {
     const watched = await runWatch(['--session', SESSION], watching, watchSources(home));
     expect(watched, watching.out + watching.err).toBe(0);
     expect(watching.out).toContain(`watching the session "${SESSION}"`);
+    const pane = run?.pane;
+    if (!pane) throw new Error('the watchdog pane was not recorded');
     expect(readState(customDir).last_valid?.file).toBe(customBody);
-    expect(readState(customDir).sessions[SESSION]?.watchdog).toEqual({ file: custom, pane: run?.pane });
+    expect(readState(customDir).sessions[SESSION]?.watchdog).toEqual({ file: custom, pane });
     expect(readState(join(root, '.agents')).last_valid?.file).not.toBe(customBody);
     expect(readState(join(root, '.agents')).sessions[SESSION]?.watch).toBeUndefined();
   });
