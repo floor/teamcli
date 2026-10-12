@@ -164,6 +164,17 @@ describe('the derived label of a seat', () => {
     expect(counted.map((seat) => workspaceLabel(seat))).toEqual(['DeepSeek V4.1 Flash', 'DeepSeek V4.1 Flash']);
   });
 
+  // The stored `label` — the one `seatDigest` hashes, not the title — keeps the `-N` a counted
+  // entry's instances have always carried, so an approval recorded before the derived label
+  // still keys the instances apart. The title above shares one string; this field does not,
+  // whether it is the lowercase default or a word the file writes.
+  test('the stored label of a counted entry keeps its instance suffix', () => {
+    const counted = valid(mixed).seats.filter((seat) => seat.declared === 'maker');
+    expect(counted.map((seat) => seat.label)).toEqual(['deepseek flash v4.1', 'deepseek flash v4.1-2']);
+    const written = valid(mixed.replace('    count: 2', '    label: desk\n    count: 2'));
+    expect(written.seats.filter((seat) => seat.declared === 'maker').map((seat) => seat.label)).toEqual(['desk', 'desk-2']);
+  });
+
   test('a display the file writes is the label verbatim, and still needs the version as its own token', () => {
     expect(workspaceLabel(seatNamed(valid(mixed), 'implementer'))).toBe('GPT-6 Sol');
     const refused = validateTeamFile(minimal.replace('    launch:', '    display: GPT Sol Six\n    launch:'));
