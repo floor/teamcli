@@ -2845,6 +2845,10 @@ scene('send.delivered', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place)), 'lead: delivered');
 });
+scene('send.dry-run', async (place) => {
+  write(place, TEAM);
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the cross-session socket; nothing was sent');
+});
 scene('send.answered', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello', '--wait'], owner, sendHost(place, { reply: 'pong' })), 'lead: answered\npong');
