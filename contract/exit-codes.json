@@ -710,6 +710,27 @@
     },
     {
       "code": 0,
+      "command": "ask-show",
+      "id": "ask-show.shown",
+      "meaning": "the question is printed",
+      "trigger": "team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt"
+    },
+    {
+      "code": 1,
+      "command": "ask-show",
+      "id": "ask-show.refused",
+      "meaning": "the marker does not verify, or a file cannot be read",
+      "trigger": "team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt"
+    },
+    {
+      "code": 2,
+      "command": "ask-show",
+      "id": "ask-show.invocation",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team ask-show"
+    },
+    {
+      "code": 0,
       "command": "broker",
       "id": "broker.stopped",
       "meaning": "the broker served until it was stopped",
