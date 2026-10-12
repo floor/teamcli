@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { lobbyDir, type FsReader } from '../lobby/gate.ts';
+import { resolveLobby, type FsReader } from '../lobby/gate.ts';
 import { protectedLanding } from '../worktree/place.ts';
 import { canonicalLanding, fixedFolder, isLegacyTrust, isMigratedTrust } from './paths.ts';
 import type { LoadResult, Problem, TeamFile } from './types.ts';
@@ -175,7 +175,7 @@ export function placedProblems(team: TeamFile, root: string, home: string = home
   }
 
   if (isMigratedTrust(team.trust)) {
-    const lobby = lobbyDir(home);
+    const lobby = resolveLobby(home, team);
     const lobbyRead = readLanding(lobby);
     const lobbyLanding = 'error' in lobbyRead ? null : lobbyRead.landing;
     if ('error' in lobbyRead) problems.push({ line: 0, message: `trust: ${lobbyRead.error}` });

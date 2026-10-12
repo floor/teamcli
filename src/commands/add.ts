@@ -21,7 +21,7 @@ import { relaunchRepair } from '../file/sections/lead.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
-import { lobbyDir, recheckLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
+import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
 import {
   agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, sessionRunning,
   sessionState, startServer, typeText, workspaceClose, workspaceCreate, workspaceList, workspacePanes,
@@ -365,7 +365,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.placed
     return 1;
   }
-  const lobby = lobbyDir(sources.home);
+  const lobby = resolveLobby(sources.home, prepared.team);
   let startProblem: string | null = null;
   let verifiedLobby: string | null = null;
   let lobbySeen: LobbySeen | null = null;
@@ -377,7 +377,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   if (!prepared.team.trust || prepared.team.trust.length === 0 || isLegacyTrust(prepared.team.trust)) {
     startProblem = `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(prepared.team, root, sources.home)}`;
   } else {
-    const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles });
+    const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby });
     if (!gate.ok) startProblem = gate.text;
     else if ('path' in gate) {
       verifiedLobby = gate.path;
@@ -563,7 +563,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
   try {
     if (isMigratedTrust(prepared.team.trust) && wouldLaunch) {
-      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles });
+      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby });
       if (!gate.ok) {
         out.stderr(`team add: ${plainText(gate.text)}\n`);
         // exit: add.lobby
@@ -613,7 +613,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // it allowed still the file it read. The declared files travel with it, so the recheck
       // walks the same closed tree the gate did.
       confirmLobby() {
-        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles }) : null;
+        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby }) : null;
       },
     });
     const report = await executePlan(plan, session, host);

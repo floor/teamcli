@@ -57,6 +57,12 @@ export type Seat = {
 export type TeamFile = {
   format: 1;
   project: string;
+  /** The entity the team belongs to, or null. Sets the team's lobby to
+   *  `~/.config/team/lobbies/<slug>` unless `lobby` names one outright. */
+  entity: string | null;
+  /** The folder the team's seats start and wait in, as written (a `~` prefix is the home), or
+   *  null. Overrides `entity`. Null with a null `entity` means the machine-global lobby. */
+  lobby: string | null;
   visibility: 'public' | 'private';
   session: string;
   /** The lead's seat, however the file spelled it: the `coordinator:` key or `leads: true`. */

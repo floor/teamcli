@@ -22,6 +22,17 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
+    "entity": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "$comment": "the entity the team belongs to; its lobby is ~/.config/team/lobbies/<entity>"
+    },
+    "lobby": {
+      "type": "string",
+      "minLength": 1,
+      "$comment": "the folder the team's seats start and wait in; a ~ prefix is the home. Overrides entity"
+    },
     "trust": {
       "type": "array",
       "items": {

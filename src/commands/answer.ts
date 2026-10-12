@@ -15,7 +15,7 @@ import { deliverRules, type Delivery } from '../launch/deliver.ts';
 import { seatProcessVerdict, type LaunchedIdentity } from '../launch/identity.ts';
 import { rulesDeliveryOf, rulesFileHash, rulesFileHolds, writeRulesFile } from '../launch/rules-file.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
-import { lobbyDir } from '../lobby/gate.ts';
+import { resolveLobby } from '../lobby/gate.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { type Profile } from '../profiles/profile.ts';
@@ -186,9 +186,12 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
 
     const cli = configured.cli;
     const profile = profileFor(cli);
-    const checked = inspect(seatName, host, session, pane, profile, approved.team.trust, root, recorded?.launched);
+    // The lobby the approved file resolves to: its own when the file sets `entity` or `lobby`, else
+    // the machine-global one. The folder shown in the dialog must be this lobby, as team writes it.
+    const answerLobby = resolveLobby(host.home, approved.team);
+    const checked = inspect(seatName, host, session, pane, profile, approved.team.trust, answerLobby, root, recorded?.launched);
     if ('class' in checked) return refused(checked);
-    const again = inspect(seatName, host, session, pane, profile, approved.team.trust, root, recorded?.launched);
+    const again = inspect(seatName, host, session, pane, profile, approved.team.trust, answerLobby, root, recorded?.launched);
     if ('class' in again) return refused(again);
     if (again.folder !== checked.folder) return refused({ class: 'folder', message: `${seatName}: ${OUTSIDE}` });
     if (again.record.from !== checked.record.from || again.record.to !== checked.record.to || again.record.action !== checked.record.action) {
@@ -289,6 +292,7 @@ function inspect(
   pane: string,
   profile: Profile | null,
   trust: readonly string[],
+  resolvedLobby: string,
   root: string,
   launched?: LaunchedIdentity,
 ): Seen | Refusal {
@@ -309,7 +313,7 @@ function inspect(
   // `shown` must be the lobby as team writes it, byte for byte, and canonicalise to
   // it — a trailing slash, another case, `//` or `/./` is a different spelling, and
   // the reading that sends less is to refuse it.
-  const lobby = canonicalLanding(lobbyDir(host.home));
+  const lobby = canonicalLanding(resolvedLobby);
   if (!lobby) return say('folder', OUTSIDE);
   if (canonicalLanding(shown) !== lobby) return say('folder', OUTSIDE);
   if (shown !== lobby) return say('folder', 'the dialog does not show the lobby as written: the owner answers it through team up');
