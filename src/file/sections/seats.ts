@@ -1,4 +1,5 @@
 import { CLIS } from '../../clis.ts';
+import { shippedEfforts, type EffortVocabulary } from '../../profiles/efforts.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
@@ -24,7 +25,10 @@ export const seats: Section = {
     const trust = valueOf<string[]>(ctx, 'trust');
     const accounts = valueOf<Budgeted>(ctx, 'budgets').declared;
     const marks: LeadMark[] = [];
-    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks);
+    const efforts = shippedEfforts();
+    // A vocabulary this build cannot read must not fail a file that never sets `effort`.
+    if (!efforts.ok) ctx.check.warnings.push({ line: entry?.value.line ?? ctx.root.line, message: efforts.message });
+    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks, efforts);
     ctx.leads = marks;
     return seats;
   },
@@ -47,6 +51,7 @@ export const seats: Section = {
         launch: { type: 'string', minLength: 1 },
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
         label: { type: 'string' },
+        effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it' },
         mode: { enum: MODES },
         parked: { type: 'boolean' },
         stopped: { type: 'boolean' },
@@ -64,7 +69,7 @@ export const seats: Section = {
 // that names an `account:` must name one of these, or it would silently spend nothing budgeted.
 function readSeats(
   entry: YamlEntry | undefined, check: Check, trust: string[], topLine: number, broken: Set<string>, accounts: ReadonlySet<string>,
-  marks: LeadMark[],
+  marks: LeadMark[], efforts: EffortVocabulary,
 ): DraftSeat[] {
   if (!entry) {
     check.fail(topLine, 'seats is required: at least the orchestrator\'s and the operator\'s seat');
@@ -77,7 +82,7 @@ function readSeats(
   const seats: DraftSeat[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
-      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'mode',
+      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
       'parked', 'stopped', 'count', 'leads',
     ]);
     if (item.kind !== 'map') continue;
@@ -123,6 +128,7 @@ function readSeats(
     if (leads && name && leadsField) marks.push({ name, line: leadsField.value.line });
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     const label = check.text(fields.get('label'), `${at}: label`);
+    const effort = readEffort(fields.get('effort'), at, vendor, efforts, check);
     // Left out, the herdr title is the model and version. A written label wins, so a file that
     // already names one keeps the title, and the fingerprint, it had.
     if (!role || !name || !cli || !vendor || !model || !version || !launch || !display) {
@@ -139,6 +145,8 @@ function readSeats(
         count,
         instance,
         ...(account ? { account } : {}),
+        // Omitted when the file has no effort, so `seatDigest` hashes the same fields as before.
+        ...(effort ? { effort } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
       });
@@ -150,6 +158,28 @@ function readSeats(
 
 export function defaultLabel(model: string, version: string): string {
   return `${model} ${version}`.toLowerCase();
+}
+
+function readEffort(
+  entry: YamlEntry | undefined, at: string, vendor: string | undefined, efforts: EffortVocabulary, check: Check,
+): string | undefined {
+  const effort = check.text(entry, `${at}: effort`);
+  if (effort === undefined || !entry || !vendor) return effort;
+  // Launch does not read `effort`. The word stays on the seat either way, so a later label can
+  // see what the file wrote, and the approval key changes when the field is added.
+  if (!efforts.ok) return effort;
+  const allowed = efforts.labs[vendor];
+  // A lab with no entry accepts any word: the vocabulary leaves that lab out rather than invent
+  // one. A lab with a list warns and names its words. The warning does not fail check, approve
+  // or up. No file that loaded before can contain `effort` — an unknown field already fails —
+  // so the warning is not a regression for those files.
+  if (allowed && !allowed.includes(effort)) {
+    check.warnings.push({
+      line: entry.value.line,
+      message: `${at}: effort "${effort}" is not one of ${vendor}'s: ${allowed.join(', ')}`,
+    });
+  }
+  return effort;
 }
 
 function readVersion(entry: YamlEntry | undefined, at: string, line: number, check: Check): string | undefined {

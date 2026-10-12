@@ -502,6 +502,11 @@
           "label": {
             "type": "string"
           },
+          "effort": {
+            "type": "string",
+            "minLength": 1,
+            "$comment": "optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it"
+          },
           "mode": {
             "enum": [
               "worktree",
