@@ -5,6 +5,7 @@
 // over a home holding trap files where those CLI files would live, with a herdr whose every
 // function would fail the run if it were called. This is the whole claim: the record below names
 // no trap, and every path it does name is the project's own state or the tool's own folders.
+import { fileURLToPath } from 'node:url';
 import { expect, test } from 'bun:test';
 
 type Traps = {
@@ -38,17 +39,24 @@ test('usage opens no CLI session file, no CLI credential, and runs nothing but t
   expect(parsed.opened).toContain(`${parsed.root}/.agents/team.state.json`);
 
   // No trap, and nothing anywhere else on the machine: every open is the project's state, the
-  // store, or the tool's own signing key folder. The key folder is allowed deliberately, and this
-  // is the test that pins what the allowance means: the key read is `approvalStanding` verifying
-  // the approved copy with the team's own key, exactly as `status` verifies it — a figure printed
-  // against budgets nobody verified would be worse than the one read every command already makes —
-  // and it is not a CLI's credential. The design's first draft promised `usage` reads no key at
-  // all; the after-review of S1 corrected that promise, and the claim here is the corrected one:
-  // no pane, no CLI's session file, no lab's credential.
+  // store, the tool's own signing key folder, or the effort vocabulary shipped beside the
+  // seats reader. The key folder is allowed deliberately, and this is the test that pins what
+  // the allowance means: the key read is `approvalStanding` verifying the approved copy with
+  // the team's own key, exactly as `status` verifies it — a figure printed against budgets
+  // nobody verified would be worse than the one read every command already makes — and it is
+  // not a CLI's credential. The design's first draft promised `usage` reads no key at all; the
+  // after-review of S1 corrected that promise, and the claim here is the corrected one: no
+  // pane, no CLI's session file, no lab's credential. Checking seats reads the vocabulary; that
+  // file is the tool's own data, named exactly, not a lab's folder.
   for (const trap of parsed.traps) expect(parsed.opened).not.toContain(trap);
   const allowed = [`${parsed.root}/`, `${parsed.home}/.config/team/`, `${parsed.home}/.config/team-key/`];
+  const vocabulary = new Set([
+    fileURLToPath(new URL('../src/profiles/efforts.json', import.meta.url)),
+    fileURLToPath(new URL('../dist/profiles/efforts.json', import.meta.url)),
+  ]);
   for (const path of parsed.opened) {
-    expect(allowed.some((prefix) => path.startsWith(prefix)), `${path} is outside the tool's own files`).toBe(true);
+    const own = vocabulary.has(path) || allowed.some((prefix) => path.startsWith(prefix));
+    expect(own, `${path} is outside the tool's own files`).toBe(true);
   }
 
   // The one command run is the root resolution; no pane, no CLI, no shell was touched.

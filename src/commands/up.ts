@@ -10,6 +10,7 @@ import { loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
+import { workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import {
   agentList,
@@ -309,7 +310,7 @@ function seatPlan(
     cli: seat.cli,
     launch: seat.launch,
     cwd: seat.cwd,
-    label: seat.label,
+    label: workspaceLabel(seat),
     model: seat.model,
     version: seat.version,
     // The team file's own repair for this seat — a lead seat is told only the whole-team

@@ -500,7 +500,13 @@
             "$comment": "relative to the project, or a trust path"
           },
           "label": {
-            "type": "string"
+            "type": "string",
+            "$comment": "accepted, and not the herdr title; the title is the display, and the effort when set"
+          },
+          "effort": {
+            "type": "string",
+            "minLength": 1,
+            "$comment": "optional; a lab with a vocabulary refuses a word outside it"
           },
           "mode": {
             "enum": [
@@ -532,7 +538,7 @@
           "version",
           "launch"
         ],
-        "$comment": "account must name a key of budgets.accounts; label defaults to the model and version; a seat with count is neither lead"
+        "$comment": "account must name a key of budgets.accounts; the herdr title is the display and the effort; a written label is kept and does not title the workspace; a seat with count is neither lead"
       }
     },
     "releases": {
