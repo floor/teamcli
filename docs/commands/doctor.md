@@ -30,7 +30,7 @@ them are done; the last line counts those.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| nothing is missing | one line per finding, its level (`ok  `, `warn`, `MISS`, `--  `) first, then the count: `team doctor: nothing missing, 1 warning` | 0 |
+| nothing is missing; warnings do not change this | one line per finding, its level (`ok  `, `warn`, `MISS`, `--  `) first, then the count: `team doctor: nothing missing, 1 warning` | 0 |
 | at least one `MISS` | the same report, then the count and how many of the missing ones block `up` and `add` | 1 |
 | the invocation or the team file can't be read | `team doctor: <problem>`, with the usage for the invocation | 2 |
 
