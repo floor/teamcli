@@ -65,7 +65,7 @@ export function mergeScreen(base: ScreenData, added: ProfileOverride): ScreenDat
 // toward caution, never away from the one record that names a screen the owner must act on. The
 // CLI's own exit question is pinned the same way, on the stop's side: a stop answers that screen
 // with the profile's key, so an override may not move the reading away from it.
-const KEPT = new Set<Screen['kind']>(['permission', 'trust', 'question', 'vendor notice', 'exit question']);
+const KEPT = new Set<Screen['kind']>(['permission', 'trust', 'question', 'vendor notice', 'exit question', 'provider error', 'rate limit']);
 // `vendor notice` is not here on purpose: an override can never add that stage (DIALOG_STAGES
 // names the stages it may add patterns to), so a merged reading can never gain one. A shipped
 // one is pinned by KEPT above. `exit question` is the same, and for the same reason: only the

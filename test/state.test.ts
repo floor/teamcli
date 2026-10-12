@@ -84,7 +84,7 @@ describe('the state file', () => {
     expect(() => readState(dir)).toThrow(/not valid JSON/);
   });
 
-  test('a stored classification outside the closed list reads as unknown; the eight read as themselves', () => {
+  test('a stored classification outside the closed list reads as unknown; the closed list reads as itself', () => {
     // The state file is the one door a classification from outside the program enters through.
     // A probe carrying an escape sequence and a fake line, a wrong case, a trailing space, an
     // empty string, a number, a null and a missing field all read as `unknown` — the log line,
@@ -98,7 +98,7 @@ describe('the state file', () => {
       nothing: null,
       missing: undefined,
     };
-    const closed = ['trust', 'permission', 'question', 'vendor notice', 'login', 'unknown', 'unsent', 'timeout'] as const;
+    const closed = ['trust', 'permission', 'question', 'provider error', 'rate limit', 'vendor notice', 'login', 'unknown', 'unsent', 'timeout'] as const;
     const seats: Record<string, unknown> = {};
     for (const [seat, classification] of Object.entries(probes)) {
       seats[seat] = { stage: 'launched', waiting: { state: 'waiting-owner', classification } };
