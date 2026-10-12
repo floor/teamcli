@@ -543,15 +543,24 @@ function includesOf(source: ts.SourceFile, ident: string): string[] {
   return found;
 }
 
+/** An identifier, or a quoted command that needs a hyphen (`'ask-show'`). */
+function propertyKey(name: ts.PropertyName): string | null {
+  if (ts.isIdentifier(name)) return name.text;
+  if (ts.isStringLiteral(name) && /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/.test(name.text)) return name.text;
+  return null;
+}
+
 function tableOf(source: ts.SourceFile): { name: string; rel: string }[] {
   let found: { name: string; rel: string }[] | null = null;
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'commands' && node.initializer && ts.isObjectLiteralExpression(node.initializer)) {
       found = node.initializer.properties.map((property) => {
-        if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) throw new Error('src/cli.ts: command table has an unexpected entry');
+        if (!ts.isPropertyAssignment(property)) throw new Error('src/cli.ts: command table has an unexpected entry');
+        const key = propertyKey(property.name);
+        if (key === null) throw new Error('src/cli.ts: command table has an unexpected entry');
         const spec = importSpec(property.initializer);
-        if (!spec) throw new Error(`src/cli.ts: ${property.name.text} does not import a command`);
-        return { name: property.name.text, rel: srcPath(spec) };
+        if (!spec) throw new Error(`src/cli.ts: ${key} does not import a command`);
+        return { name: key, rel: srcPath(spec) };
       });
     }
     ts.forEachChild(node, visit);
