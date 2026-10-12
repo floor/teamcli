@@ -153,15 +153,19 @@ describe('a seat\'s effort', () => {
   });
 
   test('a vocabulary this build cannot read warns, and the file still loads', () => {
-    // The regression this guards: a bad data file must not fail a file that never sets `effort`.
-    // The shipped file is replaced for the length of one load and put back.
+    // The regression this guards: a bad data file fails no file. The vocabulary is read only
+    // once a seat sets the field, so the shipped file is replaced for the length of one load
+    // and put back: a seat with the field gets the warning and keeps its word, and a file that
+    // sets none does not even open the vocabulary.
     const shipped = new URL('../src/profiles/efforts.json', import.meta.url);
     const backup = readFileSync(shipped, 'utf8');
     try {
       writeFileSync(shipped, '{"format": 2, "labs": {}}');
-      const { team, warnings } = valid(seatOf(lab, undefined));
-      expect(team.seats[0]?.effort).toBeUndefined();
-      expect(warnings.some((warning) => warning.message.includes('effort vocabulary format is 2; this build reads 1'))).toBe(true);
+      const withEffort = valid(seatOf(lab, words[0]));
+      expect(withEffort.team.seats[0]?.effort).toBe(words[0]);
+      expect(withEffort.warnings.some((warning) => warning.message.includes('effort vocabulary format is 2; this build reads 1'))).toBe(true);
+      const without = valid(seatOf(lab, undefined));
+      expect(without.warnings.some((warning) => warning.message.includes('effort vocabulary'))).toBe(false);
     } finally {
       writeFileSync(shipped, backup);
     }
