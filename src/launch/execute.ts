@@ -643,9 +643,24 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           final(op.seat, { kind: 'left out', reason: 'has no pane to read; left at launched' });
           break;
         }
-        // What an idle screen means for the seat, wherever it was found: the model check, then
-        // the identity record. The seat carries on to its rename or its delivery either way.
+        // What an idle screen means for the seat, wherever it was found: the identity record,
+        // then the model check. The process is read before the comparison, so a model the CLI
+        // is not running still leaves a `launched` identity on the pane. The seat carries on
+        // to its rename or its delivery when the model matches.
         const idleOnwards = (): void => {
+          // The seat's own process, read now that its idle prompt is on the screen: the pane's
+          // shell and the pids in front of it that are not the shell. Nothing is recorded when
+          // herdr can't tell: a seat without the record keeps today's behaviour.
+          const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
+          if (identity) {
+            identities.set(op.seat, identity);
+            host.record(op.seat, {
+              stage: 'launched',
+              pane: here.pane,
+              launched: identity,
+              ...(here.workspace ? { workspace: here.workspace } : {}),
+            });
+          }
           // After the idle wait, before the rename and the rules: the same "differs" the watch uses.
           // Unread is not a difference, and the seat continues. A different model is left unnamed.
           if (op.model !== undefined && op.version !== undefined) {
@@ -660,7 +675,11 @@ export async function executePlan(steps: readonly Step[], session: string, host:
               && (op.version === '0' ? running.model !== op.model : modelDiffers(running, declared));
             if (differs) {
               dropped.add(op.seat);
-              final(op.seat, { kind: 'left out', reason: modelLeft(running, declared, op.cli) });
+              final(
+                op.seat,
+                { kind: 'left out', reason: modelLeft(running, declared, op.cli) },
+                `  pane ${here.pane}; ${op.repairLine}, clears it\n`,
+              );
               return;
             }
             if (!running) {
@@ -668,19 +687,6 @@ export async function executePlan(steps: readonly Step[], session: string, host:
               // stderr alone — and the log keeps the one line the record writes, `ready`.
               hold(op.seat, `${op.seat}: its screen doesn't show a model this version knows; not checked\n`);
             }
-          }
-          // The seat's own process, read now that its idle prompt is on the screen: the pane's
-          // shell and the pids in front of it that are not the shell. Nothing is recorded when
-          // herdr can't tell: a seat without the record keeps today's behaviour.
-          const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
-          if (identity) {
-            identities.set(op.seat, identity);
-            host.record(op.seat, {
-              stage: 'launched',
-              pane: here.pane,
-              launched: identity,
-              ...(here.workspace ? { workspace: here.workspace } : {}),
-            });
           }
         };
         if (op.waiting) {
