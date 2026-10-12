@@ -138,6 +138,7 @@ export const CHECK_NAMES = [
   'restored',
   'model-drift',
   'attention',
+  'provider-error',
   'unsent',
   'idle',
   'extra',
