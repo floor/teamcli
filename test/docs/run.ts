@@ -28,6 +28,8 @@ import { runIssues } from '../../src/commands/issues.ts';
 import { runNext } from '../../src/commands/next.ts';
 import { runPlan } from '../../src/commands/plan.ts';
 import { runUsage } from '../../src/commands/usage.ts';
+import { runLock } from '../../src/commands/lock.ts';
+import { runUnlock } from '../../src/commands/unlock.ts';
 import { runWatch } from '../../src/commands/watch.ts';
 import { runWorktree } from '../../src/commands/worktree.ts';
 import type { Caller } from '../../src/caller.ts';
@@ -235,6 +237,16 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runStatus(rest, io, world.statusSources());
     case 'up':
       return runUp(rest, io, world.upSources());
+    case 'lock':
+      return runLock(rest, io, {
+        home: fixture.home,
+        now: () => new Date(spec.now),
+        // The page's clock is pinned. A sleep that left it there would spin, so a wait ends
+        // after one look — the same refusal, and the lock is not broken.
+        sleep: () => {},
+      });
+    case 'unlock':
+      return runUnlock(rest, io, { home: fixture.home });
     case 'usage':
       return runUsage(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'watch':

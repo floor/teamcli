@@ -200,6 +200,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `issues.shape` | `issues` | 1 | a record is not a task, or the task file is not a list | `team issues` |
 | `issues.invocation` | `issues` | 2 | the invocation can't be read | `team issues extra` |
 | `issues.not-a-repo` | `issues` | 2 | not inside a git repository | `team issues` |
+| `lock.taken` | `lock` | 0 | the lock was taken | `team lock heavy-run` |
+| `lock.held` | `lock` | 1 | the lock is already held | `team lock heavy-run` |
+| `lock.io` | `lock` | 1 | the lock directory could not be written | `team lock heavy-run` |
+| `lock.invocation` | `lock` | 2 | the invocation can't be read | `team lock` |
+| `lock.project` | `lock` | 2 | the caller's project can't be read | `team lock heavy-run` |
 | `mcp.clear` | `mcp` | 0 | the bridge is clear: doctor found nothing missing | `team mcp doctor` |
 | `mcp.up` | `mcp` | 0 | every observed bridge leg is up | `team mcp status` |
 | `mcp.down` | `mcp` | 1 | at least one leg is down or unknown | `team mcp status` |
@@ -313,6 +318,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
+| `unlock.released` | `unlock` | 0 | the lock was released | `team unlock heavy-run` |
+| `unlock.io` | `unlock` | 1 | the lock directory could not be removed | `team unlock heavy-run` |
+| `unlock.not-held` | `unlock` | 1 | the lock is not held | `team unlock heavy-run` |
+| `unlock.not-yours` | `unlock` | 1 | the lock is held by someone else | `team unlock heavy-run` |
+| `unlock.unknown-holder` | `unlock` | 1 | the lock's holder can't be read | `team unlock heavy-run` |
+| `unlock.invocation` | `unlock` | 2 | the invocation can't be read | `team unlock` |
+| `unlock.project` | `unlock` | 2 | the caller's project can't be read | `team unlock heavy-run` |
 | `up.dry-run` | `up` | 0 | a dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) | `team up --dry-run` |
 | `up.ready` | `up` | 0 | the launch finished | `team up` |
 | `up.agents` | `up` | 1 | the agents can't be read | `team up` |

@@ -473,6 +473,47 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--for",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--wait",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "lock",
+      "positionals": [
+        {
+          "name": "name",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team lock <name> [--for <text>] [--wait <seconds>]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -921,6 +962,35 @@
       "subcommands": [],
       "usage": [
         "team status [--session <name>] [--file <path>] [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "unlock",
+      "positionals": [
+        {
+          "name": "name",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team unlock <name>"
       ]
     },
     {
