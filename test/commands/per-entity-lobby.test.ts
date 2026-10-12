@@ -100,7 +100,7 @@ function teamYaml(opts: { entity?: string; lobby?: string; lobbyTrust?: string }
   const lobbyTrust = opts.lobbyTrust ?? '~/.config/team/lobby';
   return `format: 1
 project: acme
-${opts.entity ? `entity: ${opts.entity}\n` : ''}${opts.lobby ? `lobby: ${opts.lobby}\n` : ''}coordinator: lead
+${opts.entity ? `entity: ${opts.entity}\n` : ''}${opts.lobby ? `lobby: "${opts.lobby}"\n` : ''}coordinator: lead
 operator: lead
 trust:
   - ${lobbyTrust}
@@ -194,6 +194,53 @@ describe('trust must list the resolved lobby (the owner-gated interlock)', () =>
     if (!team.ok) throw new Error('fixture did not validate');
     const problems = placedProblems(team.team, root, home);
     expect(problems.some((p) => p.message.includes('must list the lobby'))).toBe(false);
+  });
+
+  test('an explicit lobby: redirect not listed in trust is refused', () => {
+    const team = validateTeamFile(teamYaml({ lobby: '~/work/floor-lobby' }), { home, root });
+    if (!team.ok) throw new Error('fixture did not validate');
+    const problems = placedProblems(team.team, root, home);
+    expect(problems.some((p) => p.message.includes('must list the lobby') && p.message.includes('work/floor-lobby'))).toBe(true);
+  });
+
+  test('an explicit lobby: redirect listed in trust passes', () => {
+    const team = validateTeamFile(teamYaml({ lobby: '~/work/floor-lobby', lobbyTrust: '~/work/floor-lobby' }), { home, root });
+    if (!team.ok) throw new Error('fixture did not validate');
+    const problems = placedProblems(team.team, root, home);
+    expect(problems.some((p) => p.message.includes('must list the lobby'))).toBe(false);
+  });
+});
+
+describe('the lobby field validator rejects a cwd-dependent or traversing value', () => {
+  test('a relative lobby is refused with a clear message', () => {
+    const bad = validateTeamFile(teamYaml({ lobby: 'work/lobby' }));
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.errors.some((e) => e.message.includes('lobby must be an absolute path or start with "~/"'))).toBe(true);
+  });
+
+  test('a bare ~ (the home, not a folder of its own) is refused', () => {
+    const bad = validateTeamFile(teamYaml({ lobby: '~' }));
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.errors.some((e) => e.message.includes('lobby must be an absolute path or start with "~/"'))).toBe(true);
+  });
+
+  test('a ".." traversal in the lobby is refused', () => {
+    const relTraversal = validateTeamFile(teamYaml({ lobby: '~/work/../../etc' }));
+    expect(relTraversal.ok).toBe(false);
+    if (!relTraversal.ok) expect(relTraversal.errors.some((e) => e.message.includes('lobby must not contain a ".." segment'))).toBe(true);
+
+    const absTraversal = validateTeamFile(teamYaml({ lobby: '/var/team/../lobby' }));
+    expect(absTraversal.ok).toBe(false);
+    if (!absTraversal.ok) expect(absTraversal.errors.some((e) => e.message.includes('lobby must not contain a ".." segment'))).toBe(true);
+  });
+
+  test('an absolute and a ~/ lobby are accepted', () => {
+    const abs = validateTeamFile(teamYaml({ lobby: '/var/team/lobby' }));
+    expect(abs.ok).toBe(true);
+    if (abs.ok) expect(abs.team.lobby).toBe('/var/team/lobby');
+    const tilde = validateTeamFile(teamYaml({ lobby: '~/work/lobby' }));
+    expect(tilde.ok).toBe(true);
+    if (tilde.ok) expect(tilde.team.lobby).toBe('~/work/lobby');
   });
 });
 
