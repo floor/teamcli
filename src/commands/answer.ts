@@ -103,6 +103,27 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     // exit: answer.file-owner
     return 1;
   }
+  // The owner is a terminal outside herdr, and the walk alone decides that: a non-owner aiming
+  // `--session` is refused here, before `launchedTeamFile` or any other call that reaches herdr,
+  // and before the flag's session is read — no agent list, no pane root, no state write; the
+  // refusal's own log line is the only line written. (A seat cannot be named in this refusal:
+  // placing it would read a session, and that is what must not happen yet.) The log sits beside
+  // this cwd's own file, never a file the flag or a pane pointer would open.
+  if (args.values.session !== undefined) {
+    const walked = walkCaller(io);
+    if (!isOwner(walked)) {
+      const local = loadTeamFile(io.cwd, { home: host.home });
+      if (local.ok) {
+        return refuse(io, json, dirname(local.path), logWho(walked, local.team), seatName, host, {
+          class: 'caller',
+          message: `team answer: ${sessionOwnerRefusal(walked)}`,
+        });
+      }
+      io.stderr(`team answer: ${sessionOwnerRefusal(walked)}\n`);
+      // exit: answer.session-owner
+      return 1;
+    }
+  }
   const launched = args.values.file ? undefined : launchedTeamFile(io, host.home);
   const loaded = loadTeamFile(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), home: host.home });
   if (!loaded.ok) {
@@ -111,19 +132,6 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   }
   const { team, root } = loaded;
   const dir = dirname(loaded.path);
-  // The owner is a terminal outside herdr, and the walk alone decides that: a non-owner aiming
-  // `--session` is refused here, before the flag's session is read — no agent list, no pane root,
-  // no state write; the refusal's own log line is the only line written. (A seat cannot be named
-  // in this refusal: placing it would read a session, and that is what must not happen yet.)
-  if (args.values.session !== undefined) {
-    const walked = walkCaller(io);
-    if (!isOwner(walked)) {
-      return refuse(io, json, dir, logWho(walked, team), seatName, host, {
-        class: 'caller',
-        message: `team answer: ${sessionOwnerRefusal(walked)}`,
-      });
-    }
-  }
   // The gate judges the caller placed in the session this command asks about. With no `--session`
   // the session judged is the caller's own placement: the file's session first, then a session
   // the state records this caller's pane in (`team up --session <other>`) — never one a non-owner
