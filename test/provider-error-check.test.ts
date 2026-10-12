@@ -6,10 +6,11 @@ import type { CheckContext, Report, SeatObservation } from '../src/watch/check.t
 import { providerError } from '../src/watch/checks/provider-error.ts';
 import type { Screen } from '../src/watch/screen.ts';
 
-function seat(name: string, screen: { kind: string; reset?: string | null }, running = true): SeatObservation {
+function seat(name: string, screen: { kind: string; reset?: string | null }, running = true, working = false): SeatObservation {
   return {
     name,
     running,
+    working,
     screen: screen as Screen,
   } as SeatObservation;
 }
@@ -74,6 +75,22 @@ describe('provider-error check', () => {
       'operator: claude-b is at a rate limit: usage limit, and the screen names no reset time',
       'owner: claude-b is at a rate limit: usage limit, and the screen names no reset time',
     ]);
+  });
+
+  test('a seat working on a provider-error screen is not reported, and is reported when it stops', () => {
+    const { ctx, finish } = harness();
+    const screen = { kind: 'provider error' };
+    const told = [
+      'operator: claude-a shows a provider error: connection lost, and no capture names a retry',
+      'owner: claude-a shows a provider error: connection lost, and no capture names a retry',
+    ];
+    expect(providerError.run(seat('claude-a', screen, true, true), ctx)).toEqual([]);
+    finish();
+    expect(texts(providerError.run(seat('claude-a', screen), ctx))).toEqual(told);
+    finish();
+    expect(providerError.run(seat('claude-a', screen, true, true), ctx)).toEqual([]);
+    finish();
+    expect(texts(providerError.run(seat('claude-a', screen), ctx))).toEqual(told);
   });
 
   test('a seat that is not running, and any other screen, is not this state', () => {

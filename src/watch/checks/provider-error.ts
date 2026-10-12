@@ -4,8 +4,9 @@ import type { Screen } from '../screen.ts';
 // A seat stopped on its CLI's provider error or usage limit. herdr calls that seat done, and the
 // pane is back at its prompt, so without this reading it looks idle. Reported once, to the
 // operator and to the owner, and cleared when the seat leaves the state: a pass that stops
-// calling `once` drops the key. Nothing is typed. The report names a retry only when a capture
-// has shown one. None has.
+// calling `once` drops the key. A seat that is working is not this report, even while the
+// sentence is still in the window: the key clears, and a later stop is reported again. Nothing
+// is typed. The report names a retry only when a capture has shown one. None has.
 
 type Held = { kind: 'provider error' } | { kind: 'rate limit'; reset: string | null };
 
@@ -24,7 +25,7 @@ function textOf(name: string, state: Held): string {
 export const providerError: SeatCheck = {
   name: 'provider-error',
   run(seat, ctx) {
-    const state = seat.running ? held(seat.screen) : null;
+    const state = seat.running && !seat.working ? held(seat.screen) : null;
     if (!state) return [];
     const text = textOf(seat.name, state);
     // `to` names one recipient. The operator and the owner each get the line.
