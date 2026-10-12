@@ -63,3 +63,21 @@ describe('provider errors on other CLIs', () => {
     for (const sentence of [LOST, LIMIT]) expectIdle('antigravity', `${sentence}\n${idle}`, sentence);
   });
 });
+
+describe('a reset time the classifier cannot read', () => {
+  // The stage matches "Your limit will reset at " with a trailing space. The window trims
+  // each line first, so a phrase with nothing after it is not that stage, and the idle box
+  // under it is what the screen reads. A trailing space on the phrase trims away too.
+  const phrase = 'API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at';
+
+  test('nothing after the reset phrase is idle, trailing space included', () => {
+    expect(readScreen('claude-code', `${phrase}\n${claudeBox('')}`)).toEqual({ kind: 'idle' });
+    expect(readScreen('claude-code', `${phrase} \n${claudeBox('')}`)).toEqual({ kind: 'idle' });
+  });
+
+  test('a reset time wrapped onto the next line is idle and the time is not read', () => {
+    const cut = `${phrase}\n11:00\n${claudeBox('')}`;
+    expect(readScreen('claude-code', cut)).toEqual({ kind: 'idle' });
+    expect(inWindow(cut, '11:00')).toBe(true);
+  });
+});
