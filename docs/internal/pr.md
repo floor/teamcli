@@ -53,8 +53,8 @@ The old spelling `team check … --pr <file>` still runs this body check, one no
 ## Examples, moved here whole
 
 The examples below are the page's own, moved here whole, in the order they stood in. The
-first console is also on [the `team pr check` page](../commands/pr.md); the rest run only here,
-and their order and their output matter only here.
+first console is also on [the `team pr check` page](../commands/pr.md); the rest stand only in this
+note and are not executed by any test — `test/docs.test.ts` reads `docs/commands/` alone.
 
 ```yaml file=.agents/team.yaml
 format: 1
