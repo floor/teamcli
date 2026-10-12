@@ -1871,6 +1871,13 @@ scene('watch.file-owner', async (place) => {
   write(place, TEAM);
   return show(await watched(place, ['--file', '.agents/team.yaml'], other), "--file is the owner's");
 });
+scene('watch.watchdog', async (place) => {
+  updateState(place.root, (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.watchdog = { file: join(place.root, 'custom', 'team.yaml'), pane: 'w2:p1' };
+  });
+  return show(await watched(place, ['--session', 'acme'], other), 'watchdog pane');
+});
 scene('watch.no-nudge', async (place) => {
   write(place, TEAM);
   return show(await watched(place, ['--no-nudge'], other), '--no-nudge');

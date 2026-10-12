@@ -140,11 +140,6 @@ function aim(session: string): string | undefined {
   return session === 'default' ? undefined : session;
 }
 
-/** Said instead of `watch: started` when a flagless watch in the watchdog's start folder would
- *  not read the file `up` was given. One line: the watch was not started, why, and what to do. */
-export const WATCH_NOT_STARTED =
-  'watch: not started: a watch started there could not read this file, or would read another one under this session\'s name. Move the file to .agents/team.yaml in the folder the watch starts in. A fuller repair is planned.';
-
 function sameFile(a: string, b: string): boolean {
   const real = (path: string) => {
     try {
@@ -740,11 +735,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   }
   const watch = recorded?.watch;
   const watchAlive = Boolean(watch && sources.alive?.(watch.pid));
-  // The watchdog starts in `root` and runs `watch` with no `--file`. Start it only when that
-  // load reads the file this command was given. Anything else would miss this file, or read
-  // another one under this session's name.
-  const startWatch = watchWouldRead(root, loaded.path, sources.home);
-  const watchMissed = !watchAlive && !startWatch;
+  // The watchdog starts in `root` and runs `watch` with no `--file`. When that load would miss
+  // this file, or read another one, the resolved path is recorded for the watchdog pane.
+  const watchFile = watchWouldRead(root, loaded.path, sources.home) ? undefined : loaded.path;
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
   const buildPlan = () => upPlan({
@@ -755,24 +748,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     sessionRunning: state === 'running' || state === 'stopped',
     seats,
     watchAlive,
-    startWatch,
     watchLine: (sources.watchCommand ?? watchCommand)(session),
+    ...(watchFile ? { watchFile } : {}),
   });
-  // Exit 1, including when every seat is ready: a team that comes up with no watch looks
-  // finished, and that is how a watch that never read its file was missed. The owner has to
-  // see it. A dry run prints the same line. That exit is decided with the launch, after the
-  // plan, so a dry run does not take it.
-  // One physical line, through the cleaned writer every other line of this command uses.
-  // `plainLine` folds it. A real run writes it on stderr, where `watch: started` is: stdout
-  // is the records alone. A dry run writes it on stdout, with the plan. The sentence does not
-  // copy the path the command line named, so an escape in that path is not printed.
-  const sayWatchMissed = () => {
-    if (!watchMissed) return;
-    const line = `${plainLine(WATCH_NOT_STARTED)}\n`;
-    if (dry) out.stdout(line);
-    else out.stderr(line);
-    if (!dry) logLine(dir, 'up', describeCaller(caller), WATCH_NOT_STARTED, sources.now?.() ?? new Date());
-  };
 
   if (dry) {
     // The same cause can reach the list twice — the gate and `doctor` both read the
@@ -780,7 +758,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // return below, so the status and the exit id are that refusal's; the words stay these.
     for (const refusal of [...new Set(refusals)]) out.stdout(`! up would refuse: ${plainText(refusal)}\n`);
     out.stdout(plainText(formatPlan(buildPlan())));
-    sayWatchMissed();
   }
   if (refusals.length) {
     if (!dry) for (const refusal of [...new Set(refusals)]) out.stderr(`team up: ${plainText(refusal)}\n`);
@@ -993,6 +970,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return sources.doctor.version(profile.binary);
       },
       log: (who, what) => logLine(dir, 'up', callerLabel(caller), `${who}: ${what}`, now()),
+      noteWatch(pane, file) {
+        updateState(dir, (state) => {
+          const current = (state.sessions[session] ??= emptySession());
+          current.watchdog = { file, pane };
+        });
+      },
       /**
        * §3/§4: what happens to a seat this run finds at a dialog. The owner at a terminal is
        * asked, in `pause.ts`, with `o`/`s`/`q`; an owner whose stdin is not a terminal never
@@ -1077,7 +1060,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     });
 
     const report = await executePlan(plan, session, host);
-    sayWatchMissed();
     const afterwards = readState(dir).sessions[session]?.seats ?? {};
     const pending = team.seats.filter((seat) => {
       if (seat.stopped || !profileFor(seat.cli)) return false;
@@ -1089,7 +1071,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.pending
     // exit: up.server
     // exit: up.watch
-    return pending.length || report.serverFailed || report.watchFailed || report.held || watchMissed ? 1 : 0;
+    return pending.length || report.serverFailed || report.watchFailed || report.held ? 1 : 0;
   } finally {
     runLock.release();
   }

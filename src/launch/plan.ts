@@ -63,7 +63,7 @@ export type Op =
        *  is working and nothing is closed. */
       drift?: { model: string; version: string; way: string };
     }
-  | { do: 'watch'; label: string; command: string }
+  | { do: 'watch'; label: string; command: string; file?: string }
   | {
       do: 'type';
       seat: string;
@@ -202,6 +202,11 @@ export interface UpInput {
   startWatch?: boolean;
   /** The command the watchdog pane runs. Defaults to `team watch`. */
   watchLine?: string;
+  /**
+   * The team file a flagless watch in `root` would not read. Recorded for the watchdog pane
+   * before its command runs. Absent when that flagless watch already reads the file.
+   */
+  watchFile?: string;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -459,7 +464,7 @@ export function upPlan(input: UpInput): Step[] {
     kind: 'run',
     argv: herdr(session, 'pane', 'run', paneOf('watchdog'), watchLine),
     note: 'a desktop notification follows when the watch exits',
-    do: { do: 'watch', label: 'watchdog', command: watchLine },
+    do: { do: 'watch', label: 'watchdog', command: watchLine, ...(input.watchFile ? { file: input.watchFile } : {}) },
   });
   return steps;
 }

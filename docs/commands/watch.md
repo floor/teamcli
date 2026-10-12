@@ -24,9 +24,9 @@ machine's approval store, the session's state (`.agents/team.state.json`) and he
 agents, each pane's screen and status. With no `--file`, that file is `.agents/team.yaml` of the
 repository's main checkout, found through git's common directory; a folder that is not a git
 repository is read from `.agents/team.yaml` in that folder only, not from a parent, and a link at
-`.agents` or at the file is not followed. A file at
-another path is not what this command reads when `up` starts it: `up` does not start that watch
-(`watch: not started: …` on the `up` page). It also reads the machine's load, free memory, free disk and
+`.agents` or at the file is not followed. A file at another path is what this command reads when `up` recorded it for the watchdog pane
+this session's state names: the command `up` runs carries no `--file`, and any other non-owner
+is refused. It also reads the machine's load, free memory, free disk and
 swap, and, when a temporary seat's end is judged, git.
 
 Writes `.agents/team.state.json` (the watch's pid and a heartbeat, once a pass; a temporary seat's
