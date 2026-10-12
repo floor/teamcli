@@ -108,12 +108,14 @@ function mineNotesOf(loaded: LoadResult | null, error: unknown, restricted: bool
 /** One note for a file that exists and does not load. The owner reads the loader's own message:
  *  the path, the line when it has one, and the problem — never the bare `no team file here` text,
  *  which is a different case's sentence. A caller who is not the owner reads a fixed sentence
- *  instead — this project's own path relative to the root, the line, and where the reason is —
- *  because the loader's bodies are the loader's own and can name paths outside this project
- *  (`trust: must list the lobby <home>/…` when a migrated file omits it), and `team status`
- *  prints every one of them with the bodies, as a run showed (stderr, exit 2). */
+ *  instead — this project's own path relative to the root, the line, and the owner as the
+ *  reader of the reason — because the loader's bodies are the loader's own and can name paths
+ *  outside this project (`trust: must list the lobby <home>/…` when a migrated file omits it).
+ *  `team status` does not print those bodies for this caller: the caller rule answers with one
+ *  sentence and no reason, so this note names the owner, the same way a file that cannot be read
+ *  does. */
 function noticeOf(path: string, problem: Problem, restricted: boolean): string {
-  if (restricted) return `${TEAM_FILE} does not load${problem.line ? ` (line ${problem.line})` : ''}: run team status for the reason`;
+  if (restricted) return `${TEAM_FILE} does not load${problem.line ? ` (line ${problem.line})` : ''}: the owner reads the reason`;
   return `${path}${problem.line ? ` line ${problem.line}` : ''}: ${problem.message}`;
 }
 
