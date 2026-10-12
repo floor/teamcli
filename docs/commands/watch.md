@@ -118,9 +118,9 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> waits at a permission prompt: its owner's to answer` | a permission dialog or a trust question; only its owner answers those |
 | `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
 | `<seat> shows a vendor notice: its owner's to act on` | a screen the seat's profile captures as a vendor notice — today, Codex 0.157.0's update screen; `team` never answers one |
-| `<seat> shows a provider error: connection lost, and no capture names a retry` | a Claude Code seat stopped on its provider's connection error (or its usage limit); told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
-| `<seat> is at a rate limit: usage limit, resets at <time>` | a Claude Code seat stopped on its provider's connection error (or its usage limit); told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
-| `<seat> is at a rate limit: usage limit, and the screen names no reset time` | a Claude Code seat stopped on its provider's connection error (or its usage limit); told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
+| `<seat> shows a provider error: connection lost, and no capture names a retry` | a Claude Code seat stopped on its provider's connection error; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
+| `<seat> is at a rate limit: usage limit, resets at <time>` | a Claude Code seat stopped on its provider's usage limit, and the screen names when it resets; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
+| `<seat> is at a rate limit: usage limit, and the screen names no reset time` | the same usage-limit screen when it names no reset time |
 | `<seat> is blocked, and its screen is not one the watch recognises` | herdr says blocked and the screen says nothing the watch knows |
 | `<seat>: herdr reports the status "<status>"` | a status that is neither idle, done, working nor blocked |
 | `<seat> holds text in its input box that was never sent` | unsent text for `watch.unsent_after`; the watch never sends or clears text it cannot show it typed itself |
