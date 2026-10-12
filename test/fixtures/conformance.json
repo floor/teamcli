@@ -316,10 +316,24 @@
       "provenance": "constructed"
     },
     {
+      "file": "claude-code/provider-error.txt",
+      "cli": "claude-code",
+      "classify": "provider error",
+      "composer": "unknown",
+      "provenance": "constructed"
+    },
+    {
       "file": "claude-code/quoted-dialog.txt",
       "cli": "claude-code",
       "classify": "idle",
       "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "claude-code/rate-limit.txt",
+      "cli": "claude-code",
+      "classify": "rate limit",
+      "composer": "unknown",
       "provenance": "constructed"
     },
     {

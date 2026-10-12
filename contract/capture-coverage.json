@@ -16,6 +16,8 @@
     "exit question",
     "trust",
     "vendor notice",
+    "provider error",
+    "rate limit",
     "unknown"
   ],
   "cells": {
@@ -56,6 +58,16 @@
         "undocumented": 0
       },
       "vendor notice": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "provider error": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "rate limit": {
         "real": 0,
         "constructed": 0,
         "undocumented": 0
@@ -107,6 +119,16 @@
         "constructed": 0,
         "undocumented": 0
       },
+      "provider error": {
+        "real": 0,
+        "constructed": 1,
+        "undocumented": 0
+      },
+      "rate limit": {
+        "real": 0,
+        "constructed": 1,
+        "undocumented": 0
+      },
       "unknown": {
         "real": 1,
         "constructed": 11,
@@ -151,6 +173,16 @@
       },
       "vendor notice": {
         "real": 1,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "provider error": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "rate limit": {
+        "real": 0,
         "constructed": 0,
         "undocumented": 0
       },
@@ -201,6 +233,16 @@
         "constructed": 0,
         "undocumented": 0
       },
+      "provider error": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "rate limit": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
       "unknown": {
         "real": 3,
         "constructed": 0,
@@ -244,6 +286,16 @@
         "undocumented": 0
       },
       "vendor notice": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "provider error": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "rate limit": {
         "real": 0,
         "constructed": 0,
         "undocumented": 0
@@ -534,9 +586,21 @@
       "provenance": "constructed"
     },
     {
+      "file": "claude-code/provider-error.txt",
+      "cli": "claude-code",
+      "kind": "provider error",
+      "provenance": "constructed"
+    },
+    {
       "file": "claude-code/quoted-dialog.txt",
       "cli": "claude-code",
       "kind": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "claude-code/rate-limit.txt",
+      "cli": "claude-code",
+      "kind": "rate limit",
       "provenance": "constructed"
     },
     {
