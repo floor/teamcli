@@ -1,7 +1,0 @@
-{
-  "format": 1,
-  "labs": {
-    "anthropic": ["low", "medium", "high", "xhigh", "max"],
-    "google": ["low", "medium", "high", "xhigh", "max"]
-  }
-}

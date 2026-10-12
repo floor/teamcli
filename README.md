@@ -157,8 +157,6 @@ with the seat's `display` (itself defaulting to the model and version, `Claude O
 ` · ` plus `effort` when the seat sets one (`Grok 4.7 · high`). Seats expanded from `count` share
 that title: the seat's name is the only key. A `label` written in the file is still read, and it
 does not title the workspace; left out, the stored title is the model and version in lowercase.
-`effort` is optional. A lab listed in `src/profiles/efforts.json` (format 1) refuses a word
-outside its list, and names the words it allows; a lab with no entry accepts any effort.
 `team doctor` warns, and does not refuse the file, when a name or a stored label repeats the
 project or the session.
 

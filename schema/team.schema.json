@@ -503,11 +503,6 @@
             "type": "string",
             "$comment": "accepted, and not the herdr title; the title is the display, and the effort when set"
           },
-          "effort": {
-            "type": "string",
-            "minLength": 1,
-            "$comment": "optional; a lab with a vocabulary refuses a word outside it"
-          },
           "mode": {
             "enum": [
               "worktree",

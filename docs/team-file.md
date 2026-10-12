@@ -79,12 +79,9 @@ one no longer does:
 
 - `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
   as a token of its own when the file writes it.
-- `effort` is optional. `up` and `add` title the workspace `<display> · <effort>` when it is set,
-  and `<display>` when it is not. The title has no seat name and no role. Seats expanded from
+- `up` and `add` title the workspace `<display> · <effort>` when the seat sets `effort`,
+  and `<display>` when it does not. The title has no seat name and no role. Seats expanded from
   `count` share it: herdr shows the seat's name on its own line.
-- The words a lab allows are `src/profiles/efforts.json`, format 1, keyed by the seat's `vendor`.
-  A word outside that lab's list fails `team check`, and the failure names the words the lab
-  allows. A vendor with no entry accepts any effort. `effort` is not put on the launch line.
 - `label`, written or left out, is still a field the file may carry. A written one is accepted.
   It does not title the workspace. Left out, the stored title stays the model and version in
   lowercase, which is what an approval of a file written that way already sealed.

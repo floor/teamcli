@@ -1,5 +1,4 @@
 import { CLIS } from '../../clis.ts';
-import { shippedEfforts, type EffortVocabulary } from '../../profiles/efforts.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
@@ -25,9 +24,7 @@ export const seats: Section = {
     const trust = valueOf<string[]>(ctx, 'trust');
     const accounts = valueOf<Budgeted>(ctx, 'budgets').declared;
     const marks: LeadMark[] = [];
-    const efforts = shippedEfforts();
-    if (!efforts.ok) ctx.check.fail(entry?.value.line ?? ctx.root.line, efforts.message);
-    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks, efforts);
+    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks);
     ctx.leads = marks;
     return seats;
   },
@@ -50,7 +47,6 @@ export const seats: Section = {
         launch: { type: 'string', minLength: 1 },
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
         label: { type: 'string', $comment: 'accepted, and not the herdr title; the title is the display, and the effort when set' },
-        effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary refuses a word outside it' },
         mode: { enum: MODES },
         parked: { type: 'boolean' },
         stopped: { type: 'boolean' },
@@ -68,7 +64,7 @@ export const seats: Section = {
 // that names an `account:` must name one of these, or it would silently spend nothing budgeted.
 function readSeats(
   entry: YamlEntry | undefined, check: Check, trust: string[], topLine: number, broken: Set<string>, accounts: ReadonlySet<string>,
-  marks: LeadMark[], efforts: EffortVocabulary,
+  marks: LeadMark[],
 ): DraftSeat[] {
   if (!entry) {
     check.fail(topLine, 'seats is required: at least the orchestrator\'s and the operator\'s seat');
@@ -81,7 +77,7 @@ function readSeats(
   const seats: DraftSeat[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
-      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
+      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'mode',
       'parked', 'stopped', 'count', 'leads',
     ]);
     if (item.kind !== 'map') continue;
@@ -127,7 +123,6 @@ function readSeats(
     if (leads && name && leadsField) marks.push({ name, line: leadsField.value.line });
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     const label = check.text(fields.get('label'), `${at}: label`);
-    const effort = readEffort(fields.get('effort'), at, vendor, efforts, check);
     // The written label, or the lowercase model and version, stays on the seat: `seatDigest`
     // hashes `label`, and an approved file keeps its key. It does not title the workspace.
     // `up` and `add` use `workspaceLabel` (the display, and the effort when set).
@@ -145,7 +140,6 @@ function readSeats(
         count,
         instance,
         ...(account ? { account } : {}),
-        ...(effort ? { effort } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
       });
@@ -168,19 +162,6 @@ export function defaultLabel(model: string, version: string): string {
  */
 export function workspaceLabel(seat: { display: string; effort?: string }): string {
   return seat.effort ? `${seat.display} · ${seat.effort}` : seat.display;
-}
-
-function readEffort(
-  entry: YamlEntry | undefined, at: string, vendor: string | undefined, efforts: EffortVocabulary, check: Check,
-): string | undefined {
-  const effort = check.text(entry, `${at}: effort`);
-  if (effort === undefined || !entry || !vendor || !efforts.ok) return effort;
-  const allowed = efforts.labs[vendor];
-  // A lab with no entry accepts any effort. One with an entry refuses a word outside it.
-  if (allowed && !allowed.includes(effort)) {
-    check.fail(entry.value.line, `${at}: effort "${effort}" is not one of ${vendor}'s: ${allowed.join(', ')}`);
-  }
-  return effort;
 }
 
 function readVersion(entry: YamlEntry | undefined, at: string, line: number, check: Check): string | undefined {

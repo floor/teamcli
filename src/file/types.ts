@@ -47,11 +47,6 @@ export type Seat = {
    * It does not title the herdr workspace; `workspaceLabel` does, from `display` and `effort`.
    */
   label: string;
-  /**
-   * The seat's effort word, when the file sets one. Absent otherwise, so a file that omits
-   * it keeps the digest it had. A lab with a vocabulary refuses a word outside it.
-   */
-  effort?: string;
   mode: Mode;
   parked: boolean;
   stopped: boolean;
