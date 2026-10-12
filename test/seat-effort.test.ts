@@ -11,7 +11,7 @@
 // change's coverage, in test/seat-label.test.ts.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalDifferences } from '../src/approve/approval.ts';
@@ -166,6 +166,34 @@ describe('a seat\'s effort', () => {
       expect(withEffort.warnings.some((warning) => warning.message.includes('effort vocabulary format is 2; this build reads 1'))).toBe(true);
       const without = valid(seatOf(lab, undefined));
       expect(without.warnings.some((warning) => warning.message.includes('effort vocabulary'))).toBe(false);
+    } finally {
+      writeFileSync(shipped, backup);
+    }
+  });
+
+  test('a vocabulary file that is missing, or is not JSON, warns the same way', () => {
+    // The loader's two unreadable branches, distinct from a readable-but-refused document:
+    // the read itself throws (the file is renamed away for the length of one load), or the
+    // bytes do not parse. Either way the word stays on the seat and the file still loads —
+    // a missing data file must not fail teams whose seats set no effort either.
+    const shipped = new URL('../src/profiles/efforts.json', import.meta.url);
+    const aside = new URL('../src/profiles/efforts.json.aside', import.meta.url);
+    renameSync(shipped, aside);
+    try {
+      const missing = valid(seatOf(lab, words[0]));
+      expect(missing.team.seats[0]?.effort).toBe(words[0]);
+      expect(missing.warnings.some((warning) => /effort vocabulary could not be read:.*ENOENT/.test(warning.message))).toBe(true);
+      const untouched = valid(seatOf(lab, undefined));
+      expect(untouched.warnings.some((warning) => warning.message.includes('effort vocabulary'))).toBe(false);
+    } finally {
+      renameSync(aside, shipped);
+    }
+    const backup = readFileSync(shipped, 'utf8');
+    try {
+      writeFileSync(shipped, 'not json');
+      const unparsable = valid(seatOf(lab, words[0]));
+      expect(unparsable.team.seats[0]?.effort).toBe(words[0]);
+      expect(unparsable.warnings.some((warning) => warning.message.startsWith('effort vocabulary is not JSON:'))).toBe(true);
     } finally {
       writeFileSync(shipped, backup);
     }
