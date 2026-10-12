@@ -2,9 +2,10 @@
 
 Lists the typed records in the one file the team file names. Anyone in the checkout may run it.
 It reads: it writes nothing, and it creates no key. The list is file order — a priority is shown and
-does not reorder — and a listing is not a claim and not the intake rule. A broker source is read by
-`team next`, never from here: this command connects to no broker, holds no tracker credential, and
-has no seat gate.
+does not reorder. A listing is not a claim and not the intake rule:
+`team plan` prints the takeable queue and claims nothing. A broker source is read by `team next`,
+never from here: this command connects to no broker, holds no tracker credential, and has no seat
+gate.
 
 ## Synopsis
 
