@@ -6,6 +6,7 @@ import { approvedFingerprints, approvalOf, ceilingsOf } from '../approve/approva
 import { checkDrift, resolveChecks } from '../budgets/checks.ts';
 import { formatDiff } from '../approve/diff.ts';
 import { compare, describe, fingerprints } from '../approve/fingerprint.ts';
+import { approveFingerprint, ownerAuthorized } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources } from '../delegate.ts';
@@ -305,6 +306,12 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
     `approval #${(recorded?.generation ?? 0) + 1} for this project${recorded ? `; the last one was on ${recorded.at.slice(0, 10)}` : ''}${keyRead.kind === 'key' ? `; key ${keyFingerprint(keyRead.key)}` : ''}.\n`,
   );
 
+  // The out-of-band owner-authorization fingerprint: the agent shows it with `--show`, the owner
+  // reads it back ("yes <fingerprint>"), and the agent reruns with `TEAM_OWNER_APPROVAL=<it>`. It
+  // is recomputed from the live file, so a post-yes edit prints — and demands — a different hex.
+  const approveFp = approveFingerprint(team);
+  io.stdout(`Owner-authorization fingerprint: ${approveFp}\n`);
+
   // exit: approve.show
   if (args.flags.has('show')) return 0;
 
@@ -312,6 +319,10 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   // it — the owner's own, or the delegate's audit line naming the pane and what the approval
   // sealed — and the sentence. `pane` is the approved delegate's when this is a delegated
   // approval, and absent for the owner's.
+  // Set once the caller is placed below: true when a non-owner was admitted by a matching
+  // out-of-band owner token. The write and the signing are the owner's either way; this only
+  // adds the provenance to the log line.
+  let tokenAuthorized = false;
   const writeApproved = (caller: Caller, pane?: string, changed?: string): number => {
     const now = sources.now();
     writeApproval(
@@ -326,7 +337,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
         dirname(path),
         'approve',
         describeCaller(caller),
-        `approved ${seats} seats; ceilings: ${ceilingsLine(ceilings)}`,
+        `approved ${seats} seats; ceilings: ${ceilingsLine(ceilings)}${tokenAuthorized ? '; owner-token-authorized' : ''}`,
         now,
       );
     } else {
@@ -338,11 +349,16 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   };
 
   const caller = callerOf(io);
+  // An out-of-band owner token admits a non-owner caller as the owner for this one change: the
+  // fingerprint it carries must equal the one just recomputed from the live file. When it does,
+  // the delegate gate is skipped and the run rejoins the owner's path — the same key, the same
+  // write — with the provenance on the log line. A token for any other change never matches.
+  tokenAuthorized = !isOwner(caller) && ownerAuthorized(io.env, approveFp);
   // The approved delegate's pane, when this is a delegated approval: the gate passed it, and
   // the run goes on through the same key guards and the same write the owner's run uses.
   // Absent, this is the owner's run.
   let delegatedPane: string | undefined;
-  if (!isOwner(caller)) {
+  if (!isOwner(caller) && !tokenAuthorized) {
     if (!team.delegates) {
       io.stderr(
         `team approve: only the owner approves a team file, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`,
@@ -406,7 +422,9 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   // a paste, so it carries its own id. A delegated run skips both guards: the question is the
   // owner's, its terminal is not where a delegated approval is answered, and the audit line —
   // not an answer — is its record.
-  if (delegatedPane === undefined) {
+  // A token-authorized run skips the question's guards like a delegated one: the question is the
+  // owner's terminal act, and the owner already authorized this exact change out of band.
+  if (delegatedPane === undefined && !tokenAuthorized) {
     if (args.flags.has('confirm')) {
       const answer = await sources.ask(
         `\nType the number of seats (${seats}) to approve this file, and its commands and rules, to run: `,

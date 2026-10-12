@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/approval.ts';
+import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, mayLaunchSeats } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
@@ -476,9 +477,24 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // and nothing here tells the caller to run a herdr command.
   let clearStopped = false;
 
+  // One verified snapshot carries the whole command: the refusal when there is
+  // one, and the ceilings the launch holds. A legacy or refused record is not
+  // an approval in force, and says so in its own words. Read before the caller
+  // gate so an out-of-band owner token can be matched against what `up` would launch.
+  const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
+  // The out-of-band owner authorization: a non-owner caller is admitted as the owner for this one
+  // launch when the token equals the fingerprint of the approved record `up` would launch — its
+  // fingerprints and generation, recomputed now. Only when an approval is in force, and never on a
+  // delegated run (the gate decides those). Downstream treats it as a no-terminal owner: it never
+  // prompts, which is right for an agent with no terminal.
+  const upFp =
+    standing.kind === 'verified' ? upFingerprint(standing.record.approval.fingerprints, standing.generation) : undefined;
+  const ownerToken =
+    !mayLaunchSeats(caller) && verdict === null && upFp !== undefined && ownerAuthorized(io.env, upFp);
+
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
-  if (!mayLaunchSeats(caller)) {
+  if (!mayLaunchSeats(caller) && !ownerToken) {
     if (verdict === null) {
       refusals.push(
         `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
@@ -487,10 +503,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       refusals.push(verdict.text);
     }
   }
-  // One verified snapshot carries the whole command: the refusal when there is
-  // one, and the ceilings the launch holds. A legacy or refused record is not
-  // an approval in force, and says so in its own words.
-  const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified') refusals.push(notInForce(standing));
   else {
     const differences = approvalDifferencesOf(standing, team);
@@ -518,7 +530,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // decision. Written only when this call is one that may run `up` — the refusals above
       // accumulate rather than return, so a caller the caller gate refused must leave every
       // file as it was — and not on a dry run, which decides nothing.
-      if (!dry && (mayLaunchSeats(caller) || delegated !== null)) {
+      if (!dry && (mayLaunchSeats(caller) || delegated !== null || ownerToken)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
       refusals.push(problem);
@@ -833,6 +845,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // so the delegation is on the record before the first workspace is made. A dry run returned
     // above and writes nothing; a run that refused never got here.
     if (delegated !== null) (sources.logDelegated ?? logDelegated)(dir, delegated, 'up', sources.now?.());
+    // Provenance for an owner-token launch: the caller that ran it, and that the owner authorized
+    // it out of band for this approved record.
+    if (ownerToken) logLine(dir, 'up', callerLabel(caller), 'owner-token-authorized', sources.now?.() ?? new Date());
 
     if (createLobby) {
       // The run's first write, under the lock: the lobby the read-only pass above found absent.
