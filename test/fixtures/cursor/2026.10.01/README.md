@@ -177,6 +177,17 @@ dropped; what remains wrapped at the pane's width, as the pane drew it), the wor
 path is `<workspace>`, and the resume session id is `<session>`. All other visible text
 is retained.
 
+## The background-task row (2026-10-12)
+
+Captured from `cursor-agent` `2026.10.01-14929f9` with herdr 0.7.1, `pane read --source
+visible`, in the scratch session `b2-cursor-task`. The pane was 54 columns. The folder
+was trusted (`--trust --force --sandbox disabled`). A background `sleep` was started and
+the turn settled: herdr reported idle, the box held only `→ Add a follow-up`, and the
+row above the model line was the task count. The workspace path is `<workspace>`.
+
+- `task-idle.txt`: one background sleep, the row `  1 task`.
+- `tasks-idle.txt`: two background sleeps, the row `  2 tasks`.
+
 ## Constructed
 
 - `working-no-spinner.txt`: constructed from `working.txt` by removing the braille spinner line. Not a capture. That line sits several lines above the prompt, so a longer tool transcript pushes it out of the 20-line window. The prompt still ends in `ctrl+c to stop`.

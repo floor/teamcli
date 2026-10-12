@@ -162,7 +162,7 @@
     },
     "cursor": {
       "idle": {
-        "real": 9,
+        "real": 11,
         "constructed": 0,
         "undocumented": 0
       },
@@ -1027,6 +1027,18 @@
     },
     {
       "file": "cursor/2026.10.01/startup.txt",
+      "cli": "cursor",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.01/task-idle.txt",
+      "cli": "cursor",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.01/tasks-idle.txt",
       "cli": "cursor",
       "kind": "idle",
       "provenance": "capture"
