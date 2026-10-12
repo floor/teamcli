@@ -2,7 +2,7 @@
 // real unix socket (a listener this test owns). No pane is read and no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -710,6 +710,11 @@ describe('team send: native drop', () => {
     const { host, pane } = nativeHost(sockets, ['idle', 'working']);
     const io = owner(root);
     const body = 'y'.repeat(500);
+    const dropsRoot = join(dir, 'send-drops');
+    const sessionDir = join(dropsRoot, 'acme');
+    mkdirSync(sessionDir, { recursive: true });
+    chmodSync(dropsRoot, 0o755);
+    chmodSync(sessionDir, 0o755);
 
     const code = await runSend(['native', body], io, host);
 
@@ -727,6 +732,8 @@ describe('team send: native drop', () => {
     expect(files.length).toBe(1);
     const path = join(drops, files[0] as string);
     expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(dropsRoot).mode & 0o777).toBe(0o700);
+    expect(statSync(sessionDir).mode & 0o777).toBe(0o700);
     expect(statSync(drops).mode & 0o777).toBe(0o700);
     expect(readFileSync(path, 'utf8')).toBe(body);
     expect(trigger).toContain(path);

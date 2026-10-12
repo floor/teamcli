@@ -51,7 +51,8 @@ usage error. `--timeout` is a whole number of seconds, 1 to 86,400, and is only 
 `--wait`; without it a wait runs 120 seconds. `--json` prints one result document instead of
 the lines — `{seat, status, exit, reply?, error?, ids}` — where `ids.sent` is the composed
 frame's id and `ids.reply` the reply frame's own, when there is one. `--dry-run` resolves the
-seat and names the channel, and writes nothing.
+seat and names the channel. It writes no drop file and types nothing; it appends one line to
+`.agents/team.log`.
 
 ## What it reads and writes
 
@@ -59,8 +60,10 @@ Reads the team file, the caller's placement, and the herdr session's agents. A C
 seat also reads the processes of the seat's pane and the socket file's presence in `cc-socks`.
 The socket is the first of the pane's processes — the foreground processes first, then the
 shell — with a file at `<sockets dir>/<pid>.sock`. A native seat writes
-`.agents/send-drops/<session>/<seat>/<id>` (the directory mode 0700, the file mode 0600) and
-types one trigger line into that seat's pane. The command holds the seat's lock
+`.agents/send-drops/<session>/<seat>/<id>` (the file mode 0600). `send-drops`, the session
+directory, and the seat directory are each mode 0700. This command never deletes a delivered
+drop file; the owner removes `.agents/send-drops` when those messages are no longer needed. The
+command types one trigger line into that seat's pane. The command holds the seat's lock
 (`<state dir>/seat-locks/<session>/<seat>`) around the write, so a launch of the same seat
 cannot act beside it and two native sends cannot type into one pane at once; a `--wait` send
 holds it until the reply or the timeout, because the outstanding request is the thing the lock
@@ -206,7 +209,7 @@ team send: refused: gpt-reviewer runs codex: this build confirms that a native C
 exit 1
 ```
 
-`--dry-run` names the channel and writes nothing:
+`--dry-run` names the channel. It writes no drop file and types nothing; it appends one line to `.agents/team.log`:
 
 ```console
 $ team send gpt-reviewer "hello" --dry-run ; echo "exit $?"

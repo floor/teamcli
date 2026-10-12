@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -24,7 +24,8 @@ has no socket: the body is written whole to a drop file (mode 0600, atomic renam
 pane receives one short trigger line, never the body and never several typed chunks. Only
 the owner, or the orchestrator from its own seat, may call it; a worker seat may not.
 --list sends nothing: it prints the file's seats and needs no caller check. --dry-run
-resolves the seat and the channel and writes nothing.
+resolves the seat and the channel, writes no drop file, and types nothing. It appends
+one line to the team log.
 
 The outcome is one of five, and none of them is silent:
   delivered    the channel took it (exit 0). For a socket, the socket accepted the frame.
@@ -306,6 +307,7 @@ async function deliverNative(
   try {
     let path: string;
     try {
+      sealDropTree(dir, session, seatName);
       path = dropMessage(dropDir, msgId, body);
     } catch {
       return refuse(io, dir, who, `${seatName}: the drop file could not be written; nothing was typed`, host, report);
@@ -321,7 +323,20 @@ async function deliverNative(
   }
 }
 
-/** The seat and channel, and nothing written. Exit 0, always. */
+/** `send-drops`, the session directory, and the seat directory are each mode 0700.
+ *  The leaf alone would leave the parents at the umask, so other users could list
+ *  session ids and seat names. `.agents` itself is not changed. */
+function sealDropTree(dir: string, session: string, seat: string): void {
+  const root = join(dir, 'send-drops');
+  const sessionDir = join(root, session);
+  const leaf = join(sessionDir, seat);
+  mkdirSync(leaf, { recursive: true });
+  chmodSync(root, 0o700);
+  chmodSync(sessionDir, 0o700);
+  chmodSync(leaf, 0o700);
+}
+
+/** The seat and channel. No drop file and nothing typed. One team.log line. Exit 0, always. */
 function dryRun(io: Io, dir: string, who: string, seat: string, what: string, host: SendHost, report: Report): number {
   report.sent = null;
   logLine(dir, 'send', who, `${seat}: dry-run: ${what}`, host.now());
