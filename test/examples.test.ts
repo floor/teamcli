@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 
 const example = readFileSync(new URL('../examples/team.yaml', import.meta.url), 'utf8');
@@ -35,10 +36,11 @@ describe('the fictional example file', () => {
   });
 
   test('labels are derived from each seat\'s display, and a count shares one', () => {
-    // The example still writes `label:` on every seat — an accepted field — but the title is
-    // derived from the seat's own configuration: its display, never the written label, and no
-    // number under count (nothing keys two seats apart by their label; herdr shows the name).
-    expect(team.seats.map((seat) => [seat.name, seat.label])).toEqual([
+    // The example still writes `label:` on every seat — an accepted field, kept on the seat —
+    // but the workspace title is derived from the seat's own configuration: its display, never
+    // the written label, and no number under count (nothing keys two seats apart by their
+    // label; herdr shows the name).
+    expect(team.seats.map((seat) => [seat.name, workspaceLabel(seat)])).toEqual([
       ['codex-keeper', 'GPT-2 Compass'],
       ['codex-signal', 'GPT-2 Compass'],
       ['codex-beacon', 'GPT-3 Comet'],

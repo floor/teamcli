@@ -13,6 +13,7 @@ import { runTeamCheck } from '../src/check/team.ts';
 import { runApprove } from '../src/commands/approve.ts';
 import { runDoctor, seatNameFindings, type DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type UpSources } from '../src/commands/up.ts';
+import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
@@ -93,6 +94,12 @@ function valid(text: string) {
   return result.team;
 }
 
+function seatNamed(team: ReturnType<typeof valid>, name: string) {
+  const seat = team.seats.find((candidate) => candidate.name === name);
+  if (!seat) throw new Error(`fixture has no seat ${name}`);
+  return seat;
+}
+
 function withLabel(label: string): string {
   return minimal.replace('    launch:', `    label: ${label}\n    launch:`);
 }
@@ -104,22 +111,25 @@ const DIGEST_OMITTED = '9680f5f846ed89d816396590ff3883fd44ce864808fabd4c91a04823
 const DIGEST_WRITTEN = '21a216ffade36f87249b66e39ada2b3fdc849a73543e320e3ce5e1a5ceac3e2f';
 
 describe('the derived label of a seat', () => {
+  // The title `up` and `add` give the workspace is `workspaceLabel(seat)`; the seat's stored
+  // `label` keeps what the file wrote (or the lowercase default) and no longer titles anything.
   test('is the display alone when the seat has no effort, in the display\'s own case', () => {
-    expect(valid(minimal).seats[0]?.label).toBe('Claude Opus 5.5');
+    expect(workspaceLabel(seatNamed(valid(minimal), 'lead'))).toBe('Claude Opus 5.5');
   });
 
   test('is the display and the effort, spaced by a middle dot', () => {
-    expect(valid(mixed).seats.find((seat) => seat.name === 'researcher')?.label).toBe('Grok 4.7 · high');
+    expect(workspaceLabel(seatNamed(valid(mixed), 'researcher'))).toBe('Grok 4.7 · high');
   });
 
   test('a written label no longer decides the title, and the file still loads', () => {
     const team = valid(withLabel('builder1.Grok7'));
-    expect(team.seats[0]?.label).toBe('Claude Opus 5.5');
-    expect(valid(mixed).seats.find((seat) => seat.name === 'lead')?.label).toBe('Claude Opus 5.5');
+    expect(workspaceLabel(seatNamed(team, 'lead'))).toBe('Claude Opus 5.5');
+    expect(team.seats[0]?.label).toBe('builder1.Grok7');
+    expect(workspaceLabel(seatNamed(valid(mixed), 'lead'))).toBe('Claude Opus 5.5');
   });
 
   test('every seat of a mixed roster is titled from its own configuration', () => {
-    expect(valid(mixed).seats.map((seat) => [seat.name, seat.label])).toEqual([
+    expect(valid(mixed).seats.map((seat) => [seat.name, workspaceLabel(seat)])).toEqual([
       ['lead', 'Claude Opus 5.5'],
       ['researcher', 'Grok 4.7 · high'],
       ['implementer', 'GPT-6 Sol'],
@@ -131,9 +141,10 @@ describe('the derived label of a seat', () => {
 
   test('carries no seat\'s name and no seat\'s role', () => {
     for (const seat of valid(mixed).seats) {
-      expect(seat.label.includes(seat.name)).toBe(false);
-      expect(seat.label.includes(seat.role)).toBe(false);
-      expect(seat.label.toLowerCase().includes(seat.name.toLowerCase())).toBe(false);
+      const title = workspaceLabel(seat);
+      expect(title.includes(seat.name)).toBe(false);
+      expect(title.includes(seat.role)).toBe(false);
+      expect(title.toLowerCase().includes(seat.name.toLowerCase())).toBe(false);
     }
   });
 
@@ -145,11 +156,11 @@ describe('the derived label of a seat', () => {
   // needs no `-N` on the label: both instances carry the same title.
   test('a counted entry shares one label across its instances, with no number', () => {
     const counted = valid(mixed).seats.filter((seat) => seat.declared === 'maker');
-    expect(counted.map((seat) => seat.label)).toEqual(['DeepSeek V4.1 Flash', 'DeepSeek V4.1 Flash']);
+    expect(counted.map((seat) => workspaceLabel(seat))).toEqual(['DeepSeek V4.1 Flash', 'DeepSeek V4.1 Flash']);
   });
 
   test('a display the file writes is the label verbatim, and still needs the version as its own token', () => {
-    expect(valid(mixed).seats.find((seat) => seat.name === 'implementer')?.label).toBe('GPT-6 Sol');
+    expect(workspaceLabel(seatNamed(valid(mixed), 'implementer'))).toBe('GPT-6 Sol');
     const refused = validateTeamFile(minimal.replace('    launch:', '    display: GPT Sol Six\n    launch:'));
     expect(refused.ok).toBe(false);
     if (!refused.ok) {
@@ -161,7 +172,7 @@ describe('the derived label of a seat', () => {
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
     const fence = readme.split('```yaml\n')[1]?.split('\n```')[0] ?? '';
     const team = valid(fence);
-    expect(team.seats.map((seat) => [seat.name, seat.label])).toEqual([
+    expect(team.seats.map((seat) => [seat.name, workspaceLabel(seat)])).toEqual([
       ['coordinator', 'Meridian 1'],
       ['implementer', 'GPT-6 Sol'],
       ['implementer-deepseek', 'DeepSeek V4.1 Flash'],
@@ -360,10 +371,12 @@ seats:
     const code = await runDoctor(['--file', '.agents/team.yaml'], io, sources);
     expect(code).toBe(0);
     // The fixture still spells the lead `coordinator:`, on line 4: doctor prints the file's
-    // notice before the seat's own warning, and counts both. The written `web-tab` no longer
-    // warns: it is not the seat's title any more, so only the name repeats "acme".
+    // notice before the seat's own warning, and counts both. The seat's warning reads the
+    // stored fields — the name repeats the project "acme", and the written `web-tab`, kept on
+    // the seat, repeats the session "web" — while the workspace title, derived from the
+    // display, repeats neither.
     expect(io.out).toContain('warn  the file, line 4: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read\n');
-    expect(io.out).toContain('warn  acme-lead: its name repeats "acme"; the session already carries it\n');
+    expect(io.out).toContain('warn  acme-lead: its name repeats "acme" and its label repeats "web"; the session already carries it\n');
     expect(io.out).not.toContain('reviewer:');
     expect(io.out).toContain('team doctor: nothing missing, 2 warnings\n');
     rmSync(base, { recursive: true, force: true });
