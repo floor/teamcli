@@ -142,8 +142,9 @@ a pass):
 ## Examples, moved here whole
 
 The examples below are the page's own, moved here whole, in the order they stood in. The
-first console is also on [the `team release check` page](../commands/release.md); the rest run only
-here, and their order and their output matter only here.
+first console is also on [the `team release check` page](../commands/release.md); the rest stand
+only in this note and are not executed by any test — `test/docs.test.ts` reads `docs/commands/`
+alone.
 
 The registry says material 3.0.2 is out with its provenance, the release and the changelog are
 right, but the tag's commit has not reached the default branch — one check missing, so exit 1:
