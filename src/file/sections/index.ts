@@ -1,5 +1,7 @@
 import { format } from './format.ts';
 import { project } from './project.ts';
+import { entity } from './entity.ts';
+import { lobby } from './lobby.ts';
 import { trust } from './trust.ts';
 import { dialogs } from './dialogs.ts';
 import { limits } from './limits.ts';
@@ -31,6 +33,10 @@ import type { Section } from './section.ts';
 export const SECTIONS: readonly Section[] = [
   format,
   project,
+  // Where this team's lobby lives. Both non-owner and additive: a file that sets neither keeps the
+  // machine-global lobby, so they change no approval digest and sit outside the owner-section list.
+  entity,
+  lobby,
   trust,
   dialogs,
   limits,

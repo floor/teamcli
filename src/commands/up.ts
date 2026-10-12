@@ -53,7 +53,7 @@ import { trustPolicy } from '../file/dialogs.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
-import { lobbyDir, recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
+import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
 import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedLobbyFiles } from '../profiles/index.ts';
@@ -393,14 +393,14 @@ function seatPlan(
 // (an old release's start). The skip line says what does repair it; both repairs relaunch the
 // seat — one seat at a time, or the whole team (for an orchestrator or operator, only the whole team).
 function restartNote(
-  team: Pick<TeamFile, 'orchestrator' | 'operator'>,
+  team: Pick<TeamFile, 'orchestrator' | 'operator' | 'entity' | 'lobby'>,
   name: string,
   recorded: SeatState,
   home: string,
 ): { restartNote: string } | Record<string, never> {
   const fix = relaunchRepair(team, name, 'plain');
   if (!recorded.launched) return { restartNote: `a relaunch records its process: ${fix}` };
-  if (recorded.start_cwd && recorded.start_cwd !== lobbyDir(home)) {
+  if (recorded.start_cwd && recorded.start_cwd !== resolveLobby(home, team)) {
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
   return {};
@@ -462,6 +462,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     return 2;
   }
   const { team, root } = loaded;
+  // The lobby this team operates on: its own when it sets `entity` or `lobby`, else the
+  // machine-global one. Every lobby read and make below runs against it, so a second team on the
+  // machine no longer waits behind the first team's lobby.
+  const teamLobby = resolveLobby(sources.home, team);
   // Owner-only targets are honoured only when no gate decided: a delegated run is the default
   // file's own session, and a refused one never adopts the session its caller tried to name.
   const session = verdict === null ? (args.values.session ?? team.session) : team.session;
@@ -578,7 +582,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     }
   }
 
-  const lobby = lobbyDir(sources.home);
+  const lobby = teamLobby;
   if (!team.trust || team.trust.length === 0 || isLegacyTrust(team.trust)) {
     // The block names every entry the next `up` will require, computed from the file, so one
     // edit takes the file past validation. The same block is what `doctor` and `add` print.
@@ -726,7 +730,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // the run's first filesystem effect outside the lock, and two fresh runs can both see the
     // lobby absent: the loser's mkdir meets the winner's component and `verifyLobby` turns the
     // EEXIST into a refusal the losing run never earned (`lobby/gate.ts`, the create branch).
-    const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles });
+    const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby: teamLobby });
     if (!gate.ok) refusals.push(gate.text);
     else if ('path' in gate) {
       verifiedLobby = gate.path;
@@ -834,7 +838,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // The run's first write, under the lock: the lobby the read-only pass above found absent.
       // Serialised here, no competing mkdir can turn into this run's refusal, and this run's own
       // make cannot land on another run's — which is what the read-only pass exists for.
-      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles });
+      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby: teamLobby });
       if (!gate.ok) {
         out.stderr(`team up: ${plainText(gate.text)}\n`);
         // exit: up.lobby
@@ -885,7 +889,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // it allowed still the file it read. The declared files travel with it, so the recheck
       // walks the same closed tree the gate did.
       confirmLobby() {
-        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles }) : null;
+        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
       typeLine: () => false,

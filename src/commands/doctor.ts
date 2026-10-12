@@ -18,7 +18,7 @@ import { declaredModel } from '../file/model.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, type HerdrAgent } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { lobbyDir, verifyLobby } from '../lobby/gate.ts';
+import { resolveLobby, verifyLobby } from '../lobby/gate.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles } from '../profiles/index.ts';
 import { checkRulesFile, rulesFilePathOf } from '../launch/rules-file.ts';
@@ -416,7 +416,7 @@ function trustFindings(team: TeamFile, dir: string, session: string, sources: Do
     if (inRange) {
       const shown = extractFolder(inRange.extract, screen);
       const landed = shown ? showLanding(shown) : null;
-      const lobby = showLanding(lobbyDir(sources.home));
+      const lobby = showLanding(resolveLobby(sources.home, team));
       // The shown spelling must be the lobby itself, not something that only
       // canonicalises to it: `answer` refuses a trailing slash, another case,
       // `//` or `/./`, and doctor warns about what `answer` would refuse.
@@ -578,13 +578,13 @@ export function doctorFindings(
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now()));
   findings.push(...trustFindings(team, dir, session, sources));
 
-  const lobby = lobbyDir(sources.home);
+  const lobby = resolveLobby(sources.home, team);
   // The same closed tree the launch's gate walks: the `lobby_files` of every profile the tool
   // ships, the one set `up`, `add` and this finding all read, so this finding says of the
   // lobby exactly what the launch's gate would — a `miss` here blocks the launch, and the
   // callers cannot disagree about a declared file.
   const declaredLobbyFiles = shippedLobbyFiles();
-  const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, files: declaredLobbyFiles });
+  const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, files: declaredLobbyFiles, lobby });
   if (!gate.ok) {
     findings.push({ level: 'miss', text: gate.text });
   } else if ('missing' in gate) {

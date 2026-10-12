@@ -1,10 +1,74 @@
 import { lstatSync, mkdirSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-/** The lobby path for a given user home: `<home>/.config/team/lobby`. */
+/** The machine-global lobby path for a given user home: `<home>/.config/team/lobby`. This is the
+ *  lobby a team that sets neither `entity` nor `lobby` uses, the shape every team used before
+ *  per-entity lobbies existed. The approval-store containment checks (`file/paths.ts`) stay on
+ *  this folder: it, and the per-entity lobbies beside it, all sit under `<home>/.config/team`. */
 export function lobbyDir(home: string = homedir()): string {
   return join(home, '.config', 'team', 'lobby');
+}
+
+/** How a team names the lobby its seats start and wait in. A team that sets neither key uses the
+ *  machine-global lobby (`lobbyDir`), the backward-compatible default; one that sets `entity`
+ *  gets a lobby of its own under `<home>/.config/team/lobbies/<slug>`; one that sets `lobby`
+ *  names the folder outright (a `~` prefix is the home). */
+export interface LobbyConfig {
+  entity?: string | null;
+  lobby?: string | null;
+}
+
+/** The path segment an entity resolves to under `.config/team/lobbies`. The section validator
+ *  holds `entity` to the project-name shape — letters, digits, ".", "_" and "-", starting with a
+ *  letter or digit — so lower-casing is the whole slug and never yields "", "." or "..". */
+export function lobbySlug(entity: string): string {
+  return entity.toLowerCase();
+}
+
+/** Expands a leading `~` to the home. A `~` anywhere else is left as written: the gate's own
+ *  symlink and realpath checks refuse a path that does not resolve to a real folder under it. */
+function expandHome(path: string, home: string): string {
+  return resolve(path.replace(/^~(?=$|\/)/, home));
+}
+
+/**
+ * The absolute lobby path a team operates on. Explicit `lobby` wins; then `entity`, under
+ * `<home>/.config/team/lobbies/<slug>`; then, when neither is set, the machine-global lobby —
+ * so a team that declares neither key is byte-for-byte unchanged.
+ */
+export function resolveLobby(home: string = homedir(), config?: LobbyConfig): string {
+  if (config?.lobby) return expandHome(config.lobby, home);
+  if (config?.entity) return join(home, '.config', 'team', 'lobbies', lobbySlug(config.entity));
+  return lobbyDir(home);
+}
+
+/** The lobby entry a team's trust must list, spelled with a `~` when the lobby is under the home
+ *  (so the block a migration prints stays portable), and absolute otherwise. For a team that sets
+ *  neither key this is exactly `~/.config/team/lobby`, as it has always been. */
+export function lobbyTrustEntry(home: string = homedir(), config?: LobbyConfig): string {
+  const abs = resolveLobby(home, config);
+  const rel = relative(home, abs);
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return abs;
+  return `~/${rel.split(sep).join('/')}`;
+}
+
+/** The components from `home` (inclusive) down to the resolved lobby (inclusive): the chain the
+ *  gate verifies and, with `create`, makes one at a time. For a lobby under the home this is
+ *  `home`, every folder on the way, and the lobby itself; for the default lobby that is exactly
+ *  `[home, .config, .config/team, .config/team/lobby]`. A lobby that is not under the home has no
+ *  chain to walk through the home: only the home and the lobby are checked directly. */
+function lobbyChain(home: string, lobby: string): string[] {
+  const rel = relative(home, lobby);
+  if (!rel) return [home];
+  if (rel.startsWith('..') || isAbsolute(rel)) return [home, lobby];
+  const chain = [home];
+  let current = home;
+  for (const part of rel.split(sep)) {
+    current = join(current, part);
+    chain.push(current);
+  }
+  return chain;
 }
 
 export interface FsStats {
@@ -107,6 +171,10 @@ export interface VerifyLobbyOptions {
    *  ships. Absent, no path is tolerated: the lobby holds nothing but the seats, as it
    *  always has. */
   files?: readonly string[];
+  /** The resolved lobby the team operates on (`resolveLobby`). Absent, the machine-global lobby
+   *  is used — the backward-compatible default for a team that sets neither `entity` nor
+   *  `lobby`. The ancestor chain the gate verifies runs from the home down to this path. */
+  lobby?: string;
 }
 
 type CompCheck = { ok: true; stat: FsStats } | { ok: false; problem: string; text: string; words: string; component?: string };
@@ -256,16 +324,11 @@ function checkClosedTree(lobby: string, declared: readonly string[], fs: FsReade
  * declared file. Without `files` the lobby holds nothing but the seats, as it always has.
  */
 export function verifyLobby(home: string, options?: VerifyLobbyOptions): LobbyGateResult {
-  const lobby = lobbyDir(home);
+  const lobby = options?.lobby ?? lobbyDir(home);
   const fs = options?.fs ?? defaultFs;
   const myUid = options?.getuid ? options.getuid() : process.getuid?.() ?? 0;
 
-  const chain = [
-    home,
-    join(home, '.config'),
-    join(home, '.config', 'team'),
-    lobby,
-  ];
+  const chain = lobbyChain(home, lobby);
 
   // How a refusal's words name the component that caused it, without the folder itself: the
   // lobby, your home folder, or a folder on the way to it. The words travel in records and the
@@ -414,7 +477,13 @@ export function verifyLobby(home: string, options?: VerifyLobbyOptions): LobbyGa
       words: 'the lobby: your home folder cannot be resolved',
     };
   }
-  const expectedLobby = join(homeReal, '.config', 'team', 'lobby');
+  // The lobby's canonical path anchored to the canonical home: the same relative tail the
+  // resolved lobby has from the home. For the default lobby this is `<homeReal>/.config/team/lobby`,
+  // as before. A lobby that is not under the home keeps its own resolved path.
+  const lobbyRel = relative(home, lobby);
+  const expectedLobby = lobbyRel && !lobbyRel.startsWith('..') && !isAbsolute(lobbyRel)
+    ? join(homeReal, lobbyRel)
+    : lobby;
 
   let real: string;
   try {
@@ -533,9 +602,9 @@ export type LobbyRefusal = { reason: string; detail: string };
 export function recheckLobby(
   home: string,
   seen: LobbySeen,
-  options?: { getuid?: () => number; fs?: FsReader; files?: readonly string[] },
+  options?: { getuid?: () => number; fs?: FsReader; files?: readonly string[]; lobby?: string },
 ): LobbyRefusal | null {
-  const again = verifyLobby(home, { create: false, getuid: options?.getuid, fs: options?.fs, files: options?.files });
+  const again = verifyLobby(home, { create: false, getuid: options?.getuid, fs: options?.fs, files: options?.files, lobby: options?.lobby });
   if (!again.ok) return { reason: again.words, detail: again.text };
   if (!('path' in again)) {
     return { reason: 'the lobby: it is not there any more', detail: `the lobby ${seen.path}: it is not there any more` };
