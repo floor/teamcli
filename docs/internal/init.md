@@ -67,8 +67,8 @@ The tracked-file message names the repair:
 ## Examples, moved here whole
 
 The examples below are the page's own, moved here whole, in the order they stood in. The
-first console is also on [the `team init` page](../commands/init.md); the rest run only here,
-and their order and their output matter only here.
+first console is also on [the `team init` page](../commands/init.md); the rest stand only in this
+note and are not executed by any test — `test/docs.test.ts` reads `docs/commands/` alone.
 
 A seat can't run it:
 
