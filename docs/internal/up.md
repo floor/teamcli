@@ -534,7 +534,8 @@ A team file that is not `.agents/team.yaml` in the folder the watch starts in is
 The fixture and the examples below are the page's own, moved here whole. They run in the order they
 stand in, and the `fixture` line is theirs: the two seats are up, the third is stopped in the file,
 and this session has never had a watchdog pane. The first example is also on [the `team up`
-page](../commands/up.md), and the rest are not, so their order and their output matter only here.
+page](../commands/up.md); the rest stand only here and are not executed by any test —
+`test/docs.test.ts` reads `docs/commands/` alone.
 
 ```yaml file=.agents/team.yaml
 format: 1
