@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { judgeMerge, readMerge } from '../src/end/condition.ts';
 import { resultPathProblem } from '../src/end/until.ts';
+import { readEnd } from '../src/watch/end.ts';
 import { gitEnv } from './helpers.ts';
 
 describe('a result path stays inside the project', () => {
@@ -24,6 +25,32 @@ describe('a result path stays inside the project', () => {
       // `alias` points at a file outside the project. The check reads the path as written
       // and does not follow the link, so the name is inside the project.
       expect(resultPathProblem(root, 'alias')).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { force: true });
+    }
+  });
+});
+
+describe('a stored result path', () => {
+  test('an absolute path or a .. segment is refused, and the seat is named', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'team-stored-')));
+    const outside = join(root, '..', 'outside.md');
+    try {
+      writeFileSync(outside, 'x\n');
+      expect(readEnd(root, 'result:../outside.md', null, false, 'worker-tmp-1')).toEqual({
+        kind: 'merged',
+        verdict: 'unproven',
+        ownNow: 0,
+        detail: 'worker-tmp-1: a result path is relative to the project; nothing is removed',
+      });
+      expect(readEnd(root, 'result:/tmp/out.md', null, false, 'worker-tmp-1').kind).toBe('merged');
+      writeFileSync(join(root, 'out.md'), 'x\n');
+      expect(readEnd(root, 'result:out.md', null, false, 'worker-tmp-1')).toEqual({ kind: 'result', exists: true });
+      expect(readEnd(root, 'result:missing.md', null, false)).toEqual({ kind: 'result', exists: false });
+      symlinkSync(outside, join(root, 'alias'));
+      // The name `alias` is inside the project, so it is not refused. Existence follows the link.
+      expect(readEnd(root, 'result:alias', null, false, 'worker-tmp-1')).toEqual({ kind: 'result', exists: true });
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(outside, { force: true });
