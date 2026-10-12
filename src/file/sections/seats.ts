@@ -1,5 +1,5 @@
 import { CLIS } from '../../clis.ts';
-import { shippedEfforts, type EffortVocabulary } from '../../profiles/efforts.ts';
+import { shippedEfforts } from '../../profiles/efforts.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
@@ -25,10 +25,7 @@ export const seats: Section = {
     const trust = valueOf<string[]>(ctx, 'trust');
     const accounts = valueOf<Budgeted>(ctx, 'budgets').declared;
     const marks: LeadMark[] = [];
-    const efforts = shippedEfforts();
-    // A vocabulary this build cannot read must not fail a file that never sets `effort`.
-    if (!efforts.ok) ctx.check.warnings.push({ line: entry?.value.line ?? ctx.root.line, message: efforts.message });
-    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks, efforts);
+    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks);
     ctx.leads = marks;
     return seats;
   },
@@ -69,7 +66,7 @@ export const seats: Section = {
 // that names an `account:` must name one of these, or it would silently spend nothing budgeted.
 function readSeats(
   entry: YamlEntry | undefined, check: Check, trust: string[], topLine: number, broken: Set<string>, accounts: ReadonlySet<string>,
-  marks: LeadMark[], efforts: EffortVocabulary,
+  marks: LeadMark[],
 ): DraftSeat[] {
   if (!entry) {
     check.fail(topLine, 'seats is required: at least the orchestrator\'s and the operator\'s seat');
@@ -128,7 +125,7 @@ function readSeats(
     if (leads && name && leadsField) marks.push({ name, line: leadsField.value.line });
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     const label = check.text(fields.get('label'), `${at}: label`);
-    const effort = readEffort(fields.get('effort'), at, vendor, efforts, check);
+    const effort = readEffort(fields.get('effort'), at, vendor, check);
     // Left out, the herdr title is the model and version. A written label wins, so a file that
     // already names one keeps the title, and the fingerprint, it had.
     if (!role || !name || !cli || !vendor || !model || !version || !launch || !display) {
@@ -161,13 +158,19 @@ export function defaultLabel(model: string, version: string): string {
 }
 
 function readEffort(
-  entry: YamlEntry | undefined, at: string, vendor: string | undefined, efforts: EffortVocabulary, check: Check,
+  entry: YamlEntry | undefined, at: string, vendor: string | undefined, check: Check,
 ): string | undefined {
   const effort = check.text(entry, `${at}: effort`);
   if (effort === undefined || !entry || !vendor) return effort;
   // Launch does not read `effort`. The word stays on the seat either way, so a later label can
   // see what the file wrote, and the approval key changes when the field is added.
-  if (!efforts.ok) return effort;
+  // The vocabulary is read only once a seat sets the field, so a file that omits it opens
+  // nothing new and cannot fail because the list is missing.
+  const efforts = shippedEfforts();
+  if (!efforts.ok) {
+    check.warnings.push({ line: entry.value.line, message: efforts.message });
+    return effort;
+  }
   const allowed = efforts.labs[vendor];
   // A lab with no entry accepts any word: the vocabulary leaves that lab out rather than invent
   // one. A lab with a list warns and names its words. The warning does not fail check, approve
