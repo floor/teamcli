@@ -193,6 +193,43 @@ describe('team status', () => {
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
   });
 
+  // The example names one seat as both orchestrator and operator. These two runs split that:
+  // codex is unparked so it can lead, and only the mismatched seat holds one of the two roles.
+  function splitLeads(coordinator: string, operatorName: string) {
+    const text = example
+      .replace('coordinator: claude-coordinator-acme', `coordinator: ${coordinator}`)
+      .replace('operator: claude-coordinator-acme', `operator: ${operatorName}`)
+      .replace('    parked: true\n', '');
+    writeFileSync(file, text);
+    approveOnDisk();
+  }
+
+  test('an orchestrator who is not the operator is told team down for a model mismatch', async () => {
+    splitLeads('claude-coordinator-acme', 'codex-acme');
+    live = { ...built(), screens: { 'w1:p1': claudeScreen('Fable 5.1') } };
+    const { code, out } = await status();
+    expect(code).toBe(1);
+    expect(out).toContain(
+      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
+        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file and run team approve\n',
+    );
+    expect(out).not.toContain('team remove claude-coordinator-acme --keep');
+    expect(out).not.toContain('codex-acme runs');
+  });
+
+  test('an operator who is not the orchestrator is told team down for a model mismatch', async () => {
+    splitLeads('codex-acme', 'claude-coordinator-acme');
+    live = { ...built(), screens: { 'w1:p1': claudeScreen('Fable 5.1') } };
+    const { code, out } = await status();
+    expect(code).toBe(1);
+    expect(out).toContain(
+      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
+        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file and run team approve\n',
+    );
+    expect(out).not.toContain('team remove claude-coordinator-acme --keep');
+    expect(out).not.toContain('codex-acme runs');
+  });
+
   // Each profile's own status line, through the same comparison: the codex seat's captured
   // footer names another model, and an id the map doesn't know is unread, never a difference.
   test('a codex seat whose captured status line names another model', async () => {
