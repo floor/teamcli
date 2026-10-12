@@ -178,22 +178,61 @@ export function workspacePanes(workspace: string, session?: string): string[] | 
 
 export type SessionState = 'running' | 'stopped' | 'absent';
 
-// Whether a session exists and runs. A stopped session stays listed with running false; a deleted
-// one is absent. Null when herdr can't be reached. "default" is herdr's own.
-export function sessionState(name: string): SessionState | null {
+export type HerdrSession = {
+  name: string;
+  running: boolean;
+  /** `<session_dir>` from the list, or null when herdr did not name one. */
+  sessionDir: string | null;
+};
+
+// Every session herdr lists, or null when herdr can't be asked. Herdr 0.7.1, captured on a scratch
+// session `list-probe-b1`: `herdr session list --json` prints one JSON object, not the `{id, result}`
+// wrapper the socket commands use —
+// `{"sessions":[{"default":false,"name":"list-probe-b1","running":true,"session_dir":"…/sessions/list-probe-b1","socket_path":"…/herdr.sock"}]}`.
+// `herdr session stop list-probe-b1` leaves that object listed with `"running":false`.
+// `herdr session delete list-probe-b1` prints `deleted session list-probe-b1\n` and the name is then
+// absent. While the session exists, `<session_dir>/session.json` holds `workspaces[].identity_cwd`,
+// the workspace folder's real path (`/tmp` was `/private/tmp` for a workspace created `--cwd /tmp`).
+// `herdr --session list-probe-b1 agent list` prints
+// `{"id":"cli:agent:list","result":{"agents":[],"type":"agent_list"}}` before any seat is named;
+// after `agent rename` the one agent carried `name`, `agent_status` (`unknown` for that new seat),
+// `cwd`, `pane_id` and `workspace_id`.
+export function sessionList(): HerdrSession[] | null {
   try {
     const out = execFileSync('herdr', ['session', 'list', '--json'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000,
     });
-    const sessions = (JSON.parse(out) as { sessions?: { name?: string; running?: boolean }[] }).sessions ?? [];
-    const found = sessions.find((session) => session.name === name);
-    if (!found) return 'absent';
-    return found.running === true ? 'running' : 'stopped';
+    const body = JSON.parse(out) as { sessions?: unknown };
+    // A missing list is no sessions. Anything else that is not an array is not this document.
+    if (body.sessions === undefined || body.sessions === null) return [];
+    if (!Array.isArray(body.sessions)) return null;
+    const listed: HerdrSession[] = [];
+    for (const entry of body.sessions) {
+      if (!entry || typeof entry !== 'object') continue;
+      const session = entry as { name?: unknown; running?: unknown; session_dir?: unknown };
+      if (typeof session.name !== 'string' || session.name === '') continue;
+      listed.push({
+        name: session.name,
+        running: session.running === true,
+        sessionDir: typeof session.session_dir === 'string' ? session.session_dir : null,
+      });
+    }
+    return listed;
   } catch {
     return null;
   }
+}
+
+// Whether a session exists and runs. A stopped session stays listed with running false; a deleted
+// one is absent. Null when herdr can't be reached. "default" is herdr's own.
+export function sessionState(name: string): SessionState | null {
+  const sessions = sessionList();
+  if (sessions === null) return null;
+  const found = sessions.find((session) => session.name === name);
+  if (!found) return 'absent';
+  return found.running ? 'running' : 'stopped';
 }
 
 // Whether a session exists and runs: null when herdr can't be reached.
