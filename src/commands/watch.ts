@@ -15,6 +15,7 @@ import { waitOrStop } from '../wait.ts';
 import type { Live } from '../status/compare.ts';
 import { readMachine, readingsText } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
+import { beatWatch, ownWatchPane, placedWatch } from '../watch/pane.ts';
 import { notify } from '../watch/notify.ts';
 import { listUnacked } from './messages.ts';
 import { newMemory, ownUnsent, pass, type MailboxWaiting } from '../watch/pass.ts';
@@ -63,6 +64,8 @@ export type WatchSources = {
   wait(seconds: number): Promise<boolean>;
   alive(pid: number): boolean;
   pid: number;
+  /** This process's pane, `'gone'` when herdr answered and none has it, null when herdr can't say. */
+  ownPane?(session: string, pid: number): { pane: string; workspace: string } | 'gone' | null;
   /** How an end is read. The real watch uses git and the filesystem. */
   readEnd?(root: string, until: string, base: string | null, ownBefore: boolean): EndView;
   /** Stops one free seat. The real watch uses the same steps as `remove`. */
@@ -100,6 +103,7 @@ export const realWatchSources: WatchSources = {
     }
   },
   pid: process.pid,
+  ownPane: ownWatchPane,
   home: homedir(),
 };
 
@@ -174,10 +178,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     if (notify) sources.notify(text);
   };
   const say = (text: string, desktop: boolean) => tell(text, desktop && !args.flags.has('no-notify'));
-  const beat = () => updateState(dir, (state) => {
-    const record = (state.sessions[session] ??= emptySession());
-    record.watch = { pid: sources.pid, heartbeat: sources.now().toISOString() };
-  });
 
   const memory = newMemory();
   const told = new Set<string>();
@@ -331,7 +331,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (result.mailboxNote) tell(result.mailboxNote, true);
         await closeEnded({ team, root, dir, session, live, sources, say, io, told });
       }
-      beat();
+      const place = placedWatch(dir, session, sources.pid, sources.ownPane);
+      if (place === 'end') {
+        tell(`the watch's pane is gone; the watch ends with it`, true);
+        break;
+      }
+      beatWatch(dir, session, sources.pid, sources.now().toISOString(), place);
       if (!(await sources.wait(inForce.interval))) break;
     }
   } finally {

@@ -63,7 +63,7 @@ export type SessionState = {
   started?: { at: string; by: string };
   seats: Record<string, SeatState>;
   worktrees: Record<string, WorktreeState>;
-  watch?: { pid: number; heartbeat: string };
+  watch?: { pid: number; heartbeat: string; pane?: string; workspace?: string };
   nudge?: { pending_since: string | null };
 };
 
