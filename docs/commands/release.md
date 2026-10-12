@@ -44,6 +44,8 @@ wherever they appear, so `--file --help` prints the usage and exits 0.
 | at least one check is unknown | the same table, the failed reads' detail under `unknown` | 2 |
 | a bad invocation, an invalid team file, or a package the file does not declare | `team release: <reason>`, with the usage for a bad invocation; with `--json`, one error object instead (`usage` for the arguments and an undeclared package, `configuration` for the file) | 64 |
 
+A timeout, a transport failure, or a 408, 429 or 5xx response is retried exactly once; other failures are not retried.
+
 ## Example
 
 The team file declares the package the run checks:
