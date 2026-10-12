@@ -1,8 +1,10 @@
-// The herdr title of a seat is derived from the seat's own configuration — its `display`, and
-// its `effort` when it has one — never from a hand-written `label:`, which the file still
-// accepts so every file written so far loads, checks, approves and runs unchanged. A written
-// label repeated the seat's name and drifted ("builder1.Grok7"); herdr already shows the seat's
-// name on its own line, so the title must not carry it.
+// The herdr title of a seat is derived from the seat's own configuration — its `display` —
+// never from a hand-written `label:`, which the file still accepts so every file written so
+// far loads, checks, approves and runs unchanged. A written label repeated the seat's name and
+// drifted ("builder1.Grok7"); herdr already shows the seat's name on its own line, so the
+// title must not carry it. The effort a seat may one day carry joins the title with ` · `;
+// that field is the effort change's (#263) — here its half of `workspaceLabel`'s contract is
+// pinned as a plain call, and the through-file coverage follows #263's merge.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -36,8 +38,10 @@ seats:
     launch: claude --model claude-opus-5-5
 `;
 
-// A roster with one seat of each shape the label is derived from: no effort, an effort, a
+// A roster with one seat of each shape the label is derived from: the lowercase default, a
 // display the file writes, a counted entry, a written label that must not decide anything.
+// (`effort` on a seat is the effort change's field, not this branch's; the ` · ` it would add
+// is pinned below as workspaceLabel's own contract.)
 const mixed = `format: 1
 project: acme
 coordinator: lead
@@ -59,7 +63,6 @@ seats:
     vendor: xai
     model: Grok
     version: "4.7"
-    effort: high
     launch: grok --model grok-4.7
   - role: implementer
     name: implementer
@@ -117,8 +120,10 @@ describe('the derived label of a seat', () => {
     expect(workspaceLabel(seatNamed(valid(minimal), 'lead'))).toBe('Claude Opus 5.5');
   });
 
+  // The seat type carries no `effort` until the effort change lands (#263); `workspaceLabel`
+  // keeps the half of its contract that reads one, so it is pinned as a plain call.
   test('is the display and the effort, spaced by a middle dot', () => {
-    expect(workspaceLabel(seatNamed(valid(mixed), 'researcher'))).toBe('Grok 4.7 · high');
+    expect(workspaceLabel({ display: 'Grok 4.7', effort: 'high' })).toBe('Grok 4.7 · high');
   });
 
   test('a written label no longer decides the title, and the file still loads', () => {
@@ -131,7 +136,7 @@ describe('the derived label of a seat', () => {
   test('every seat of a mixed roster is titled from its own configuration', () => {
     expect(valid(mixed).seats.map((seat) => [seat.name, workspaceLabel(seat)])).toEqual([
       ['lead', 'Claude Opus 5.5'],
-      ['researcher', 'Grok 4.7 · high'],
+      ['researcher', 'Grok 4.7'],
       ['implementer', 'GPT-6 Sol'],
       ['maker', 'DeepSeek V4.1 Flash'],
       ['maker-2', 'DeepSeek V4.1 Flash'],
@@ -308,7 +313,7 @@ describe('check, approve and up on a file from before the change', () => {
       doctor: doctor(home),
     } satisfies Partial<UpSources> as UpSources);
     expect(upCode, `${up.out}${up.err}`).toBe(0);
-    expect(up.out).toContain(`--label 'Grok 4.7 · high'`);
+    expect(up.out).toContain(`--label 'Grok 4.7'`);
     expect(up.out).toContain(`--label 'Claude Opus 5.5'`);
     expect(up.out).toContain('<pane of researcher>');
     expect(up.out).toContain('<pane of maker-2>');
