@@ -189,7 +189,7 @@ screen:
     - all:
         - 'API Error: Request rejected \(429\)'
         - 'Usage limit reached'
-        - 'Your limit will reset at '
+        - 'Your limit will reset at'
   working:
     - any:
         - '\besc to interrupt\b'
