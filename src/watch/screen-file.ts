@@ -13,8 +13,8 @@ import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts'
 
 const require = createRequire(import.meta.url);
 
-const STAGES = ['unknown', 'trust', 'permission', 'exit_question', 'question', 'vendor_notice', 'working'] as const;
-const KINDS = ['idle', 'working', 'unsent', 'permission', 'trust', 'question', 'vendor notice', 'unknown'] as const;
+const STAGES = ['unknown', 'trust', 'permission', 'exit_question', 'question', 'vendor_notice', 'provider_error', 'rate_limit', 'working'] as const;
+const KINDS = ['idle', 'working', 'unsent', 'permission', 'trust', 'question', 'vendor notice', 'provider error', 'rate limit', 'unknown'] as const;
 // The lines a dialog draws for its choices, built from their parts: the mark on the choice
 // the cursor is on (claude-code ❯, codex ›, antigravity >) or the indent of the others, the
 // number, and the labels the profiles' rules and fixtures show, run-on forms included — the

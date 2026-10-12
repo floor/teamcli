@@ -178,6 +178,18 @@ screen:
         anchor: 'Enter to select|↑/↓ to navigate|Enter to confirm|Esc to cancel'
         patterns:
           - '^\s*[❯›>]\s*$'
+  # The prompt is back and the error is still on the pane. Herdr calls the seat done. The
+  # sentence is the one a seat printed; no capture shows a retry key, so none is named.
+  provider_error:
+    - any:
+        - 'API Error: Connection lost mid-response\. The response above may be incomplete\.'
+  # The 429 line, matched on the fragments that were quoted. Whatever follows
+  # "Your limit will reset at" is the reset time the watch reports.
+  rate_limit:
+    - all:
+        - 'API Error: Request rejected \(429\)'
+        - 'Usage limit reached'
+        - 'Your limit will reset at '
   working:
     - any:
         - '\besc to interrupt\b'

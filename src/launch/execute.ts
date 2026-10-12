@@ -19,7 +19,7 @@ import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { vendorNoticeRange } from '../watch/screen.ts';
 
-export type ScreenKind = 'idle' | 'working' | 'permission' | 'trust' | 'question' | 'exit question' | 'vendor notice' | 'unsent' | 'unknown';
+export type ScreenKind = 'idle' | 'working' | 'permission' | 'trust' | 'question' | 'exit question' | 'vendor notice' | 'provider error' | 'rate limit' | 'unsent' | 'unknown';
 
 /** What a live `up` or `down` can do, apart from deciding it. Tests stand in for all of it. */
 /** What one live exit typing ended in. `true`: the box read back as the typed text and the
@@ -704,7 +704,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         const startedAt = host.now();
         const deadline = startedAt + op.seconds * 1000;
         const pollMs = IDLE_POLL_MS;
-        let outcome: 'idle' | 'permission' | 'trust' | 'question' | 'vendor notice' | 'ended' | 'timeout' = 'timeout';
+        let outcome: 'idle' | 'permission' | 'trust' | 'question' | 'vendor notice' | 'provider error' | 'rate limit' | 'ended' | 'timeout' = 'timeout';
         let last: ScreenKind = 'unknown';
         let endedRead: string | null = null;
         let endedFor = 0;
@@ -750,7 +750,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
               }
             }
           } else shellBackSince = null;
-          if (kind === 'idle' || kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'vendor notice') {
+          if (kind === 'idle' || kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit') {
             outcome = kind;
             break;
           }
@@ -764,7 +764,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           break;
         }
         const workspace = here.workspace ?? places.get(op.seat)?.workspace;
-        if (outcome === 'permission' || outcome === 'trust' || outcome === 'question' || outcome === 'vendor notice') {
+        if (outcome === 'permission' || outcome === 'trust' || outcome === 'question' || outcome === 'vendor notice' || outcome === 'provider error' || outcome === 'rate limit') {
           const reading = outcome === 'trust' ? 'trust' : outcome;
           if (host.dialog) {
             // The seat's owner decides what happens next, at their own keyboard. The identity is

@@ -152,6 +152,8 @@
         "exit_question": { "$ref": "#/$defs/stage" },
         "question": { "$ref": "#/$defs/stage" },
         "vendor_notice": { "$ref": "#/$defs/vendorNotice" },
+        "provider_error": { "$ref": "#/$defs/stage" },
+        "rate_limit": { "$ref": "#/$defs/stage" },
         "working": { "$ref": "#/$defs/stage" },
         "composer": { "$ref": "#/$defs/composer" },
         "screen_module": { "$ref": "#/$defs/screenModule" }
@@ -413,7 +415,7 @@
             "required": ["all", "kind"],
             "properties": {
               "all": { "$ref": "#/$defs/patterns" },
-              "kind": { "enum": ["idle", "working", "unsent", "permission", "trust", "question", "vendor notice", "unknown"] }
+              "kind": { "enum": ["idle", "working", "unsent", "permission", "trust", "question", "vendor notice", "provider error", "rate limit", "unknown"] }
             }
           }
         }
