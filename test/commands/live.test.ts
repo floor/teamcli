@@ -1177,6 +1177,141 @@ describe('team up, live', () => {
     expect(seats['deepseek-acme']?.stage).toBe('ready');
   });
 
+  // A record from 0.2.1 names the pane and not the process. The multiplexer restored that pane
+  // as a shell, or as another model. `up` reports it and names the repair; it does not close
+  // the pane and it does not launch the seat again.
+  test('a ready seat with no process identity whose pane is a shell is left, and names abandon', async () => {
+    await approve();
+    writeFileSync(
+      join(root, '.agents/team.state.json'),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: { 'claude-coordinator-acme': { stage: 'ready', pane: 'w8:p1', workspace: 'w8' } },
+            worktrees: {},
+          },
+        },
+      }),
+    );
+    const made = world();
+    made.session = 'running';
+    made.launch.processInfo = () => ({ shell: 400, foreground: [400] });
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          agents: () => [agent('claude-coordinator-acme', 'w8:p1')],
+          workspaces: () => [{ id: 'w8', label: 'claude opus 5.5' }],
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    expect(io.out).toContain('claude-coordinator-acme: ready\n');
+    expect(io.err).toContain(
+      '  its pane runs no CLI and its process was never recorded (team down --abandon, then team up)\n',
+    );
+    expect(io.err).not.toContain('a relaunch records its process');
+    expect(io.out).not.toContain('team up (it resumes the launch)');
+    expect(made.closes).toEqual([]);
+    expect(made.creates).not.toContain('claude opus 5.5');
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+    expect(seats['claude-coordinator-acme']?.stage).toBe('ready');
+    expect(seats['claude-coordinator-acme']?.workspace).toBe('w8');
+  });
+
+  test('a ready seat with no process identity whose screen is another model is left, and names abandon', async () => {
+    await approve();
+    writeFileSync(
+      join(root, '.agents/team.state.json'),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: { 'claude-coordinator-acme': { stage: 'ready', pane: 'w8:p1', workspace: 'w8' } },
+            worktrees: {},
+          },
+        },
+      }),
+    );
+    const made = world();
+    made.session = 'running';
+    made.seed('w8:p1', `❯ \n${'─'.repeat(40)}\n  main · …/acme · Fable 5.1 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`, true);
+    made.launch.processInfo = () => ({ shell: 400, foreground: [401] });
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          agents: () => [agent('claude-coordinator-acme', 'w8:p1')],
+          workspaces: () => [{ id: 'w8', label: 'claude opus 5.5' }],
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    expect(io.out).toContain('claude-coordinator-acme: ready\n');
+    expect(io.err).toContain(
+      '  its screen runs Claude Fable 5.1; the file says Claude Opus 5.5; its process was never recorded (team down --abandon, then team up)\n',
+    );
+    expect(io.err).not.toContain('a relaunch records its process');
+    expect(made.closes).toEqual([]);
+    expect(made.creates).not.toContain('claude opus 5.5');
+  });
+
+  test('a launched seat with no process identity whose pane is a shell is not waited out', async () => {
+    const path = join(root, '.agents/team.yaml');
+    writeFileSync(path, makeExample(base, root, EXAMPLE.replace('stopped: true\n', '')));
+    await approve();
+    writeFileSync(
+      join(root, '.agents/team.state.json'),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: { 'codex-acme': { stage: 'launched', pane: 'w2:p1', workspace: 'w2' } },
+            worktrees: {},
+          },
+        },
+      }),
+    );
+    const made = world();
+    made.session = 'running';
+    made.seed('w2:p1', 'user@host % \n', true);
+    made.launch.processInfo = (_session, pane) =>
+      pane === 'w2:p1' ? { shell: 400, foreground: [400] } : { shell: 900, foreground: [901] };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          agents: () => [agent('codex-acme', 'w2:p1', 'idle', 'codex')],
+          workspaces: () => [{ id: 'w2', label: 'gpt sol 6' }],
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(1);
+    expect(io.out).toContain(
+      'codex-acme: left out: its pane runs no CLI and its process was never recorded (team remove codex-acme --abandon, then team up)\n',
+    );
+    expect(io.out).not.toContain('timeout');
+    expect(io.out).not.toContain('the screen last read unknown');
+    expect(made.closes).toEqual([]);
+    expect(made.creates).not.toContain('gpt sol 6');
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+    expect(seats['codex-acme']?.stage).toBe('launched');
+    expect(seats['codex-acme']?.pane).toBe('w2:p1');
+  });
+
   // §3: the interrupted launch. `up` made the workspace and recorded the pane at `launched`, then
   // stopped before the rename, so herdr lists an agent with no name on the pane the state records.
   // That agent is the run's own half-finished seat, not a stranger: the filter knows it by the
