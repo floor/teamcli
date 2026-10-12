@@ -17,7 +17,7 @@ import { runWatch, type WatchSources } from '../../src/commands/watch.ts';
 import { LINK_NOT_FOLLOWED, loadTeamFile, NOT_A_REPO } from '../../src/file/load.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval, type Standing } from '../../src/store/store.ts';
-import { readState } from '../../src/state.ts';
+import { emptySession, readState, updateState } from '../../src/state.ts';
 import { testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
@@ -306,7 +306,9 @@ describe('a folder with no git repository', () => {
     expect(beat.pid).toBeGreaterThan(0);
   }, 20_000);
 
-  test("a seat's status with no flag reads the file and writes nothing", async () => {
+  // Earlier rule, reversed by the status caller rule:
+  // a plain folder's seat reads status with no flag whatever pane it is on, and that run writes nothing.
+  test.skip("a seat's status with no flag reads the file and writes nothing", async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(join(root, '.agents'), { recursive: true });
@@ -316,6 +318,38 @@ describe('a folder with no git repository', () => {
     expect(code).not.toBe(2);
     expect(io.err).not.toContain('not inside a git repository');
     expect(io.out).toContain('team acme');
+    expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
+  });
+
+  test('a seat on its recorded pane reads a plain folder with no flag and writes nothing', async () => {
+    const { home } = fresh();
+    const root = join(base, 'acme');
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
+    updateState(join(root, '.agents'), (state) => {
+      const session = (state.sessions[SESSION] ??= emptySession());
+      session.seats['claude-coordinator-acme'] = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
+    });
+    const before = readFileSync(join(root, '.agents', 'team.state.json'), 'utf8');
+    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION });
+    const code = await runStatus([], io, statusSources(home));
+    expect(code).not.toBe(2);
+    expect(io.err).not.toContain('not inside a git repository');
+    expect(io.out).toContain('team acme');
+    expect(readFileSync(join(root, '.agents', 'team.state.json'), 'utf8')).toBe(before);
+    expect(readState(join(root, '.agents')).last_valid).toBeUndefined();
+  });
+
+  test('the same seat with no recorded pane gets the fixed sentence', async () => {
+    const { home } = fresh();
+    const root = join(base, 'acme');
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
+    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION });
+    const code = await runStatus([], io, statusSources(home));
+    expect(code).toBe(2);
+    expect(io.err).toBe('team status: this team is not yours to read\n');
+    expect(io.out).toBe('');
     expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
   });
 
@@ -480,6 +514,35 @@ function quietHosts(home: string): StatusSources {
   };
 }
 
+const NOT_YOURS = 'team status: this team is not yours to read\n';
+const LINK_SEAT = { kind: 'seat' as const, name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION };
+
+function expectUnfollowed(cwd: string, home: string): void {
+  const loaded = loadTeamFile(cwd, { home });
+  expect(loaded.ok).toBe(false);
+  if (loaded.ok) return;
+  expect(loaded.path).toBeUndefined();
+  expect(loaded.errors[0]?.message).toBe(LINK_NOT_FOLLOWED);
+}
+
+async function ownerRefusesLink(cwd: string, home: string): Promise<void> {
+  expectUnfollowed(cwd, home);
+  const io = testIo(cwd, { kind: 'owner' });
+  const code = await runStatus([], io, quietHosts(home));
+  expect(code).toBe(2);
+  expect(io.err).toBe(`team status: ${LINK_NOT_FOLLOWED}\n`);
+  expect(io.out).toBe('');
+}
+
+async function seatRefusesLink(cwd: string, home: string): Promise<void> {
+  expectUnfollowed(cwd, home);
+  const io = testIo(cwd, LINK_SEAT);
+  const code = await runStatus([], io, quietHosts(home));
+  expect(code).toBe(2);
+  expect(io.err).toBe(NOT_YOURS);
+  expect(io.out).toBe('');
+}
+
 // The owner and a seat both get the link refusal, and neither reaches a host.
 async function bothRefuse(cwd: string, home: string): Promise<void> {
   const loaded = loadTeamFile(cwd, { home });
@@ -500,7 +563,9 @@ async function bothRefuse(cwd: string, home: string): Promise<void> {
 }
 
 describe('a link is not a plain folder\'s team file', () => {
-  test('a link at .agents is not followed', async () => {
+  // Earlier rule, reversed by the status caller rule:
+  // a seat is shown the same link refusal as the owner when .agents is a link, and the link is not followed.
+  test.skip('a link at .agents is not followed', async () => {
     const { home } = fresh();
     const plain = join(base, 'plain');
     const vault = join(base, 'vault');
@@ -519,7 +584,47 @@ describe('a link is not a plain folder\'s team file', () => {
     expect(lstatSync(join(plain, '.agents')).isSymbolicLink()).toBe(true);
   });
 
-  test('a link at team.yaml is not followed', async () => {
+  test('a link at .agents is not followed for the owner', async () => {
+    const { home } = fresh();
+    const plain = join(base, 'plain');
+    const vault = join(base, 'vault');
+    mkdirSync(plain);
+    mkdirSync(vault);
+    const target = join(vault, 'team.yaml');
+    writeFileSync(target, teamText(plain));
+    symlinkSync(vault, join(plain, '.agents'));
+    const before = { text: readFileSync(target, 'utf8'), names: readdirSync(vault).sort() };
+
+    await ownerRefusesLink(plain, home);
+
+    expect(readFileSync(target, 'utf8')).toBe(before.text);
+    expect(readdirSync(vault).sort()).toEqual(before.names);
+    expect(readdirSync(plain).sort()).toEqual(['.agents']);
+    expect(lstatSync(join(plain, '.agents')).isSymbolicLink()).toBe(true);
+  });
+
+  test('a seat gets the fixed sentence when .agents is a link, and the target is not read', async () => {
+    const { home } = fresh();
+    const plain = join(base, 'plain');
+    const vault = join(base, 'vault');
+    mkdirSync(plain);
+    mkdirSync(vault);
+    const target = join(vault, 'team.yaml');
+    writeFileSync(target, teamText(plain));
+    symlinkSync(vault, join(plain, '.agents'));
+    const before = { text: readFileSync(target, 'utf8'), names: readdirSync(vault).sort() };
+
+    await seatRefusesLink(plain, home);
+
+    expect(readFileSync(target, 'utf8')).toBe(before.text);
+    expect(readdirSync(vault).sort()).toEqual(before.names);
+    expect(readdirSync(plain).sort()).toEqual(['.agents']);
+    expect(lstatSync(join(plain, '.agents')).isSymbolicLink()).toBe(true);
+  });
+
+  // Earlier rule, reversed by the status caller rule:
+  // a seat is shown the same link refusal as the owner when team.yaml is a link, and the link is not followed.
+  test.skip('a link at team.yaml is not followed', async () => {
     const { home } = fresh();
     const plain = join(base, 'plain');
     const vault = join(base, 'vault');
@@ -538,7 +643,47 @@ describe('a link is not a plain folder\'s team file', () => {
     expect(existsSync(join(plain, '.agents', 'team.state.json'))).toBe(false);
   });
 
-  test('a link whose target is inside the same folder is not followed', async () => {
+  test('a link at team.yaml is not followed for the owner', async () => {
+    const { home } = fresh();
+    const plain = join(base, 'plain');
+    const vault = join(base, 'vault');
+    mkdirSync(join(plain, '.agents'), { recursive: true });
+    mkdirSync(vault);
+    const target = join(vault, 'secret.yaml');
+    writeFileSync(target, teamText(plain));
+    symlinkSync(target, join(plain, '.agents', 'team.yaml'));
+    const before = { text: readFileSync(target, 'utf8'), names: readdirSync(vault).sort() };
+
+    await ownerRefusesLink(plain, home);
+
+    expect(readFileSync(target, 'utf8')).toBe(before.text);
+    expect(readdirSync(vault).sort()).toEqual(before.names);
+    expect(readdirSync(join(plain, '.agents')).sort()).toEqual(['team.yaml']);
+    expect(existsSync(join(plain, '.agents', 'team.state.json'))).toBe(false);
+  });
+
+  test('a seat gets the fixed sentence when team.yaml is a link, and the target is not read', async () => {
+    const { home } = fresh();
+    const plain = join(base, 'plain');
+    const vault = join(base, 'vault');
+    mkdirSync(join(plain, '.agents'), { recursive: true });
+    mkdirSync(vault);
+    const target = join(vault, 'secret.yaml');
+    writeFileSync(target, teamText(plain));
+    symlinkSync(target, join(plain, '.agents', 'team.yaml'));
+    const before = { text: readFileSync(target, 'utf8'), names: readdirSync(vault).sort() };
+
+    await seatRefusesLink(plain, home);
+
+    expect(readFileSync(target, 'utf8')).toBe(before.text);
+    expect(readdirSync(vault).sort()).toEqual(before.names);
+    expect(readdirSync(join(plain, '.agents')).sort()).toEqual(['team.yaml']);
+    expect(existsSync(join(plain, '.agents', 'team.state.json'))).toBe(false);
+  });
+
+  // Earlier rule, reversed by the status caller rule:
+  // a seat is shown the same link refusal as the owner when the link's target is inside the same folder, and the link is not followed.
+  test.skip('a link whose target is inside the same folder is not followed', async () => {
     const { home } = fresh();
     const plain = join(base, 'plain');
     const agents = join(plain, '.agents');
@@ -569,7 +714,71 @@ describe('a link is not a plain folder\'s team file', () => {
     expect(readdirSync(held).sort()).toEqual(['.agents', 'nested']);
   });
 
-  test('a dangling link is not followed', async () => {
+  test('a link whose target is inside the same folder is not followed for the owner', async () => {
+    const { home } = fresh();
+    const plain = join(base, 'plain');
+    const agents = join(plain, '.agents');
+    mkdirSync(agents, { recursive: true });
+    const target = join(agents, 'real.yaml');
+    writeFileSync(target, teamText(plain));
+    symlinkSync('real.yaml', join(agents, 'team.yaml'));
+    const before = { text: readFileSync(target, 'utf8'), names: readdirSync(agents).sort() };
+
+    await ownerRefusesLink(plain, home);
+
+    expect(readFileSync(target, 'utf8')).toBe(before.text);
+    expect(readdirSync(agents).sort()).toEqual(before.names);
+    expect(readlinkSync(join(agents, 'team.yaml'))).toBe('real.yaml');
+
+    const held = join(base, 'held');
+    const inside = join(held, 'nested');
+    mkdirSync(inside, { recursive: true });
+    const nestedFile = join(inside, 'team.yaml');
+    writeFileSync(nestedFile, teamText(held));
+    symlinkSync('nested', join(held, '.agents'));
+    const nestedBefore = { text: readFileSync(nestedFile, 'utf8'), names: readdirSync(inside).sort() };
+
+    await ownerRefusesLink(held, home);
+
+    expect(readFileSync(nestedFile, 'utf8')).toBe(nestedBefore.text);
+    expect(readdirSync(inside).sort()).toEqual(nestedBefore.names);
+    expect(readdirSync(held).sort()).toEqual(['.agents', 'nested']);
+  });
+
+  test('a seat gets the fixed sentence when the link target is inside the same folder, and the target is not read', async () => {
+    const { home } = fresh();
+    const plain = join(base, 'plain');
+    const agents = join(plain, '.agents');
+    mkdirSync(agents, { recursive: true });
+    const target = join(agents, 'real.yaml');
+    writeFileSync(target, teamText(plain));
+    symlinkSync('real.yaml', join(agents, 'team.yaml'));
+    const before = { text: readFileSync(target, 'utf8'), names: readdirSync(agents).sort() };
+
+    await seatRefusesLink(plain, home);
+
+    expect(readFileSync(target, 'utf8')).toBe(before.text);
+    expect(readdirSync(agents).sort()).toEqual(before.names);
+    expect(readlinkSync(join(agents, 'team.yaml'))).toBe('real.yaml');
+
+    const held = join(base, 'held');
+    const inside = join(held, 'nested');
+    mkdirSync(inside, { recursive: true });
+    const nestedFile = join(inside, 'team.yaml');
+    writeFileSync(nestedFile, teamText(held));
+    symlinkSync('nested', join(held, '.agents'));
+    const nestedBefore = { text: readFileSync(nestedFile, 'utf8'), names: readdirSync(inside).sort() };
+
+    await seatRefusesLink(held, home);
+
+    expect(readFileSync(nestedFile, 'utf8')).toBe(nestedBefore.text);
+    expect(readdirSync(inside).sort()).toEqual(nestedBefore.names);
+    expect(readdirSync(held).sort()).toEqual(['.agents', 'nested']);
+  });
+
+  // Earlier rule, reversed by the status caller rule:
+  // a seat is shown the same link refusal as the owner when the link dangles, and the link is not followed.
+  test.skip('a dangling link is not followed', async () => {
     const { home } = fresh();
     const plain = join(base, 'plain');
     mkdirSync(plain);
@@ -587,6 +796,54 @@ describe('a link is not a plain folder\'s team file', () => {
     symlinkSync(join(base, 'gone.yaml'), join(agents, 'team.yaml'));
 
     await bothRefuse(join(base, 'file-link'), home);
+
+    expect(existsSync(join(base, 'gone.yaml'))).toBe(false);
+    expect(readdirSync(agents).sort()).toEqual(['team.yaml']);
+    expect(lstatSync(join(agents, 'team.yaml')).isSymbolicLink()).toBe(true);
+  });
+
+  test('a dangling link is not followed for the owner', async () => {
+    const { home } = fresh();
+    const plain = join(base, 'plain');
+    mkdirSync(plain);
+    const missing = join(base, 'missing');
+    symlinkSync(missing, join(plain, '.agents'));
+
+    await ownerRefusesLink(plain, home);
+
+    expect(existsSync(missing)).toBe(false);
+    expect(readlinkSync(join(plain, '.agents'))).toBe(missing);
+    expect(readdirSync(plain).sort()).toEqual(['.agents']);
+
+    const agents = join(base, 'file-link', '.agents');
+    mkdirSync(agents, { recursive: true });
+    symlinkSync(join(base, 'gone.yaml'), join(agents, 'team.yaml'));
+
+    await ownerRefusesLink(join(base, 'file-link'), home);
+
+    expect(existsSync(join(base, 'gone.yaml'))).toBe(false);
+    expect(readdirSync(agents).sort()).toEqual(['team.yaml']);
+    expect(lstatSync(join(agents, 'team.yaml')).isSymbolicLink()).toBe(true);
+  });
+
+  test('a seat gets the fixed sentence when the link dangles, and the target is not read', async () => {
+    const { home } = fresh();
+    const plain = join(base, 'plain');
+    mkdirSync(plain);
+    const missing = join(base, 'missing');
+    symlinkSync(missing, join(plain, '.agents'));
+
+    await seatRefusesLink(plain, home);
+
+    expect(existsSync(missing)).toBe(false);
+    expect(readlinkSync(join(plain, '.agents'))).toBe(missing);
+    expect(readdirSync(plain).sort()).toEqual(['.agents']);
+
+    const agents = join(base, 'file-link', '.agents');
+    mkdirSync(agents, { recursive: true });
+    symlinkSync(join(base, 'gone.yaml'), join(agents, 'team.yaml'));
+
+    await seatRefusesLink(join(base, 'file-link'), home);
 
     expect(existsSync(join(base, 'gone.yaml'))).toBe(false);
     expect(readdirSync(agents).sort()).toEqual(['team.yaml']);
