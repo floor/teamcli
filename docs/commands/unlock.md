@@ -3,7 +3,8 @@
 Releases a lock `team lock` took, and only that caller's lock. The holder file has to name this
 caller: the same project and the same `by` line. Anyone else is shown who holds it and refused.
 A lock whose holder file is missing, unreadable, or not the four lines `team lock` writes is left
-where it is — the directory is not removed to find out.
+where it is — the directory is not removed to find out. When no caller can release it, the owner
+removes it by hand, as [team lock](lock.md) describes under "When the holder is gone".
 
 ## Synopsis
 

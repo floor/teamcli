@@ -61,6 +61,33 @@ file is refused before the lock is touched: the holder has to name a project.
 A held lock is never removed by this command. A holder file that is missing or unreadable is
 still a held lock: nothing is cleared and nobody is guessed.
 
+## When the holder is gone
+
+A run that finished the take and never unlocked leaves a holder file. `team lock` refuses, with
+or without `--wait`:
+
+    heavy-run: held since 2026-10-04T09:00:00Z by owner (beacon) — release CI, for 3h
+
+`team unlock` from that caller releases it: the same project, and the same `by` (the owner at a
+terminal, or the seat's name). Anyone else is refused. When that caller is not coming back, no
+`team` command clears the lock. The owner checks that nothing is still running under that holder,
+then removes the directory by hand:
+
+    ~/.config/team/locks/<name>.lock
+
+A take that died after the directory was created and before `who` was written, and a holder that
+cannot be read, refuse every caller. `team lock` says one of:
+
+    heavy-run: held; its holder file is not there yet
+    heavy-run: held; its holder file cannot be read
+    heavy-run: held; its lock is not a directory
+
+`team unlock` refuses these too, and leaves the path in place. No `team` command clears them, by
+design. The owner checks that nothing is still creating the lock, then removes that same directory
+by hand.
+
+A seat does not remove a lock it did not take.
+
 ## Exit codes
 
 - `0` — the lock was taken.
