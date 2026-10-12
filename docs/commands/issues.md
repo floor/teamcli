@@ -1,65 +1,29 @@
 # team issues
 
 Lists the typed records in the one file the team file names. Anyone in the checkout may run it.
-It reads. It writes nothing, and it creates no key.
-
-The source is a file the owner committed. A broker source is read by `team next`, never from
-here: this command connects to no broker, holds no tracker credential, and has no seat gate.
-The broker runs as the same OS principal as the seat: that is integrity, not authenticity, and
-this command does not isolate anything.
-`title` and `description` are the owner's text. They are not scrubbed.
-The list is file order. A priority is shown and does not reorder.
-A listing is not a claim and not the intake rule. `team plan` prints the takeable queue and claims nothing.
-`repos` and `needs` are shown when the file has them. They are not a grant, and they are not checked.
-The watch's ring is unchanged: `Team: run team messages`.
+It reads: it writes nothing, and it creates no key. The list is file order — a priority is shown and
+does not reorder — and a listing is not a claim and not the intake rule. A broker source is read by
+`team next`, never from here: this command connects to no broker, holds no tracker credential, and
+has no seat gate.
 
 ## Synopsis
 
     team issues
 
-## What it reads and writes
-
-Reads the git checkout (`findRoot`), the team file, and the YAML list at `tasks.path`. The path
-is relative to the checkout. A record's `id` and `title` are required. Every other field is
-printed only when the file has it. An empty `blocked-by`, `repos`, or `needs` prints no line.
-
-On a broker source nothing is listed and no socket connection is attempted: the refusal below
-names where the read lives.
-
-Writes nothing.
-
 ## Who may run it
 
 Anyone in the checkout.
 
-## Refusals
+## Output and exit codes
 
-```text
-team issues: the team file declares no task source
-team issues: tasks.source must be file
-team issues: team issues lists the file the owner committed; a broker source is read by team next
-team issues: tasks.linear.project is required
-team issues: the task file is not there
-team issues: the task file is not a list
-team issues: m1 is not a task: title is required
-team issues: record 1 is not a task: id is required
-team issues: nothing is waiting
-```
+| Outcome | What is printed | Exit |
+| --- | --- | --- |
+| the records were listed | each record's block, in file order | 0 |
+| the list was empty | `team issues: nothing is waiting` | 0 |
+| the team file can't be read, it declares no task source or one that is a broker's, the task file is missing or not a list, or a record is not a task | `team issues: <reason>` | 1 |
+| the invocation can't be read, or this folder is not a git checkout | `team issues: <problem>`, with the usage for the invocation | 2 |
 
-`nothing is waiting` is not a refusal. It is what an empty list prints, and the exit is 0.
-
-`tasks.source must be file` is the local-adapter miss: it stands for a source this build does not
-carry. The broker-source sentence is the other side of the same rule — a tracker's records are
-read behind the broker's socket, where the seat gate and the policy live, and this command has
-neither.
-
-## Exit codes
-
-- `0` — the records were listed, or the list was empty.
-- `1` — the team file can't be read, it declares no task source or one that is a broker's, the task file is missing or not a list, or a record is not a task.
-- `2` — the invocation can't be read, or this folder is not a git checkout.
-
-## Examples
+## Example
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -99,3 +63,5 @@ $ team issues ; echo "exit $?"
 m1  the task title
 exit 0
 ```
+
+Rationale, behaviour, refusals and known limits: [docs/internal/issues.md](../internal/issues.md).
