@@ -2,13 +2,14 @@
 // real unix socket (a listener this test owns). No pane is read and no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { dropMessage, sawSubmission, triggerLine, TRIGGER_MAX, type NativePane } from '../src/send/native.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../src/send/uds.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
@@ -89,6 +90,7 @@ function fake(sockets: string, patch: Partial<SendHost> = {}): Fake {
       frames.push(frame);
       return { ok: true };
     },
+    native: quietNative(),
     now: () => NOW,
     home: join(base, 'home'),
     ...patch,
@@ -111,6 +113,16 @@ async function listen(sockets: string, pid: number): Promise<{ path: string; rec
 async function until(check: () => boolean, ms = 2000): Promise<void> {
   const start = Date.now();
   while (!check() && Date.now() - start < ms) await new Promise((resolve) => setTimeout(resolve, 5));
+}
+
+/** A native pane that never moves. Socket tests must not depend on it. */
+function quietNative(): NativePane {
+  return {
+    typeText: () => false,
+    pressEnter: () => false,
+    status: () => null,
+    wait: async () => {},
+  };
 }
 
 function record(dir: string, seat: string, pane: string): void {
@@ -219,17 +231,19 @@ describe('team send: refused', () => {
     expect(host.frames).toEqual([]);
   });
 
-  test('a native-CLI seat is refused: that channel is not built yet', async () => {
-    const { root, sockets } = world();
-    const host = fake(sockets);
+  test('a native --wait is refused before anything is written', async () => {
+    const { root, dir, sockets } = world();
+    const host = fake(sockets, { agents: () => [{ name: 'native', pane: 'w9:p1' }] });
     const io = owner(root);
 
-    const code = await runSend(['native', 'hello'], io, host);
+    const code = await runSend(['native', 'hello', '--wait'], io, host);
 
     expect(code).toBe(1);
     expect(io.err).toContain('native runs codex');
-    expect(io.err).toContain('cross-session socket channel only');
+    expect(io.err).toContain('does not carry its reply');
+    expect(io.err).toContain('nothing was sent');
     expect(host.frames).toEqual([]);
+    expect(existsSync(join(dir, 'send-drops'))).toBe(false);
   });
 
   test('a message over the measured limit is refused, never truncated', async () => {
@@ -652,5 +666,221 @@ describe('team send: --json documents', () => {
     expect(code).toBe(0);
     const sent = JSON.parse((host.frames[0] as string).trim()) as { msg_id: string };
     expect(JSON.parse(io.out)).toEqual({ seat: 'lead', status: 'delivered', exit: 0, ids: { sent: sent.msg_id, reply: null } });
+  });
+});
+
+type Scripted = NativePane & { typed: string[]; enters: number };
+
+/** Status samples, one per read. `wait` resolves immediately so the polls cost nothing. */
+function scripted(samples: string[]): Scripted {
+  const typed: string[] = [];
+  let enters = 0;
+  let read = 0;
+  const pane: Scripted = {
+    typed,
+    get enters() {
+      return enters;
+    },
+    typeText: (_session, _pane, text) => {
+      typed.push(text);
+      return true;
+    },
+    pressEnter: () => {
+      enters += 1;
+      return true;
+    },
+    status: () => samples[Math.min(read++, samples.length - 1)] ?? 'idle',
+    wait: async () => {},
+  };
+  return pane;
+}
+
+function nativeHost(sockets: string, samples: string[]): { host: Fake; pane: Scripted } {
+  const pane = scripted(samples);
+  const host = fake(sockets, {
+    agents: () => [{ name: 'native', pane: 'w9:p1' }],
+    native: pane,
+  });
+  return { host, pane };
+}
+
+describe('team send: native drop', () => {
+  test('a codex seat is delivered when herdr reports working, and the body is not typed', async () => {
+    const { root, dir, sockets } = world();
+    const { host, pane } = nativeHost(sockets, ['idle', 'working']);
+    const io = owner(root);
+    const body = 'y'.repeat(500);
+
+    const code = await runSend(['native', body], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('native: delivered\n');
+    expect(host.frames).toEqual([]);
+    expect(pane.typed.length).toBe(1);
+    const trigger = pane.typed[0] as string;
+    expect(trigger.includes('\n')).toBe(false);
+    expect(trigger.length).toBeLessThanOrEqual(TRIGGER_MAX);
+    expect(trigger).not.toContain(body);
+    expect(pane.enters).toBe(1);
+    const drops = join(dir, 'send-drops', 'acme', 'native');
+    const files = readdirSync(drops);
+    expect(files.length).toBe(1);
+    const path = join(drops, files[0] as string);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(drops).mode & 0o777).toBe(0o700);
+    expect(readFileSync(path, 'utf8')).toBe(body);
+    expect(trigger).toContain(path);
+    const log = readFileSync(join(dir, LOG_FILE), 'utf8');
+    expect(log).toContain('herdr status working');
+    expect(log).not.toContain(body);
+  });
+
+  test('cursor, grok and antigravity take the same drop path', async () => {
+    const { root, sockets } = world();
+    const file = join(root, '.agents', 'team.yaml');
+    const original = readFileSync(file, 'utf8');
+    for (const cli of ['cursor', 'grok', 'antigravity']) {
+      writeFileSync(file, original.replace('cli: codex', `cli: ${cli}`));
+      const { host, pane } = nativeHost(sockets, ['idle', 'working']);
+      const io = owner(root);
+
+      const code = await runSend(['native', 'hello'], io, host);
+
+      expect(code).toBe(0);
+      expect(pane.typed.length).toBe(1);
+      expect(host.frames).toEqual([]);
+    }
+  });
+
+  test('a seat that stays idle through the first Enter is submitted by the second', async () => {
+    const { root, sockets } = world();
+    // Before Enter, then five polls of idle, then working on the next read.
+    const { host, pane } = nativeHost(sockets, ['idle', 'idle', 'idle', 'idle', 'idle', 'idle', 'working']);
+    const io = owner(root);
+
+    const code = await runSend(['native', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(pane.enters).toBe(2);
+    expect(pane.typed.length).toBe(1);
+  });
+
+  test('no working status is unreachable, and the drop file is kept whole', async () => {
+    const { root, dir, sockets } = world();
+    const { host, pane } = nativeHost(sockets, ['idle']);
+    const io = owner(root);
+
+    const code = await runSend(['native', 'hello'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.err).toContain('unreachable');
+    expect(io.err).toContain('herdr did not report the seat working');
+    expect(pane.enters).toBe(2);
+    expect(pane.typed.length).toBe(1);
+    const drops = join(dir, 'send-drops', 'acme', 'native');
+    const name = readdirSync(drops)[0] as string;
+    expect(io.err).toContain(join(drops, name));
+    expect(readFileSync(join(drops, name), 'utf8')).toBe('hello');
+  });
+
+  test('a codex seat already at done is not delivered until the status changes', async () => {
+    const { root, sockets } = world();
+    const stayed = nativeHost(sockets, ['done']);
+    const io = owner(root);
+    expect(await runSend(['native', 'hello'], io, stayed.host)).toBe(1);
+
+    const moved = nativeHost(sockets, ['done', 'working']);
+    const again = owner(root);
+    expect(await runSend(['native', 'hello'], again, moved.host)).toBe(0);
+    expect(again.out).toBe('native: delivered\n');
+  });
+
+  test('two sends to one seat do not interleave triggers', async () => {
+    const { root, sockets } = world();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let waits = 0;
+    const typed: string[] = [];
+    const host = fake(sockets, {
+      agents: () => [{ name: 'native', pane: 'w9:p1' }],
+      native: {
+        typeText: (_session, _pane, text) => {
+          typed.push(text);
+          return true;
+        },
+        pressEnter: () => true,
+        status: () => (waits < 2 ? 'idle' : 'working'),
+        wait: () => {
+          waits += 1;
+          return waits === 1 ? gate : Promise.resolve();
+        },
+      },
+    });
+    const first = runSend(['native', 'one'], owner(root), host);
+    const started = Date.now();
+    while (typed.length === 0 && Date.now() - started < 1000) await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await runSend(['native', 'two'], owner(root), host);
+    expect(second).toBe(1);
+    release();
+    expect(await first).toBe(0);
+    expect(typed.length).toBe(1);
+    expect(typed[0]).not.toContain('one');
+    expect(typed[0]).not.toContain('two');
+  });
+
+  test('--dry-run names the channel and writes nothing', async () => {
+    const { root, dir, sockets } = world();
+    const { host, pane } = nativeHost(sockets, ['working']);
+    const io = owner(root);
+
+    const code = await runSend(['native', 'hello', '--dry-run'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('native: dry-run: codex via a 0600 drop file and one trigger line; nothing was written\n');
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+    expect(existsSync(join(dir, 'send-drops'))).toBe(false);
+    const json = owner(root);
+    expect(await runSend(['lead', 'hello', '--dry-run', '--json'], json, fake(sockets))).toBe(0);
+    expect(JSON.parse(json.out)).toEqual({ seat: 'lead', status: 'dry-run', exit: 0, ids: { sent: null, reply: null } });
+  });
+
+  test('a pane that rejects the trigger is unreachable and the file remains', async () => {
+    const { root, dir, sockets } = world();
+    const host = fake(sockets, {
+      agents: () => [{ name: 'native', pane: 'w9:p1' }],
+      native: { ...quietNative(), status: () => 'idle', typeText: () => false },
+    });
+    const io = owner(root);
+
+    const code = await runSend(['native', 'hello'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.err).toContain('the pane did not take the trigger');
+    const drops = join(dir, 'send-drops', 'acme', 'native');
+    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe('hello');
+  });
+});
+
+describe('native delivery core', () => {
+  test('sawSubmission treats a leftover done as not a new submit', () => {
+    expect(sawSubmission('idle', ['working'])).toBe(true);
+    expect(sawSubmission('done', ['done'])).toBe(false);
+    expect(sawSubmission('done', ['working'])).toBe(true);
+    expect(sawSubmission('idle', ['done'])).toBe(true);
+    expect(sawSubmission('idle', ['idle', 'idle'])).toBe(false);
+    expect(sawSubmission('idle', ['blocked'])).toBe(true);
+  });
+
+  test('dropMessage keeps a long body whole at mode 0600', () => {
+    const { dir } = world();
+    const body = `S${'y'.repeat(4000)}E`;
+    const path = dropMessage(join(dir, 'drops'), 'one', body);
+    expect(readFileSync(path, 'utf8')).toBe(body);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(triggerLine(path)).toBe(`Read ${path} and do that.`);
+    expect(triggerLine(`${'p'.repeat(TRIGGER_MAX)}`)).toBeNull();
   });
 });

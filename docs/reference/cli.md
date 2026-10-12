@@ -538,14 +538,15 @@ Hidden: no
 
 Usage:
 
-    team send <seat> <message> [--wait] [--timeout <s>] [--json]
-    team send <seat> --file <path> [--wait] [--timeout <s>] [--json]
+    team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send --list [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |

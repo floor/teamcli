@@ -293,7 +293,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.locked` | `remove` | 2 | the locked edit does not validate | `team remove worker` |
 | `remove.not-a-repo` | `remove` | 2 | not inside a git repository | `team remove worker` |
 | `send.answered` | `send` | 0 | the seat's reply came back within the window | `team send worker hello --wait` |
-| `send.delivered` | `send` | 0 | the seat's socket took the frame | `team send worker hello` |
+| `send.delivered` | `send` | 0 | the seat's channel took the message | `team send worker hello` |
+| `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
 | `send.timeout` | `send` | 1 | delivered, but the seat's reply did not arrive in the window | `team send worker hello --wait --timeout 10` |

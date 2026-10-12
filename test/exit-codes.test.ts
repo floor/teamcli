@@ -2812,6 +2812,12 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
       }
       return { ok: true };
     },
+    native: {
+      typeText: () => false,
+      pressEnter: () => false,
+      status: () => null,
+      wait: async () => {},
+    },
     now: () => NOW,
     home: place.home,
   };
