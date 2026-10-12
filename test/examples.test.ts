@@ -34,13 +34,20 @@ describe('the fictional example file', () => {
     ]);
   });
 
-  test('labels are numbered with the names under count', () => {
-    expect(team.seats.filter((seat) => seat.declared === 'nimbus-beacon').map((seat) => seat.label)).toEqual([
-      'nimbus',
-      'nimbus-2',
-      'nimbus-3',
+  test('labels are derived from each seat\'s display, and a count shares one', () => {
+    // The example still writes `label:` on every seat — an accepted field — but the title is
+    // derived from the seat's own configuration: its display, never the written label, and no
+    // number under count (nothing keys two seats apart by their label; herdr shows the name).
+    expect(team.seats.map((seat) => [seat.name, seat.label])).toEqual([
+      ['codex-keeper', 'GPT-2 Compass'],
+      ['codex-signal', 'GPT-2 Compass'],
+      ['codex-beacon', 'GPT-3 Comet'],
+      ['cursor-beacon', 'Meridian 1'],
+      ['nimbus-beacon', 'Nimbus 1'],
+      ['nimbus-beacon-2', 'Nimbus 1'],
+      ['nimbus-beacon-3', 'Nimbus 1'],
     ]);
-    expect(team.seats[0]).toMatchObject({ label: 'coordinator', declared: 'codex-keeper', count: 1, instance: 1 });
+    expect(team.seats[0]).toMatchObject({ declared: 'codex-keeper', count: 1, instance: 1 });
   });
 
   test('the coordinator and the operator run the same CLI', () => {
