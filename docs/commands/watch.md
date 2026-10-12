@@ -78,6 +78,16 @@ is the owner's alone too: the watch `up` starts reads the project's own file fro
 and carries no flag, so a non-owner aiming `--file` at another project is refused before that file
 is read.
 
+## When its pane closes
+
+The watch ends with its pane. `up` starts it in the session's watchdog workspace, and once this
+process has seen itself there it records that pane. A hangup — what closing the pane sends —
+stops the watch the same way Ctrl-C does, and the record is cleared. A process that is still
+running after its pane is gone stops on its next pass. A watch started by hand records no pane
+and keeps running. While a recorded pane is gone and that process is still running, `team doctor`
+names the process by its name and its pid and the repair is to stop it and run `team up`.
+`remove --keep` and `add` close the seat's workspace, not the watchdog's.
+
 ## Flags
 
 | Flag | Meaning |
@@ -169,6 +179,7 @@ A report that is the operator's to act on is also what the nudge stands for. The
 | `team.yaml can't be read (<problem>); watching with the team as it was` | the file broke and no copy of it validated |
 | `<name>: its record is not an approved seat; left as it is (the owner cleans it: team remove <name> --abandon)` | a temporary seat whose end is proved and whose pane is free is left running |
 | `worktree <task> was not removed` | its removal failed; it is tried again on the next pass |
+| `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
 | `the watch of "<session>" stopped` | the last line, on Ctrl-C or a stop signal |
 
 A message already waiting under `.agents/messages/<seat>/` is not a report. When that seat's box is an empty idle prompt, and this pass is not already typing the report nudge, the watch types `Team: run team messages` and not the body. `--no-nudge` types neither line. A watch of another session types nothing for a message and raises no owner line; the file's own watch still does both. The record stays. The report nudge wins the pane: a pass that types it does not also type the ring. A message older than `nudge_wait` whose box is not free raises one owner line naming the id and the recipient, types nothing, and leaves the record where it is. Nothing in this build writes that record. A report still leaves as the nudge.

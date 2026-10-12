@@ -193,7 +193,8 @@ with the command that logs in; a CLI that can't be asked — one with no login c
 profile in this version — is `--  `.
 
 A watch that has not run, or whose heartbeat is old, is `MISS` here but not a reason for `up` to
-refuse: `up` starts the watch itself.
+refuse: `up` starts the watch itself. A recorded pane the session no longer has is `MISS` too,
+and not a reason to refuse.
 
 ## Refusals
 
