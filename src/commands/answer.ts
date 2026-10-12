@@ -7,6 +7,7 @@ import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, fileOwnerR
 import { trustPolicy } from '../file/dialogs.ts';
 import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
 import { loadTeamFile } from '../file/load.ts';
+import { launchedTeamFile } from '../file/launched-file.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { agentList, agentRename, agentStatus, paneForeground, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey as herdrSendKey, typeText, type PaneProcesses } from '../herdr.ts';
@@ -102,7 +103,8 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     // exit: answer.file-owner
     return 1;
   }
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: host.home });
+  const launched = args.values.file ? undefined : launchedTeamFile(io, host.home);
+  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), home: host.home });
   if (!loaded.ok) {
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return configuration(io, json, message || 'the team file cannot be read');

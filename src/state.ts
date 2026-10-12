@@ -64,6 +64,11 @@ export type SessionState = {
   seats: Record<string, SeatState>;
   worktrees: Record<string, WorktreeState>;
   watch?: { pid: number; heartbeat: string };
+  /**
+   * The team file this session was launched from. A lead in the lobby resolves it from a pane
+   * the state records, and from no other path. Absent on a session started before it was written.
+   */
+  launched_file?: string;
   nudge?: { pending_since: string | null };
 };
 
