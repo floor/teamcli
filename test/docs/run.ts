@@ -21,6 +21,7 @@ import { runMcp } from '../../src/commands/mcp.ts';
 import { runRemove } from '../../src/commands/remove.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
+import { runList } from '../../src/commands/list.ts';
 import { runStatus } from '../../src/commands/status.ts';
 import { runUp } from '../../src/commands/up.ts';
 import { runMessages } from '../../src/commands/messages.ts';
@@ -233,6 +234,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRelease(rest, io, world.releaseFetch(), world.releaseKeyReader());
     case 'status':
       return runStatus(rest, io, world.statusSources());
+    case 'list':
+      return runList(rest, io, world.listSources());
     case 'up':
       return runUp(rest, io, world.upSources());
     case 'usage':

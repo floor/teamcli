@@ -200,6 +200,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `issues.shape` | `issues` | 1 | a record is not a task, or the task file is not a list | `team issues` |
 | `issues.invocation` | `issues` | 2 | the invocation can't be read | `team issues extra` |
 | `issues.not-a-repo` | `issues` | 2 | not inside a git repository | `team issues` |
+| `list.empty` | `list` | 0 | herdr answered and there is nothing to list | `team list` |
+| `list.herdr-down` | `list` | 0 | herdr cannot be asked, so the list is empty | `team list` |
+| `list.shown` | `list` | 0 | the sessions are printed | `team list` |
+| `list.invocation` | `list` | 2 | the arguments are not this command's | `team list --nope` |
 | `mcp.clear` | `mcp` | 0 | the bridge is clear: doctor found nothing missing | `team mcp doctor` |
 | `mcp.up` | `mcp` | 0 | every observed bridge leg is up | `team mcp status` |
 | `mcp.down` | `mcp` | 1 | at least one leg is down or unknown | `team mcp status` |

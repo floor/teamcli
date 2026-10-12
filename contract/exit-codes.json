@@ -1361,6 +1361,34 @@
     },
     {
       "code": 0,
+      "command": "list",
+      "id": "list.empty",
+      "meaning": "herdr answered and there is nothing to list",
+      "trigger": "team list"
+    },
+    {
+      "code": 0,
+      "command": "list",
+      "id": "list.herdr-down",
+      "meaning": "herdr cannot be asked, so the list is empty",
+      "trigger": "team list"
+    },
+    {
+      "code": 0,
+      "command": "list",
+      "id": "list.shown",
+      "meaning": "the sessions are printed",
+      "trigger": "team list"
+    },
+    {
+      "code": 2,
+      "command": "list",
+      "id": "list.invocation",
+      "meaning": "the arguments are not this command's",
+      "trigger": "team list --nope"
+    },
+    {
+      "code": 0,
       "command": "mcp",
       "id": "mcp.clear",
       "meaning": "the bridge is clear: doctor found nothing missing",
