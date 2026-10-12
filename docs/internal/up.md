@@ -525,36 +525,6 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 A watch that has not run, or whose heartbeat is old, is not a reason to refuse: `up` starts the
 watch itself.
 
-## Refusals
-
-A real run stops before the first step, prints one `team up: <reason>` per reason and exits 1:
-
-| Reason |
-| --- |
-| ``only the owner runs `up`, from a terminal outside herdr; this call is <caller>`` — the owner without a terminal is not refused: it runs, and never prompts. With a `delegates` section in the file, this refusal is the delegate gate's to say, in its own words below |
-| ``only the owner or the approved delegate runs `up`; this call is <caller>`` — the delegate gate: the file's `delegates` section names panes, and this caller is none of them |
-| ``--<flag> is the owner's; the approved delegate cannot use it`` — the delegate gate, for `--session` and `--file` on a delegated run, refused before the file or the session the flag names is read |
-| the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the approved copy unreadable, the live file drifted from the approved copy, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |
-| ``the file was never approved on this machine: run `team approve` `` |
-| ``approved before records were signed: run `team approve` once`` — the record was written by an earlier `team` |
-| ``the record <case>: run `team approve` once`` — a signed record that does not verify |
-| ``the file is not the approved one (<differences>): run `team approve` `` |
-| a `MISS` finding from [team doctor](../commands/doctor.md) — herdr or a CLI not installed, or a CLI not logged in. A launch that names another model than the file, or that names none, is a warning, so `up` still starts the seat; a seat's own launch line is not this — it leaves that seat out alone, in the lines above. After the idle wait, a screen that shows a different model leaves that seat at launched, not named |
-| `the load is 1.2 per core, above 1` / `free memory is 8%, below 25%` / `free disk is 3.0 GB, below 10.0 GB` / `free swap is 1.0 GB, below 2.0 GB` |
-| `herdr doesn't answer` |
-| `session beacon is stopped` — herdr lists it stopped and this team's state does not record it, so `up` does not clear it |
-| `session <session> is stopped and did not clear` — herdr lists it stopped, this team's state records it, and the clear did not happen |
-| ``session beacon has 2 agents this file's state doesn't record: `up` never touches a running team`` — an agent on a pane no record names, or on a pane this state records for a seat at another stage: a seat at `named` or `ready` whose pane now holds a foreign agent is refused here, with the whole team. An agent on the pane this state records for a seat left at `launched` — the run stopped after its pane was made and before its rename — is not refused: it is the run's own half-finished seat, and this run finishes it, the idle wait and the rename like any launched seat |
-| ``the file is legacy: migrate trust to absolute paths including the lobby ~/.config/team/lobby: ...`` — followed by the whole `trust:` block to paste: every entry the next `up` requires, one line saying which key of the file each entry comes from, and, for an entry a rule of `trust` refuses, one line naming the key that forces it |
-| ``the lobby ~/.config/team/lobby: <check>`` — gate check failed (symbolic link, permissions, mode, not empty, inside git repo) |
-| ``the lobby <path>: failed to create <component>: <code>`` — the run had to make an absent lobby, and the make itself failed at `<component>`: a component that cannot be written, or one another process took first. The read-only check above found the lobby missing and made nothing; the make runs under the run lock, after a delegated run's audit line and before any seat's own effect, and the run stops here (exit 1) |
-| ``seat beacon-qa would start in live, inside the protected checkout live; a seat that isn't `mode: shared` never starts in one`` — the folder the file gives it, or its lobby, is a protected checkout |
-| ``another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share: this run stopped before its first step, and a delegated run gets the same line. The line names no command, because the lock is shared and its token records only a pid. `--dry-run` takes no lock and never shows it |
-| ``another session-mutating run may be holding session <session>, and its lock cannot be read; if no run is using it, delete <state dir>/seat-locks/<session>/.run`` — the lock file does not read as a token (empty, corrupt, unreadable), so its holder is unknown: a run that cannot be proven finished counts as running, the same as a lock left by a run whose pid is still alive, and only the owner clears it — the line names the file |
-
-A watch that has not run, or whose heartbeat is old, is not a reason to refuse: `up` starts the
-watch itself.
-
 ## Known issues
 
 A team file that is not `.agents/team.yaml` in the folder the watch starts in is not watched. A real `up` prints `watch: not started: …` and exits 1. A dry run prints that line with its plan and exits 0. Move the file to that path. A fuller repair is planned.
