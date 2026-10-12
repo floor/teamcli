@@ -3,7 +3,8 @@
 What moved off [the `team usage` page](../commands/usage.md): what the run reads and
 writes, the two views and how the caller is placed, the report's lines, what the restricted view
 carries, the JSON behind `--json`, the refusals in their own words, and the known limits. The
-synopsis, the flag, the caller table and the exit codes stay on the page.
+synopsis, the flag, the caller table and the exit codes stay on the page; the view an exit-0 run
+prints outside every project is kept below.
 
 ## What the run does: the machine's teams, read as one report
 
@@ -284,11 +285,23 @@ unreadable; it is the command's one refusal beside the invocation, and the owner
 and the read's own reason in its place (`team usage: the store folder <folder> could not be read:
 <why>`) — that message carries a path this machine derived, so it is the owner's.
 
+## The exit codes, and the view outside every project
+
+The page's table carries the exit codes; the outside-a-project view the exit-0 line held stands
+here, in its own words:
+
+- `0` — the report printed, whatever its figures, and whether or not this folder holds a project:
+  outside every project the block is the header, the counts, and the notes — no lab renders, since
+  every lab belongs to another team for a caller with no project of their own — and one note line
+  says `no team file is found from this folder; there is no project block to show`. That is still
+  exit 0, a note and not a refusal.
+- `2` — the invocation can't be read, or the stores folder can't be read.
+
 ## Examples, moved here whole
 
 The examples below are the page's own, moved here whole, in the order they stood in. The
-first console is also on [the `team usage` page](../commands/usage.md); the rest run only here,
-and their order and their output matter only here.
+first console is also on [the `team usage` page](../commands/usage.md); the rest stand only in this
+note and are not executed by any test — `test/docs.test.ts` reads `docs/commands/` alone.
 
 The file below names one account, read by a check and by the shipped status line — so a window the
 check reports is read from the check; the account is spent by no seat's vendor, so its lab is its
