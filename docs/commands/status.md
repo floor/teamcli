@@ -133,7 +133,7 @@ here.
 | `<seat>: its pane runs no CLI (the CLI ended or the session was restored)` | `the owner runs team up` (it closes the pane without input and launches the seat fresh) |
 | `<seat>: the process in its pane is not the one team launched; nothing checks its model, account or rules` | `the owner runs team up` (it closes the pane without input and launches the seat fresh) |
 | `<seat>: the agent in <pane> is named "x"` | `herdr --session <s> agent rename <pane> <seat>` |
-| `<seat> runs <model> <version>; the file says <declared>` (`<declared>` is the seat's `display` spelling) | restart it (`team remove <seat> --keep`, then `team add <seat>`), or correct the file and `team approve` |
+| `<seat> runs <model> <version>; the file says <declared>` (`<declared>` is the seat's `display` spelling) | restart it (`team remove <seat> --keep`, then `team add <seat>`), or correct the file and `team approve`. A lead (the orchestrator or the operator) is not removed: `team down`, then `team up` (to restart the whole team), or correct the file and `team approve` |
 | `<seat> is marked stopped in the file and is running` | `team remove <seat> --keep`, or take `stopped: true` off the seat |
 | `<seat>: waiting for owner (<classification>)` | `the owner runs team up` (it offers to open the pane, skip the seat or stop cleanly), or `team answer <seat> trust` when the classification is `trust` and the policy is `dialogs.trust: orchestrator` |
 | `<seat>: trust sent; recovery required` | `the owner runs team up` |
