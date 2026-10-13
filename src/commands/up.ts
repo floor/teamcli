@@ -353,13 +353,19 @@ function seatPlan(
   };
   if (!resume || !recorded || seat.stopped) return planned;
   // §5: a seat recorded waiting takes precedence over everything below. Its recorded pane and
-  // workspace are reused — never launched again — whatever the process verdict says: the pause
-  // reads the pane fresh and verifies it before doing anything, and a pane that is gone is a
-  // fail-closed refusal there, not a reason to create another workspace.
+  // workspace are reused — never launched again — while the host still lists that pane: the
+  // pause reads it fresh and verifies it before doing anything. A pane the host no longer
+  // lists is not that refusal: a fresh workspace is made and the seat launches. A pane the
+  // host still lists, including one whose process this run cannot account for, is never
+  // closed or recreated.
   if (recorded.waiting) {
-    // The pane is herdr's one agent of this seat's name. The pane the state records selects
-    // nothing: a waiting seat with no such agent, or with two, is left out and not launched.
     const named = agents.filter((agent) => agent.name === seat.name);
+    const paneListed = recorded.pane !== undefined && agents.some((agent) => agent.pane === recorded.pane);
+    if (named.length === 0 && recorded.pane && !paneListed) {
+      return { ...planned, replacedPane: recorded.pane };
+    }
+    // The pane is herdr's one agent of this seat's name. No such agent, or two, is left out
+    // and not launched: the recorded pane is still listed, or the name is ambiguous.
     const live = named.length === 1 ? named[0] : undefined;
     return {
       ...planned,

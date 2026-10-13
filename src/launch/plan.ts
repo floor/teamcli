@@ -142,6 +142,9 @@ export interface UpSeat {
   waitingLaunched?: LaunchedIdentity;
   /** Set when a waiting seat has no single herdr agent of its name: the resume is left out. */
   resumeGap?: 'none' | 'many';
+  /** The waiting seat's recorded pane, when the host no longer lists it. The seat is launched
+   *  in a fresh workspace, and this id is the one line that says the old pane was replaced. */
+  replacedPane?: string;
   /** The seat works in worktrees: it waits in the lobby until a brief names its worktree. */
   lobby?: boolean;
   /**
@@ -357,6 +360,10 @@ export function upPlan(input: UpInput): Step[] {
     let notice: string | undefined;
     if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
     else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;
+    if (seat.replacedPane) {
+      const gone = `its recorded pane ${seat.replacedPane} was gone and was replaced`;
+      notice = notice ? `${notice}; ${gone}` : gone;
+    }
     const takeNotice = (): string | undefined => {
       const text = notice;
       notice = undefined;
