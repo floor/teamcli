@@ -911,8 +911,8 @@ function hostOf(input: {
         }
       });
       if (patch.pane) {
-        if (replaced) forgetLaunchedPane(input.home, replaced);
-        noteLaunchedPane(input.home, input.teamFile, patch.pane);
+        if (replaced) forgetLaunchedPane(input.home, replaced, session);
+        noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
       }
     },
     running(name) {
@@ -928,7 +928,7 @@ function hostOf(input: {
         pane = seats?.[name]?.pane;
         if (seats) delete seats[name];
       });
-      if (pane) forgetLaunchedPane(input.home, pane);
+      if (pane) forgetLaunchedPane(input.home, pane, session);
     },
     // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
     // here with the same function the records use: no escape sequence or bidi override reaches
