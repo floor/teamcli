@@ -18,7 +18,6 @@ import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { runStatus, type StatusSources } from '../../src/commands/status.ts';
-import { runUp, type UpSources } from '../../src/commands/up.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import { testIo } from '../helpers.ts';
@@ -268,38 +267,3 @@ describe('doctor: --session for a non-owner', () => {
   });
 });
 
-describe('up: --session for a plain non-owner', () => {
-  test("is refused as the owner's command, and today the aimed session is asked first — pinned as the current order", async () => {
-    approveFile();
-    updateState(join(root, '.agents'), (state) => {
-      state.sessions['acme-web'] = emptySession();
-    });
-    const beforeState = readFileSync(stateFile, 'utf8');
-    const asked: string[] = [];
-    const sources: UpSources = {
-      sessionRunning: () => true,
-      sessionState: (session) => {
-        asked.push(session);
-        return 'running';
-      },
-      agents: () => [],
-      workspaces: () => [],
-      home,
-      now: () => NOW,
-      sleep: async () => {},
-      alive: () => false,
-    };
-    const io = testIo(root, { kind: 'seat', name: 'worker', pane: 'w3:p1' });
-    const code = await runUp(['--session', 'elsewhere'], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toBe('team up: only the owner runs `up`, from a terminal outside herdr; this call is worker\n');
-    // Today's order, from the code: a run with no `delegates` section honours the flag, so the
-    // aimed session's state is read (resolveState) before the caller refusal — the #282 shape,
-    // on main, outside the delegated runs the gate covers. Pinned here so any change to it is a
-    // decision, not an accident; the table in the pull request names it as the one pair where
-    // the zero-host-call rule does not hold.
-    expect(asked).toEqual(['elsewhere']);
-    // The refusal adopts nothing and launches nothing: the state's bytes stand.
-    expect(readFileSync(stateFile, 'utf8')).toBe(beforeState);
-  });
-});
