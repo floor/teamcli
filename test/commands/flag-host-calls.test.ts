@@ -7,20 +7,55 @@
 // read-and-report commands get their first non-owner `--session` tests at all. The pairs and
 // their tests are tabulated in the pull request. `send --file` is not this flag (it names the
 // message's file), and `approve`, `commits`, `pr` and `release` reach no herdr.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf, verifiedOf } from '../../src/approve/approval.ts';
 import type { CallerSources } from '../../src/caller.ts';
-import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
+import type { AnswerHost } from '../../src/commands/answer.ts';
+import type { DoctorSources } from '../../src/commands/doctor.ts';
+import type { StatusSources } from '../../src/commands/status.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
-import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
-import { runStatus, type StatusSources } from '../../src/commands/status.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import { testIo } from '../helpers.ts';
+
+// A reorder that reads the flagged file before refusing it changes no bytes and prints the same
+// refusal, so the walk's empty call record alone cannot see it. The fs is therefore wrapped to
+// record every touch (exists, lstat, realpath, read) under a directory a test points at — the
+// --file refusal must not so much as look. The wrapper delegates everything to the real fs.
+// bun binds a module's named imports as it loads, so the mock has to be registered before the
+// command under test (and its load chain) is imported: the commands here are imported
+// dynamically, in the beforeAll below; every static import above loads no command.
+const realFs = await import('node:fs');
+const touched: string[] = [];
+let watching: string | undefined;
+mock.module('node:fs', () => {
+  const wrapped = Object.assign({}, realFs);
+  for (const name of ['existsSync', 'lstatSync', 'realpathSync', 'readFileSync'] as const) {
+    const real = realFs[name] as (...args: unknown[]) => unknown;
+    Object.assign(wrapped, {
+      [name]: (...args: unknown[]) => {
+        if (watching !== undefined && String(args[0]).startsWith(watching)) {
+          touched.push(`${name}(${String(args[0]).slice(watching.length)})`);
+        }
+        return real(...args);
+      },
+    });
+  }
+  return wrapped as typeof realFs;
+});
+
+let runAnswer: (typeof import('../../src/commands/answer.ts'))['runAnswer'];
+let runDoctor: (typeof import('../../src/commands/doctor.ts'))['runDoctor'];
+let runStatus: (typeof import('../../src/commands/status.ts'))['runStatus'];
+beforeAll(async () => {
+  ({ runAnswer } = await import('../../src/commands/answer.ts'));
+  ({ runDoctor } = await import('../../src/commands/doctor.ts'));
+  ({ runStatus } = await import('../../src/commands/status.ts'));
+});
 
 const NOW = new Date('2026-10-03T14:02:00Z');
 const FILE = `format: 1
@@ -159,13 +194,20 @@ describe("answer: --file is the owner's — its own direct test", () => {
     const calls: string[] = [];
     const io = testIo(root);
     io.callerSources = underHerdr(calls);
+    // Every fs touch under the flagged project is recorded: the refusal must come before the
+    // file is read, and a reorder that only reads first would leave every other pin standing.
+    watching = flagged;
+    touched.length = 0;
     const code = await runAnswer(['worker', 'trust', '--file', flaggedFile], io, answerHost(calls));
+    watching = undefined;
     expect(code).toBe(1);
     expect(io.err).toBe(
       "team answer: --file is the owner's, from a terminal outside herdr; this call is unplaced (it runs under herdr)\n",
     );
     // No walk read and no command read: nothing asked herdr, nothing read the store.
     expect(calls).toEqual([]);
+    // And nothing so much as looked at the flagged file: no exists, no lstat, no realpath, no read.
+    expect(touched).toEqual([]);
     // The flagged file was never read: unparsable bytes, and no problem of its own is reported.
     expect(readFileSync(flaggedFile, 'utf8')).toBe('format: [\n');
     // And nothing written anywhere: no refusal log and no state, in either project.
