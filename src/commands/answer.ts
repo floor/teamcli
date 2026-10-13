@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { basename, dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { approvalDifferencesOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
@@ -113,15 +113,12 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     const walked = walkCaller(io);
     if (!isOwner(walked)) {
       const local = loadTeamFile(io.cwd, { home: host.home });
-      if (local.ok) {
-        return refuse(io, json, dirname(local.path), logWho(walked, local.team), seatName, host, {
-          class: 'caller',
-          message: `team answer: ${sessionOwnerRefusal(walked)}`,
-        });
-      }
-      io.stderr(`team answer: ${sessionOwnerRefusal(walked)}\n`);
-      // exit: answer.session-owner
-      return 1;
+      const dir = local.ok ? dirname(local.path) : join(io.cwd, '.agents');
+      const who = local.ok ? logWho(walked, local.team) : walkedWho(walked);
+      return refuse(io, json, dir, who, seatName, host, {
+        class: 'caller',
+        message: `team answer: ${sessionOwnerRefusal(walked)}`,
+      });
     }
   }
   const launched = args.values.file ? undefined : launchedTeamFile(io, host.home);
@@ -248,6 +245,14 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   } finally {
     lock.release();
   }
+}
+
+/** The log bracket when the session flag is refused before a team file can be read. */
+function walkedWho(caller: Caller): string {
+  if (caller.kind === 'owner' || caller.kind === 'owner-no-tty') return 'owner';
+  if (caller.kind === 'unplaced') return 'unplaced';
+  if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
+  return 'seat';
 }
 
 /** The caller class the caller check returned, as the log's bracket. */
