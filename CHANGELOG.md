@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-13
+
+A release that draws the line on who may read a team and how a team finds its own ground: any
+caller could read any team's status before, and now only the owner, the team's own recorded seat,
+and a named delegate can; each team resolves its own per-entity lobby instead of sharing one; a
+seat may declare its reasoning effort; and the watch learns to name what went wrong — a provider
+error, a rate limit, a seat that vanished, a screen it cannot read — instead of going quiet.
+
+### Breaking
+
+- **`team status` is no longer readable by any caller.** The rule `team check` already applied
+  now governs `status` too (one shared `mayReadTeam`): the full answer goes only to the owner at a
+  terminal, to a seat of that team on the pane the state records for it, and to a pane the approved
+  file names. Everyone else gets `team status: this team is not yours to read` on stderr, nothing
+  on stdout, exit 2. `--file` and `--session` are owner-only and are refused before anything is
+  read (exit 1). Upgrading: a terminal-less run of `team status` — including the owner's own
+  scripts, cron jobs or CI calling `team status --json` — now gets that refusal and exit 2, so a
+  script that parsed the JSON must handle the refusal instead; a seat must run `status` from the
+  folder that holds `.agents`, on its recorded pane. (#291)
+
+### Added
+
+- **Per-entity lobbies.** Two optional top-level keys, `entity` and `lobby`, let each team resolve
+  and operate on its own lobby, so one team's non-empty lobby can no longer block another on the
+  same machine. `lobby` names a folder outright (`~` = home); `entity` resolves to
+  `~/.config/team/lobbies/<slug>`. A file that sets neither keeps the machine-global
+  `~/.config/team/lobby`, byte for byte. Both are non-owner keys — they change no approval digest —
+  but the resolved lobby must appear in the owner-gated `trust` list. (#259)
+- **Optional `effort` seat field.** A seat may declare a reasoning `effort`; it is accepted and
+  validated as a known optional field with a defined vocabulary, and the launch code soft-ignores
+  it for now (no behaviour change), leaving other keys untouched. (#263)
+- **`team list`** — the teams/sessions on this machine, read-only. (#262)
+- **Herdr workspace titles from display and effort.** `team up`/`add` derive the workspace label
+  from the seat's `display` (and effort); a written `label` is ignored in favour of the derived
+  title. (#261)
+- **`team send` to a native CLI via a drop file.** A native-CLI seat (codex, cursor, grok,
+  antigravity) has no message socket, so the body is written whole to a drop file (mode 0600,
+  atomic rename) and the pane receives exactly one short trigger line — never the body, never
+  several typed chunks. A Claude Code seat still gets one socket frame; `--wait` is socket-only. (#267)
+- **`team ask-show`** — prints a seat's question only when its marker verifies against that question
+  and request id and is not past its expiry; otherwise it prints nothing of the question. (#273)
+- **Machine lock primitive `team lock` / `team unlock`.** Takes and releases a named machine lock
+  via one non-recursive `mkdir`; a held lock is refused and names its holder; `--wait` waits without
+  breaking it; a lock is released only by its recorded holder. Primitive only — nothing in the tool
+  takes the lock yet. (#285)
+- **Reach grants and the reach-roster projection.** (#258)
+
+### Fixed
+
+- `team up` records a mismatched seat's process before leaving it unnamed. (#283)
+- An already-running seat on an unrecognised screen now names the way out: `team down`, then
+  `team up`. (#289)
+- A restored seat with no process identity is reported. (#276)
+- `team up`: the recorded watchdog pane reads a flagged team file — when `up --file <f>` launches
+  from a non-default file, the resolved path is recorded in state and fed to the watchdog, so the
+  watch monitors the same file. (#278)
+- `team watch` reports a seat stopped on a provider error or a rate limit. (#271)
+- `team watch` reports a named seat that has vanished. (#280)
+- `team watch` ends with its pane and names the repair. (#292)
+- `team up`: a caller who is not the owner and passes `--session`, or a `--file` other than its own
+  folder's team file, is now refused before that file is read and before the session is asked for
+  anything, as `add`, `remove`, `down` and `answer` already do. Nothing was written, adopted or
+  launched before this change. A non-owner's dry run in its own folder is unchanged. Upgrade note:
+  a non-owner's `team up --file <missing path>` now ends in the owner refusal (exit 1), not exit 2;
+  the owner's own run stays exit 2. (PR #TBD-up)
+- `team add --temporary --until` now validates its end condition: a `result:<path>` must resolve
+  lexically inside the project (no absolute path, no `..`), and a `merged:<branch>` must be a valid
+  git ref name passed after `--`; a branch name starting with `-` is refused. `team watch`
+  re-validates a stored end condition before use. (PR #TBD-until)
+- `cursor`: a background-task row is no longer read as unsent text. (#281)
+- A lobby lead uses the file its session launched from. (#282)
+- A lead is told to relaunch with `team down`, not `remove --keep`. (#288)
+
+### Changed
+
+- Project renamed `team` → `teamcli` (GitHub `floor/teamcli`, docs and paths). The published npm
+  package name is unchanged (`team`), so install snippets are unaffected.
+- Release pipeline hardened: CI verifies on a macOS matrix before publishing, runs verify and pack
+  on a workflow dispatch, and publishes only from a tag push. (#284, #295)
+
+### Internal
+
+- Command reference and the `team up` page trimmed to one glance. (#268, #270, #272, #274, #275,
+  #277, #279)
+- Public roster updated with current roles. (#264, #296)
+- Test coverage added across the flag gates of every herdr-reaching command, the soft effort field
+  and its vocabulary, the derived herdr label, `team list`, the machine lock's sequential branches,
+  native send delivery, and the provider-error and rate-limit screens. (#265, #266, #269, #286,
+  #287, #290, #293)
+
 ## [0.3.5] - 2026-10-07
 
 A release about a seat whose screen nobody can read: a caller other than the owner can now let
