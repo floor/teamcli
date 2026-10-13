@@ -61,6 +61,9 @@ export type SeatObservation = {
   identity: SeatProcessVerdict;
   // Whether an agent answers for the seat. False: the seat's own checks never run.
   running: boolean;
+  // The stage the session state records, when it records one. `named` and `ready` mean the
+  // seat was running even when this pass sees no agent.
+  recorded: 'launched' | 'named' | 'ready' | undefined;
   quiet: boolean;
   working: boolean;
   prompt: boolean;
