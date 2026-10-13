@@ -39,6 +39,7 @@ import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor, shippedLobbyFiles } from '../profiles/index.ts';
+import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { emptySession, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
@@ -603,6 +604,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       const parsed = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
       // The amendment re-signs from the command's own one snapshot, read at its gate.
       if (parsed.ok) recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);
+      // The reach projection, from the file just written: a seat added with a `reach` grant
+      // reaches the bridge and the shuttle at this approval, without waiting for an `up`.
+      if (parsed.ok) {
+        const projectionNote = reachProjectionNote(writeReachProjection(parsed.team, sources.home));
+        if (projectionNote) logLine(dir, 'add', describeCaller(caller), projectionNote, sources.now());
+      }
     }
 
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;

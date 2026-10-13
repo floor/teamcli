@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { profileFor, shippedLobbyFiles } from '../src/profiles/index.ts';
+import { TOOL_LOBBY_FILES, profileFor, shippedLobbyFiles } from '../src/profiles/index.ts';
 import { exitClearKey, launchCommand, lobbyFilesList } from '../src/profiles/profile.ts';
 import { runningModel } from '../src/status/statusline.ts';
 
@@ -255,13 +255,16 @@ describe('the lobby_files a profile may name', () => {
     expect(profileFor('grok')?.lobbyFiles).toEqual([]);
   });
 
-  test('the union of every shipped profile is what a lobby may hold, whatever the team runs', () => {
+  test('the union of every shipped profile and the tool\'s own files is what a lobby may hold, whatever the team runs', () => {
     // The set a lobby gate reads cannot depend on a team's seats: it is every shipped
-    // declaration together, sorted and deduped, so a CLI another team runs is covered too.
+    // declaration together — plus the files the tool itself keeps there, today the reach
+    // projection and its write's temporary — sorted and deduped, so a CLI another team runs
+    // and the tool's own files are covered too.
     const perCli = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok']
       .flatMap((cli) => profileFor(cli)?.lobbyFiles ?? []);
-    expect(shippedLobbyFiles()).toEqual([...new Set(perCli)].sort());
+    expect(shippedLobbyFiles()).toEqual([...new Set([...perCli, ...TOOL_LOBBY_FILES])].sort());
     expect(shippedLobbyFiles()).toContain('.claude/scheduled_tasks.lock');
+    expect(shippedLobbyFiles()).toContain('reach-roster.json');
   });
 
   test('no declared lobby file is one a shipped profile names as a configuration or instruction file', () => {
