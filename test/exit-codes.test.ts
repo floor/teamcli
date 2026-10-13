@@ -1166,7 +1166,7 @@ scene('down.file-owner', async (place) => {
 });
 scene('down.no-pane', async (place) => {
   write(place, TEAM);
-  return show(await down(place, [], leadSeat, downSources({ sessionRunning: () => true, agents: () => [] })), 'no pane is recorded for seat lead');
+  return show(await down(place, [], leadSeat, downSources({ sessionRunning: () => true, agents: () => [], home: place.home })), 'no pane is recorded for seat lead');
 });
 scene('down.session-owner', async (place) => {
   write(place, TEAM);
@@ -1177,7 +1177,7 @@ scene('down.another-pane', async (place) => {
   updateState(join(place.root, '.agents'), (state) => {
     (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w2:p1' };
   });
-  return show(await down(place, [], leadSeat, downSources({ sessionRunning: () => true, agents: () => [] })), 'the state records pane w2:p1 for seat lead');
+  return show(await down(place, [], leadSeat, downSources({ sessionRunning: () => true, agents: () => [], home: place.home })), 'the state records pane w2:p1 for seat lead');
 });
 scene('down.abandon', async (place) => {
   write(place, TEAM);
