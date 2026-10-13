@@ -44,6 +44,12 @@ export type Seat = {
   cwd: string;
   /** Herdr workspace title. Omitted in the file, it is `<model> <version>` in lowercase. */
   label: string;
+  /**
+   * The seat's effort word, when the file sets one. Absent otherwise, so a file that omits it
+   * keeps the digest it had. A lab with a vocabulary warns when the word is outside it; the
+   * warning does not fail the file, and launch does not read the field.
+   */
+  effort?: string;
   mode: Mode;
   parked: boolean;
   stopped: boolean;
