@@ -423,6 +423,9 @@ section, say — use "Re-run failed jobs": a full re-run goes back through `npm 
 fails because that version is already on npm. A tag ruleset protecting `v*`, so that only the
 owner creates version tags, is recommended.
 
+The same workflow can be started by hand. That run is the Linux and macOS verify matrix through the
+pack. npm publish and the GitHub release run only on a push of a `v*` tag.
+
 Trusted publishing must be bound once, by the package owner, on npmjs.com: the package `team` →
 Publishing → trusted publishers → GitHub Actions, naming `floor/teamcli` and the workflow file
 `release.yml`; until then the workflow cannot publish.

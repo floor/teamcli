@@ -18,12 +18,16 @@
 # Never push this repository's version tags to another repository with a
 # publish workflow (floor/material's Release runs on any v* tag): a pushed tag
 # starts a publish there.
+# A workflow_dispatch runs verify on Linux and macOS through the pack. The
+# publish job and the GitHub release job require a push of a v* tag, so that
+# run does not publish.
 name: Release
 
 on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -51,7 +55,10 @@ jobs:
         with:
           node-version: 22
 
+      # A dispatch has no tag. These three checks stay on a tag push, and the
+      # install, the gate and the pack still run.
       - name: The tag must be the package version
+        if: ${{ success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         run: |
           tag="${GITHUB_REF_NAME#v}"
           version="$(node -p "require('./package.json').version")"
@@ -62,6 +69,7 @@ jobs:
 
       # Only a commit on main is releaseable: a tag on an unmerged branch must not publish.
       - name: The tagged commit must be on main
+        if: ${{ success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         run: |
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "the tag is not on main" >&2; exit 1; }
 
@@ -70,6 +78,7 @@ jobs:
       # YYYY-MM-DD would publish and release without a complaint. Only this
       # workflow runs the check — between releases the placeholder is legitimate.
       - name: The version's CHANGELOG heading carries a real date
+        if: ${{ success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         run: bun scripts/check-release-date.ts "${GITHUB_REF_NAME#v}"
 
       - run: bun install --frozen-lockfile
@@ -105,6 +114,7 @@ jobs:
   # Only the token, a Node with the pinned npm, and the tarball verify built.
   publish:
     needs: verify
+    if: ${{ success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -142,6 +152,7 @@ jobs:
   # to the repository, with the workflow's own token.
   github-release:
     needs: publish
+    if: ${{ success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
