@@ -245,11 +245,13 @@ describe('the lobby field validator rejects a cwd-dependent or traversing value'
 });
 
 describe('seatStart waits in the resolved lobby', () => {
-  test('a worktree seat on an entity team starts in the per-entity lobby', () => {
+  test('a worktree seat that is not a lead starts in the per-entity lobby, and the lead starts in the project', () => {
     const team = validateTeamFile(teamYaml({ entity: 'floor', lobbyTrust: '~/.config/team/lobbies/floor' }));
     if (!team.ok) throw new Error('fixture did not validate');
-    const seat = { ...team.team.seats[0]!, mode: 'worktree' as const, cwd: '.' };
-    const start = seatStart(team.team, seat, root, home);
+    const lead = team.team.seats[0]!;
+    const worker = { ...lead, name: 'worker', mode: 'worktree' as const, cwd: '.' };
+    expect(seatStart(team.team, lead, root, home)).toEqual({ cwd: root });
+    const start = seatStart(team.team, worker, root, home);
     expect('cwd' in start && start.cwd).toBe(resolveLobby(home, { entity: 'floor' }));
   });
 });
