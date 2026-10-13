@@ -363,7 +363,9 @@ describe('team up, live', () => {
     expect(code).toBe(1);
     expect(made.renames).not.toContain('codex-acme');
     expect(io.out).toContain(
-      'codex-acme: left out: runs GPT Terra 5.6; the file says GPT Sol 6; left at launched, not named',
+      'codex-acme: left out: runs GPT Terra 5.6; the file says GPT Sol 6; left at launched, not named. '
+        + 'Add -m <id> to its launch, or correct the file\'s model and version and run `team approve`. '
+        + 'This CLI is told its model with -m <model id>.',
     );
   });
 

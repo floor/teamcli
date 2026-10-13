@@ -68,6 +68,7 @@
     "models": { "$ref": "#/$defs/models" },
     "status_model": { "type": "array", "items": { "$ref": "#/$defs/statusModelRule" }, "minItems": 1, "description": "optional: absent, the CLI's screen doesn't show its model" },
     "last_used_model": { "type": "boolean", "description": "optional: the CLI starts on its last-used model when a launch names none" },
+    "model_form": { "type": "string", "minLength": 1, "description": "optional: how a launch tells this CLI its model, recorded only where a run has shown the form; absent, a mismatch line says nothing more" },
     "quota": { "type": "array", "items": { "$ref": "#/$defs/quota" }, "minItems": 1 },
     "trust_answer": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/trustAnswer" } },
     "screen": { "$ref": "#/$defs/screen" },

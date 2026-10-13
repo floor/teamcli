@@ -115,6 +115,7 @@ describe('checkLogin with fake command results', () => {
       modelOf: () => null,
       startsOnLastModel: false,
       modelFlag: () => ({ option: '--model', id: null }),
+      modelForm: null,
       answers: [],
     };
     let ran = false;
