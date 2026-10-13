@@ -423,6 +423,7 @@
           "propertyNames": {
             "enum": [
               "restored",
+              "provider-error",
               "unsent",
               "idle",
               "extra",

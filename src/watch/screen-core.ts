@@ -240,6 +240,8 @@ const SCREEN_KINDS: ReadonlySet<string> = new Set<Screen['kind']>([
   'question',
   'exit question',
   'vendor notice',
+  'provider error',
+  'rate limit',
   'unknown',
 ]);
 
@@ -307,13 +309,31 @@ function callComposer(composer: unknown, lines: string[]): Hit {
   }
 }
 
-type StageName = 'unknown' | 'trust' | 'permission' | 'exit_question' | 'question' | 'vendor_notice' | 'working';
+type StageName = 'unknown' | 'trust' | 'permission' | 'exit_question' | 'question' | 'vendor_notice' | 'provider_error' | 'rate_limit' | 'working';
 
 /** The kind a stage reads as. A stage is named for the profile (vendor_notice); a screen kind is
  *  what the run prints (vendor notice). */
 function kindOfStage(name: StageName): Screen['kind'] {
   if (name === 'vendor_notice') return 'vendor notice';
+  if (name === 'provider_error') return 'provider error';
+  if (name === 'rate_limit') return 'rate limit';
   return name === 'exit_question' ? 'exit question' : name;
+}
+
+/** The reset time a rate-limit window names, from the phrase the seat printed. Null when the
+ *  window matches the limit and does not name a time. */
+function resetOf(lines: string[]): string | null {
+  for (const line of lines) {
+    const found = /Your limit will reset at\s+(.+?)\s*$/.exec(line);
+    const time = found?.[1]?.trim();
+    if (time) return time;
+  }
+  return null;
+}
+
+function asScreen(kind: Screen['kind'], lines: string[]): Screen {
+  if (kind === 'rate limit') return { kind, reset: resetOf(lines) };
+  return { kind };
 }
 
 /** `lines` is already the window: the last 20 lines, each trimmed at the end. */
@@ -329,8 +349,8 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     const plain = plainLines(lines);
 
     // Rule (a): Every hatch predicate is monotone toward caution: hatch OR data, for working,
-    // every dialog (trust, permission, the CLI's own exit question, question, a vendor notice)
-    // and unknown. The data stage of a
+    // every dialog (trust, permission, the CLI's own exit question, question, a vendor notice,
+    // a provider error, a rate limit) and unknown. The data stage of a
     // profile always runs; a hatch predicate can only add a match. A hatch can only add caution,
     // never remove it.
     // The exit question reads before the ordinary question on purpose: its footer is one an
@@ -343,6 +363,8 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
       ['exit_question', data.exit_question],
       ['question', data.question],
       ['vendor_notice', data.vendor_notice],
+      ['provider_error', data.provider_error],
+      ['rate_limit', data.rate_limit],
       ['working', data.working],
     ];
     for (const [name, stage] of cautionStages) {
@@ -351,14 +373,14 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
       const fn = getProfileFn(data.profile, name);
       if (fn !== undefined) {
         const outcome = evalPredicate(fn, plain);
-        if (outcome === 'match') return { kind };
+        if (outcome === 'match') return asScreen(kind, plain);
         if (outcome === 'fail') return { kind: 'unknown' };
       }
       if (stage) {
         for (const rule of stage.rules) {
           const hit = ruleMatches(data, plain, rule, tick);
           if (hit === 'stop') return { kind: 'unknown' };
-          if (hit) return { kind };
+          if (hit) return asScreen(kind, plain);
         }
       }
     }
@@ -370,15 +392,15 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
       if (composed.kind === 'stop' || composed.kind === 'unknown') return { kind: 'unknown' };
       const marked = floorHits(plain, 0, -1, data.chrome, tick);
       if (marked === 'stop' || marked) return { kind: 'unknown' };
-      return { kind: composed.kind };
+      return asScreen(composed.kind, plain);
     }
 
     const composed = compose(data, plain, lines, tick, expectedCwd, home);
     if (composed.kind === 'stop' || composed.kind === 'unknown') return { kind: 'unknown' };
-    if (composed.kind !== 'idle' && composed.kind !== 'unsent') return { kind: composed.kind };
+    if (composed.kind !== 'idle' && composed.kind !== 'unsent') return asScreen(composed.kind, plain);
     const marked = floorHits(plain, composed.from, composed.input, data.chrome, tick);
     if (marked === 'stop' || marked) return { kind: 'unknown' };
-    return { kind: composed.kind };
+    return asScreen(composed.kind, plain);
   } catch {
     return { kind: 'unknown' };
   }
@@ -410,6 +432,8 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
         ['exit_question', data.exit_question],
         ['question', data.question],
         ['vendor_notice', data.vendor_notice],
+        ['provider_error', data.provider_error],
+        ['rate_limit', data.rate_limit],
         ['working', data.working],
       ];
       for (const [kind, stage] of stages) {
@@ -431,12 +455,12 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
       if (composed.kind === 'stop' || composed.kind === 'unknown') return { kind: 'unknown' };
       const marked = floorHits(plain, 0, -1, data.chrome, tick);
       if (marked === 'stop' || marked) return { kind: 'unknown' };
-      return { kind: composed.kind };
+      return asScreen(composed.kind, plain);
     }
 
     // Profile has a DATA composer.
     // Check hatch dialog predicates:
-    const dialogKinds: StageName[] = ['unknown', 'trust', 'permission', 'exit_question', 'question', 'vendor_notice'];
+    const dialogKinds: StageName[] = ['unknown', 'trust', 'permission', 'exit_question', 'question', 'vendor_notice', 'provider_error', 'rate_limit'];
     for (const kind of dialogKinds) {
       if (tick()) return { kind: 'unknown' };
       const fn = getProfileFn(data.profile, kind);
@@ -459,13 +483,22 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
         if (hit) return { kind: 'unknown' };
       }
     }
+    // A provider error or a rate limit above an idle box is not a free composer: the box read
+    // stays unknown, the same as a dialog, so nothing types from the composer alone.
+    for (const stage of [data.provider_error, data.rate_limit]) {
+      if (!stage) continue;
+      for (const rule of stage.rules) {
+        const hit = ruleMatches(data, plain, rule, tick);
+        if (hit === 'stop' || hit) return { kind: 'unknown' };
+      }
+    }
 
     const composed = compose(data, plain, lines, tick, expectedCwd, home);
     if (composed.kind === 'stop' || composed.kind === 'unknown') return { kind: 'unknown' };
-    if (composed.kind !== 'idle' && composed.kind !== 'unsent') return { kind: composed.kind };
+    if (composed.kind !== 'idle' && composed.kind !== 'unsent') return asScreen(composed.kind, plain);
     const marked = floorHits(plain, composed.from, composed.input, data.chrome, tick);
     if (marked === 'stop' || marked) return { kind: 'unknown' };
-    return { kind: composed.kind };
+    return asScreen(composed.kind, plain);
   } catch {
     return { kind: 'unknown' };
   }

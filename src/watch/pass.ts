@@ -28,6 +28,7 @@ import {
 } from './check.ts';
 import { minutes } from './check.ts';
 import { attention } from './checks/attention.ts';
+import { providerError } from './checks/provider-error.ts';
 import { approval } from './checks/approval.ts';
 import { budget } from './checks/budget.ts';
 import { disk } from './checks/disk.ts';
@@ -120,7 +121,7 @@ export type PassResult = {
 // order is the core's: a seat's wrong model is reported before its permission prompt, and every
 // seat before the team. Disabling a check in the `watch` section in force takes it out of the
 // run, except the four that can't be turned off.
-export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, attention, unsent, idle];
+export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, attention, providerError, unsent, idle];
 export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, approval, load, memoryCheck, disk, swapFree, swapGrowth, budget];
 
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
@@ -300,7 +301,7 @@ export function pass({
     // Working is herdr's word or the screen's: a seat mid-turn is never idle, whatever its
     // status says.
     const working = agent.status === 'working' || screen.kind === 'working';
-    const prompt = screen.kind === 'permission' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice';
+    const prompt = screen.kind === 'permission' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit';
     if (!lead && !parked) workers.push({ idle: quiet && !working && !prompt });
 
     // The history the idle clock counts from. A seat seen working starts it again; a seat quiet
