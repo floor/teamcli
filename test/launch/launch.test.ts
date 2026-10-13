@@ -78,6 +78,12 @@ describe('profiles', () => {
       "AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt 'Don'\\''t stop.\n- two'",
     );
   });
+
+  test('an unattended flag the launch line already carries is not appended again', () => {
+    expect(launchCommand(claudeCode, 'claude --model claude-opus-5-5 --dangerously-skip-permissions', 'Rules.')).toBe(
+      'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt Rules.',
+    );
+  });
 });
 
 describe('the rules of a seat', () => {
