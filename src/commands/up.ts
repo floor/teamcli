@@ -6,7 +6,7 @@ import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, mayLaunchSeats, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { declaredModel } from '../file/model.ts';
@@ -456,8 +456,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // delegate's eligibility never comes from a file the caller names. A gate refusal replaces the
   // ordinary caller refusal, and the flagged target is never read; a passed verdict makes
   // the run the delegate's, on that same default file. The owner's runs never come here, and
-  // with no `delegates` section the ordinary refusal returns before a flagged file or a session
-  // is read. A missing default file, with no flag, keeps the file error below.
+  // with no `delegates` section, a non-owner's `--session`, or a `--file` other than this
+  // folder's own team file, is the ordinary refusal and returns before that file or session is
+  // read. This folder's own file, with no `--session`, continues below.
   const walked = walkCaller(io);
   const defaultLoad = mayLaunchSeats(walked) ? null : loadTeamFile(io.cwd, { home: sources.home });
   const delegateTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
@@ -476,9 +477,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // refused, the default file's `delegates` section named a pane, and the gate passed it.
   let delegated: string | null = null;
   if (verdict?.kind === 'passed') delegated = verdict.pane;
-  // Not the owner, and not a delegated run: one refusal, before a flagged file is read and
-  // before a session is asked. The walk reads no session.
-  if (!mayLaunchSeats(walked) && verdict === null && (args.values.file !== undefined || (defaultLoad !== null && defaultLoad.ok))) {
+  // A non-owner passing `--session`, or a `--file` other than this folder's own team file, and
+  // not a delegated run, is refused here, before that file is read and before a session is asked.
+  // The walk reads no session. This folder's own file, with no `--session`, continues below.
+  const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
+  if (!mayLaunchSeats(walked) && verdict === null && (otherFile || args.values.session !== undefined)) {
     out.stderr(
       `team up: only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(walked)}\n`,
     );
@@ -521,7 +524,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
-  if (!mayLaunchSeats(caller) && verdict?.kind === 'refused') refusals.push(verdict.text);
+  if (!mayLaunchSeats(caller)) {
+    if (verdict === null) {
+      refusals.push(
+        `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
+      );
+    } else if (verdict.kind === 'refused') {
+      refusals.push(verdict.text);
+    }
+  }
   // One verified snapshot carries the whole command: the refusal when there is
   // one, and the ceilings the launch holds. A legacy or refused record is not
   // an approval in force, and says so in its own words.

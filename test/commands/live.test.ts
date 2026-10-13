@@ -4113,11 +4113,8 @@ describe('team up, delegated', () => {
     expect(made.creates).toEqual([]);
   });
 
-  // Today's order, byte for byte, when the default file has no `delegates` section: the flagged
-  // file is read first and its own failure answers — exit 2, the caller refusal never reached,
-  // the gate never asked. The owner's side of the same order, with a section present: the
-  // owner's `--file` is honoured exactly as before and the gate is not asked either.
-  test('with no delegates a missing --file is today\'s exit 2, gate never asked', async () => {
+  // The flag is the owner's, so its target is not looked at.
+  test('with no delegates a non-owner\'s --file is the owner refusal, gate never asked', async () => {
     await approve();
     const made = world();
     let asked = 0;
@@ -4128,9 +4125,10 @@ describe('team up, delegated', () => {
         return { kind: 'passed', pane: 'main/w1:p1' };
       },
     }, made));
-    expect(code).toBe(2);
+    expect(code).toBe(1);
     expect(asked).toBe(0);
-    expect(caller.err).toBe(`team up: no team file at ${join(root, 'missing.yaml')}\n`);
+    expect(caller.out).toBe('');
+    expect(caller.err).toBe('team up: only the owner runs `up`, from a terminal outside herdr; this call is work\n');
   });
 
   test('the owner\'s missing --file stays exit 2 even with a delegates section: gate never asked', async () => {
