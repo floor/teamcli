@@ -3961,7 +3961,7 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
     .replace(/  - role: implementer\n    name: codex-acme[\s\S]*?stopped: true\n/, `${cursorSeat}\n`)));
   await approve();
   const shown = readFileSync(join(import.meta.dir, '../fixtures/cursor/2026.10.01/gpt-sol-idle.txt'), 'utf8');
-  const made = world((_pane, label) => (label === 'grok 4.7' ? shown : IDLE));
+  const made = world((_pane, label) => (label === 'Grok 4.7' ? shown : IDLE));
   made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
   const labels = new Map<string, string>();
   const createWorkspace = made.launch.createWorkspace;
@@ -3977,7 +3977,7 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
   made.launch.paneText = (session, id) => {
     const text = pasted.get(id);
     if (text === undefined) return readPane(session, id);
-    if (labels.get(id) === 'grok 4.7') {
+    if (labels.get(id) === 'Grok 4.7') {
       const [first = '', ...rest] = text.split('\n');
       return shown.replace('  → Plan, search, build anything', [`  → ${first}`, ...rest.map((line) => `    ${line}`)].join('\n'));
     }
