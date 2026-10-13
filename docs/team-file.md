@@ -73,6 +73,19 @@ either way. Nothing in this build writes the file or the tracker.
 
 ## `seats`
 
+Each seat names a model and how it is launched. The fields are in the README's
+[file format](../README.md#the-files-format). Two of them decide the herdr workspace title, and
+one no longer does:
+
+- `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
+  as a token of its own when the file writes it.
+- `up` and `add` title the workspace `<display> · <effort>` when the seat sets `effort`,
+  and `<display>` when it does not. The title has no seat name and no role. Seats expanded from
+  `count` share it: herdr shows the seat's name on its own line.
+- `label`, written or left out, is still a field the file may carry. A written one is accepted.
+  It does not title the workspace. Left out, the stored title stays the model and version in
+  lowercase, which is what an approval of a file written that way already sealed.
+
 `effort` is optional. It is a known field: a file may set it, and a file that leaves it out
 loads as before. The words a lab allows are [`src/profiles/efforts.json`](../src/profiles/efforts.json),
 format 1, keyed by the seat's `vendor`. Each list is the words that lab's own CLI help printed.

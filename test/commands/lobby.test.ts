@@ -679,8 +679,9 @@ describe('the lobby gate', () => {
     approveYaml(migratedTeamYaml());
     const dry = await runUpCmd(['--dry-run'], world());
     expect(dry.code).toBe(0);
-    expect(dry.out).toContain(`workspace create --cwd ${lobby} --label lead`);
-    expect(dry.out).toContain(`workspace create --cwd ${lobby} --label worker`);
+    expect(dry.out).toContain(`workspace create --cwd ${lobby} --label 'Claude Opus 5.5'`);
+    expect(dry.out).toContain('<pane of lead>');
+    expect(dry.out).toContain('<pane of worker>');
     expect(dry.out).not.toContain('mkdir -p');
   });
 
@@ -692,8 +693,8 @@ describe('the lobby gate', () => {
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
     expect(existsSync(lobby)).toBe(true);
-    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: lobby });
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
     expect(readdirSync(oldLobby)).toEqual([]);
   });
 });
@@ -979,12 +980,12 @@ describe('the lobby gate with files declared', () => {
     const made = world();
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: lobby });
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
   });
 
   test('up refuses an undeclared sibling beside the declared file with today’s bytes', async () => {
@@ -1147,14 +1148,14 @@ seats:
     const upWorld = codexWorld();
     const run = await runUpCmd([], upWorld);
     expect(run.code).toBe(0);
-    expect(upWorld.workspaces).toContainEqual({ label: 'lead', cwd: lobby });
+    expect(upWorld.workspaces).toContainEqual({ label: 'GPT Sol 6', cwd: lobby });
     expect(existsSync(lock())).toBe(true);
 
     const addWorld = codexWorld();
     addWorld.session = 'running';
     const addRun = await runAddCmd(['worker'], addWorld);
     expect(addRun.code).toBe(0);
-    expect(addWorld.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(addWorld.workspaces).toContainEqual({ label: 'GPT Sol 6', cwd: lobby });
     expect(readState(dir).sessions['acme']?.seats.worker?.stage).toBe('ready');
   });
 
@@ -1228,7 +1229,7 @@ seats:
     };
     const run = await runUpCmd([], made, live);
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'scribe', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'GPT Sol 6', cwd: lobby });
     expect(existsSync(lock())).toBe(true);
     const seats = readState(dir).sessions['acme']?.seats;
     expect(seats?.scribe?.stage).toBe('ready');
@@ -1707,7 +1708,7 @@ describe('legacy files and migration', () => {
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
     const added = made.workspaces.slice(before);
-    expect(added).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
+    expect(added).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
   });
 
   test('add refuses when trust has no lobby and leaves file untouched', async () => {
@@ -2643,9 +2644,9 @@ describe('a launch line that cannot run where the seat starts', () => {
     expect(run.code).toBe(0);
     expect(run.out).toContain('worker: would refuse: its launch line runs `../tools/x.sh`');
     expect(run.out).toContain(lobby);
-    expect(run.out).not.toContain('--label worker ');
+    expect(run.out).not.toContain('<pane of worker>');
     expect(run.out).not.toContain('mkdir -p');
-    expect(run.out).toContain(`--cwd ${lobby} --label lead`);
+    expect(run.out).toContain(`--cwd ${lobby} --label 'Claude Opus 5.5'`);
   });
 
   test('the real run refuses that seat only: its workspace is never made, the others start', async () => {
@@ -2656,7 +2657,7 @@ describe('a launch line that cannot run where the seat starts', () => {
     const run = await runUpCmd([], made);
     expect(run.code).toBe(1);
     expect(run.out).toContain('worker: left out: refused: its launch line runs `../tools/x.sh`');
-    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
     expect(made.workspaces.some((workspace) => workspace.label === 'worker')).toBe(false);
   });
 
@@ -2842,7 +2843,7 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     // worker's confirmation third — after the lead was created, before the worker is.
     const run = await runUpCmd([], made, { fs: swapLobbyAt(3, 'folder') });
     expect(run.code).toBe(1);
-    expect(made.workspaces).toEqual([{ label: 'lead', cwd: lobby }]);
+    expect(made.workspaces).toEqual([{ label: 'Claude Opus 5.5', cwd: lobby }]);
     expect(run.out).toContain('lead: ready');
     expect(run.out).toContain('worker: left out: the lobby: it is not the folder the gate read\n');
     expect(run.out).not.toContain(lobby);
@@ -2928,8 +2929,8 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     const made = world();
     const run = await runUpCmd([], made, { home: homeLink });
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: canonical });
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: canonical });
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: canonical });
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: canonical });
     const state = readState(dir);
     expect(state.sessions['acme']?.seats['lead']?.start_cwd).toBe(canonical);
     expect(state.sessions['acme']?.seats['worker']?.start_cwd).toBe(canonical);
@@ -2949,7 +2950,7 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     const before = made.workspaces.length;
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made, { home: homeLink });
     expect(addRun.code).toBe(0);
-    expect(made.workspaces.slice(before)).toContainEqual({ label: 'worker-tmp-1', cwd: canonical });
+    expect(made.workspaces.slice(before)).toContainEqual({ label: 'Claude Opus 5.5', cwd: canonical });
   });
 
   test('an existing lobby with a looser mode is refused, never repaired', () => {

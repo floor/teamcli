@@ -47,7 +47,7 @@ export const seats: Section = {
         display: { type: 'string', $comment: 'defaults to "model version"; must contain the version as a token of its own' },
         launch: { type: 'string', minLength: 1 },
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
-        label: { type: 'string' },
+        label: { type: 'string', $comment: 'accepted, and not the herdr title; the title is the display, and the effort when set' },
         effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it' },
         mode: { enum: MODES },
         parked: { type: 'boolean' },
@@ -56,7 +56,7 @@ export const seats: Section = {
         count: { type: 'integer', minimum: 1 },
       },
       required: ['role', 'name', 'cli', 'vendor', 'model', 'version', 'launch'],
-      $comment: 'account must name a key of budgets.accounts; label defaults to the model and version; a seat with count is neither lead',
+      $comment: 'account must name a key of budgets.accounts; the herdr title is the display and the effort; a written label is kept and does not title the workspace; a seat with count is neither lead',
     },
   },
 };
@@ -126,8 +126,9 @@ function readSeats(
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     const label = check.text(fields.get('label'), `${at}: label`);
     const effort = readEffort(fields.get('effort'), at, vendor, check);
-    // Left out, the herdr title is the model and version. A written label wins, so a file that
-    // already names one keeps the title, and the fingerprint, it had.
+    // The written label, or the lowercase model and version, stays on the seat: `seatDigest`
+    // hashes `label`, and an approved file keeps its key. It does not title the workspace.
+    // `up` and `add` use `workspaceLabel` (the display, and the effort when set).
     if (!role || !name || !cli || !vendor || !model || !version || !launch || !display) {
       if (name) broken.add(name);
       continue;
@@ -155,6 +156,17 @@ function readSeats(
 
 export function defaultLabel(model: string, version: string): string {
   return `${model} ${version}`.toLowerCase();
+}
+
+/**
+ * The herdr workspace title `up` and `add` give a seat: its display, and ` · ` plus
+ * its effort when the file sets one. No seat name and no role. Count instances share
+ * it. `execute.ts` keys a place on the seat's name ("the display label may be shared"),
+ * and a herdr 0.7.1 sidebar drew the workspace label on line 1 and `idle · <agent name>`
+ * on line 2, so the name is not lost when the title is shared.
+ */
+export function workspaceLabel(seat: { display: string; effort?: string }): string {
+  return seat.effort ? `${seat.display} · ${seat.effort}` : seat.display;
 }
 
 function readEffort(

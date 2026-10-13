@@ -151,11 +151,14 @@ budgets:                      # the owner's: reserve or floor per account, marks
 ### Naming seats
 
 The herdr session carries the project, so a seat's name is its role: `coordinator`, `implementer`,
-`reviewer`. When a role is used twice, the model is added: `implementer-deepseek`. The label is the
-herdr workspace title. Left out of the file, it is the model and version in lowercase
-(`claude opus 5.5`), taken from that seat's own fields, so a model change retitles the pane. A
-label written in the file is kept. `team doctor` warns, and does not refuse the file, when a name
-or a label repeats the project or the session.
+`reviewer`. When a role is used twice, the model is added: `implementer-deepseek`. herdr already
+shows that name, so the workspace title does not repeat it. `up` and `add` title the workspace
+with the seat's `display` (itself defaulting to the model and version, `Claude Opus 5.5`), and
+` · ` plus `effort` when the seat sets one (`Grok 4.7 · high`). Seats expanded from `count` share
+that title: the seat's name is the only key. A `label` written in the file is still read, and it
+does not title the workspace; left out, the stored title is the model and version in lowercase.
+`team doctor` warns, and does not refuse the file, when a name or a stored label repeats the
+project or the session.
 
 The Codex profile is tested with CLI 0.157.0 to 0.161.0. Its status line is read for a weekly figure
 (`weekly N% left`) when the pane is wide enough to show the number; a cut line is not a figure.

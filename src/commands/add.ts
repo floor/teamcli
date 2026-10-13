@@ -18,6 +18,7 @@ import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
+import { workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
@@ -711,7 +712,7 @@ function seatPlan(
     cli: seat.cli,
     launch: seat.launch,
     cwd: start.cwd,
-    label: seat.label,
+    label: workspaceLabel(seat),
     model: seat.model,
     version: seat.version,
     // The team file's own repair for this seat — a lead seat is told only the whole-team

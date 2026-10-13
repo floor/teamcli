@@ -42,7 +42,10 @@ export type Seat = {
   display: string;
   launch: string;
   cwd: string;
-  /** Herdr workspace title. Omitted in the file, it is `<model> <version>` in lowercase. */
+  /**
+   * The file's label: written, or `<model> <version>` in lowercase. Hashed with the seat.
+   * It does not title the herdr workspace; `workspaceLabel` does, from `display` and `effort`.
+   */
   label: string;
   /**
    * The seat's effort word, when the file sets one. Absent otherwise, so a file that omits it
