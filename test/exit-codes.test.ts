@@ -2813,6 +2813,12 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
       }
       return { ok: true };
     },
+    native: {
+      typeText: () => false,
+      pressEnter: () => false,
+      status: () => null,
+      wait: async () => {},
+    },
     now: () => NOW,
     home: place.home,
   };
@@ -2879,6 +2885,10 @@ scene('send.unreachable', async (place) => {
 scene('send.delivered', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place)), 'lead: delivered');
+});
+scene('send.dry-run', async (place) => {
+  write(place, TEAM);
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the cross-session socket; nothing was sent');
 });
 scene('send.answered', async (place) => {
   write(place, TEAM);

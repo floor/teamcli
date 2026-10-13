@@ -2042,8 +2042,15 @@
       "code": 0,
       "command": "send",
       "id": "send.delivered",
-      "meaning": "the seat's socket took the frame",
+      "meaning": "the seat's channel took the message",
       "trigger": "team send worker hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
+      "id": "send.dry-run",
+      "meaning": "the seat and channel were resolved and nothing was written",
+      "trigger": "team send worker hello --dry-run"
     },
     {
       "code": 0,

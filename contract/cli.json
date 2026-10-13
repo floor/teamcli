@@ -867,6 +867,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true
@@ -924,8 +930,8 @@
       ],
       "subcommands": [],
       "usage": [
-        "team send <seat> <message> [--wait] [--timeout <s>] [--json]",
-        "team send <seat> --file <path> [--wait] [--timeout <s>] [--json]",
+        "team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]",
+        "team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]",
         "team send --list [--json]"
       ]
     },
