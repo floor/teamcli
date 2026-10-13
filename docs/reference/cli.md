@@ -349,6 +349,29 @@ Usage:
 
 None.
 
+## `lock`
+
+Hidden: no
+
+Usage:
+
+    team lock <name> [--for <text>] [--wait <seconds>]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--for` | yes | no | no |
+| `--help` | no | no | no |
+| `--wait` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `name` | no | no |
+
 ## `mcp`
 
 Hidden: no
@@ -628,6 +651,27 @@ Usage:
 ### Positionals
 
 None.
+
+## `unlock`
+
+Hidden: no
+
+Usage:
+
+    team unlock <name>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `name` | no | no |
 
 ## `up`
 

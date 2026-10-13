@@ -26,6 +26,8 @@ import { runInit } from '../src/commands/init.ts';
 import { plantMessage, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
+import { runLock } from '../src/commands/lock.ts';
+import { runUnlock } from '../src/commands/unlock.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
@@ -43,6 +45,7 @@ import { findRoot, loadTeamFile } from '../src/file/load.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
 import type { Key, Terminal } from '../src/launch/terminal.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -2588,6 +2591,67 @@ scene('issues.shape', async (place) => {
 });
 scene('issues.invocation', async (place) => show(await issued(place, ['extra']), 'unexpected'));
 scene('issues.not-a-repo', async (place) => show(await issued(place), 'not inside a git repository'), false);
+
+// A machine lock is a directory under the scene's own home. The holder and the clock are
+// injected, so these scenes never read a team file or the wall clock. The project refusals are
+// the exception: they are that read, of a folder that has no team file.
+const LOCK_OWNER: LockIdentity = { team: 'acme', by: 'owner' };
+const LOCK_SEAT: LockIdentity = { team: 'acme', by: 'lead' };
+
+function lockSources(place: Place, identity?: LockIdentity): LockSources {
+  return {
+    home: place.home,
+    ...(identity ? { identity } : {}),
+    now: () => NOW,
+    sleep: () => {},
+  };
+}
+
+async function locked(place: Place, argv: string[], identity?: LockIdentity): Promise<Ran> {
+  const io = testIo(place.root, owner);
+  const code = await runLock(argv, io, lockSources(place, identity));
+  return { code, out: io.out, err: io.err };
+}
+
+async function unlocked(place: Place, argv: string[], identity?: LockIdentity): Promise<Ran> {
+  const io = testIo(place.root, owner);
+  const code = await runUnlock(argv, io, lockSources(place, identity));
+  return { code, out: io.out, err: io.err };
+}
+
+scene('lock.taken', async (place) => show(await locked(place, ['heavy-run', '--for', 'release CI'], LOCK_OWNER), 'heavy-run: taken'));
+scene('lock.held', async (place) => {
+  await locked(place, ['heavy-run', '--for', 'release CI'], LOCK_OWNER);
+  return show(await locked(place, ['heavy-run'], LOCK_SEAT), 'held since');
+});
+scene('lock.io', async (place) => {
+  mkdirSync(join(place.home, '.config'), { recursive: true });
+  writeFileSync(join(place.home, '.config', 'team'), 'not a folder\n');
+  return show(await locked(place, ['heavy-run'], LOCK_OWNER), 'not a directory');
+});
+scene('lock.invocation', async (place) => show(await locked(place, [], LOCK_OWNER), 'a <name> is required'));
+scene('lock.project', async (place) => show(await locked(place, ['heavy-run']), 'no team file'));
+
+scene('unlock.released', async (place) => {
+  await locked(place, ['heavy-run'], LOCK_OWNER);
+  return show(await unlocked(place, ['heavy-run'], LOCK_OWNER), 'heavy-run: released');
+});
+scene('unlock.io', async (place) => {
+  await locked(place, ['heavy-run'], LOCK_OWNER);
+  writeFileSync(join(lockDirectory(place.home, 'heavy-run'), 'extra'), 'leave me\n');
+  return show(await unlocked(place, ['heavy-run'], LOCK_OWNER), 'could not remove');
+});
+scene('unlock.not-held', async (place) => show(await unlocked(place, ['heavy-run'], LOCK_OWNER), 'not held'));
+scene('unlock.not-yours', async (place) => {
+  await locked(place, ['heavy-run', '--for', 'release CI'], LOCK_OWNER);
+  return show(await unlocked(place, ['heavy-run'], LOCK_SEAT), 'not you');
+});
+scene('unlock.unknown-holder', async (place) => {
+  mkdirSync(lockDirectory(place.home, 'heavy-run'), { recursive: true });
+  return show(await unlocked(place, ['heavy-run'], LOCK_OWNER), 'its holder file is not there yet');
+});
+scene('unlock.invocation', async (place) => show(await unlocked(place, [], LOCK_OWNER), 'a <name> is required'));
+scene('unlock.project', async (place) => show(await unlocked(place, ['heavy-run']), 'no team file'));
 
 async function nexted(place: Place, argv: string[] = [], caller: Caller = leadSeat): Promise<Ran> {
   const io = testIo(place.root, caller);

@@ -1417,6 +1417,41 @@
     },
     {
       "code": 0,
+      "command": "lock",
+      "id": "lock.taken",
+      "meaning": "the lock was taken",
+      "trigger": "team lock heavy-run"
+    },
+    {
+      "code": 1,
+      "command": "lock",
+      "id": "lock.held",
+      "meaning": "the lock is already held",
+      "trigger": "team lock heavy-run"
+    },
+    {
+      "code": 1,
+      "command": "lock",
+      "id": "lock.io",
+      "meaning": "the lock directory could not be written",
+      "trigger": "team lock heavy-run"
+    },
+    {
+      "code": 2,
+      "command": "lock",
+      "id": "lock.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team lock"
+    },
+    {
+      "code": 2,
+      "command": "lock",
+      "id": "lock.project",
+      "meaning": "the caller's project can't be read",
+      "trigger": "team lock heavy-run"
+    },
+    {
+      "code": 0,
       "command": "mcp",
       "id": "mcp.clear",
       "meaning": "the bridge is clear: doctor found nothing missing",
@@ -2212,6 +2247,55 @@
       "id": "team.unknown",
       "meaning": "the command is unknown",
       "trigger": "team nosuch"
+    },
+    {
+      "code": 0,
+      "command": "unlock",
+      "id": "unlock.released",
+      "meaning": "the lock was released",
+      "trigger": "team unlock heavy-run"
+    },
+    {
+      "code": 1,
+      "command": "unlock",
+      "id": "unlock.io",
+      "meaning": "the lock directory could not be removed",
+      "trigger": "team unlock heavy-run"
+    },
+    {
+      "code": 1,
+      "command": "unlock",
+      "id": "unlock.not-held",
+      "meaning": "the lock is not held",
+      "trigger": "team unlock heavy-run"
+    },
+    {
+      "code": 1,
+      "command": "unlock",
+      "id": "unlock.not-yours",
+      "meaning": "the lock is held by someone else",
+      "trigger": "team unlock heavy-run"
+    },
+    {
+      "code": 1,
+      "command": "unlock",
+      "id": "unlock.unknown-holder",
+      "meaning": "the lock's holder can't be read",
+      "trigger": "team unlock heavy-run"
+    },
+    {
+      "code": 2,
+      "command": "unlock",
+      "id": "unlock.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team unlock"
+    },
+    {
+      "code": 2,
+      "command": "unlock",
+      "id": "unlock.project",
+      "meaning": "the caller's project can't be read",
+      "trigger": "team unlock heavy-run"
     },
     {
       "code": 0,
