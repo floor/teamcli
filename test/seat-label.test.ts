@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { fingerprints } from '../src/approve/fingerprint.ts';
 import { runDoctor, seatNameFindings, type DoctorSources } from '../src/commands/doctor.ts';
+import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { writeApproval, storePath } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
@@ -149,5 +150,19 @@ seats:
       'gemini 3',
     ]);
     expect(seatNameFindings(team, team.session)).toEqual([]);
+  });
+});
+
+describe('the herdr workspace title', () => {
+  test('a seat parsed from a file titles to its display — no name, no role, no label', () => {
+    const seat = valid(minimal).seats[0]!;
+    expect(workspaceLabel(seat)).toBe('Claude Opus 5.5');
+  });
+
+  test('a seat that carries an effort is joined to it with a middle dot', () => {
+    // No file can set an effort yet — the field's parsing is another change — so the join is
+    // pinned here on the function `up` and `add` read, not through a file.
+    expect(workspaceLabel({ display: 'Grok 4.7' })).toBe('Grok 4.7');
+    expect(workspaceLabel({ display: 'Grok 4.7', effort: 'high' })).toBe('Grok 4.7 · high');
   });
 });
