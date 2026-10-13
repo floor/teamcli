@@ -113,12 +113,18 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     const walked = walkCaller(io);
     if (!isOwner(walked)) {
       const local = loadTeamFile(io.cwd, { home: host.home });
-      const dir = local.ok ? dirname(local.path) : join(io.cwd, '.agents');
-      const who = local.ok ? logWho(walked, local.team) : walkedWho(walked);
-      return refuse(io, json, dir, who, seatName, host, {
-        class: 'caller',
-        message: `team answer: ${sessionOwnerRefusal(walked)}`,
-      });
+      return refuse(
+        io,
+        json,
+        local.ok ? dirname(local.path) : join(io.cwd, '.agents'),
+        logWho(walked, local.ok ? local.team : undefined),
+        seatName,
+        host,
+        {
+          class: 'caller',
+          message: `team answer: ${sessionOwnerRefusal(walked)}`,
+        },
+      );
     }
   }
   const launched = args.values.file ? undefined : launchedTeamFile(io, host.home);
@@ -129,10 +135,11 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   }
   const { team, root } = loaded;
   const dir = dirname(loaded.path);
-  // The gate judges the caller placed in the session this command asks about. With no `--session`
-  // the session judged is the caller's own placement: the file's session first, then a session
-  // the state records this caller's pane in (`team up --session <other>`) — never one a non-owner
-  // chose. The refusal names the caller's own placement, exactly as main described it.
+  // A non-owner's `--session` has already returned, above, so this arm is the owner's: the flag's
+  // session, placed with `callerOf`. With no `--session` the session judged is the caller's own
+  // placement: the file's session first, then a session the state records this caller's pane in
+  // (`team up --session <other>`) — never one a non-owner chose. The refusal names the caller's
+  // own placement, exactly as main described it.
   const judged = args.values.session !== undefined
     ? { caller: callerOf(io, args.values.session), session: args.values.session }
     : judgeCallerIn(io, dir, team);
@@ -247,22 +254,15 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   }
 }
 
-/** The log bracket when the session flag is refused before a team file can be read. */
-function walkedWho(caller: Caller): string {
-  if (caller.kind === 'owner' || caller.kind === 'owner-no-tty') return 'owner';
-  if (caller.kind === 'unplaced') return 'unplaced';
-  if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
-  return 'seat';
-}
-
-/** The caller class the caller check returned, as the log's bracket. */
-function logWho(caller: Caller, team: TeamFile): string {
+/** The caller class the caller check returned, as the log's bracket. With no team file yet, a seat
+ *  stays a seat: telling an orchestrator from any other seat would read that file. */
+function logWho(caller: Caller, team?: TeamFile): string {
   // `owner-no-tty` is refused before anything logs (it is not on a terminal), but the bracket
   // it would carry is the owner's, as everywhere else.
   if (caller.kind === 'owner' || caller.kind === 'owner-no-tty') return 'owner';
   if (caller.kind === 'unplaced') return 'unplaced';
   if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
-  return caller.name === team.orchestrator ? 'orchestrator' : 'seat';
+  return team !== undefined && caller.name === team.orchestrator ? 'orchestrator' : 'seat';
 }
 
 function callerProblemOf(caller: Caller, team: TeamFile, seat: string, at?: SeatStanding): Refusal | null {
