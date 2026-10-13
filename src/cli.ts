@@ -23,6 +23,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   worktree: () => import('./commands/worktree.ts'),
   add: () => import('./commands/add.ts'),
   answer: () => import('./commands/answer.ts'),
+  'ask-show': () => import('./commands/ask-show.ts'),
   pr: () => import('./commands/pr.ts'),
   remove: () => import('./commands/remove.ts'),
   send: () => import('./commands/send.ts'),

@@ -165,6 +165,13 @@ export interface UpSeat {
    *  working, or its screen shows a running turn. The record stays ready. */
   driftHold?: string;
   /**
+   * A seat recorded with no process identity whose pane is a bare shell or another model.
+   * This `up` does not close it: the record cannot prove the pane is the seat's. The line
+   * names the repair (`--abandon`, then `up`). A ready seat keeps that record; any earlier
+   * stage is left out and is not resumed.
+   */
+  unidentifiedHold?: string;
+  /**
    * Set when the seat's own launch line can't run where the seat starts — the program is not
    * there, or a relative path in it resolves from neither the start folder nor the root. The
    * seat is left out before its workspace is made; the other seats go on. The words only: no
@@ -257,6 +264,34 @@ export function upPlan(input: UpInput): Step[] {
           record: { kind: 'left out', reason: `no launch profile for \`${seat.cli}\` in this version; left out` },
         },
       });
+      continue;
+    }
+    // No recorded process, and the pane is a shell or another model. Nothing is closed and
+    // nothing is launched: a ready seat keeps its record, and a seat still at launch is left
+    // out instead of being waited on.
+    if (seat.unidentifiedHold) {
+      if (seat.stage === 'ready') {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.unidentifiedHold}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'ready' },
+            detail: `  ${seat.unidentifiedHold}\n`,
+          },
+        });
+      } else {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.unidentifiedHold}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'left out', reason: seat.unidentifiedHold },
+          },
+        });
+      }
       continue;
     }
     if (seat.stage === 'ready') {

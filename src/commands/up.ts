@@ -9,7 +9,8 @@ import { delegateGate, logDelegated } from '../delegate.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
-import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
+import { declaredModel } from '../file/model.ts';
+import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import {
   agentList,
@@ -40,7 +41,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { launchedIdentity, seatProcessVerdict } from '../launch/identity.ts';
+import { launchedIdentity, paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
@@ -285,6 +286,36 @@ function modelDrift(
   return { kind: 'skip' };
 }
 
+/** A record with no process identity whose pane is a bare shell or another model. `up` does not
+ *  close it: without an identity there is no proof the pane is the seat's. Null when the record
+ *  has an identity, or when the pane cannot be told apart from the seat the file describes. */
+function unidentifiedHold(
+  team: TeamFile,
+  seat: Seat,
+  recorded: SeatState,
+  processes: Readonly<Record<string, PaneProcesses | null>>,
+  screenOf: (pane: string) => string | null,
+): string | null {
+  if (recorded.launched || !recorded.pane) return null;
+  const proc = processes[seat.name];
+  const repair = unidentifiedRepair(team, seat.name);
+  if (paneHoldsShell(proc ?? null)) {
+    return `its pane runs no CLI and its process was never recorded (${repair})`;
+  }
+  // No process reading: the screen is not consulted. A ready seat keeps today's relaunch note,
+  // and a seat still at launch is finished.
+  if (proc == null) return null;
+  // A seat still at launch is finished: a CLI is in the pane. Only a seat already recorded
+  // ready is left in place when its screen names another model.
+  if (recorded.stage !== 'ready') return null;
+  if (!canShowModel(seat) || !seat.version) return null;
+  const text = screenOf(recorded.pane);
+  if (text == null || text === '') return null;
+  const running = seatModel(seat, text);
+  if (!running || !modelDiffers(running, { model: seat.model, version: seat.version })) return null;
+  return `its screen runs ${running.model} ${running.version}; the file says ${declaredModel(seat)}; its process was never recorded (${repair})`;
+}
+
 function seatPlan(
   standing: Standing,
   team: TeamFile,
@@ -335,6 +366,10 @@ function seatPlan(
       ...(live ? {} : { resumeGap: named.length === 0 ? 'none' as const : 'many' as const }),
     };
   }
+  // A record with no process identity cannot prove its pane. A bare shell or another model is
+  // reported, with the repair that works, and is not closed and not launched again.
+  const hold = unidentifiedHold(team, seat, recorded, processes, screenOf);
+  if (hold) return { ...planned, stage: recorded.stage, unidentifiedHold: hold };
   // The pane is the seat only while the process team launched is still in it: a pane that runs
   // no CLI, or one whose process is not the recorded one, is not the seat. Its workspace is
   // closed without input and the seat is launched fresh — the stage it stopped at is not
@@ -594,7 +629,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const processes: Record<string, PaneProcesses | null> = {};
   if (state === 'running' && sources.launch?.processInfo) {
     for (const [name, held] of Object.entries(recorded?.seats ?? {})) {
-      if (held.launched && held.pane) processes[name] = sources.launch.processInfo(session, held.pane);
+      // A pane with no recorded identity is read too: a bare shell is visible without one.
+      // The close path still requires the identity; this reading only lets the plan say so.
+      if (held.pane) processes[name] = sources.launch.processInfo(session, held.pane);
     }
   }
   const readings = loadReadings(dir);
@@ -634,7 +671,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     );
     // A stopped seat, one without a profile, and one already ready are left out of the budget.
     // A seat resumed into a live workspace starts nowhere new, but its reading is still said.
-    if (planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
+    if (planned.unidentifiedHold || planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
       seats.push(planned);
       continue;
     }
@@ -713,7 +750,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const declaredLobbyFiles = shippedLobbyFiles();
   if (isMigratedTrust(team.trust)) {
     const launching = seats.some((seat) => {
-      if (seat.stopped || seat.launchProblem) return false;
+      if (seat.unidentifiedHold || seat.stopped || seat.launchProblem) return false;
       if (!profileFor(seat.cli)) return false;
       const fresh = seat.stage === undefined || !seat.pane || (seat.stage === 'launched' && !seat.agentLive);
       if (!fresh) return false;
