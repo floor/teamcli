@@ -69,13 +69,14 @@ error, a rate limit, a seat that vanished, a screen it cannot read — instead o
 - `team up`: a caller who is not the owner and passes `--session`, or a `--file` other than its own
   folder's team file, is now refused before that file is read and before the session is asked for
   anything, as `add`, `remove`, `down` and `answer` already do. Nothing was written, adopted or
-  launched before this change. A non-owner's dry run in its own folder is unchanged. Upgrade note:
-  a non-owner's `team up --file <missing path>` now ends in the owner refusal (exit 1), not exit 2;
-  the owner's own run stays exit 2. (PR #TBD-up)
+  launched before this change. A non-owner's dry run in its own folder is unchanged. Upgrade notes:
+  a non-owner's `team up --file <missing path>` now ends in the owner refusal (exit 1), not exit 2
+  (the owner's own run stays exit 2); and a non-owner's dry run whose delegate aim is refused now
+  prints the refusal without a plan. (#303)
 - `team add --temporary --until` now validates its end condition: a `result:<path>` must resolve
   lexically inside the project (no absolute path, no `..`), and a `merged:<branch>` must be a valid
   git ref name passed after `--`; a branch name starting with `-` is refused. `team watch`
-  re-validates a stored end condition before use. (PR #TBD-until)
+  re-validates a stored end condition before use. (#302)
 - `cursor`: a background-task row is no longer read as unsent text. (#281)
 - A lobby lead uses the file its session launched from. (#282)
 - A lead is told to relaunch with `team down`, not `remove --keep`. (#288)
