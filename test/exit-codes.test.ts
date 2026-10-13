@@ -25,6 +25,7 @@ import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
 import { plantMessage, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { runIssues } from '../src/commands/issues.ts';
+import { runList, type ListSources } from '../src/commands/list.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
@@ -1916,6 +1917,21 @@ scene('usage.block', async (place) => {
   return show(await used(place, [], other), 'usage on this machine');
 });
 scene('usage.invocation', async (place) => show(await used(place, ['extra']), 'unexpected'));
+
+async function listed(place: Place, argv: string[], sources: ListSources): Promise<Ran> {
+  const io = testIo(place.root, owner);
+  return { code: await runList(argv, io, sources), out: io.out, err: io.err };
+}
+
+const noTeam: ListSources = { sessions: () => [], roster: () => [], team: () => null };
+scene('list.invocation', async (place) => show(await listed(place, ['--nope'], noTeam), 'unknown option'), false);
+scene('list.herdr-down', async (place) => show(await listed(place, [], { ...noTeam, sessions: () => null }), 'herdr is not running'), false);
+scene('list.empty', async (place) => show(await listed(place, [], noTeam), 'no running sessions'), false);
+scene('list.shown', async (place) => show(await listed(place, [], {
+  sessions: () => [{ name: 'acme', running: true }],
+  roster: () => [],
+  team: () => null,
+}), 'orphan'), false);
 // The one refusal beside the invocation: the stores folder itself cannot be read. It is a file
 // where the folder belongs, and the caller here is the owner, who alone reads its message.
 scene('usage.store', async (place) => {
