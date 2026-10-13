@@ -6,7 +6,8 @@ import { overridesInForceOf, type OverrideForce } from '../profiles/overrides.ts
 import { readArgs } from '../args.ts';
 import { budgetLine, budgetTable, type BudgetRow } from '../budgets/table.ts';
 import { recall } from '../budgets/readings.ts';
-import { isOwner, walkCaller } from '../caller.ts';
+import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
@@ -18,6 +19,7 @@ import { approvalStanding, type Standing } from '../store/store.ts';
 import { checkRulesFile, rulesFilePathOf } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { profileFor } from '../profiles/index.ts';
+import { mayReadTeam } from '../read-gate.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
@@ -36,6 +38,8 @@ export type StatusSources = {
   /** This machine's own figures, read for the one check no machine can ever meet. Absent in a test
    *  that does not read them; absent is not "fine", it is nothing said. */
   machine?(root: string): Machine;
+  /** The approved pane's read gate's own reads; the real ones when absent. */
+  gate?: DelegateSources;
 };
 
 /**
@@ -129,16 +133,34 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // exit: status.invocation
     return 2;
   }
-  // A read is a read: the report below is the same for every caller, and anyone may aim `--file`
-  // — a plain folder's own seats must, for its project has no git walk to find the file. What a
-  // run that is not the owner's must not do is write anywhere, and the one write on this path is
-  // the `last_valid` copy `currentTeam` keeps beside the file it read, so the walk decides here,
-  // once, whether that copy is written. (`watch`, which writes a log and a heartbeat of its own,
-  // still refuses the flag outright: fileOwnerRefusal in caller.ts.)
-  const owner = isOwner(walkCaller(io));
+  // `--file` and `--session` are the owner's. The walk decides that before any file or session
+  // is read, the same gate `worktree` and `watch` use. A plain folder's own seats need no flag:
+  // `currentTeam` finds `.agents/team.yaml` in their folder. The one write on this path is the
+  // `last_valid` copy, and only the owner's run keeps it.
+  const walked = walkCaller(io);
+  const owner = isOwner(walked);
+  if (args.values.file !== undefined) {
+    const refusal = fileOwnerRefusal(io, args.values.file);
+    if (refusal !== undefined) {
+      io.stderr(`team status: ${refusal}\n`);
+      // exit: status.file-owner
+      return 1;
+    }
+  }
+  if (args.values.session !== undefined && !owner) {
+    io.stderr(`team status: ${sessionOwnerRefusal(walked)}\n`);
+    // exit: status.session-owner
+    return 1;
+  }
 
-  const current = currentTeam(io.cwd, args.values.file, sources.now(), sources.home, owner);
-  if (!current.ok) {
+  const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
+  if (!owner) {
+    if (!current.ok || !mayReadTeam(current, io, sources)) {
+      io.stderr('team status: this team is not yours to read\n');
+      // exit: status.not-yours
+      return 2;
+    }
+  } else if (!current.ok) {
     printProblems(io, current.errors);
     // exit: status.not-a-repo
     // exit: status.file

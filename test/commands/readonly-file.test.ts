@@ -32,6 +32,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import type { Fetch } from '../../src/release/http.ts';
+import { emptySession, updateState } from '../../src/state.ts';
 import { storePath, writeApproval, type Standing } from '../../src/store/store.ts';
 import { testIo, type TestIo } from '../helpers.ts';
 
@@ -376,6 +377,42 @@ describe("watch: --file is the owner's", () => {
   });
 });
 
+function unreadStatus(): StatusSources {
+  return {
+    ...statusSources(),
+    live: () => { throw new Error('a session was read'); },
+    standing: () => { throw new Error('the approval was read'); },
+  };
+}
+
+// A non-owner's `--file` is refused before the file is read. The owner's run on the same file
+// still prints the report and keeps the copy.
+async function refusedFile(git: boolean): Promise<void> {
+  const flagged = flaggedProject('valid', git);
+  try {
+    const beforeBytes = flagged.bytes();
+    const seatIo = testIo(flagged.root, placed(OTHER, COORDINATOR, COORDINATOR_PANE));
+    const missing = testIo(flagged.root, placed(OTHER, COORDINATOR, COORDINATOR_PANE));
+    const seatCode = await runStatus(['--file', flagged.file], seatIo, unreadStatus());
+    const missingCode = await runStatus(['--file', join(flagged.root, 'no-such.yaml')], missing, unreadStatus());
+    const text = FILE_OWNER('status', COORDINATOR);
+    expect({ code: seatCode, out: seatIo.out, err: seatIo.err }).toEqual({ code: 1, out: '', err: text });
+    expect({ code: missingCode, out: missing.out, err: missing.err }).toEqual({ code: 1, out: '', err: text });
+    expect(flagged.listing()).toEqual(['team.yaml']);
+    expect(flagged.bytes()).toBe(beforeBytes);
+
+    const ownerIo = testIo(flagged.root, { kind: 'owner' });
+    const ownerCode = await runStatus(['--file', flagged.file], ownerIo, statusSources());
+    expect(ownerCode).toBe(1);
+    expect(ownerIo.out).toContain('team acme');
+    expect(flagged.listing()).toEqual(['team.state.json', 'team.yaml']);
+    const state = JSON.parse(readFileSync(join(flagged.root, '.agents', 'team.state.json'), 'utf8')) as { last_valid?: { file?: string } };
+    expect(state.last_valid?.file ?? null).toBe(beforeBytes);
+  } finally {
+    flagged.cleanup();
+  }
+}
+
 // The round-2 rule for `status`: the flag is any caller's — the report is the same for every
 // caller — and the write is the owner's alone. A non-owner's run writes nothing at all, beside
 // the file it read (its `last_valid` copy is not its project's to accept) or in its own project;
@@ -420,7 +457,9 @@ describe('status: --file reads for any caller, and writes for the owner alone', 
     }
   }
 
-  test("a non-owner's --file prints the owner's report and writes nothing — a git project's file", async () => {
+  // Earlier rule, reversed by the status caller rule:
+  // a non-owner's --file on a git project's file prints the same report as the owner, and that run writes nothing.
+  test.skip("a non-owner's --file prints the owner's report and writes nothing — a git project's file", async () => {
     const run = await aimed(true);
     // The same report the owner would get for that file: byte for byte, exit and stderr too.
     expect(run.seat).toEqual(run.owner);
@@ -436,7 +475,9 @@ describe('status: --file reads for any caller, and writes for the owner alone', 
     expect(state.last_valid?.file ?? null).toBe(run.beforeBytes);
   });
 
-  test("a non-owner's --file prints the owner's report and writes nothing — a plain folder's file", async () => {
+  // Earlier rule, reversed by the status caller rule:
+  // a non-owner's --file on a plain folder's file prints the same report as the owner, and that run writes nothing.
+  test.skip("a non-owner's --file prints the owner's report and writes nothing — a plain folder's file", async () => {
     // The plain folder is the round-2 case itself: a project with no git walk to find the file,
     // whose own seats carry `--file` by necessity. The caller runs from the flagged root, and
     // the owner's runs there keep behaving as they did before the round (the copy included).
@@ -451,7 +492,9 @@ describe('status: --file reads for any caller, and writes for the owner alone', 
     expect(state.last_valid?.file ?? null).toBe(run.beforeBytes);
   });
 
-  test("a non-owner's --file on a path the git walk does not resolve: the same split", async () => {
+  // Earlier rule, reversed by the status caller rule:
+  // a non-owner's --file on a file the git walk does not find prints the same report as the owner, and that run writes nothing.
+  test.skip("a non-owner's --file on a path the git walk does not resolve: the same split", async () => {
     // The layout a review ran: `custom/team.yaml` inside a git project — a file the walk never
     // finds, so the project's own seats reach it only with the flag, and their bare runs from the
     // pane's folder find nothing at all. The seat's flagged run reads it and writes nothing; the
@@ -481,7 +524,9 @@ describe('status: --file reads for any caller, and writes for the owner alone', 
     }
   });
 
-  test("the fallback serves a non-owner while the owner edits, and its read writes nothing", async () => {
+  // Earlier rule, reversed by the status caller rule:
+  // a non-owner's --file reads the last valid copy while the owner edits the file, and that read writes nothing.
+  test.skip("the fallback serves a non-owner while the owner edits, and its read writes nothing", async () => {
     // The owner's run left the copy; the file breaks; a seat's `--file` reads the copy — the
     // notice, then the report — and the state's bytes do not move.
     const flagged = flaggedProject('valid', true);
@@ -493,6 +538,73 @@ describe('status: --file reads for any caller, and writes for the owner alone', 
       writeFileSync(flagged.file, 'format: [\n');
       const seat = testIo(flagged.root, placed(OTHER, COORDINATOR, COORDINATOR_PANE));
       const code = await runStatus(['--file', flagged.file], seat, statusSources());
+      expect(code).toBe(1);
+      expect(seat.out.split('\n')[0]).toBe('team.yaml is invalid (line 1: "[" is not closed on its line); using the copy of 1970-01-01T00:00:00.000Z');
+      expect(seat.out).toContain('team acme');
+      expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
+      expect(flagged.bytes()).toBe('format: [\n');
+    } finally {
+      flagged.cleanup();
+    }
+  });
+
+  test("a non-owner's --file is refused before the file is read, and the owner still keeps the copy — a git project's file", async () => {
+    await refusedFile(true);
+  });
+
+  test("a non-owner's --file is refused before the file is read, and the owner still keeps the copy — a plain folder's file", async () => {
+    await refusedFile(false);
+  });
+
+  test("a non-owner's --file on a path the git walk does not resolve is refused before the file is read, and the owner still keeps the copy", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'team-custom-'));
+    try {
+      mkdirSync(join(root, 'custom'));
+      execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+      const custom = join(root, 'custom', 'team.yaml');
+      writeFileSync(custom, FILE);
+      const bareIo = testIo(join(root, 'custom'), placed(SESSION, COORDINATOR, COORDINATOR_PANE));
+      const bareCode = await runStatus([], bareIo, unreadStatus());
+      expect(bareCode).toBe(2);
+      expect(bareIo.err).toBe('team status: this team is not yours to read\n');
+      expect(bareIo.out).toBe('');
+      expect(readdirSync(join(root, 'custom')).sort()).toEqual(['team.yaml']);
+
+      const seatIo = testIo(root, placed(SESSION, COORDINATOR, COORDINATOR_PANE));
+      const seatCode = await runStatus(['--file', custom], seatIo, unreadStatus());
+      expect({ code: seatCode, out: seatIo.out, err: seatIo.err }).toEqual({
+        code: 1,
+        out: '',
+        err: FILE_OWNER('status', COORDINATOR),
+      });
+      expect(readdirSync(join(root, 'custom')).sort()).toEqual(['team.yaml']);
+
+      const ownerIo = testIo(root, { kind: 'owner' });
+      const ownerCode = await runStatus(['--file', custom], ownerIo, statusSources());
+      expect(ownerCode).toBe(1);
+      expect(ownerIo.out).toContain('team acme');
+      expect(readdirSync(join(root, 'custom')).sort()).toEqual(['team.state.json', 'team.yaml']);
+      const state = JSON.parse(readFileSync(join(root, 'custom', 'team.state.json'), 'utf8')) as { last_valid?: { file?: string } };
+      expect(state.last_valid?.file ?? null).toBe(FILE);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a seat on its recorded pane, with no flag, is served the fallback while the owner edits, and that read writes nothing', async () => {
+    const flagged = flaggedProject('valid', true);
+    try {
+      const owner = testIo(flagged.root, { kind: 'owner' });
+      await runStatus(['--file', flagged.file], owner, statusSources());
+      const statePath = join(flagged.root, '.agents', 'team.state.json');
+      updateState(join(flagged.root, '.agents'), (state) => {
+        const session = (state.sessions[SESSION] ??= emptySession());
+        session.seats[COORDINATOR] = { stage: 'ready', pane: COORDINATOR_PANE, workspace: 'w1' };
+      });
+      const stateBefore = readFileSync(statePath, 'utf8');
+      writeFileSync(flagged.file, 'format: [\n');
+      const seat = testIo(flagged.root, placed(SESSION, COORDINATOR, COORDINATOR_PANE));
+      const code = await runStatus([], seat, statusSources());
       expect(code).toBe(1);
       expect(seat.out.split('\n')[0]).toBe('team.yaml is invalid (line 1: "[" is not closed on its line); using the copy of 1970-01-01T00:00:00.000Z');
       expect(seat.out).toContain('team acme');

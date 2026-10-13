@@ -209,32 +209,38 @@ function verifiedStanding() {
 }
 
 describe('status: --session for a non-owner', () => {
-  test("reads the aimed session and writes nothing — a read is a read, the write is the owner's", async () => {
+  // A read was open to any caller.
+  // The caller rule replaces it.
+  test('a non-owner aiming --session is refused at once, before that session is read', async () => {
     updateState(join(root, '.agents'), (state) => {
       state.sessions['acme-web'] = emptySession();
     });
     const beforeState = readFileSync(stateFile, 'utf8');
-    const asked: string[] = [];
+    const calls: string[] = [];
     const sources: StatusSources = {
       live: (session) => {
-        asked.push(session);
+        calls.push(`live(${session})`);
         return { running: true, agents: [], workspaces: [], screens: {} };
       },
-      branch: () => 'main',
-      standing: () => verifiedStanding(),
+      branch: () => {
+        calls.push('branch');
+        return 'main';
+      },
+      standing: () => {
+        calls.push('standing');
+        return verifiedStanding();
+      },
       now: () => NOW,
     };
-    const io = testIo(root, { kind: 'seat', name: 'worker', pane: 'w3:p1' });
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
     const code = await runStatus(['--session', 'team-test'], io, sources);
-    // The aimed session's own report: its live read shows the seat stopped, so the run exits 1
-    // on that difference — the flag was allowed, which is the pair this test pins.
     expect(code).toBe(1);
-    // The aimed session is the one read, and the report says so.
-    expect(asked).toEqual(['team-test']);
-    expect(io.out).toContain('session "team-test"');
-    expect(io.out).toContain('worker');
-    expect(io.out).toContain('difference');
-    // A non-owner's run writes nothing: the state's bytes stand (no `last_valid` copy).
+    expect(io.out).toBe('');
+    expect(io.err).toBe(
+      "team status: --session is the owner's, from a terminal outside herdr; this call is unplaced (it runs under herdr)\n",
+    );
+    expect(calls).toEqual([]);
     expect(readFileSync(stateFile, 'utf8')).toBe(beforeState);
   });
 });

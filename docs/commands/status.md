@@ -19,17 +19,37 @@ the file it read — and a run that is not the owner's writes nothing at all.
 
 ## Who may run it
 
-Anyone, in any terminal, and it needs no approval of its own. It does need herdr to answer: without
-it, `status` can't say anything and exits 2. `--file` may be aimed by any caller — a plain folder's
-project has no git walk to find the file, so its own seats carry the flag — and a run that is not
-the owner's writes nothing at all, beside the file it read or in its own project.
+The caller decides, not the flags. Three callers get the reading:
+
+- **the owner**, from a terminal outside herdr. An owner **without a terminal** is not this
+  caller: a script meets the fixed sentence below;
+- **a seat of the team** — placed in the file's session, on the pane the state records for it.
+  A seat the state records no pane for, or records on another pane, fails closed;
+- **a pane outside the team that the approved file names** in its `delegates` entries. A pane
+  only the live file names does not pass.
+
+Anyone else gets one fixed sentence and nothing else, whatever failed underneath — no file, an
+invalid one, a file that was never approved, a refused approval:
+
+    team status: this team is not yours to read
+
+The sentence is the whole answer, with or without `--json`: stderr only, stdout empty, exit 2.
+It does need herdr to answer once the caller has passed: without it, `status` can't say anything
+and exits 2.
+
+`--file` and `--session` are the owner's. Aimed by anyone else, each is refused before any file
+or session is read (`--file is the owner's, from a terminal outside herdr; this call is …`) and
+exits 1.
+
+A plain folder's seat runs `team status` from the folder that holds `.agents`. The lookup does
+not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim the parent's file.
 
 ## Flags
 
 | Flag | Meaning |
 | --- | --- |
-| `--session <name>` | the herdr session to read, instead of `team.session` |
-| `--file <path>` | the team file, instead of `.agents/team.yaml`; a run that is not the owner's writes nothing |
+| `--session <name>` | the herdr session to read, instead of `team.session`; the owner's |
+| `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's |
 | `--json` | print the same reading as one JSON document instead of the table, the notes and the repairs |
 | `--help`, `-h` | the usage, and exit 0 |
 
@@ -181,13 +201,18 @@ when the budgets table would be printed, one object per row (`account`, `window`
 when a subscription's left figure is at or inside its reserve, `fallback` when the figure did not
 come from the first source the account names, and `reserve` the reserve that row was read against —
 the same figure the table's line names, null when the account has none. The exit
-code is the same as without `--json`, and the file's warnings still go to stderr.
+code is the same as without `--json`, and the file's warnings still go to stderr. A caller who
+may not read the team gets the fixed sentence on stderr and nothing on stdout, with or without
+`--json`: not a JSON document.
 
 ## Refusals
 
 | Message | Exit |
 | --- | --- |
 | `team status: unexpected "x"` (with the usage) | 2 |
+| `team status: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
+| `team status: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
+| `team status: this team is not yours to read` | 2 |
 | `team status: team.yaml line <n>: <message>` | 2 |
 | `team status: herdr doesn't answer; is it installed and running?` | 2 |
 
@@ -200,8 +225,8 @@ unchanged file. That is a true advisory about this machine, not drift.
 ## Exit codes
 
 - `0` — no difference: the file, the state and the live session agree.
-- `1` — at least one difference; each is printed with its repair.
-- `2` — the invocation or the team file can't be read, or herdr doesn't answer.
+- `1` — at least one difference, each printed with its repair; or `--file` or `--session` from a caller who is not the owner.
+- `2` — the invocation or the team file can't be read, herdr doesn't answer, or the caller may not read this team.
 
 ## Examples
 
