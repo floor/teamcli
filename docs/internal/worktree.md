@@ -8,7 +8,7 @@ worktree in this state file — the same rows the limit counts — and writes no
 whose folder is gone names `team worktree remove <task>`, which drops that record and
 prunes, and does not delete the branch.
 
-## What the two subcommands do
+## What new and remove do
 
 Creates and removes a task worktree: a second checkout of the project on a branch of its own, where
 one seat does one task. `new` cuts the branch from `workspace.base`, records the worktree in the
@@ -21,7 +21,7 @@ Reads the team file and this machine's approval store, the session's state
 (`.agents/team.state.json`), and git: the base branch, the branch names, and the worktree itself.
 With `--session`, the state of that session instead of `team.session`.
 
-Every value the two subcommands read from the file is the **approved copy's** while a verified
+Every value the subcommands read from the file is the **approved copy's** while a verified
 approval is in force, whatever the file says now and whether or not the fingerprints match:
 `workspace` (mode, path, branch, base, setup and limit), `trust`, the caller rules (`orchestrator`
 and `operator`), the session, the names a public project forbids, and the seats `--seat` may name.
@@ -81,8 +81,8 @@ and a process of the same user that writes its own pane there under the orchestr
 renames its pane, passes. The check guards a mistaken agent, not a hostile process running as the
 same user.
 `--file` and `--session` are the owner's alone, from a terminal outside herdr: a non-owner aiming
-either is refused before the flagged file or session is read at all. Both subcommands refuse the
-same way.
+either is refused before the flagged file or session is read at all. `list`, `new` and `remove` refuse
+the same way.
 
 ## Refusals
 
