@@ -621,11 +621,6 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           final(op.seat, { kind: 'left out', reason: 'its launch command did not run; left at launched' });
           break;
         }
-        // Line 2, on the pane just launched. Absent on a host that does not launch seats.
-        // A call that fails is one line; the seat stays, and the wait that follows is unchanged.
-        if (op.displayAgent && host.reportDisplayAgent && !host.reportDisplayAgent(session, here.pane, op.displayAgent)) {
-          host.say(`${op.seat}: its display was not reported\n`);
-        }
         host.running(op.seat);
         break;
       }
@@ -890,6 +885,11 @@ export async function executePlan(steps: readonly Step[], session: string, host:
             ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
           });
           finishReady(op.seat);
+        }
+        // Line 2, after the name. Absent on a host that does not launch seats. A call that
+        // fails is one line; the seat stays named, and nothing here reads the owner's terminal.
+        if (op.displayAgent && host.reportDisplayAgent && !host.reportDisplayAgent(session, here.pane, op.displayAgent)) {
+          host.say(`${op.seat}: its display was not reported\n`);
         }
         break;
       }

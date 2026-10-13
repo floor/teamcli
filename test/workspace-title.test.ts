@@ -103,7 +103,7 @@ describe('the pane display', () => {
     expect(displayAgent({ display: 'Grok 4.7' })).toBe('Grok 4.7');
   });
 
-  test('the plan reports display_agent after launch', () => {
+  test('the plan reports display_agent after the seat is named', () => {
     const seat: UpSeat = {
       name: 'lead',
       cli: 'claude-code',
@@ -144,7 +144,7 @@ describe('the pane display', () => {
       closeWorkspace: () => true,
       stopSession: () => true,
       kill: () => true,
-      agentPanes: () => [],
+      agentPanes: () => ['p1'],
       classify: () => 'idle',
       sleep: async () => {},
       now: () => 0,
@@ -158,11 +158,11 @@ describe('the pane display', () => {
     const repair = '`team down` then `team up` (to restart the whole team)';
     const steps: Step[] = [
       { kind: 'run', argv: [], do: { do: 'create', seat: 'lead', label: 'Priam · coordinator', cwd: '/work', repairLine: repair } },
-      { kind: 'run', argv: [], do: { do: 'launch', seat: 'lead', label: 'Priam · coordinator', command: 'claude', displayAgent: 'Claude Opus 5.5 · high' } },
+      { kind: 'run', argv: [], do: { do: 'rename', seat: 'lead', label: 'Priam · coordinator', seconds: 1, rules: 'message', displayAgent: 'Claude Opus 5.5 · high' } },
       { kind: 'run', argv: [], do: { do: 'launch', seat: 'lead', label: 'Priam · coordinator', command: 'claude' } },
     ];
     await executePlan(steps, 'acme', host);
     expect(said).toEqual(['lead: its display was not reported\n']);
-    expect(runs).toBe(2);
+    expect(runs).toBe(1);
   });
 });

@@ -20,16 +20,7 @@ export type Op =
   | { do: 'create'; seat: string; label: string; cwd: string; repairLine: string; notice?: string; lobby?: true }
   /** The watchdog's workspace: no seat, so no seat repair either. */
   | { do: 'create'; seat?: undefined; label: string; cwd: string; notice?: string; lobby?: undefined }
-  | {
-      do: 'launch';
-      seat: string;
-      label: string;
-      command: string;
-      pane?: string;
-      notice?: string;
-      /** Sidebar line 2, reported on the pane after the launch command. A failure is one line. */
-      displayAgent?: string;
-    }
+  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -58,7 +49,16 @@ export type Op =
       /** A waiting seat herdr does not name exactly once: left out, nothing launched. */
       resumeGap?: 'none' | 'many';
     }
-  | { do: 'rename'; seat: string; label: string; seconds: number; rules: 'option' | 'message'; pane?: string }
+  | {
+      do: 'rename';
+      seat: string;
+      label: string;
+      seconds: number;
+      rules: 'option' | 'message';
+      pane?: string;
+      /** Sidebar line 2, reported once this rename has named the seat. A failure is one line. */
+      displayAgent?: string;
+    }
   | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string }
   | { do: 'ready'; seat: string; rules: 'option' | 'message'; notice?: string }
   | {
@@ -418,19 +418,8 @@ export function upPlan(input: UpInput): Step[] {
       steps.push({
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
-        ...(seat.displayAgent
-          ? { also: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent) }
-          : {}),
         ...(said ? { note: `${said}; would launch` } : {}),
-        do: {
-          do: 'launch',
-          seat: seat.name,
-          label: seat.label,
-          command,
-          pane: seat.pane,
-          ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
-          ...(said ? { notice: said } : {}),
-        },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, ...(said ? { notice: said } : {}) },
       });
     }
     const rules = profile.rulesOption === null ? 'message' : 'option';
@@ -466,7 +455,20 @@ export function upPlan(input: UpInput): Step[] {
       steps.push({
         kind: 'run',
         argv: herdr(session, 'agent', 'rename', pane, seat.name),
-        do: { do: 'rename', seat: seat.name, label: seat.label, seconds: profile.idleTimeout, rules, pane: seat.pane },
+        // Line 2 is printed with the rename. The live run reports it after the name lands,
+        // so the idle wait and anything it asks the owner stay as they were.
+        ...(seat.displayAgent
+          ? { also: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent) }
+          : {}),
+        do: {
+          do: 'rename',
+          seat: seat.name,
+          label: seat.label,
+          seconds: profile.idleTimeout,
+          rules,
+          pane: seat.pane,
+          ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
+        },
       });
     }
     if (profile.rulesOption === null) {
