@@ -22,6 +22,17 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
+    "entity": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "$comment": "the entity the team belongs to; its lobby is ~/.config/team/lobbies/<entity>"
+    },
+    "lobby": {
+      "type": "string",
+      "minLength": 1,
+      "$comment": "the folder the team's seats start and wait in; a ~ prefix is the home. Overrides entity"
+    },
     "trust": {
       "type": "array",
       "items": {
@@ -412,6 +423,7 @@
           "propertyNames": {
             "enum": [
               "restored",
+              "provider-error",
               "unsent",
               "idle",
               "extra",
@@ -489,7 +501,13 @@
             "$comment": "relative to the project, or a trust path"
           },
           "label": {
-            "type": "string"
+            "type": "string",
+            "$comment": "accepted, and not the herdr title; the title is the display, and the effort when set"
+          },
+          "effort": {
+            "type": "string",
+            "minLength": 1,
+            "$comment": "optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it"
           },
           "mode": {
             "enum": [
@@ -561,7 +579,7 @@
           "version",
           "launch"
         ],
-        "$comment": "account must name a key of budgets.accounts; label defaults to the model and version; a seat with count is neither lead"
+        "$comment": "account must name a key of budgets.accounts; the herdr title is the display and the effort; a written label is kept and does not title the workspace; a seat with count is neither lead"
       }
     },
     "releases": {

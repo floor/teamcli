@@ -75,6 +75,8 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
   return {
     format: 1,
     project: valueOf<string>(ctx, 'project'),
+    entity: valueOf<string | null>(ctx, 'entity'),
+    lobby: valueOf<string | null>(ctx, 'lobby'),
     visibility: valueOf<TeamFile['visibility']>(ctx, 'visibility'),
     session: valueOf<string>(ctx, 'session'),
     orchestrator: valueOf<string>(ctx, 'orchestrator'),

@@ -24,7 +24,7 @@ type ScreenCase = { file: string; cli: string; classify: string; provenance?: st
 type Manifest = { screens: ScreenCase[] };
 
 /** The kinds a screen is read as; the matrix's second axis. */
-const KINDS = ['idle', 'working', 'unsent', 'permission', 'question', 'exit question', 'trust', 'vendor notice', 'unknown'] as const;
+const KINDS = ['idle', 'working', 'unsent', 'permission', 'question', 'exit question', 'trust', 'vendor notice', 'provider error', 'rate limit', 'unknown'] as const;
 type Kind = (typeof KINDS)[number];
 
 export type Provenance = 'capture' | 'constructed' | 'undocumented';

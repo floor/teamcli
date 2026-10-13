@@ -20,7 +20,7 @@ The project's name is TeamCLI; the package and the command are `team`. The site 
 
 **Status: early, herdr only.** This build parses and
 validates the file, checks who is calling, and holds `add`, `answer`, `approve`, `check`, `doctor`,
-`down`, `init`, `release`, `remove`, `status`, `up`, `watch` and `worktree`.
+`down`, `init`, `list`, `release`, `remove`, `status`, `up`, `watch` and `worktree`.
 
 ## Install
 
@@ -151,11 +151,14 @@ budgets:                      # the owner's: reserve or floor per account, marks
 ### Naming seats
 
 The herdr session carries the project, so a seat's name is its role: `coordinator`, `implementer`,
-`reviewer`. When a role is used twice, the model is added: `implementer-deepseek`. The label is the
-herdr workspace title. Left out of the file, it is the model and version in lowercase
-(`claude opus 5.5`), taken from that seat's own fields, so a model change retitles the pane. A
-label written in the file is kept. `team doctor` warns, and does not refuse the file, when a name
-or a label repeats the project or the session.
+`reviewer`. When a role is used twice, the model is added: `implementer-deepseek`. herdr already
+shows that name, so the workspace title does not repeat it. `up` and `add` title the workspace
+with the seat's `display` (itself defaulting to the model and version, `Claude Opus 5.5`), and
+` · ` plus `effort` when the seat sets one (`Grok 4.7 · high`). Seats expanded from `count` share
+that title: the seat's name is the only key. A `label` written in the file is still read, and it
+does not title the workspace; left out, the stored title is the model and version in lowercase.
+`team doctor` warns, and does not refuse the file, when a name or a stored label repeats the
+project or the session.
 
 The Codex profile is tested with CLI 0.157.0 to 0.161.0. Its status line is read for a weekly figure
 (`weekly N% left`) when the pane is wide enough to show the number; a cut line is not a figure.
@@ -255,10 +258,11 @@ check, and this build acts on what the commands below read.
 | `team pr check <file>` | checks a pull request's body against the signature rule (`-` reads stdin), needing no repository; exit 1 when it is refused | anyone; read only |
 | `team doctor` | checks this machine for what the file needs: herdr, each CLI, login, launch line, model, watch heartbeat; `--login` checks only CLI sign-ins | anyone; read only |
 | `team status` | prints the file's seats against the running session, each difference with its repair; `--json` outputs a stable JSON document (`format: 1`) for scripts; exit 1 when they differ | anyone; read only |
+| `team list` | lists the herdr sessions on this machine, running ones by default; `--all` includes stopped sessions; `--json` prints a stable array, empty when there is nothing; an orphan session and an unreadable seat do not fail it | anyone, from any folder; read only |
 | `team up` / `team down` | starts / stops the session and its seats | `up`: the owner; `down`: the owner, the coordinator or the operator seat |
 | `team watch` | watches the session, reports idle seats and nudges the operator; `--no-nudge` and `--no-notify` are the owner's and do not silence a report addressed to the owner | anyone, one per session; it types only a fixed line into an empty idle prompt: the report nudge, or `Team: run team messages` when a message is already waiting |
 | `team messages` | verifies a message that is already waiting, prints its body and writes the receipt; no command writes a message record — `team send` writes to a seat's cross-session socket, not to this mailbox — and a report still leaves as the watch's nudge | anyone |
-| `team send` | writes one message to one seat over the cross-session message socket (a Claude Code seat's channel), confirming `delivered`, `answered`, `timeout`, `unreachable` or `refused`; `--wait [--timeout <s>]` blocks for the seat's reply and prints it (120 seconds by default), `--json` prints one result document, `--file` reads the body from a file, and `--list` prints the addressable seats and sends nothing. The native-CLI delivery daemon and broadcast are not in this build | the owner, or the coordinator from its own seat (`--list`: anyone) |
+| `team send` | writes one message to one seat, confirming `delivered`, `answered`, `timeout`, `unreachable` or `refused`. A Claude Code seat takes a frame on the cross-session socket; a native CLI (codex, cursor, grok, antigravity) gets the body in a mode-0600 drop file and one short trigger, and `delivered` means herdr reported the seat working. `--wait [--timeout <s>]` blocks for a Claude Code seat's reply (120 seconds by default) and is refused for a native seat. `--json` prints one result document, `--file` reads the body from a file, `--dry-run` names the channel, writes no drop file, and types nothing (it appends one team.log line), and `--list` prints the addressable seats and sends nothing. Broadcast is not in this build | the owner, or the coordinator from its own seat (`--list`: anyone) |
 | `team issues` | lists the typed records in the one file the team file names. The source is a file the owner committed. A broker source is read by `team next`, never from here: this command connects to no broker, holds no tracker credential, and has no seat gate. The broker runs as the same OS principal as the seat: that is integrity, not authenticity, and this command does not isolate anything. `title` and `description` are the owner's text. They are not scrubbed. The list is file order. A priority is shown and does not reorder. A listing is not a claim and not the intake rule. `team plan` prints the takeable queue and claims nothing. `repos` and `needs` are shown when the file has them. They are not a grant, and they are not checked. The watch's ring is unchanged: `Team: run team messages` | anyone |
 | `team next` | claims one record from the team's one task source, with a lease in this clone. The source is a file the owner committed, or a tracker the owner's broker reads. On a broker source, `team next` asks the broker; with no broker running it refuses and claims nothing. The broker holds the tracker credential; this command never reads it. The broker runs as the same OS principal as the seat: that is integrity, not authenticity, and this command does not isolate anything. A lease is a file in this clone. Two live leases in this clone do not cover one id. Another clone, and another machine, are outside that promise. An expired lease returns the record to the queue. Another seat may take it, and the work may be done twice. The file is the intake for a file source; for a broker source it is the tracker's read, with the team's policy deciding which fields cross. That is not the owner-set intake rule. `team plan` prints the takeable queue and claims nothing. `title` and `description` are the owner's text. They are not scrubbed. A record with `blocked-by`, `repos`, or `needs` is listed by `team issues` and is not taken. A deadline is printed and not read as a time. A missed deadline is not decided here. `--wait` re-reads the source every `tasks.cadence` while a pass finds nothing takeable; without `tasks.cadence` it refuses. The wait polls at a constant pace; a refused read ends it — back-off is not implemented. Releasing a lease records no progress. The watch's ring is unchanged: `Team: run team messages` | a seat of this team, on the pane the state records for it |
 | `team plan` | prints the queue a claim would consider, in the order `team next` would consider it. A plan is a listing: it claims nothing and writes no lease, and a record another seat holds can still appear. The queue is this clone's view of one source read. A deadline the clock has passed is marked `(overdue)`; the mark decides nothing — an overdue record is still takeable and is never dropped, blocked, reordered or released by lateness, and an unparseable deadline is printed as written and unmarked. On a broker source it asks the broker the same read `team next` asks, and claims nothing. Writes nothing: no lease file, no renewal, no state write, no tracker write | a seat of this team, on the pane the state records for it |

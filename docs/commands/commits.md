@@ -10,71 +10,32 @@ request's body alone and needs no git.
 
     team commits check <ref> [--since <ref>] [--file <path>]
 
-## What it reads and writes
+## Flags
 
-Reads the team file (or the one `--file` names), the ledger of this machine's store (every seat the
-team has had here, so a removed seat's commits still pass), and the git history of `<ref>`. It
-writes nothing: no state file, no log line, no store.
+| Flag | Value | Effect |
+| --- | --- | --- |
+| `<ref>` | one commit, or a range when it holds `..` | the commits to check, passed to git as given (`origin/main..HEAD`) |
+| `--since <ref>` | a commit | skip this commit and everything reachable from it, for this run; overrides `identity.since` |
+| `--file <path>` | a team file | the team file to read, instead of `.agents/team.yaml` |
+| `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
 
-Anyone. It needs no herdr session, no terminal and no approval of its own; a seat runs it on its
-own branch and CI runs it on a push.
-
-## Flags
-
-| Flag | Meaning |
+| Caller | May |
 | --- | --- |
-| `<ref>` | one commit, or a range when it holds `..`, passed to git as given (`origin/main..HEAD`) |
-| `--since <ref>` | skip this commit and everything reachable from it, for this run; overrides `identity.since` |
-| `--file <path>` | the team file, instead of `.agents/team.yaml` |
-| `--help`, `-h` | the usage, and exit 0 |
+| anyone — a seat, an agent-run CLI, or the owner, from any folder | run it: it needs no herdr session, no terminal and no approval of its own |
+| a seat, on its own branch, before it reports | run it |
+| CI, on a push | run it |
 
-## What it finds
+## Output and exit codes
 
-Every offending commit is printed with its hash and subject, then one block per finding:
+| Outcome | What is printed | Exit |
+| --- | --- | --- |
+| every commit checked passes | `team commits check: <n> commits checked, <n> by a human or a merge: ok` — with `<n> skipped (since <ref>)` when `--since` left commits out | 0 |
+| at least one commit was refused | one block per offending commit — its hash and subject, then one line per finding under it — then the same count, ending `<n> commits refused` | 1 |
+| the check can't run: a bad invocation, a team file that can't be read, or a ref that names nothing | `team commits check: <reason>`, with the usage for a bad invocation | 2 |
 
-    <sha> Tidy the logs
-      line 5: forbidden pattern ^Claude-Session:
-        Claude-Session: 8f21c4a9
-
-| Finding | Meaning |
-| --- | --- |
-| `no signature: expected "Agent: {display} · {role}" in the final trailer block` | the message carries no signature at all |
-| `the signature is not in the final trailer block` | a seat's signature is there, but not where the file's rule says |
-| `the signature shares its paragraph with prose ("…"), so git reads no trailer block: put it in a paragraph of its own, with trailers only` | the signature touches ordinary text, so git reads no trailer |
-| `a signature no seat of this team has had (the model, the version and the role must all match one seat)` | a signature-shaped line naming a model, version or role no seat has |
-| `forbidden pattern <source>` | the line matches one of the file's patterns, or one of the two defaults |
-
-The summary says what was read — `<n> commits checked`, `<n> by a human or a merge`, `<n> skipped
-(since <ref>)` — and then `ok`, or `1 commit refused`, or `2 commits refused`.
-
-## Refusals
-
-| Message | Exit |
-| --- | --- |
-| `team commits check: a <ref> is required` (with the usage) | 2 |
-| `team commits check: one <ref> at most` (with the usage) | 2 |
-| `team commits check: unknown option --<name>` (with the usage) | 2 |
-| `team commits check: --since needs a value` (with the usage) | 2 |
-| `team commits check: <path>, line <n>: <message>` | 2 |
-| `team commits check: not in a git repository` | 2 |
-| `team commits check: "<ref>" doesn't name a commit` | 2 |
-| `team commits check: the range "<ref>" can't be resolved` | 2 |
-| `team commits check: the range "<ref>" holds no commit` | 2 |
-| `team commits check: since "<ref>" doesn't name a commit here (a shallow clone doesn't hold the history it needs)` | 2 |
-| `team commits check: since "<ref>" is not reachable from "<ref>"` | 2 |
-
-The body's own refusals are [`team pr check`](pr.md)'s. The old spelling `team check …` still
-runs all of this, one notice line first: [`team check`](check.md).
-
-## Exit codes
-
-- `0` — every commit checked passes.
-- `1` — at least one commit was refused.
-- `2` — the check can't run: a bad invocation, a team file that can't be read, a ref that names nothing.
-
-## Examples
+## Example
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -152,49 +113,4 @@ team commits check: 1 commit checked, 1 by a human or a merge: ok
 exit 0
 ```
 
-The newest commit signs, but leaks the forbidden line:
-
-```console
-$ team commits check HEAD ; echo "exit $?"
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-<sha> Tidy the logs
-  line 5: forbidden pattern ^Claude-Session:
-    Claude-Session: 8f21c4a9
-team commits check: 1 commit checked: 1 commit refused
-exit 1
-```
-
-A range reads newest first and reports every commit with findings:
-
-```console
-$ team commits check HEAD~3..HEAD ; echo "exit $?"
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-<sha> Tidy the logs
-  line 5: forbidden pattern ^Claude-Session:
-    Claude-Session: 8f21c4a9
-<sha> Add the metrics page
-  no signature: expected "Agent: {display} · {role}" in the final trailer block
-team commits check: 3 commits checked, 1 by a human or a merge: 2 commits refused
-exit 1
-```
-
-`--since` leaves that commit and everything reachable from it out of the report:
-
-```console
-$ team commits check HEAD~3..HEAD --since HEAD~1 ; echo "exit $?"
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-<sha> Tidy the logs
-  line 5: forbidden pattern ^Claude-Session:
-    Claude-Session: 8f21c4a9
-team commits check: 1 commit checked, 2 skipped (since <sha>): 1 commit refused
-exit 1
-```
-
-A ref that names nothing can't be checked:
-
-```console
-$ team commits check origin/main ; echo "exit $?"
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-team commits check: "origin/main" doesn't name a commit
-exit 2
-```
+Rationale, behaviour, refusals and known limits: [docs/internal/commits.md](../internal/commits.md).

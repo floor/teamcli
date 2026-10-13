@@ -1,11 +1,11 @@
 import { resolve } from 'node:path';
-import { defaultFs, type FsReader } from '../lobby/gate.ts';
+import { defaultFs, lobbyTrustEntry, type FsReader } from '../lobby/gate.ts';
 import { absoluteTrustProblem, fixedFolder, insideProject } from './paths.ts';
 import type { TeamFile } from './types.ts';
 
 /** The keys of the file the block is computed from — `seatStart`'s own Pick, so every printer
- *  passes the team it already holds. */
-export type MigrationTeam = Pick<TeamFile, 'project' | 'workspace' | 'trust' | 'seats'>;
+ *  passes the team it already holds. `entity` and `lobby` resolve the lobby entry it suggests. */
+export type MigrationTeam = Pick<TeamFile, 'project' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby'>;
 
 /** One entry the migrated file's trust lists, and the key of the file it comes from. */
 export type TrustSuggestion = { entry: string; from: string };
@@ -39,7 +39,16 @@ export function migrationTrust(team: MigrationTeam, root: string, home: string, 
     else suggestions.push({ entry, from });
   };
 
-  suggestions.push({ entry: '~/.config/team/lobby', from: 'the machine lobby, where every seat starts now' });
+  // The lobby this team operates on: the machine-global `~/.config/team/lobby` when it sets
+  // neither `entity` nor `lobby`, or its own per-entity lobby when it does. Pasting the block
+  // writes the entry trust must list, which `load.ts` checks against the same resolved lobby.
+  suggestions.push({
+    entry: lobbyTrustEntry(home, team),
+    from:
+      team.entity || team.lobby
+        ? 'the team\'s lobby, where its seats start now'
+        : 'the machine lobby, where every seat starts now',
+  });
 
   const initEntries = legacyInitEntries(team.project);
   const replaced = new Set<string>();

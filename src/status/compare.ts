@@ -3,7 +3,8 @@ import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
-import { seatProcessVerdict } from '../launch/identity.ts';
+import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
+import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { readScreen } from '../watch/screen.ts';
 import { modelDiffers, seatModel } from './statusline.ts';
@@ -132,7 +133,15 @@ export function compare(
         if (note) notes.push(note);
         continue;
       }
-      const model = modelOf(seat, agent, live, differences, notes);
+      // A ready seat with no identity is not relaunched by `up` when its model differs. A seat
+      // still at launch is: `up` finishes it, so that repair stays `team up`. A bare shell is
+      // not finished at any stage: there is no CLI to resume.
+      const noIdentity = recorded !== undefined && !recorded.launched;
+      const unidentified = noIdentity && recorded.stage === 'ready';
+      const shell = noIdentity && paneHoldsShell(live.processes?.[agent.pane] ?? null);
+      // A shell has no model to compare. Reading it would add an "unread" note beside the
+      // repair that already says the pane runs no CLI.
+      const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified);
       const held = waitingView(seat.name, recorded, team);
       if (held) {
         rows.push({
@@ -150,6 +159,15 @@ export function compare(
             repair: `team remove ${seat.name} --keep, or take "stopped: true" off the seat`,
           });
         }
+        continue;
+      }
+      // No recorded process: a shell in this pane is not a seat `up` will relaunch, and it is
+      // not shown idle. The repair is the one that works, never `team up`. A waiting record
+      // was reported above; `up` resumes that into the pause, which has its own refusal.
+      if (shell) {
+        const found = unidentifiedShell(seat, agent.pane, team);
+        rows.push({ ...found.row, ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
+        differences.push(found.difference);
         continue;
       }
       const screenText = live.screens[agent.pane];
@@ -177,7 +195,10 @@ export function compare(
           repair: `team remove ${seat.name} --keep, or take "stopped: true" off the seat`,
         });
       }
-      if (isUnsent && recorded?.stage === 'named') {
+      // A model mismatch on a record with no identity is repaired by abandon, not by resuming
+      // the launch: `up` will not relaunch a pane it cannot prove is the seat's.
+      const unidentifiedMismatch = unidentified && modelDiffers(seatModel(seat, screenText), seat);
+      if (isUnsent && recorded?.stage === 'named' && !unidentifiedMismatch) {
         differences.push({
           what: `${seat.name}: its launch stopped at "named", and it holds text in its input box that was never sent`,
           repair: 'the owner clears or sends it in the pane, then runs team up (it resumes the launch)',
@@ -185,7 +206,7 @@ export function compare(
           owner: true,
         });
       } else {
-        if (recorded && recorded.stage !== 'ready') {
+        if (recorded && recorded.stage !== 'ready' && !unidentifiedMismatch) {
           differences.push({
             what: `${seat.name}: its launch stopped at "${recorded.stage}"`,
             repair: 'the owner runs team up (it resumes the launch)',
@@ -225,13 +246,21 @@ export function compare(
     // or one whose foreground CLI is not the recorded one, is not this seat — and it is not a
     // stray to rename: the launch ended, and only `up` puts a fresh one there.
     const held = recorded?.pane;
-    const verdict = seatProcessVerdict(recorded?.launched, held ? live.processes?.[held] ?? null : null);
+    const paneProc = held ? live.processes?.[held] ?? null : null;
+    const verdict = seatProcessVerdict(recorded?.launched, paneProc);
     if (held && (verdict === 'gone' || verdict === 'replaced')) {
       claimed.add(held);
       const { row, difference, note } = notLaunched(seat, held, verdict, live.screens[held]);
       rows.push(row);
       differences.push(difference);
       if (note) notes.push(note);
+      continue;
+    }
+    if (held && recorded && !recorded.launched && paneHoldsShell(paneProc)) {
+      claimed.add(held);
+      const found = unidentifiedShell(seat, held, team);
+      rows.push({ ...found.row, ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
+      differences.push(found.difference);
       continue;
     }
     // A waiting record is read only of a pane that may still hold the seat: one that lost the
@@ -397,17 +426,62 @@ function unverifiedModel(seat: Seat, screen: string | undefined): string {
   return running ? `${running.model} ${running.version}` : '(unread)';
 }
 
-function modelOf(seat: Seat, agent: HerdrAgent, live: Live, differences: Difference[], notes: string[]): string {
+function modelOf(
+  seat: Seat,
+  agent: HerdrAgent,
+  live: Live,
+  differences: Difference[],
+  notes: string[],
+  team: TeamFile,
+  /** The seat's record has no process identity and is ready: the repair is abandon, then up. */
+  unidentified: boolean,
+): string {
   const running = seatModel(seat, live.screens[agent.pane]);
   if (!running) {
     notes.push(`${seat.name}: version unread (its screen doesn't show the model)`);
     return `${seat.display} (unread)`;
   }
   if (!modelDiffers(running, seat)) return seat.display;
-  differences.push({
-    what: `${seat.name} runs ${running.model} ${running.version}; the file says ${declaredModel(seat)}`,
-    repair: `restart the seat on the file's model (team remove ${seat.name} --keep, then team add ${seat.name}), or correct the file and run team approve`,
-    needs: 'approve',
-  });
+  const declared = declaredModel(seat);
+  differences.push(unidentified
+    ? {
+        what: `${seat.name} runs ${running.model} ${running.version}; the file says ${declared}; its process was never recorded`,
+        repair: unidentifiedRepair(team, seat.name),
+        needs: 'approve',
+        owner: true,
+      }
+    : {
+        what: `${seat.name} runs ${running.model} ${running.version}; the file says ${declared}`,
+        repair: modelMismatchRepair(team, seat.name),
+        needs: 'approve',
+      });
   return `${running.model} ${running.version} (file: ${seat.display})`;
+}
+
+/** The model-mismatch repair. A lead cannot be removed, so it gets the same whole-team
+ *  wording `up` prints (`relaunchRepair`). An ordinary seat keeps remove --keep, then add.
+ *  Correcting the file and approving it is still a repair for either seat. */
+function modelMismatchRepair(team: TeamFile, name: string): string {
+  const command = isLeadSeat(team, name)
+    ? relaunchRepair(team, name, 'plain')
+    : `team remove ${name} --keep, then team add ${name}`;
+  return `restart the seat on the file's model (${command}), or correct the file and run team approve`;
+}
+
+/** A pane that holds only a shell, on a record that never stored the process team launched.
+ *  `up` will not relaunch it. The row matches a gone pane; the repair does not name `team up`. */
+function unidentifiedShell(
+  seat: Seat,
+  pane: string,
+  team: TeamFile,
+): { row: Row; difference: Difference } {
+  return {
+    row: { name: seat.name, state: 'missing', model: seat.display, pane },
+    difference: {
+      what: `${seat.name}: its pane runs no CLI and its process was never recorded`,
+      repair: unidentifiedRepair(team, seat.name),
+      needs: 'approve',
+      owner: true,
+    },
+  };
 }

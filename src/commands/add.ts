@@ -18,10 +18,11 @@ import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
+import { workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
-import { lobbyDir, recheckLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
+import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
 import {
   agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, sessionRunning,
   sessionState, startServer, typeText, workspaceClose, workspaceCreate, workspaceList, workspacePanes,
@@ -335,8 +336,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const repair = (verdict === 'gone' || verdict === 'replaced') && held?.workspace && held.pane && held.launched
     ? { pane: held.pane, workspace: held.workspace, launched: held.launched, cli: built.seat.cli }
     : undefined;
-  if (!repair && agents.some((agent) => agent.name === built.name)) {
-    out.stderr(`team add: ${plainLine(built.name)} is already running\n`);
+  const runningNow = !repair ? agents.find((agent) => agent.name === built.name) : undefined;
+  if (runningNow) {
+    const unknown = screenUnknown(built.seat.cli, sources.launch.paneText(session, runningNow.pane));
+    out.stderr(alreadyRunningLine(built.name, caller.kind === 'owner', unknown));
     // exit: add.already-running
     return 1;
   }
@@ -366,7 +369,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.placed
     return 1;
   }
-  const lobby = lobbyDir(sources.home);
+  const lobby = resolveLobby(sources.home, prepared.team);
   let startProblem: string | null = null;
   let verifiedLobby: string | null = null;
   let lobbySeen: LobbySeen | null = null;
@@ -378,7 +381,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   if (!prepared.team.trust || prepared.team.trust.length === 0 || isLegacyTrust(prepared.team.trust)) {
     startProblem = `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(prepared.team, root, sources.home)}`;
   } else {
-    const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles });
+    const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby });
     if (!gate.ok) startProblem = gate.text;
     else if ('path' in gate) {
       verifiedLobby = gate.path;
@@ -564,7 +567,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
   try {
     if (isMigratedTrust(prepared.team.trust) && wouldLaunch) {
-      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles });
+      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby });
       if (!gate.ok) {
         out.stderr(`team add: ${plainText(gate.text)}\n`);
         // exit: add.lobby
@@ -612,7 +615,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const who = describeCaller(caller);
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
-      caller: who, now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
+      caller: who, owner: caller.kind === 'owner', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
       verifiedLobby, records,
       doctor: sources.doctor,
       // The lobby is read again directly before the workspace this run makes in it, with nothing
@@ -620,7 +623,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // it allowed still the file it read. The declared files travel with it, so the recheck
       // walks the same closed tree the gate did.
       confirmLobby() {
-        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles }) : null;
+        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby }) : null;
       },
     });
     const report = await executePlan(plan, session, host);
@@ -716,7 +719,7 @@ function seatPlan(
     cli: seat.cli,
     launch: seat.launch,
     cwd: start.cwd,
-    label: seat.label,
+    label: workspaceLabel(seat),
     model: seat.model,
     version: seat.version,
     // The team file's own repair for this seat — a lead seat is told only the whole-team
@@ -769,9 +772,29 @@ function where(problem: Problem): string {
   return problem.line ? `line ${problem.line}: ` : '';
 }
 
+/** A screen the profile does not recognise, including one that could not be read. */
+function screenUnknown(cli: string, text: string | null | undefined): boolean {
+  return readScreen(cli, text ?? undefined).kind === 'unknown';
+}
+
+/**
+ * The already-running refusal. A screen the profile recognises keeps the sentence a normal
+ * seat gets. A screen it does not recognise names the way out for this caller: the owner is
+ * told to run `team remove <seat> --abandon`; anyone else is told that the owner runs it.
+ */
+function alreadyRunningLine(name: string, owner: boolean, unknown: boolean): string {
+  const who = plainLine(name);
+  const base = `team add: ${who} is already running`;
+  if (!unknown) return `${base}\n`;
+  const way = owner
+    ? `team remove ${who} --abandon closes its workspace without typing`
+    : `the owner runs team remove ${who} --abandon, which closes its workspace without typing`;
+  return `${base} (${way})\n`;
+}
+
 function hostOf(input: {
   dir: string; session: string; team: TeamFile; root: string; home: string; ceilings: Ceilings; running: Running[];
-  seat: Seat; temporary?: SeatState['temporary']; caller: string; now(): Date; launch: Launch;
+  seat: Seat; temporary?: SeatState['temporary']; caller: string; owner: boolean; now(): Date; launch: Launch;
   readMachine?: (root: string) => Machine; samples: SwapSample[]; limits: TeamFile['machine']; io: Io;
   standing: Standing;
   verifiedLobby: string | null;
@@ -899,11 +922,13 @@ function hostOf(input: {
     progress: (name, state) => records.progress(name, state),
     final(name, record) {
       // `add` on a pane that is the seat's again: nothing was launched and nothing closed. The
-      // record says so, and this is the line the owner gets instead — the same one main prints.
-      // The record's detail lines go unspoken with it.
+      // record says so, and this is the already-running line instead. A screen the profile does
+      // not recognise names the way out for this caller. The record's detail lines go unspoken.
       if (record.kind === 'left out' && record.reason === "its pane is the seat's again; left as it is") {
         swallowed = true;
-        input.io.stderr(`team add: ${plainLine(input.seat.name)} is already running\n`);
+        const listed = launch.agents(session)?.find((agent) => agent.name === name);
+        const unknown = screenUnknown(seat.cli, listed ? launch.paneText(session, listed.pane) : undefined);
+        input.io.stderr(alreadyRunningLine(input.seat.name, input.owner, unknown));
         return;
       }
       swallowed = false;

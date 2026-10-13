@@ -111,6 +111,19 @@ const errors = (doc: unknown): Errors => check(schema, doc, 'profile', schema);
 const COMPOSER = { mode: 'box-to-rule', prompt: '^>', rule: '^-{8}$', placeholders: [{ equals: '' }] };
 
 describe("the profiles' schema", () => {
+  test('a provider error and a rate limit are stages, like a question', () => {
+    const doc = {
+      format: 1,
+      cli: 'sample',
+      screen: {
+        provider_error: [{ any: ['API Error: Connection lost mid-response\\. The response above may be incomplete\\.'] }],
+        rate_limit: [{ any: ['API Error: Request rejected \\(429\\)', 'Usage limit reached', 'Your limit will reset at '] }],
+        composer: COMPOSER,
+      },
+    };
+    expect(errors(doc)).toEqual([]);
+  });
+
   test('the five shipped profiles pass it', () => {
     for (const name of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok']) {
       expect([name, errors(profile(name))]).toEqual([name, []]);

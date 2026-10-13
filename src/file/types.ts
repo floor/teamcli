@@ -57,8 +57,17 @@ export type Seat = {
   display: string;
   launch: string;
   cwd: string;
-  /** Herdr workspace title. Omitted in the file, it is `<model> <version>` in lowercase. */
+  /**
+   * The file's label: written, or `<model> <version>` in lowercase. Hashed with the seat.
+   * It does not title the herdr workspace; `workspaceLabel` does, from `display` and `effort`.
+   */
   label: string;
+  /**
+   * The seat's effort word, when the file sets one. Absent otherwise, so a file that omits it
+   * keeps the digest it had. A lab with a vocabulary warns when the word is outside it; the
+   * warning does not fail the file, and launch does not read the field.
+   */
+  effort?: string;
   mode: Mode;
   parked: boolean;
   stopped: boolean;
@@ -74,6 +83,12 @@ export type Seat = {
 export type TeamFile = {
   format: 1;
   project: string;
+  /** The entity the team belongs to, or null. Sets the team's lobby to
+   *  `~/.config/team/lobbies/<slug>` unless `lobby` names one outright. */
+  entity: string | null;
+  /** The folder the team's seats start and wait in, as written (a `~` prefix is the home), or
+   *  null. Overrides `entity`. Null with a null `entity` means the machine-global lobby. */
+  lobby: string | null;
   visibility: 'public' | 'private';
   session: string;
   /** The lead's seat, however the file spelled it: the `coordinator:` key or `leads: true`. */

@@ -84,3 +84,18 @@ export function relaunchRepair(
     ? 'team down, then team up (to restart the whole team)'
     : `team remove ${name} --keep, then team add ${name} (or team down, then team up, for the whole team)`;
 }
+
+/**
+ * The repair for a seat recorded with no process identity whose pane is a bare shell or
+ * another model. `up` will not close that pane: the record cannot prove it is the seat's.
+ * `remove --keep` refuses a screen the profile does not recognise. A lead is never removed;
+ * the whole team is abandoned and started again.
+ */
+export function unidentifiedRepair(
+  team: { orchestrator: string; operator: string },
+  name: string,
+): string {
+  return isLeadSeat(team, name)
+    ? 'team down --abandon, then team up'
+    : `team remove ${name} --abandon, then team up`;
+}

@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { CLIS } from '../../clis.ts';
+import { shippedEfforts } from '../../profiles/efforts.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
@@ -48,7 +49,8 @@ export const seats: Section = {
         display: { type: 'string', $comment: 'defaults to "model version"; must contain the version as a token of its own' },
         launch: { type: 'string', minLength: 1 },
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
-        label: { type: 'string' },
+        label: { type: 'string', $comment: 'accepted, and not the herdr title; the title is the display, and the effort when set' },
+        effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it' },
         mode: { enum: MODES },
         parked: { type: 'boolean' },
         stopped: { type: 'boolean' },
@@ -69,7 +71,7 @@ export const seats: Section = {
         },
       },
       required: ['role', 'name', 'cli', 'vendor', 'model', 'version', 'launch'],
-      $comment: 'account must name a key of budgets.accounts; label defaults to the model and version; a seat with count is neither lead',
+      $comment: 'account must name a key of budgets.accounts; the herdr title is the display and the effort; a written label is kept and does not title the workspace; a seat with count is neither lead',
     },
   },
 };
@@ -92,7 +94,7 @@ function readSeats(
   const seats: DraftSeat[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
-      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'mode',
+      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
       'parked', 'stopped', 'count', 'leads', 'reach',
     ]);
     if (item.kind !== 'map') continue;
@@ -138,11 +140,13 @@ function readSeats(
     if (leads && name && leadsField) marks.push({ name, line: leadsField.value.line });
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     const label = check.text(fields.get('label'), `${at}: label`);
+    const effort = readEffort(fields.get('effort'), at, vendor, check);
+    // The written label, or the lowercase model and version, stays on the seat: `seatDigest`
+    // hashes `label`, and an approved file keeps its key. It does not title the workspace.
+    // `up` and `add` use `workspaceLabel` (the display, and the effort when set).
     // The owner-only reach grant. In the seat's digest like every other field: a grant reaches
     // the bridge and the shuttle daemon only through an owner's approval of the file.
     const reach = readReach(fields.get('reach'), at, check);
-    // Left out, the herdr title is the model and version. A written label wins, so a file that
-    // already names one keeps the title, and the fingerprint, it had.
     if (!role || !name || !cli || !vendor || !model || !version || !launch || !display) {
       if (name) broken.add(name);
       continue;
@@ -157,6 +161,8 @@ function readSeats(
         count,
         instance,
         ...(account ? { account } : {}),
+        // Omitted when the file has no effort, so `seatDigest` hashes the same fields as before.
+        ...(effort ? { effort } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
         ...(reach ? { reach } : {}),
@@ -170,6 +176,45 @@ function readSeats(
 
 export function defaultLabel(model: string, version: string): string {
   return `${model} ${version}`.toLowerCase();
+}
+
+/**
+ * The herdr workspace title `up` and `add` give a seat: its display, and ` · ` plus
+ * its effort when the file sets one. No seat name and no role. Count instances share
+ * it. `execute.ts` keys a place on the seat's name ("the display label may be shared"),
+ * and a herdr 0.7.1 sidebar drew the workspace label on line 1 and `idle · <agent name>`
+ * on line 2, so the name is not lost when the title is shared.
+ */
+export function workspaceLabel(seat: { display: string; effort?: string }): string {
+  return seat.effort ? `${seat.display} · ${seat.effort}` : seat.display;
+}
+
+function readEffort(
+  entry: YamlEntry | undefined, at: string, vendor: string | undefined, check: Check,
+): string | undefined {
+  const effort = check.text(entry, `${at}: effort`);
+  if (effort === undefined || !entry || !vendor) return effort;
+  // Launch does not read `effort`. The word stays on the seat either way, so a later label can
+  // see what the file wrote, and the approval key changes when the field is added.
+  // The vocabulary is read only once a seat sets the field, so a file that omits it opens
+  // nothing new and cannot fail because the list is missing.
+  const efforts = shippedEfforts();
+  if (!efforts.ok) {
+    check.warnings.push({ line: entry.value.line, message: efforts.message });
+    return effort;
+  }
+  const allowed = efforts.labs[vendor];
+  // A lab with no entry accepts any word: the vocabulary leaves that lab out rather than invent
+  // one. A lab with a list warns and names its words. The warning does not fail check, approve
+  // or up. No file that loaded before can contain `effort` — an unknown field already fails —
+  // so the warning is not a regression for those files.
+  if (allowed && !allowed.includes(effort)) {
+    check.warnings.push({
+      line: entry.value.line,
+      message: `${at}: effort "${effort}" is not one of ${vendor}'s: ${allowed.join(', ')}`,
+    });
+  }
+  return effort;
 }
 
 function readVersion(entry: YamlEntry | undefined, at: string, line: number, check: Check): string | undefined {

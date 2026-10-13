@@ -493,6 +493,16 @@ describe('codex, cursor and antigravity through the screen core', () => {
     expect(classify('cursor', text.split('\n')).kind).toBe('working');
   });
 
+  test('an empty follow-up box with a background-task row is idle', () => {
+    for (const name of ['task-idle.txt', 'tasks-idle.txt']) {
+      const text = readFileSync(new URL(`./fixtures/cursor/2026.10.01/${name}`, import.meta.url), 'utf8');
+      expect(readScreen('cursor', text).kind, name).toBe('idle');
+      expect(classify('cursor', text.split('\n')).kind, name).toBe('idle');
+      const typed = text.replace('  → Add a follow-up', '  → hello');
+      expect(readScreen('cursor', typed).kind, `${name} typed`).toBe('unsent');
+    }
+  });
+
   test('a quoted ctrl+c to stop above an idle box is idle', () => {
     const idle = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
     const text = `  the transcript quoted ctrl+c to stop\n${idle}`;
@@ -535,6 +545,11 @@ describe('codex, cursor and antigravity through the screen core', () => {
         // each of these read unknown. The profile now reads the bordered frame beside the
         // blank one. Their own tests are in test/launch/cursor.test.ts.
         if (name.startsWith('bordered-')) continue;
+        // Captured 2026-10-12. Main's classifier treats the background-task row
+        // (`  1 task` / `  2 tasks`) between the empty placeholder and the status
+        // row as unsent text. The box holds only the placeholder. Its own test
+        // follows the loop.
+        if (name === 'task-idle.txt' || name === 'tasks-idle.txt') continue;
         // Captured 2026-10-04, and the four screens the antigravity profile's round-2 rules are
         // meant to read differently: main had no rule for the file-creation, file-edit, question
         // or unsent-comments dialogs and read each unknown. Their own test follows the loop.
