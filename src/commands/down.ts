@@ -5,6 +5,7 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
+import { launchedTeamFile } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -35,6 +36,7 @@ import { approvalStanding, type Standing } from '../store/store.ts';
 import { profileFor } from '../profiles/index.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState } from '../state.ts';
+import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
 
 // What `down` reads from outside the file, so tests can stand in for it.
@@ -185,7 +187,7 @@ export function stateOf(status: string, screen: Screen): DownSeat['state'] {
   // A framed exit question already on screen was left by an earlier stop. This run did not ask
   // it, so it is blocked: no key is sent, and `--abandon` closes it only as it closes every
   // other seat that cannot be asked.
-  if (screen.kind === 'permission' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice') return 'blocked';
+  if (screen.kind === 'permission' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit') return 'blocked';
   // A screen showing a running turn is working even when herdr's status has not caught up:
   // `--wait` waits for it, and it is never typed into.
   if (screen.kind === 'working') return 'working';
@@ -335,7 +337,7 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     // screen the reader cannot name) proves nothing about where the typed text went, and keeps
     // that report.
     const dialog =
-      kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'exit question';
+      kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'exit question' || kind === 'provider error' || kind === 'rate limit';
     if (!dialog) return false;
     return { left: `its exit was not confirmed; the screen was reading ${kind} before the Enter; left running` };
   }
@@ -462,7 +464,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
   // Both flags are dropped once the branch has decided the run: the gate has refused them, and a
   // delegated run judges the file's own session, as any delegated `down` does.
-  const file = branching() ? undefined : args.values.file;
+  const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
+  const file = branching() ? undefined : (args.values.file ?? launched);
   const sessionFlag = branching() ? undefined : args.values.session;
 
   // The run's file. The load is today's: `currentTeam` falls back to the last copy that
@@ -836,10 +839,13 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       record() {},
       running() {},
       drop(name) {
+        let pane: string | undefined;
         updateState(dir, (file) => {
           const seatsOf = (file.sessions[session] ??= emptySession()).seats;
+          pane = seatsOf[name]?.pane;
           delete seatsOf[name];
         });
+        if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane);
       },
       say: (line) => io.stdout(line),
       log: (who, what) => logLine(dir, 'down', describeCaller(caller), `${who}: ${what}`, now()),

@@ -9,6 +9,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAdd } from '../../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
+import { runAskShow } from '../../src/commands/ask-show.ts';
 import { runApprove, type Waiting } from '../../src/commands/approve.ts';
 import { runBroker } from '../../src/commands/broker.ts';
 import { check, loadConfig } from '../../src/commands/check.ts';
@@ -21,6 +22,7 @@ import { runMcp } from '../../src/commands/mcp.ts';
 import { runRemove } from '../../src/commands/remove.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
+import { runList } from '../../src/commands/list.ts';
 import { runStatus } from '../../src/commands/status.ts';
 import { runUp } from '../../src/commands/up.ts';
 import { runMessages } from '../../src/commands/messages.ts';
@@ -28,6 +30,8 @@ import { runIssues } from '../../src/commands/issues.ts';
 import { runNext } from '../../src/commands/next.ts';
 import { runPlan } from '../../src/commands/plan.ts';
 import { runUsage } from '../../src/commands/usage.ts';
+import { runLock } from '../../src/commands/lock.ts';
+import { runUnlock } from '../../src/commands/unlock.ts';
 import { runWatch } from '../../src/commands/watch.ts';
 import { runWorktree } from '../../src/commands/worktree.ts';
 import type { Caller } from '../../src/caller.ts';
@@ -176,6 +180,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runAdd(rest, io, world.addSources());
     case 'answer':
       return runAnswer(rest, io, answerHost(fixture.home));
+    case 'ask-show':
+      return runAskShow(rest, io, new Date(spec.now));
     // The broker page's one runnable line is the file-source refusal, which precedes the
     // credential read — no keychain, no socket, no peer on the page's fixture. The command's own
     // refusals that need a broker source are shown as text on the page instead: their sentences
@@ -221,11 +227,11 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'remove':
       return runRemove(rest, io, world.removeSources());
     case 'send': {
-      // The seat is the first the page's file names; the page's examples are deterministic.
+      // Every seat of the page's file is a live agent, so a native-CLI example resolves.
       // `reply="…"` on the fence is the fake seat's answer: with it, a `--wait` example has a
       // reply to print; without it, the seat stays silent and the wait times out.
-      const seat = page.team?.seats[0]?.name ?? 'claude-keeper';
-      return runSend(rest, io, sendHost(fixture, seat, spec.now, reply));
+      const seats = page.team?.seats.map((seat) => seat.name) ?? ['claude-keeper'];
+      return runSend(rest, io, sendHost(fixture, seats, spec.now, reply));
     }
     case 'pr':
       return pr(rest, io, (cwd, file) => loadConfig(cwd, file, fixture.home));
@@ -233,8 +239,20 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRelease(rest, io, world.releaseFetch(), world.releaseKeyReader());
     case 'status':
       return runStatus(rest, io, world.statusSources());
+    case 'list':
+      return runList(rest, io, world.listSources());
     case 'up':
       return runUp(rest, io, world.upSources());
+    case 'lock':
+      return runLock(rest, io, {
+        home: fixture.home,
+        now: () => new Date(spec.now),
+        // The page's clock is pinned. A sleep that left it there would spin, so a wait ends
+        // after one look — the same refusal, and the lock is not broken.
+        sleep: () => {},
+      });
+    case 'unlock':
+      return runUnlock(rest, io, { home: fixture.home });
     case 'usage':
       return runUsage(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'watch':
@@ -275,14 +293,20 @@ function answerHost(home: string): AnswerHost {
  *  is touched. */
 const SEND_PID = 4200;
 
-function sendHost(fixture: Fixture, seat: string, now: string, reply?: string): SendHost {
+function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string): SendHost {
   const sockets = join(fixture.home, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
   writeFileSync(join(sockets, `${String(SEND_PID)}.sock`), '');
   return {
-    agents: () => [{ name: seat, pane: 'w1:p1' }],
+    agents: () => seats.map((name, index) => ({ name, pane: `w1:p${String(index + 1)}` })),
     processInfo: () => ({ shell: SEND_PID, foreground: [] }),
     socketsDir: sockets,
+    native: {
+      typeText: () => true,
+      pressEnter: () => true,
+      status: () => 'working',
+      wait: async () => {},
+    },
     deliver: async () => {
       if (reply !== undefined) {
         await new Promise<void>((resolve) => {
@@ -290,7 +314,7 @@ function sendHost(fixture: Fixture, seat: string, now: string, reply?: string): 
           back.on('connect', () => {
             // The measured shape: the harness stamps its attribution wrapper around the body
             // (see src/send/reply.ts), so the page's example exercises the peel.
-            const wrapped = `<cross-session-message from="uds:/tmp/cc-socks/${String(SEND_PID)}.sock" from-name="${seat}" from-mode="bypass">\n${reply}\n</cross-session-message>`;
+            const wrapped = `<cross-session-message from="uds:/tmp/cc-socks/${String(SEND_PID)}.sock" from-name="${seats[0] ?? 'seat'}" from-mode="bypass">\n${reply}\n</cross-session-message>`;
             const frame = JSON.stringify({ type: 'user', message: { role: 'user', content: wrapped }, msg_id: 'reply-1' });
             back.end(`${frame}\n`, resolve);
           });

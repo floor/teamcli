@@ -349,3 +349,38 @@ describe('team approve and watch.checks', () => {
     expect(approvalDifferences(edited, root, home)).toEqual(['`watch.checks` changed']);
   });
 });
+
+describe('a seat stopped on a provider error or a rate limit', () => {
+  const lost = `API Error: Connection lost mid-response. The response above may be incomplete.\n${idle}`;
+  const limit = `API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00\n${idle}`;
+  const team = () => teamFile();
+  const run = (memory: ReturnType<typeof newMemory>, now: number, screen: string) => texts(pass({
+    team: team(),
+    watch: team().watch,
+    state: emptySession(),
+    live: live({ 'deepseek-acme': { status: 'done', screen } }),
+    machine: fine,
+    now,
+    memory,
+    approval: [],
+  }));
+
+  test('is reported once to the operator and the owner, and is not called idle', () => {
+    const memory = newMemory();
+    const first = run(memory, 0, lost);
+    expect(first.filter((line) => line.includes('provider error'))).toEqual([
+      'deepseek-acme shows a provider error: connection lost, and no capture names a retry',
+      'deepseek-acme shows a provider error: connection lost, and no capture names a retry',
+    ]);
+    expect(first.some((line) => line.includes('has been idle'))).toBe(false);
+    // Long enough that an idle seat would have been reported. This one is a prompt.
+    expect(run(memory, 11 * 60_000, lost).some((line) => line.includes('has been idle') || line.includes('provider error'))).toBe(false);
+  });
+
+  test('a rate limit carries the reset time, and leaving the screen clears the report', () => {
+    const memory = newMemory();
+    expect(run(memory, 0, limit)).toContain('deepseek-acme is at a rate limit: usage limit, resets at 11:00');
+    expect(run(memory, 11 * 60_000, idle).some((line) => line.includes('rate limit'))).toBe(false);
+    expect(run(memory, 12 * 60_000, limit)).toContain('deepseek-acme is at a rate limit: usage limit, resets at 11:00');
+  });
+});

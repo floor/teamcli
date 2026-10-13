@@ -9,14 +9,15 @@
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
 import { approvalCase, watchInForceOf } from '../approve/approval.ts';
-import { callerOf, callerVerdict, fileOwnerRefusal, isOwner, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
+import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { approvalDrift, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
-import { delegateReadGate, type DelegateSources } from '../delegate.ts';
-import { currentTeam, type Current } from '../file/current.ts';
+import type { DelegateSources } from '../delegate.ts';
+import { currentTeam } from '../file/current.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
+import { mayReadTeam } from '../read-gate.ts';
 import { emptySession, readState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
 import type { Standing } from '../store/store.ts';
@@ -110,7 +111,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       return 2;
     }
   } else {
-    if (!current.ok || !admits(current, io, sources)) {
+    if (!current.ok || !mayReadTeam(current, io, sources)) {
       return notYours(io);
     }
     // The caller passes and is not the owner: the flags aim nothing, and one aimed meets the
@@ -171,29 +172,6 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // exit: check.findings
   // exit: check.ok
   return differences.length > 0 ? 1 : 0;
-}
-
-/**
- * Whether this caller may see the answer: a seat of the team the state records on the pane this
- * call stands on, or a pane the approved file names. Every other case is not a message but simply
- * does not pass, and `runTeamCheck` answers with the one sentence — an unapproved caller learns
- * no detail, not which step failed, not whose pane an entry is, not that a `delegates` section
- * exists at all.
- */
-function admits(current: Extract<Current, { ok: true }>, io: Io, sources: CheckSources): boolean {
-  const session = current.team.session;
-  const caller = callerOf(io, session);
-  if (caller.kind === 'seat' && callerVerdict(caller, caller.name, standingOf(current.dir, session, caller)).kind === 'ok') {
-    return true;
-  }
-  return delegateReadGate({
-    team: current.team,
-    root: current.root,
-    dir: current.dir,
-    io,
-    ...(sources.home !== undefined ? { home: sources.home } : {}),
-    ...(sources.gate !== undefined ? { sources: sources.gate } : {}),
-  });
 }
 
 // The one sentence a caller that does not pass gets, whatever failed underneath it: it names no

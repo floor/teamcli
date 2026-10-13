@@ -316,10 +316,24 @@
       "provenance": "constructed"
     },
     {
+      "file": "claude-code/provider-error.txt",
+      "cli": "claude-code",
+      "classify": "provider error",
+      "composer": "unknown",
+      "provenance": "constructed"
+    },
+    {
       "file": "claude-code/quoted-dialog.txt",
       "cli": "claude-code",
       "classify": "idle",
       "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "claude-code/rate-limit.txt",
+      "cli": "claude-code",
+      "classify": "rate limit",
+      "composer": "unknown",
       "provenance": "constructed"
     },
     {
@@ -891,6 +905,20 @@
     },
     {
       "file": "cursor/2026.10.01/startup.txt",
+      "cli": "cursor",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.01/task-idle.txt",
+      "cli": "cursor",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.01/tasks-idle.txt",
       "cli": "cursor",
       "classify": "idle",
       "composer": "idle",

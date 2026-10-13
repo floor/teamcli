@@ -11,6 +11,8 @@
   here was read from a live pane.
 - `scrolled-shortcuts.txt`: constructed. A box whose top rule has scrolled out of the window with only `  ? for shortcuts` under the closing rule. The shortcuts row alone without a model or permissions status row does not identify Claude's composer box and reads unknown.
 - `trust-unnumbered.txt`: constructed, not a capture. The folder-trust dialog with unnumbered choices (from Claude Code 2.1.289's description), framed as the existing trust fixture.
+- `provider-error.txt`: constructed, not a capture. The sentence a seat printed when the response stopped (`API Error: Connection lost mid-response. The response above may be incomplete.`) above an empty idle box. No capture shows a retry key.
+- `rate-limit.txt`: constructed, not a capture. The quoted fragments of a 429 (`API Error: Request rejected (429)`, `Usage limit reached`, `Your limit will reset at`) on one line above an empty idle box. The middle the report omitted is not invented; the reset time is `11:00`.
 - `shell-git-log.txt`: constructed, not a capture. A shell prompt, a closing rule, then a git log line containing `·`.
 - `shell-right-prompt.txt`: constructed, not a capture. A shell prompt, a closing rule, then a zsh right-prompt segment containing `·`.
 - `shell-shortcuts.txt`: constructed, not a capture. A shell prompt, a closing rule, then the exact line `? for shortcuts` alone.

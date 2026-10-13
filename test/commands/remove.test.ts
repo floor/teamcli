@@ -656,6 +656,18 @@ describe('team remove', () => {
     expect(readFileSync(file, 'utf8')).toContain('name: worker');
   });
 
+  test("the owner's --keep on an unknown screen is refused and names abandon", async () => {
+    const made = world({ kind: 'unknown' }, 'idle');
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
+    const before = readFileSync(file, 'utf8');
+    const io = testIo(dir, owner);
+    expect(await runRemove(['worker', '--keep', '--file', file], io, made.sources)).toBe(1);
+    expect(io.err).toBe('team remove: worker shows a screen the profile does not recognise; left as it is (team remove worker --abandon closes its workspace without typing)\n');
+    expect(made.typed).toEqual([]);
+    expect(made.closed).toEqual([]);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
   test('a working seat on an unknown screen is refused, not left', async () => {
     // The one thing a non-owner never takes out: herdr reports the seat mid-turn. The screen
     // shape does not enter it — the status alone refuses — and the way out the line names is the

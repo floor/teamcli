@@ -23,6 +23,10 @@ export type Screen =
                                      // and this screen; an operator's to act on otherwise
   | { kind: 'vendor notice' }        // the CLI's own notice, an update screen for one: carried
                                      // only by a captured, versioned record, and never answered
+  | { kind: 'provider error' }       // the CLI's provider failed mid-response and the prompt is
+                                     // back: a transient error, never typed into
+  | { kind: 'rate limit'; reset: string | null } // a usage limit, with the reset time the
+                                     // screen names, or null when it names none
   | { kind: 'unknown' };
 
 function load(name: string): ScreenData {
