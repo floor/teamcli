@@ -28,7 +28,7 @@ Node 22 or later runs the built command.
 
 ```sh
 npm install -g team       # or run it without installing: npx team
-team --version            # 0.3.5
+team --version            # 0.4.0
 ```
 
 ## The file is private to each clone
@@ -364,7 +364,7 @@ cd team
 bun install
 bun run build
 npm install -g .          # puts `team` on the PATH
-team --version            # 0.3.5
+team --version            # 0.4.0
 ```
 
 Bun builds and tests the sources:
@@ -422,6 +422,9 @@ pre-release when the version is one. If the GitHub release step fails — a miss
 section, say — use "Re-run failed jobs": a full re-run goes back through `npm publish`, which
 fails because that version is already on npm. A tag ruleset protecting `v*`, so that only the
 owner creates version tags, is recommended.
+
+The same workflow can be started by hand. That run is the Linux and macOS verify matrix through the
+pack. npm publish and the GitHub release run only on a push of a `v*` tag.
 
 Trusted publishing must be bound once, by the package owner, on npmjs.com: the package `team` →
 Publishing → trusted publishers → GitHub Actions, naming `floor/teamcli` and the workflow file
