@@ -107,6 +107,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `approve.overrides` | `approve` | 2 | the overrides file can't be parsed | `team approve` |
 | `approve.placed` | `approve` | 2 | a path would trust the project's parent | `team approve` |
 | `approve.revalidate` | `approve` | 2 | the file does not validate | `team approve` |
+| `ask-show.shown` | `ask-show` | 0 | the question is printed | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
+| `ask-show.expired` | `ask-show` | 1 | the marker matches and the ask is past expires_at plus 5 seconds | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
+| `ask-show.refused` | `ask-show` | 1 | the marker does not verify, or a file cannot be read | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
+| `ask-show.invocation` | `ask-show` | 2 | the invocation cannot be read | `team ask-show` |
 | `broker.stopped` | `broker` | 0 | the broker served until it was stopped | `team broker` |
 | `broker.bind` | `broker` | 1 | the socket could not be bound | `team broker` |
 | `broker.busy` | `broker` | 1 | a broker is already answering on this clone's socket | `team broker` |
@@ -293,7 +297,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.locked` | `remove` | 2 | the locked edit does not validate | `team remove worker` |
 | `remove.not-a-repo` | `remove` | 2 | not inside a git repository | `team remove worker` |
 | `send.answered` | `send` | 0 | the seat's reply came back within the window | `team send worker hello --wait` |
-| `send.delivered` | `send` | 0 | the seat's socket took the frame | `team send worker hello` |
+| `send.delivered` | `send` | 0 | the seat's channel took the message | `team send worker hello` |
+| `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
 | `send.timeout` | `send` | 1 | delivered, but the seat's reply did not arrive in the window | `team send worker hello --wait --timeout 10` |

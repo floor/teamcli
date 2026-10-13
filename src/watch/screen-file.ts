@@ -13,8 +13,8 @@ import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts'
 
 const require = createRequire(import.meta.url);
 
-const STAGES = ['unknown', 'trust', 'permission', 'exit_question', 'question', 'vendor_notice', 'working'] as const;
-const KINDS = ['idle', 'working', 'unsent', 'permission', 'trust', 'question', 'vendor notice', 'unknown'] as const;
+const STAGES = ['unknown', 'trust', 'permission', 'exit_question', 'question', 'vendor_notice', 'provider_error', 'rate_limit', 'working'] as const;
+const KINDS = ['idle', 'working', 'unsent', 'permission', 'trust', 'question', 'vendor notice', 'provider error', 'rate limit', 'unknown'] as const;
 // The lines a dialog draws for its choices, built from their parts: the mark on the choice
 // the cursor is on (claude-code ❯, codex ›, antigravity >) or the indent of the others, the
 // number, and the labels the profiles' rules and fixtures show, run-on forms included — the
@@ -486,11 +486,12 @@ function composerOf(node: YamlNode): Composer {
     return { mode: name, statusLine: statusLineField(entries, node.line), ...(below ? { statusBelow: statusBelowOf(below) } : {}), prompt: regexField(entries, 'prompt', node.line), placeholders: placeholdersOf(required(entries, 'placeholders', node.line).value), placeholderStyle, wrap, frameRows, ...(border ? { border: borderOf(border) } : {}) };
   }
   if (name === 'status-then-one') {
-    only(entries, ['mode', 'status_line', 'status_below', 'prompt', 'placeholders', 'placeholder_style', 'strip_suffix', 'fallback', 'wrap', 'frame_rows', 'border']);
+    only(entries, ['mode', 'status_line', 'status_below', 'prompt', 'placeholders', 'placeholder_style', 'strip_suffix', 'fallback', 'wrap', 'frame_rows', 'border', 'own_rows']);
     const suffix = optional(entries, 'strip_suffix');
     const fallback = required(entries, 'fallback', node.line);
     const below = optional(entries, 'status_below');
     const border = optional(entries, 'border');
+    const own = optional(entries, 'own_rows');
     return {
       mode: name,
       statusLine: statusLineField(entries, node.line),
@@ -503,6 +504,7 @@ function composerOf(node: YamlNode): Composer {
       wrap,
       frameRows,
       ...(border ? { border: borderOf(border) } : {}),
+      ...(own ? { ownRows: ownRowsOf(own.value) } : {}),
     };
   }
   if (name === 'two-rules-footer-below') {
@@ -613,6 +615,20 @@ function placeholdersOf(node: YamlNode): Placeholder[] {
       return { prefix: text };
     }
     fail(item.line, 'a placeholder needs "equals" or "prefix"');
+  });
+}
+
+function ownRowsOf(node: YamlNode): RegExp[] {
+  if (node.kind !== 'seq' || node.items.length === 0) fail(node.line, '"own_rows" must be a non-empty list');
+  return node.items.map((item) => {
+    const text = stringOf(item);
+    if (text === null) fail(item.line, '"own_rows" entries must be strings');
+    if (!anchored(text)) fail(item.line, 'an own_rows pattern must match the whole line: "^…$"');
+    const compiled = patternOf(text, false, item.line);
+    if (CHOICE_SAMPLES.some((sample) => compiled.test(sample))) {
+      fail(item.line, 'an own_rows pattern would match a numbered choice line');
+    }
+    return compiled;
   });
 }
 

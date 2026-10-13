@@ -1746,7 +1746,7 @@ describe('the border inserted around every other capture (Cursor)', () => {
       if (after !== before) differed.push(`${name}: ${before} -> ${after}`);
     }
     expect(differed).toEqual([]);
-    expect(NAMES.length).toBe(39);
+    expect(NAMES.length).toBe(41);
     expect(NAMES).toContain('idle');
     expect(NAMES).toContain('working');
     expect(NAMES).toContain('trust');
@@ -1764,7 +1764,7 @@ describe('the border inserted around every other capture (Cursor)', () => {
     // and the screen fails closed to `unknown`; where the reading comes from elsewhere —
     // the working rule, a dialog's own rule, a capture that draws no status row — the
     // wrong-width border is inert and the capture's own reading stands. The expectation
-    // per capture was established from a run over all 39 and is pinned by the tally.
+    // per capture was established from a run over all 41 and is pinned by the tally.
     const pinned = (name: string) => {
       const lines = fixture(name).replace(/\n+$/, '').split('\n');
       const input = lines.findLastIndex((line) => /^ {2}→/.test(line));
@@ -1783,12 +1783,12 @@ describe('the border inserted around every other capture (Cursor)', () => {
       }
     }
     expect(off).toEqual([]);
-    // The 6 idle and the 19 status-pinned typed captures fail closed both ways; exit-typed
+    // The 8 idle and the 19 status-pinned typed captures fail closed both ways; exit-typed
     // draws no status row, so its border is inert and `unsent` stands; the 7 working and
     // the 4 dialog captures read their own reading through a wrong-width border; the 2
     // `unknown` originals stay `unknown`.
     expect(tally).toEqual({
-      'idle -> unknown': 12,
+      'idle -> unknown': 16,
       'unsent -> unknown': 38,
       'unsent -> unsent': 2,
       'working -> working': 14,

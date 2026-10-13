@@ -423,6 +423,7 @@
           "propertyNames": {
             "enum": [
               "restored",
+              "provider-error",
               "unsent",
               "idle",
               "extra",
@@ -502,6 +503,11 @@
           "label": {
             "type": "string",
             "$comment": "accepted, and not the herdr title; the title is the display, and the effort when set"
+          },
+          "effort": {
+            "type": "string",
+            "minLength": 1,
+            "$comment": "optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it"
           },
           "mode": {
             "enum": [

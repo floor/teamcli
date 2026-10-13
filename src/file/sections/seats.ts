@@ -1,4 +1,5 @@
 import { CLIS } from '../../clis.ts';
+import { shippedEfforts } from '../../profiles/efforts.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
@@ -47,6 +48,7 @@ export const seats: Section = {
         launch: { type: 'string', minLength: 1 },
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
         label: { type: 'string', $comment: 'accepted, and not the herdr title; the title is the display, and the effort when set' },
+        effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it' },
         mode: { enum: MODES },
         parked: { type: 'boolean' },
         stopped: { type: 'boolean' },
@@ -77,7 +79,7 @@ function readSeats(
   const seats: DraftSeat[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
-      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'mode',
+      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
       'parked', 'stopped', 'count', 'leads',
     ]);
     if (item.kind !== 'map') continue;
@@ -123,6 +125,7 @@ function readSeats(
     if (leads && name && leadsField) marks.push({ name, line: leadsField.value.line });
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     const label = check.text(fields.get('label'), `${at}: label`);
+    const effort = readEffort(fields.get('effort'), at, vendor, check);
     // The written label, or the lowercase model and version, stays on the seat: `seatDigest`
     // hashes `label`, and an approved file keeps its key. It does not title the workspace.
     // `up` and `add` use `workspaceLabel` (the display, and the effort when set).
@@ -140,6 +143,8 @@ function readSeats(
         count,
         instance,
         ...(account ? { account } : {}),
+        // Omitted when the file has no effort, so `seatDigest` hashes the same fields as before.
+        ...(effort ? { effort } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
       });
@@ -162,6 +167,34 @@ export function defaultLabel(model: string, version: string): string {
  */
 export function workspaceLabel(seat: { display: string; effort?: string }): string {
   return seat.effort ? `${seat.display} · ${seat.effort}` : seat.display;
+}
+
+function readEffort(
+  entry: YamlEntry | undefined, at: string, vendor: string | undefined, check: Check,
+): string | undefined {
+  const effort = check.text(entry, `${at}: effort`);
+  if (effort === undefined || !entry || !vendor) return effort;
+  // Launch does not read `effort`. The word stays on the seat either way, so a later label can
+  // see what the file wrote, and the approval key changes when the field is added.
+  // The vocabulary is read only once a seat sets the field, so a file that omits it opens
+  // nothing new and cannot fail because the list is missing.
+  const efforts = shippedEfforts();
+  if (!efforts.ok) {
+    check.warnings.push({ line: entry.value.line, message: efforts.message });
+    return effort;
+  }
+  const allowed = efforts.labs[vendor];
+  // A lab with no entry accepts any word: the vocabulary leaves that lab out rather than invent
+  // one. A lab with a list warns and names its words. The warning does not fail check, approve
+  // or up. No file that loaded before can contain `effort` — an unknown field already fails —
+  // so the warning is not a regression for those files.
+  if (allowed && !allowed.includes(effort)) {
+    check.warnings.push({
+      line: entry.value.line,
+      message: `${at}: effort "${effort}" is not one of ${vendor}'s: ${allowed.join(', ')}`,
+    });
+  }
+  return effort;
 }
 
 function readVersion(entry: YamlEntry | undefined, at: string, line: number, check: Check): string | undefined {

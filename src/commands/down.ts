@@ -185,7 +185,7 @@ export function stateOf(status: string, screen: Screen): DownSeat['state'] {
   // A framed exit question already on screen was left by an earlier stop. This run did not ask
   // it, so it is blocked: no key is sent, and `--abandon` closes it only as it closes every
   // other seat that cannot be asked.
-  if (screen.kind === 'permission' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice') return 'blocked';
+  if (screen.kind === 'permission' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit') return 'blocked';
   // A screen showing a running turn is working even when herdr's status has not caught up:
   // `--wait` waits for it, and it is never typed into.
   if (screen.kind === 'working') return 'working';
@@ -335,7 +335,7 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     // screen the reader cannot name) proves nothing about where the typed text went, and keeps
     // that report.
     const dialog =
-      kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'exit question';
+      kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'exit question' || kind === 'provider error' || kind === 'rate limit';
     if (!dialog) return false;
     return { left: `its exit was not confirmed; the screen was reading ${kind} before the Enter; left running` };
   }
