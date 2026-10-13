@@ -38,6 +38,10 @@ function unnamed(pane: string, workspace: string): HerdrAgent {
   return { name: null, agent: null, pane, workspace, status: 'idle', cwd: null };
 }
 
+function titled(name: string, pane: string, workspace: string): HerdrAgent {
+  return { name, agent: 'codex', pane, workspace, status: 'idle', cwd: null };
+}
+
 function recorded(pane: string, workspace: string, launched?: LaunchedIdentity): SeatState {
   return {
     stage: 'launched',
@@ -153,5 +157,32 @@ describe('an unnamed pane this team recorded', () => {
     expect(run.seats['deepseek-acme']?.pane).toBe('proof-1');
     expect(run.out).toContain('deepseek-acme: pane proof-1 is not the process this team launched; left as it is\n');
     expect(run.out).toContain('session acme-web: not stopped, 1 agent left in it\n');
+  });
+
+  test('a pane titled with something other than the seat name is closed when the ids match', async () => {
+    writeSeats({
+      'deepseek-acme': recorded('seat-1', 'ws-1'),
+      'deepseek-acme-2': recorded('seat-2', 'ws-2'),
+    });
+    const run = await down([], [titled('Codex', 'seat-1', 'ws-1'), titled('Claude', 'seat-2', 'ws-2')]);
+    expect(run.code).toBe(0);
+    expect(run.closed).toEqual(['ws-1', 'ws-2']);
+    expect(run.seats).toEqual({});
+    expect(run.out).toContain('deepseek-acme: titled Codex, not its seat name; the state records its pane and workspace, so its workspace was closed\n');
+    expect(run.out).toContain('deepseek-acme-2: titled Claude, not its seat name; the state records its pane and workspace, so its workspace was closed\n');
+    expect(run.out).toContain('session acme-web: stopped and cleared\n');
+    expect(run.out).not.toContain('not an approved seat');
+    expect(run.out).not.toContain('not stopped');
+  });
+
+  test('a name the file does not know is left when no seat record accounts for it', async () => {
+    writeSeats({ 'deepseek-acme': recorded('seat-1', 'ws-1') });
+    const run = await down([], [unnamed('seat-1', 'ws-1'), titled('reviewer', 'review-1', 'review-ws')]);
+    expect(run.code).toBe(0);
+    expect(run.closed).toEqual(['ws-1']);
+    expect(run.seats).toEqual({});
+    expect(run.out).toContain('reviewer: its record is not an approved seat; left running (the owner cleans it: team remove reviewer --abandon)\n');
+    expect(run.out).toContain('session acme-web: not stopped, 1 agent left in it\n');
+    expect(run.out).not.toContain('titled reviewer');
   });
 });

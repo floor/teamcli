@@ -1,11 +1,13 @@
 # team down
 
 Stops the team: asks every running seat the approved copy names to exit, closes its workspace, and
-stops the herdr session. The stop list is that copy — a name it does not carry is left running. A
-pane with no name is closed when the state records that pane and that workspace for one seat, and,
-when that record also holds the process `up` launched, that process is still in the pane. Any other
-unnamed pane is left as it is and named. A seat is only asked when it is free, so a working, blocked
-or half-typed seat is left running and named. `--dry-run` prints the plan and runs nothing.
+stops the herdr session. A pane herdr names with something that copy does not carry is closed when
+the state records that pane and that workspace for one seat, and left running when no seat record
+accounts for it: the name is not what decides. A pane with no name is closed on that same record.
+When the record also holds the process `up` launched, the pane is closed only while that process
+is still in the pane. Any other such pane is left as it is and named. A seat is only asked when it
+is free, so a working, blocked or half-typed seat is left running and named. `--dry-run` prints the
+plan and runs nothing.
 
 ## Synopsis
 
