@@ -21,12 +21,20 @@ export type LaunchedIdentity = { shell: number; cli: number[] };
 //   there is no repair to make.
 export type SeatProcessVerdict = 'same' | 'gone' | 'replaced' | 'unknown';
 
+/** The pane's own shell is in front and no CLI is. Knowable without a recorded identity: the
+ *  same reading `gone` uses once an identity exists. An empty foreground, or no reading, is
+ *  not a shell — herdr could not say. */
+export function paneHoldsShell(pane: PaneProcesses | null | undefined): boolean {
+  if (!pane || pane.foreground.length === 0) return false;
+  return pane.foreground.includes(pane.shell);
+}
+
 export function seatProcessVerdict(recorded: LaunchedIdentity | undefined, pane: PaneProcesses | null | undefined): SeatProcessVerdict {
   if (!recorded || !pane || pane.foreground.length === 0) return 'unknown';
   if (recorded.shell === pane.shell && recorded.cli.some((pid) => pane.foreground.includes(pid))) return 'same';
   // No CLI in front: the pane is back at its own shell. This is the bare-shell restore whether
   // or not the shell pid is still the recorded one.
-  if (pane.foreground.includes(pane.shell)) return 'gone';
+  if (paneHoldsShell(pane)) return 'gone';
   return 'replaced';
 }
 
