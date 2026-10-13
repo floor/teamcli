@@ -77,8 +77,8 @@ test("each publishing job's condition is the pinned tag-push expression", () => 
     const guard = (job.if as string).trim();
     expect(guard).toBe(PINNED);
     expect(evaluate(guard, { eventName: 'workflow_dispatch', ref: 'refs/heads/main' })).toBe(false);
-    expect(evaluate(guard, { eventName: 'workflow_dispatch', ref: 'refs/tags/v0.3.5' })).toBe(false);
-    expect(evaluate(guard, { eventName: 'push', ref: 'refs/tags/v0.3.5' })).toBe(true);
+    expect(evaluate(guard, { eventName: 'workflow_dispatch', ref: 'refs/tags/v0.4.0' })).toBe(false);
+    expect(evaluate(guard, { eventName: 'push', ref: 'refs/tags/v0.4.0' })).toBe(true);
   }
 
   for (const [, job] of Object.entries(jobs)) {
