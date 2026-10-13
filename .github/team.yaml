@@ -116,6 +116,14 @@ seats:
     version: "5.5"
     launch: claude --model claude-opus-5-5
 
+  - role: operator
+    name: claude-operator-4-8
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "4.8"
+    launch: claude --model claude-opus-4-8
+
   # Current roles (2026-10-12 reorganisation):
   - role: orchestrator
     name: orchestrator
