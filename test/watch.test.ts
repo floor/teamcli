@@ -515,6 +515,50 @@ describe('a pass of the watch', () => {
     expect(missingTexts(memory, 8 * MIN, absent)).toEqual([]);
   });
 
+  test('a seat the state left at named is already gone: the earlier not-running mark must not hide it', () => {
+    const memory = newMemory();
+    const absent = without(live(), 'deepseek-acme-2');
+    const named = emptySession();
+    named.seats['deepseek-acme-2'] = { stage: 'named', pane: 'w4:p1' };
+    const texts = (at: number, scene: Live, state = emptySession()) => pass({
+      team: team(), watch: team().watch, state, live: scene, machine: fine, now: at, memory,
+    }).reports.filter((report) => report.key.startsWith('missing:')).map((report) => report.text);
+    // Before the up: not running, and that sentence is the once-mark.
+    expect(texts(0, absent)).toEqual(['deepseek-acme-2 is in the file and is not running']);
+    // Named, and gone before the next pass saw an agent. The earlier sentence must not hide it.
+    expect(texts(2 * MIN, absent, named)).toEqual([GONE]);
+    // The same disappearance stands reported.
+    expect(texts(4 * MIN, absent, named)).toEqual([]);
+    // Seen running, then gone again: a new disappearance, reported again.
+    expect(texts(6 * MIN, live(), named)).toEqual([]);
+    expect(texts(8 * MIN, absent, named)).toEqual([GONE]);
+  });
+
+  test('a named seat already gone on the first pass was running', () => {
+    const named = emptySession();
+    named.seats['deepseek-acme-2'] = { stage: 'named', pane: 'w4:p1' };
+    const absent = without(live(), 'deepseek-acme-2');
+    expect(pass({
+      team: team(), watch: team().watch, state: named, live: absent, machine: fine, now: 0, memory: newMemory(),
+    }).reports.filter((report) => report.key.startsWith('missing:')).map((report) => report.text)).toEqual([GONE]);
+    const ready = emptySession();
+    ready.seats['deepseek-acme-2'] = { stage: 'ready', pane: 'w4:p1' };
+    expect(pass({
+      team: team(), watch: team().watch, state: ready, live: absent, machine: fine, now: 0, memory: newMemory(),
+    }).reports.filter((report) => report.key.startsWith('missing:')).map((report) => report.text)).toEqual([GONE]);
+  });
+
+  test('a seat left at launched, with no agent, is still not running', () => {
+    const state = emptySession();
+    state.seats['deepseek-acme-2'] = { stage: 'launched', pane: 'w4:p1' };
+    const absent = without(live(), 'deepseek-acme-2');
+    expect(pass({
+      team: team(), watch: team().watch, state, live: absent, machine: fine, now: 0, memory: newMemory(),
+    }).reports.filter((report) => report.key.startsWith('missing:')).map((report) => report.text)).toEqual([
+      'deepseek-acme-2 is in the file and is not running',
+    ]);
+  });
+
   test('a seat never seen running: today\'s line, once', () => {
     const memory = newMemory();
     const absent = without(live(), 'deepseek-acme-2');

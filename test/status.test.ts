@@ -173,6 +173,63 @@ describe('team status', () => {
     expect(code).toBe(1);
   });
 
+  // The example's lead is both orchestrator and operator. `remove --keep` is refused for it;
+  // an ordinary seat still gets that sequence. Correcting the file remains a repair for both.
+  test('a lead model mismatch names team down, and an ordinary seat keeps remove --keep', async () => {
+    live = {
+      ...built(),
+      screens: { 'w1:p1': claudeScreen('Fable 5.1'), 'w2:p1': codexScreen('idle') },
+    };
+    const { code, out } = await status();
+    expect(code).toBe(1);
+    expect(out).toContain(
+      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
+        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file and run team approve\n',
+    );
+    expect(out).toContain(
+      'difference: codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol\n' +
+        '  repair: restart the seat on the file\'s model (team remove codex-acme --keep, then team add codex-acme), or correct the file and run team approve\n',
+    );
+    expect(out).not.toContain('team remove claude-coordinator-acme --keep');
+  });
+
+  // The example names one seat as both orchestrator and operator. These two runs split that:
+  // codex is unparked so it can lead, and only the mismatched seat holds one of the two roles.
+  function splitLeads(coordinator: string, operatorName: string) {
+    const text = example
+      .replace('coordinator: claude-coordinator-acme', `coordinator: ${coordinator}`)
+      .replace('operator: claude-coordinator-acme', `operator: ${operatorName}`)
+      .replace('    parked: true\n', '');
+    writeFileSync(file, text);
+    approveOnDisk();
+  }
+
+  test('an orchestrator who is not the operator is told team down for a model mismatch', async () => {
+    splitLeads('claude-coordinator-acme', 'codex-acme');
+    live = { ...built(), screens: { 'w1:p1': claudeScreen('Fable 5.1') } };
+    const { code, out } = await status();
+    expect(code).toBe(1);
+    expect(out).toContain(
+      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
+        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file and run team approve\n',
+    );
+    expect(out).not.toContain('team remove claude-coordinator-acme --keep');
+    expect(out).not.toContain('codex-acme runs');
+  });
+
+  test('an operator who is not the orchestrator is told team down for a model mismatch', async () => {
+    splitLeads('codex-acme', 'claude-coordinator-acme');
+    live = { ...built(), screens: { 'w1:p1': claudeScreen('Fable 5.1') } };
+    const { code, out } = await status();
+    expect(code).toBe(1);
+    expect(out).toContain(
+      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
+        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file and run team approve\n',
+    );
+    expect(out).not.toContain('team remove claude-coordinator-acme --keep');
+    expect(out).not.toContain('codex-acme runs');
+  });
+
   // Each profile's own status line, through the same comparison: the codex seat's captured
   // footer names another model, and an id the map doesn't know is unread, never a difference.
   test('a codex seat whose captured status line names another model', async () => {
@@ -862,14 +919,95 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(out).not.toContain('its pane runs no CLI');
   });
 
-  test('a seat with no record keeps today, even with the shell in front of its pane', async () => {
-    // An older version wrote this state; nothing was recorded, so nothing is compared.
+  test('a ready seat with no process identity whose pane is a shell names abandon, then up', async () => {
+    // 0.2.1 wrote the seat ready and named its pane, and never the process. The multiplexer
+    // restored that pane as a shell. `up` will not relaunch it, so the repair is not `team up`.
     recordCodex({ launched: undefined });
     live = { ...built(), processes: { 'w2:p1': { shell: 400, foreground: [400] } } };
     const { code, out } = await status();
-    expect(code).toBe(0);
-    expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
-    expect(out).not.toContain('its pane runs no CLI');
+    expect(code).toBe(1);
+    expect(out).toMatch(/codex-acme\s+missing\s+GPT-6 Sol\s+w2:p1/);
+    expect(out).toContain(
+      'difference: codex-acme: its pane runs no CLI and its process was never recorded\n' +
+        '  repair: team remove codex-acme --abandon, then team up\n',
+    );
+    expect(out).not.toContain('the owner runs team up');
+    expect(out).not.toMatch(/codex-acme\s+idle/);
+  });
+
+  test('a launch left on a shell with no process identity is not told that team up resumes it', async () => {
+    recordCodex({ launched: undefined, stage: 'launched' });
+    live = { ...built(), processes: { 'w2:p1': { shell: 400, foreground: [400] } } };
+    const { code, out } = await status();
+    expect(code).toBe(1);
+    expect(out).toContain('repair: team remove codex-acme --abandon, then team up');
+    expect(out).not.toContain('it resumes the launch');
+    expect(out).not.toContain('the owner runs team up');
+  });
+
+  test('a shell in the recorded pane, with no agent listed and no identity, is not a seat team up starts', async () => {
+    recordCodex({ launched: undefined });
+    live = {
+      ...built(),
+      agents: built().agents.filter((one) => one.name !== 'codex-acme'),
+      processes: { 'w2:p1': { shell: 400, foreground: [400] } },
+    };
+    const { code, out } = await status();
+    expect(code).toBe(1);
+    expect(out).toContain(
+      'difference: codex-acme: its pane runs no CLI and its process was never recorded\n' +
+        '  repair: team remove codex-acme --abandon, then team up\n',
+    );
+    expect(out).not.toContain('codex-acme is in the file and is not running');
+    expect(out).not.toContain('the owner runs team up');
+  });
+
+  test('a model mismatch on a seat with no process identity names abandon, not remove --keep', async () => {
+    recordCodex({ launched: undefined });
+    live = {
+      ...built(),
+      processes: { 'w2:p1': { shell: 400, foreground: [401] } },
+      screens: { ...built().screens, 'w2:p1': codexScreen('idle') },
+    };
+    const { code, out } = await status();
+    expect(code).toBe(1);
+    expect(out).toContain('codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol; its process was never recorded');
+    expect(out).toContain('repair: team remove codex-acme --abandon, then team up');
+    expect(out).not.toContain('team remove codex-acme --keep');
+    expect(out).not.toContain('the owner runs team up');
+  });
+
+  test('a lead whose record has no process identity and whose screen is another model names down --abandon', async () => {
+    updateState(join(dir, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.seats['claude-coordinator-acme'] = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
+    });
+    live = {
+      ...built(),
+      processes: { 'w1:p1': { shell: 10, foreground: [11] } },
+      screens: { 'w1:p1': claudeScreen('Fable 5.1') },
+    };
+    const { code, out } = await status();
+    expect(code).toBe(1);
+    expect(out).toContain(
+      'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5; its process was never recorded',
+    );
+    expect(out).toContain('repair: team down --abandon, then team up');
+    expect(out).not.toContain('team remove claude-coordinator-acme');
+    expect(out).not.toContain('the owner runs team up');
+  });
+
+  test('a model mismatch on the process team launched still names remove --keep', async () => {
+    recordCodex();
+    live = {
+      ...built(),
+      processes: { 'w2:p1': { shell: 400, foreground: [401] } },
+      screens: { ...built().screens, 'w2:p1': codexScreen('idle') },
+    };
+    const { out } = await status();
+    expect(out).toContain('codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol');
+    expect(out).toContain('team remove codex-acme --keep, then team add codex-acme');
+    expect(out).not.toContain('--abandon');
   });
 });
 

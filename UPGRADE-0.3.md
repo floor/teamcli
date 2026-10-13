@@ -23,6 +23,10 @@ That is one edit, one approval, one `up`, and the team is in force again. Read-o
   **Type them as two commands, the second only after the first has returned** (`team down && team up` is
   fine). `team down & team up`, with one ampersand, starts both at once: `up` runs while `down` is still
   stopping seats, and seats are left with the exit text unsent in their input box.
+  A seat 0.2.1 recorded has no process identity: if its pane came back as a bare shell, or as another
+  model, `up` does not relaunch it (it cannot prove the pane is that seat's), and `team remove <seat> --keep`
+  refuses a screen the profile does not recognise — run `team remove <seat> --abandon`, or `team down --abandon`,
+  then `team up`.
 - **A stopped team has no screen for `doctor` to read**, so a file that names a model family its CLI doesn't
   run is only met at the first launch: that seat is left at launch with a line naming the fix; a second edit
   and a second `team approve` follow. The seat left at launch still sits in its pane, unnamed: close that pane

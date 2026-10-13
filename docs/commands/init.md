@@ -1,80 +1,37 @@
 # team init
 
-Writes the team file: a skeleton for this project, or the copy of `.agents/team.yaml` you last
-approved on this machine. It also lists the team file and its runtime files in `.git/info/exclude`,
-so git never sees them and a fresh clone never carries them.
+Writes the team file: a skeleton for this project, or with `--restore` the copy of
+`.agents/team.yaml` you last approved on this machine. It also lists the team file and its runtime
+files in `.git/info/exclude`, so git never sees them and a fresh clone never carries them. The owner
+alone runs it, from a terminal outside herdr, and a file that already exists is never overwritten.
 
 ## Synopsis
 
     team init [--restore]
 
-## What it reads and writes
+## Flags
 
-Reads the git repository (`findRoot`, `HEAD`, the git common directory) and, with `--restore`, the
-user-level store (`~/.config/team/<project>-<hash>/approved.yaml`).
-
-Writes `.agents/team.yaml`, adds the missing lines to `<git common dir>/info/exclude`, and appends
-one line to `.agents/team.log`:
-
-    .agents/team.yaml
-    .agents/team.state.json
-    .agents/team.log*
-    .agents/team.lock
-    .agents/seat-locks
-    .agents/messages/
-    .agents/leases/
-    .agents/broker.sock
-
-The skeleton is validated before it is written. Its `trust:` block names the machine lobby and this checkout:
-
-    trust:
-      - ~/.config/team/lobby
-      - <the project root, as an absolute path>
-
-An entry names a folder of the team's own; it is never a folder that contains the project, the home, or `team`'s own folders.
-
-A file that already exists is never overwritten,
-and no history is ever rewritten. The skeleton begins with a `# yaml-language-server: $schema=…` line so editors validate it against the package schema in `schema/team.schema.json`.
-That line names the schema of the release that wrote the file — the tag `v` plus the version
-`team --version` prints — so it never follows a moving branch.
+| Flag | Value | Effect |
+| --- | --- | --- |
+| `--restore` | — | write the copy of the team file this machine last approved, instead of a skeleton |
+| `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
 
-The owner, from a terminal outside herdr. A seat, an agent-run CLI, or a command without a terminal
-is refused.
-
-## Flags
-
-| Flag | Meaning |
+| Caller | May |
 | --- | --- |
-| `--restore` | write the copy of the team file this machine last approved, instead of a skeleton |
-| `--help`, `-h` | the usage, and exit 0 |
+| the owner, from a terminal outside herdr | run it |
+| a seat, an agent-run CLI, or a command without a terminal | nothing: `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` |
 
-## Refusals
+## Output and exit codes
 
-| Message | Exit |
-| --- | --- |
-| `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` | 1 |
-| `team init: not inside a git repository` | 2 |
-| `team init: .agents/team.yaml is tracked by git, and a team file is private. Untrack it, keeping the file:` … | 1 |
-| `team init: .agents/team.yaml exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.` | 1 |
-| `team init: nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.` | 1 |
-| `team init: nothing was restored: the record for this folder was approved before records were signed: run `team approve` once.` — the record was written by an earlier `team`; the same shape, with the case, for a record that does not verify | 1 |
-| `team init: unknown option --<name>` (with the usage) | 2 |
+| Outcome | What is printed | Exit |
+| --- | --- | --- |
+| a skeleton was written, or the approved copy was restored | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run team approve.` | 0 |
+| refused: not the owner, the file is tracked or already there, or there is nothing to restore | `team init: <reason>` | 1 |
+| it can't run: not inside a git repository, or a bad option | `team init: <problem>`, with the usage for a bad option | 2 |
 
-The tracked-file message names the repair:
-
-    team init: .agents/team.yaml is tracked by git, and a team file is private. Untrack it, keeping the file:
-      git rm --cached .agents/team.yaml
-    then run team init again. History is not rewritten.
-
-## Exit codes
-
-- `0` — a skeleton was written, or the approved copy was restored.
-- `1` — refused: not the owner, the file is tracked or already there, or there is nothing to restore.
-- `2` — it can't run: not inside a git repository, or a bad option.
-
-## Examples
+## Example
 
 A seat can't run it:
 
@@ -84,48 +41,4 @@ team init: only the owner runs init, from a terminal outside herdr; this call is
 exit 1
 ```
 
-With nothing approved on this machine yet, `--restore` has nothing to bring back:
-
-```console
-$ team init --restore ; echo "exit $?"
-team init: nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.
-exit 1
-```
-
-A fresh clone gets a skeleton, with the head commit in a comment so `check` can read a history the
-team file knows nothing about yet:
-
-```console
-$ team init
-Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run team approve.
-
-The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
-so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or
-receives one and approves it themselves.
-```
-
-Running it again never touches the file:
-
-```console
-$ team init ; echo "exit $?"
-team init: .agents/team.yaml exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.
-exit 1
-```
-
-A team file that git tracks is refused, because the file is the clone's, not the repository's:
-
-```git
-add -f .agents/team.yaml
-```
-
-```commit
-Add the team file
-```
-
-```console
-$ team init ; echo "exit $?"
-team init: .agents/team.yaml is tracked by git, and a team file is private. Untrack it, keeping the file:
-  git rm --cached .agents/team.yaml
-then run team init again. History is not rewritten.
-exit 1
-```
+Rationale, behaviour, refusals and known limits: [docs/internal/init.md](../internal/init.md).

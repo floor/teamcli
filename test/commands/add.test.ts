@@ -887,6 +887,75 @@ describe('team add', () => {
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
     });
 
+    const UNKNOWN = 'nothing this profile reads\n';
+    const lead = { kind: 'seat' as const, name: 'lead', pane: 'w0:p1', session: 'acme' };
+
+    function recordLead(): void {
+      updateState(join(project, '.agents'), (state) => {
+        const session = state.sessions.acme ?? emptySession();
+        session.seats.lead = { stage: 'ready', pane: lead.pane };
+        state.sessions.acme = session;
+      });
+    }
+
+    test('an unrecognised screen names abandon to the owner', async () => {
+      const { made, closes, listed, before } = setupReadySeat();
+      made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
+      made.launch.paneText = () => UNKNOWN;
+      const io = testIo(project, owner);
+      const code = await runAdd(['worker'], io, sources(made, {
+        sessionState: () => 'running',
+        agents: () => [listed],
+        workspaces: () => [{ id: 'w9' }],
+      }));
+      expect(code).toBe(1);
+      expect(io.err).toBe('team add: worker is already running (team remove worker --abandon closes its workspace without typing)\n');
+      expect(closes).toEqual([]);
+      expect(made.creates).toEqual([]);
+      expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
+    });
+
+    test('an unrecognised screen tells anyone else that the owner runs abandon', async () => {
+      const { made, closes, listed } = setupReadySeat();
+      recordLead();
+      const before = readFileSync(join(project, '.agents/team.state.json'), 'utf8');
+      made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
+      made.launch.paneText = () => UNKNOWN;
+      const io = testIo(project, lead);
+      const code = await runAdd(['worker'], io, sources(made, {
+        sessionState: () => 'running',
+        agents: () => [listed],
+        workspaces: () => [{ id: 'w9' }],
+      }));
+      expect(code).toBe(1);
+      expect(io.err).toBe('team add: worker is already running (the owner runs team remove worker --abandon, which closes its workspace without typing)\n');
+      expect(closes).toEqual([]);
+      expect(made.creates).toEqual([]);
+      expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
+    });
+
+    test('an unrecognised screen still names abandon when the pane is the seat\'s again', async () => {
+      const { made, closes, listed, before } = setupReadySeat();
+      let reads = 0;
+      made.launch.processInfo = () => {
+        reads += 1;
+        return reads === 1 ? { shell: 400, foreground: [400] } : { shell: 400, foreground: [400, 401] };
+      };
+      made.launch.paneText = () => UNKNOWN;
+      const io = testIo(project, owner);
+      const code = await runAdd(['worker'], io, sources(made, {
+        sessionState: () => 'running',
+        agents: () => [listed],
+        workspaces: () => [{ id: 'w9' }],
+      }));
+      expect(code).toBe(1);
+      expect(io.err).toContain('team add: worker is already running (team remove worker --abandon closes its workspace without typing)\n');
+      expect(io.out).not.toContain("worker: its pane is the seat's again; left as it is\n");
+      expect(closes).toEqual([]);
+      expect(made.creates).toEqual([]);
+      expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
+    });
+
     test('restarts to same between plan and close', async () => {
       const { made, closes, listed, before } = setupReadySeat();
       let reads = 0;

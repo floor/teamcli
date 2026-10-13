@@ -28,6 +28,8 @@
 //
 // Accepted, and anything else is refused:
 // - a commands-table entry `name: () => import('./commands/<name>.ts')`, where `name` is an identifier
+//   or a string literal whose text is a hyphenated command (`'ask-show'`). A quoted word with no
+//   hyphen is still refused, so the table cannot hide an alias behind quotes.
 // - a command's default export that is a function declared in that file
 // - `return` of a marked numeric literal, a conditional of those, or a call the gate has walked
 // - `process.exit` and plain `process.exitCode =` of a marked numeric literal
@@ -326,9 +328,17 @@ function tableMemberName(prop: ts.ObjectLiteralElementLike): string {
   return 'entry';
 }
 
+/** An identifier, or a quoted command that needs a hyphen (`'ask-show'`). A quoted word with no hyphen is not a key. */
+function commandKey(name: ts.PropertyName): string | null {
+  if (ts.isIdentifier(name)) return name.text;
+  if (ts.isStringLiteral(name) && /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/.test(name.text)) return name.text;
+  return null;
+}
+
 /**
- * The exported `commands` object. Only `name: () => import('<literal>')` is an entry.
- * Every other member is a problem, named at its line.
+ * The exported `commands` object. Only `name: () => import('<literal>')` is an entry,
+ * and `name` is an identifier or a hyphenated string literal. Every other member is a
+ * problem, named at its line.
  */
 function commandTable(text: string): { entries: TableEntry[]; problems: string[] } {
   const source = sourceOf('src/cli.ts', text);
@@ -352,11 +362,14 @@ function commandTable(text: string): { entries: TableEntry[]; problems: string[]
       }
       for (const prop of obj.properties) {
         const line = lineOf(source, prop);
-        if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
-          const spec = plainImport(prop.initializer);
-          if (spec !== null) {
-            entries.push({ key: prop.name.text, spec, line });
-            continue;
+        if (ts.isPropertyAssignment(prop)) {
+          const key = commandKey(prop.name);
+          if (key !== null) {
+            const spec = plainImport(prop.initializer);
+            if (spec !== null) {
+              entries.push({ key, spec, line });
+              continue;
+            }
           }
         }
         problems.push(`src/cli.ts:${line}: ${tableMemberName(prop)}: ${TABLE_FORM}`);

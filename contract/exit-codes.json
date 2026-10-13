@@ -710,6 +710,34 @@
     },
     {
       "code": 0,
+      "command": "ask-show",
+      "id": "ask-show.shown",
+      "meaning": "the question is printed",
+      "trigger": "team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt"
+    },
+    {
+      "code": 1,
+      "command": "ask-show",
+      "id": "ask-show.expired",
+      "meaning": "the marker matches and the ask is past expires_at plus 5 seconds",
+      "trigger": "team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt"
+    },
+    {
+      "code": 1,
+      "command": "ask-show",
+      "id": "ask-show.refused",
+      "meaning": "the marker does not verify, or a file cannot be read",
+      "trigger": "team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt"
+    },
+    {
+      "code": 2,
+      "command": "ask-show",
+      "id": "ask-show.invocation",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team ask-show"
+    },
+    {
+      "code": 0,
       "command": "broker",
       "id": "broker.stopped",
       "meaning": "the broker served until it was stopped",
@@ -1358,6 +1386,34 @@
       "id": "issues.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team issues"
+    },
+    {
+      "code": 0,
+      "command": "list",
+      "id": "list.empty",
+      "meaning": "herdr answered and there is nothing to list",
+      "trigger": "team list"
+    },
+    {
+      "code": 0,
+      "command": "list",
+      "id": "list.herdr-down",
+      "meaning": "herdr cannot be asked, so the list is empty",
+      "trigger": "team list"
+    },
+    {
+      "code": 0,
+      "command": "list",
+      "id": "list.shown",
+      "meaning": "the sessions are printed",
+      "trigger": "team list"
+    },
+    {
+      "code": 2,
+      "command": "list",
+      "id": "list.invocation",
+      "meaning": "the arguments are not this command's",
+      "trigger": "team list --nope"
     },
     {
       "code": 0,
@@ -2049,8 +2105,15 @@
       "code": 0,
       "command": "send",
       "id": "send.delivered",
-      "meaning": "the seat's socket took the frame",
+      "meaning": "the seat's channel took the message",
       "trigger": "team send worker hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
+      "id": "send.dry-run",
+      "meaning": "the seat and channel were resolved and nothing was written",
+      "trigger": "team send worker hello --dry-run"
     },
     {
       "code": 0,

@@ -102,6 +102,30 @@ Usage:
 
 None.
 
+## `ask-show`
+
+Hidden: no
+
+Usage:
+
+    team ask-show <request_id> --ask <path> --marker <path> --key <path>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--ask` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `--marker` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `request_id` | no | no |
+
 ## `broker`
 
 Hidden: no
@@ -298,6 +322,27 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+## `list`
+
+Hidden: no
+
+Usage:
+
+    team list [--all] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -561,14 +606,15 @@ Hidden: no
 
 Usage:
 
-    team send <seat> <message> [--wait] [--timeout <s>] [--json]
-    team send <seat> --file <path> [--wait] [--timeout <s>] [--json]
+    team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send --list [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
