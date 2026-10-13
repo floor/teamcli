@@ -1130,7 +1130,7 @@ scene('doctor.missing', async (place) => {
 
 async function down(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
   const io = testIo(place.root, caller);
-  return runCompared(place, argv, (args) => runDown(args, io, sources), io);
+  return runCompared(place, argv, (args) => runDown(args, io, { ...sources, home: sources.home ?? place.home }), io);
 }
 
 scene('down.invocation', async (place) => show(await down(place, ['extra'], owner, downSources()), 'unexpected'));
@@ -1385,7 +1385,7 @@ PATH=${JSON.stringify(saved)} exec git "$@"
 
 async function removed(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
   const io = testIo(place.root, caller);
-  return { code: await runRemove(argv, io, sources), out: io.out, err: io.err };
+  return { code: await runRemove(argv, io, { ...sources, home: sources.home ?? place.home }), out: io.out, err: io.err };
 }
 
 scene('remove.invocation', async (place) => show(await removed(place, [], owner, downSources()), 'a seat name is required'));
