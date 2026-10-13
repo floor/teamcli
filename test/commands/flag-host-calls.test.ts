@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf, verifiedOf } from '../../src/approve/approval.ts';
+import { upFingerprint } from '../../src/approve/owner-token.ts';
 import type { CallerSources } from '../../src/caller.ts';
 import type { AnswerHost } from '../../src/commands/answer.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
@@ -20,7 +21,7 @@ import type { StatusSources } from '../../src/commands/status.ts';
 import type { UpSources } from '../../src/commands/up.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { emptySession, updateState } from '../../src/state.ts';
-import { storePath, writeApproval } from '../../src/store/store.ts';
+import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { testIo } from '../helpers.ts';
 
 // A reorder that reads the flagged file before refusing it changes no bytes and prints the same
@@ -320,6 +321,14 @@ describe('doctor: --session for a non-owner', () => {
 
 const OWNER_REFUSAL = 'team up: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr)\n';
 
+/** The fingerprint of this folder's approved record: the token a matching owner authorization carries. */
+function matchingOwnerToken(): string {
+  approveFile();
+  const standing = approvalStanding(root, home);
+  if (standing.kind !== 'verified') throw new Error('fixture approval did not verify');
+  return upFingerprint(standing.record.approval.fingerprints, standing.generation);
+}
+
 function recordingUp(calls: string[]): UpSources {
   return {
     sessionRunning: (session) => {
@@ -405,6 +414,46 @@ describe('up: --file and --session for a non-owner', () => {
     expect(calls).toEqual([]);
     expect(touched).toEqual([]);
     expect(readFileSync(flaggedFile, 'utf8')).toBe('format: [\n');
+  });
+
+  test('a non-owner with a matching owner token and a foreign --file is refused before any host call', async () => {
+    const token = matchingOwnerToken();
+    const flagged = join(base, 'flagged');
+    mkdirSync(join(flagged, '.agents'), { recursive: true });
+    const flaggedFile = join(flagged, '.agents/team.yaml');
+    writeFileSync(flaggedFile, 'format: [\n');
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    io.env = { TEAM_OWNER_APPROVAL: token };
+    watching = flagged;
+    touched.length = 0;
+    const code = await runUp(['--file', flaggedFile], io, recordingUp(calls));
+    watching = undefined;
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(touched).toEqual([]);
+    expect(readFileSync(flaggedFile, 'utf8')).toBe('format: [\n');
+  });
+
+  test('a non-owner with a matching owner token and --session is refused before any host call', async () => {
+    const token = matchingOwnerToken();
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions['acme-web'] = emptySession();
+    });
+    const beforeState = readFileSync(stateFile, 'utf8');
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    io.env = { TEAM_OWNER_APPROVAL: token };
+    const code = await runUp(['--session', 'elsewhere'], io, recordingUp(calls));
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(readFileSync(stateFile, 'utf8')).toBe(beforeState);
   });
 
   test('a non-owner whose default file yields a delegate verdict, with a foreign --file, is refused before that file or a host is touched', async () => {
