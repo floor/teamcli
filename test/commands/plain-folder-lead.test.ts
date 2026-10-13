@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
+import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
 import { runDown, type DownSources } from '../../src/commands/down.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
@@ -301,5 +302,54 @@ describe('a lead in the lobby of a plain folder', () => {
     expect(readFileSync(join(other, '.agents', 'team.state.json'), 'utf8')).toBe(before);
     expect(io.err).not.toContain('project: other');
     expect(io.out).not.toContain('other-web');
+  });
+
+  test('a non-owner aiming --session from a folder with no .agents is refused and the folder stays empty', async () => {
+    const { home } = fresh();
+    const empty = join(base, 'empty');
+    mkdirSync(empty);
+    const calls: string[] = [];
+    const io = testIo(empty);
+    io.callerSources = () => ({
+      ancestors: () => [{ pid: 210, name: 'zsh' }, { pid: 200, name: 'claude' }, { pid: 10, name: 'herdr' }],
+      agents: () => {
+        calls.push('agents(no session)');
+        return [];
+      },
+      paneRootPid: (pane) => {
+        calls.push(`paneRoot(${pane})`);
+        return null;
+      },
+      env: {},
+      stdinIsTTY: true,
+    });
+    const note = (name: string) => {
+      calls.push(name);
+    };
+    const host: AnswerHost = {
+      version: () => { note('version'); return null; },
+      agents: () => { note('host.agents'); return null; },
+      pane: () => { note('pane'); return undefined; },
+      sendKey: () => { note('sendKey'); return false; },
+      rename: () => { note('rename'); return false; },
+      foreground: () => { note('foreground'); return null; },
+      foregroundCwd: () => { note('foregroundCwd'); return null; },
+      list: () => { note('list'); return null; },
+      status: () => { note('status'); return null; },
+      type: () => { note('type'); return false; },
+      enter: () => { note('enter'); return false; },
+      now: () => { note('now'); return NOW; },
+      sleep: async () => { note('sleep'); },
+      home,
+      standing: () => { note('standing'); return { kind: 'none' }; },
+    };
+    const code = await runAnswer(['seat', 'trust', '--session', OTHER], io, host);
+    expect({ code, out: io.out, err: io.err }).toEqual({
+      code: 1,
+      out: '',
+      err: "team answer: --session is the owner's, from a terminal outside herdr; this call is unplaced (it runs under herdr)\n",
+    });
+    expect(calls).toEqual([]);
+    expect(existsSync(join(empty, '.agents'))).toBe(false);
   });
 });

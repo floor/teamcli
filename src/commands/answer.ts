@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { approvalDifferencesOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
@@ -105,10 +105,10 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   }
   // The owner is a terminal outside herdr, and the walk alone decides that: a non-owner aiming
   // `--session` is refused here, before `launchedTeamFile` or any other call that reaches herdr,
-  // and before the flag's session is read — no agent list, no pane root, no state write; the
-  // refusal's own log line is the only line written. (A seat cannot be named in this refusal:
-  // placing it would read a session, and that is what must not happen yet.) The log sits beside
-  // this cwd's own file, never a file the flag or a pane pointer would open.
+  // and before the flag's session is read — no agent list, no pane root, no state write. (A seat
+  // cannot be named in this refusal: placing it would read a session, and that is what must not
+  // happen yet.) When this folder has a team file, the refusal's log line sits beside it. When
+  // it does not, the sentence is the only output: no `.agents` folder and no log are created.
   if (args.values.session !== undefined) {
     const walked = walkCaller(io);
     if (!isOwner(walked)) {
@@ -116,7 +116,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       return refuse(
         io,
         json,
-        local.ok ? dirname(local.path) : join(io.cwd, '.agents'),
+        local.ok ? dirname(local.path) : undefined,
         logWho(walked, local.ok ? local.team : undefined),
         seatName,
         host,
@@ -429,13 +429,15 @@ function recovery(io: Io, json: boolean, seat: string, reason: string, human: st
 function refuse(
   io: Io,
   json: boolean,
-  dir: string,
+  dir: string | undefined,
   who: string,
   seat: string,
   host: AnswerHost,
   reason: Refusal,
 ): number {
-  logLine(dir, 'answer', who, `${seat}: refused trust: ${reason.class}`, host.now());
+  // No directory means this folder had no team file to log beside. Writing the line would create
+  // `.agents` and `team.log` wherever the command was run.
+  if (dir !== undefined) logLine(dir, 'answer', who, `${seat}: refused trust: ${reason.class}`, host.now());
   if (json) io.stdout(`${JSON.stringify({ seat, dialog: 'trust', status: 'refused', reason: reason.message })}\n`);
   else io.stderr(`${reason.message}\n`);
   // exit: answer.caller
