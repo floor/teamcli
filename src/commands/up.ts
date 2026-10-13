@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
-import { callerLabel, callerOf, describeCaller, mayLaunchSeats } from '../caller.ts';
+import { callerLabel, callerOf, describeCaller, mayLaunchSeats, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
@@ -454,12 +454,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // DEFAULT live file of this cwd, read with no flag — before any `--file` or `--session` is
   // honoured. Both are the owner's alone: the gate refuses them for a delegated run, and a
   // delegate's eligibility never comes from a file the caller names. A gate refusal replaces the
-  // ordinary caller refusal below and the flagged target is never read; a passed verdict makes
+  // ordinary caller refusal, and the flagged target is never read; a passed verdict makes
   // the run the delegate's, on that same default file. The owner's runs never come here, and
-  // with no `delegates` section — or no readable default file — nothing changes: today's order,
-  // today's texts.
-  const caller = callerOf(io);
-  const defaultLoad = mayLaunchSeats(caller) ? null : loadTeamFile(io.cwd, { home: sources.home });
+  // with no `delegates` section the ordinary refusal returns before a flagged file or a session
+  // is read. A missing default file, with no flag, keeps the file error below.
+  const walked = walkCaller(io);
+  const defaultLoad = mayLaunchSeats(walked) ? null : loadTeamFile(io.cwd, { home: sources.home });
   const delegateTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
   const verdict = delegateTeam
     ? (sources.delegateGate ?? delegateGate)({
@@ -476,6 +476,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // refused, the default file's `delegates` section named a pane, and the gate passed it.
   let delegated: string | null = null;
   if (verdict?.kind === 'passed') delegated = verdict.pane;
+  // Not the owner, and not a delegated run: one refusal, before a flagged file is read and
+  // before a session is asked. The walk reads no session.
+  if (!mayLaunchSeats(walked) && verdict === null && (args.values.file !== undefined || (defaultLoad !== null && defaultLoad.ok))) {
+    out.stderr(
+      `team up: only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(walked)}\n`,
+    );
+    // exit: up.not-owner
+    return 1;
+  }
+  const caller = callerOf(io);
   // The file this run is whole on: the default one whenever the gate decided on it — a refused
   // run stops on the gate's words without reading a flagged target, a delegated one runs the
   // file its delegation was read from — and otherwise today's load, `--file` honoured exactly
@@ -511,15 +521,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
-  if (!mayLaunchSeats(caller)) {
-    if (verdict === null) {
-      refusals.push(
-        `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
-      );
-    } else if (verdict.kind === 'refused') {
-      refusals.push(verdict.text);
-    }
-  }
+  if (!mayLaunchSeats(caller) && verdict?.kind === 'refused') refusals.push(verdict.text);
   // One verified snapshot carries the whole command: the refusal when there is
   // one, and the ceilings the launch holds. A legacy or refused record is not
   // an approval in force, and says so in its own words.
@@ -801,7 +803,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   }
   if (refusals.length) {
     if (!dry) for (const refusal of [...new Set(refusals)]) out.stderr(`team up: ${plainText(refusal)}\n`);
-    // exit: up.not-owner
     // exit: up.delegate
     // exit: up.delegate-approval
     // exit: up.delegate-approved-copy

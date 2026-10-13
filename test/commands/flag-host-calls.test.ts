@@ -18,6 +18,7 @@ import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { runStatus, type StatusSources } from '../../src/commands/status.ts';
+import { runUp, type UpSources } from '../../src/commands/up.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import { testIo } from '../helpers.ts';
@@ -270,6 +271,71 @@ describe('doctor: --session for a non-owner', () => {
     expect(io.out).toContain('session team-test is not running');
     // Doctor writes nothing beside the file it read.
     expect(existsSync(stateFile)).toBe(false);
+  });
+});
+
+const OWNER_REFUSAL = 'team up: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr)\n';
+
+function recordingUp(calls: string[]): UpSources {
+  return {
+    sessionRunning: (session) => {
+      calls.push(`sessionRunning(${session})`);
+      return true;
+    },
+    sessionState: (session) => {
+      calls.push(`sessionState(${session})`);
+      return 'running';
+    },
+    agents: (session) => {
+      calls.push(`agents(${session})`);
+      return [];
+    },
+    workspaces: () => {
+      calls.push('workspaces');
+      return [];
+    },
+    home,
+    now: () => NOW,
+    sleep: async () => {},
+    alive: () => false,
+  };
+}
+
+describe('up: --file and --session for a non-owner', () => {
+  test('a non-owner aiming --file is refused before any host call', async () => {
+    const flagged = join(base, 'flagged');
+    mkdirSync(join(flagged, '.agents'), { recursive: true });
+    const flaggedFile = join(flagged, '.agents/team.yaml');
+    writeFileSync(flaggedFile, 'format: [\n');
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    const code = await runUp(['--file', flaggedFile], io, recordingUp(calls));
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(readFileSync(flaggedFile, 'utf8')).toBe('format: [\n');
+    expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
+    expect(existsSync(join(flagged, '.agents', 'team.log'))).toBe(false);
+    expect(existsSync(join(flagged, '.agents', 'team.state.json'))).toBe(false);
+  });
+
+  test('a non-owner aiming --session is refused before any host call', async () => {
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions['acme-web'] = emptySession();
+    });
+    const beforeState = readFileSync(stateFile, 'utf8');
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    const code = await runUp(['--session', 'elsewhere'], io, recordingUp(calls));
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(readFileSync(stateFile, 'utf8')).toBe(beforeState);
+    expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
   });
 });
 
