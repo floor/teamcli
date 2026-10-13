@@ -4151,8 +4151,8 @@ describe('team up, delegated', () => {
   // The review's reproduction: an unplaced caller, a valid default file with a `delegates`
   // section, `team up --file <missing>`. Eligibility is read from the DEFAULT file — the gate
   // sees its team and the flag — and the flagged target is never read: the gate's refusal
-  // answers, not today's exit 2. The same on a dry run: the would-refuse line and the plan of
-  // the DEFAULT file, exit 0.
+  // answers, not today's exit 2. A dry run returns that same refusal before a plan, so the
+  // host is not asked and the flagged file stays unread.
   test('an unplaced caller with a delegates file and a missing --file gets the gate\'s refusal, not exit 2', async () => {
     delegateFile();
     await approve();
@@ -4183,7 +4183,7 @@ describe('team up, delegated', () => {
     expect(made.starts).toBe(0);
   });
 
-  test('the same caller on a dry run: the would-refuse line, the default file\'s plan, exit 1', async () => {
+  test('the same caller on a dry run: the gate\'s refusal, before a plan', async () => {
     delegateFile();
     await approve();
     const made = world();
@@ -4196,8 +4196,8 @@ describe('team up, delegated', () => {
       }),
     }, made));
     expect(code).toBe(1);
-    expect(io.out).toContain("! up would refuse: --file is the owner's; the approved delegate cannot use it\n");
-    expect(io.out).toContain('dry run: nothing was run\n');
+    expect(io.err).toBe("team up: --file is the owner's; the approved delegate cannot use it\n");
+    expect(io.out).toBe('');
     expect(io.out + io.err).not.toContain('no team file');
     expect(made.starts).toBe(0);
   });

@@ -459,7 +459,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // the run the delegate's, on that same default file. The owner's runs never come here, and
   // with no `delegates` section, a non-owner's `--session`, or a `--file` other than this
   // folder's own team file, is the ordinary refusal and returns before that file or session is
-  // read. This folder's own file, with no `--session`, continues below.
+  // read. A delegate verdict that already refused the same aim returns here too, in the gate's
+  // own words. This folder's own file, with no `--session`, continues below. The path comparison
+  // is the resolved spelling: a link, or a differently-cased spelling of this folder's own team
+  // file, is not that file, and is refused here before it is opened.
   const walked = walkCaller(io);
   const defaultLoad = mayLaunchSeats(walked) ? null : loadTeamFile(io.cwd, { home: sources.home });
   const delegateTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
@@ -478,15 +481,25 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // refused, the default file's `delegates` section named a pane, and the gate passed it.
   let delegated: string | null = null;
   if (verdict?.kind === 'passed') delegated = verdict.pane;
-  // A non-owner passing `--session`, or a `--file` other than this folder's own team file, and
-  // not a delegated run, is refused here, before that file is read and before a session is asked.
-  // The walk reads no session. This folder's own file, with no `--session`, continues below.
+  // A non-owner passing `--session`, or a `--file` other than this folder's own team file, is
+  // refused here, before that file is read, before a session is asked, and before an out-of-band
+  // owner token is matched. The walk reads no session. The token is a yes for the launch this
+  // folder's own file would make, so it is matched only on the path below, which never opens a
+  // flagged file and never asks a named session. A delegate verdict that already refused this aim
+  // returns in the gate's words, before the caller is placed. This folder's own file, with no
+  // `--session`, continues below.
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
-  if (!mayLaunchSeats(walked) && verdict === null && (otherFile || args.values.session !== undefined)) {
+  const aimed = otherFile || args.values.session !== undefined;
+  if (!mayLaunchSeats(walked) && aimed && verdict === null) {
     out.stderr(
       `team up: only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(walked)}\n`,
     );
     // exit: up.not-owner
+    return 1;
+  }
+  if (!mayLaunchSeats(walked) && aimed && verdict?.kind === 'refused') {
+    out.stderr(`team up: ${verdict.text}\n`);
+    // exit: up.delegate-flag
     return 1;
   }
   const caller = callerOf(io);
@@ -833,7 +846,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.delegate-evidence
     // exit: up.delegate-placement
     // exit: up.delegate-command
-    // exit: up.delegate-flag
     // exit: up.never-approved
     // exit: up.differs
     // exit: up.doctor
