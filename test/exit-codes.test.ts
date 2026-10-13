@@ -1130,7 +1130,11 @@ scene('doctor.missing', async (place) => {
 
 async function down(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
   const io = testIo(place.root, caller);
-  return runCompared(place, argv, (args) => runDown(args, io, sources), io);
+  // A seat caller names a pane. With no home, the launched-file lookup reads this machine's
+  // own pane store, and a real pointer for that pane id loads a different team. The fixture
+  // home has no pointers, so the scene judges the file it wrote.
+  const home = sources.home ?? (caller.kind === 'seat' ? place.home : undefined);
+  return runCompared(place, argv, (args) => runDown(args, io, { ...sources, home }), io);
 }
 
 scene('down.invocation', async (place) => show(await down(place, ['extra'], owner, downSources()), 'unexpected'));
