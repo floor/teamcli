@@ -14,6 +14,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   down: () => import('./commands/down.ts'),
   init: () => import('./commands/init.ts'),
   status: () => import('./commands/status.ts'),
+  list: () => import('./commands/list.ts'),
   up: () => import('./commands/up.ts'),
   watch: () => import('./commands/watch.ts'),
   messages: () => import('./commands/messages.ts'),

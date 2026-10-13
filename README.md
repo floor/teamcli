@@ -20,7 +20,7 @@ The project's name is TeamCLI; the package and the command are `team`. The site 
 
 **Status: early, herdr only.** This build parses and
 validates the file, checks who is calling, and holds `add`, `answer`, `approve`, `check`, `doctor`,
-`down`, `init`, `release`, `remove`, `status`, `up`, `watch` and `worktree`.
+`down`, `init`, `list`, `release`, `remove`, `status`, `up`, `watch` and `worktree`.
 
 ## Install
 
@@ -255,6 +255,7 @@ check, and this build acts on what the commands below read.
 | `team pr check <file>` | checks a pull request's body against the signature rule (`-` reads stdin), needing no repository; exit 1 when it is refused | anyone; read only |
 | `team doctor` | checks this machine for what the file needs: herdr, each CLI, login, launch line, model, watch heartbeat; `--login` checks only CLI sign-ins | anyone; read only |
 | `team status` | prints the file's seats against the running session, each difference with its repair; `--json` outputs a stable JSON document (`format: 1`) for scripts; exit 1 when they differ | anyone; read only |
+| `team list` | lists the herdr sessions on this machine, running ones by default; `--all` includes stopped sessions; `--json` prints a stable array, empty when there is nothing; an orphan session and an unreadable seat do not fail it | anyone, from any folder; read only |
 | `team up` / `team down` | starts / stops the session and its seats | `up`: the owner; `down`: the owner, the coordinator or the operator seat |
 | `team watch` | watches the session, reports idle seats and nudges the operator; `--no-nudge` and `--no-notify` are the owner's and do not silence a report addressed to the owner | anyone, one per session; it types only a fixed line into an empty idle prompt: the report nudge, or `Team: run team messages` when a message is already waiting |
 | `team messages` | verifies a message that is already waiting, prints its body and writes the receipt; no command writes a message record — `team send` writes to a seat's cross-session socket, not to this mailbox — and a report still leaves as the watch's nudge | anyone |
