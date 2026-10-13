@@ -202,7 +202,7 @@ function seatCaller(name: string, pane: string) {
     caller: { kind: 'seat', name, pane } as const,
     env: {},
     stdinIsTTY: false,
-    callerSources: { ancestors: () => [], agents: () => [], paneRootPid: () => null, env: {}, stdinIsTTY: false },
+    callerSources: () => ({ ancestors: () => [], agents: () => [], paneRootPid: () => null, env: {}, stdinIsTTY: false }),
   };
 }
 
