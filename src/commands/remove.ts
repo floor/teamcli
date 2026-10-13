@@ -6,6 +6,7 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { loadTeamFile } from '../file/load.ts';
+import { launchedTeamFile } from '../file/launched-file.ts';
 import { markStopped, takeOut } from '../file/lines.ts';
 import type { Problem } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
@@ -154,7 +155,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // exit: remove.session-owner
     return 1;
   }
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), ...(sources.home ? { home: sources.home } : {}) });
+  const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
+  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), ...(sources.home ? { home: sources.home } : {}) });
   if (!loaded.ok) {
     for (const problem of loaded.errors) io.stderr(`team remove: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
     // exit: remove.not-a-repo

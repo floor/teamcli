@@ -65,6 +65,11 @@ export type SessionState = {
   worktrees: Record<string, WorktreeState>;
   watch?: { pid: number; heartbeat: string };
   /**
+   * The team file this session was launched from. A lead in the lobby resolves it from a pane
+   * the state records, and from no other path. Absent on a session started before it was written.
+   */
+  launched_file?: string;
+  /**
    * The team file `up` resolved, and the watchdog pane that may read it. Written before that
    * pane's command runs, and left in place when the watch process exits: a flagless watch in
    * the pane's folder would miss this file or read another one. Any other non-owner is refused.
