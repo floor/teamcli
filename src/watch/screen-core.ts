@@ -1002,8 +1002,17 @@ function statusLast(
     if (composer.prompt.test(lines[i] ?? '')) return { kind: 'unknown' };
     if (border && (border.top.test(lines[i] ?? '') || border.bottom.test(lines[i] ?? ''))) return { kind: 'unknown' };
   }
-  const rows = lines.slice(input + 1, end);
-  for (let i = input + 1; i < end; i++) if ((lines[i] ?? '').trim()) return { kind: 'unsent', from: input, input, rows };
+  // A row the pane draws of its own — Cursor's background-task count, captured between
+  // the empty placeholder and the status row — is not text in the box. Any other
+  // non-blank row there is.
+  const own = 'ownRows' in composer ? composer.ownRows ?? [] : [];
+  const rows: string[] = [];
+  for (let i = input + 1; i < end; i++) {
+    const line = lines[i] ?? '';
+    if (own.some((pattern) => pattern.test(line))) continue;
+    rows.push(line);
+  }
+  for (const line of rows) if (line.trim()) return { kind: 'unsent', from: input, input, rows };
   return { kind: placeholder(stripTyped(lines[input] ?? '', composer), composer, lines[input] ?? '', styled[input]) ? 'idle' : 'unsent', from: input, input, rows };
 }
 

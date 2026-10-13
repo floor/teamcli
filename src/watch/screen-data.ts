@@ -104,6 +104,9 @@ type StatusThenOne = {
   wrap?: Wrap;
   frameRows: number;
   border?: Border;
+  /** Rows the pane draws of its own between the input row and the status row, declared
+   *  only where a capture shows them. They are not the person's text. */
+  ownRows?: RegExp[];
 };
 type TwoRules = {
   mode: 'two-rules-footer-below';

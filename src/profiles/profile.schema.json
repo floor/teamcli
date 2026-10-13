@@ -392,6 +392,12 @@
             "kind": { "enum": ["word", "hard"] }
           }
         },
+        "own_rows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/patternString" },
+          "minItems": 1,
+          "description": "Rows the pane draws of its own between the input row and the status row, declared only where a capture shows them. A matching row is not text in the box. Only status-then-one reads the key."
+        },
         "frame_rows": {
           "type": "integer",
           "minimum": 0,
@@ -427,7 +433,8 @@
         { "if": { "properties": { "mode": { "const": "two-rules-footer-below" } }, "required": ["mode"] }, "then": { "required": ["rule", "footers"] } },
         { "if": { "required": ["ignore_case"] }, "then": { "properties": { "mode": { "const": "two-rules-footer-below" } } } },
         { "if": { "required": ["status_below"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
-        { "if": { "required": ["border"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } }
+        { "if": { "required": ["border"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
+        { "if": { "required": ["own_rows"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } }
       ]
     }
   }
