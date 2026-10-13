@@ -24,9 +24,9 @@ machine's approval store, the session's state (`.agents/team.state.json`) and he
 agents, each pane's screen and status. With no `--file`, that file is `.agents/team.yaml` of the
 repository's main checkout, found through git's common directory; a folder that is not a git
 repository is read from `.agents/team.yaml` in that folder only, not from a parent, and a link at
-`.agents` or at the file is not followed. A file at
-another path is not what this command reads when `up` starts it: `up` does not start that watch
-(`watch: not started: …` on the `up` page). It also reads the machine's load, free memory, free disk and
+`.agents` or at the file is not followed. A file at another path is what this command reads when `up` recorded it for the watchdog pane
+this session's state names: the command `up` runs carries no `--file`, and any other non-owner
+is refused. It also reads the machine's load, free memory, free disk and
 swap, and, when a temporary seat's end is judged, git.
 
 Writes `.agents/team.state.json` (the watch's pid and a heartbeat, once a pass; a temporary seat's
@@ -78,6 +78,17 @@ is the owner's alone too: the watch `up` starts reads the project's own file fro
 and carries no flag, so a non-owner aiming `--file` at another project is refused before that file
 is read.
 
+## When its pane closes
+
+The watch ends with its pane. `up` starts it in the session's watchdog workspace, and once this
+process has seen itself there it records that pane. A hangup — what closing the pane sends —
+stops the watch the same way Ctrl-C does, and the record is cleared. A process that is still
+running after its pane is gone stops when the next pass finds it gone again. A watch started by
+hand records no pane and keeps running. While a recorded pane is gone and that process is still
+running, `team doctor` names the process by its name and its pid and the repair is to stop it
+and run `team up`.
+`remove --keep` and `add` close the seat's workspace, not the watchdog's.
+
 ## Flags
 
 | Flag | Meaning |
@@ -118,6 +129,9 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> waits at a permission prompt: its owner's to answer` | a permission dialog or a trust question; only its owner answers those |
 | `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
 | `<seat> shows a vendor notice: its owner's to act on` | a screen the seat's profile captures as a vendor notice — today, Codex 0.157.0's update screen; `team` never answers one |
+| `<seat> shows a provider error: connection lost, and no capture names a retry` | a Claude Code seat stopped on its provider's connection error; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
+| `<seat> is at a rate limit: usage limit, resets at <time>` | a Claude Code seat stopped on its provider's usage limit, and the screen names when it resets; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
+| `<seat> is at a rate limit: usage limit, and the screen names no reset time` | the same usage-limit screen when it names no reset time |
 | `<seat> is blocked, and its screen is not one the watch recognises` | herdr says blocked and the screen says nothing the watch knows |
 | `<seat>: herdr reports the status "<status>"` | a status that is neither idle, done, working nor blocked |
 | `<seat> holds text in its input box that was never sent` | unsent text for `watch.unsent_after`; the watch never sends or clears text it cannot show it typed itself |
@@ -169,6 +183,7 @@ A report that is the operator's to act on is also what the nudge stands for. The
 | `team.yaml can't be read (<problem>); watching with the team as it was` | the file broke and no copy of it validated |
 | `<name>: its record is not an approved seat; left as it is (the owner cleans it: team remove <name> --abandon)` | a temporary seat whose end is proved and whose pane is free is left running |
 | `worktree <task> was not removed` | its removal failed; it is tried again on the next pass |
+| `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
 | `the watch of "<session>" stopped` | the last line, on Ctrl-C or a stop signal |
 
 A message already waiting under `.agents/messages/<seat>/` is not a report. When that seat's box is an empty idle prompt, and this pass is not already typing the report nudge, the watch types `Team: run team messages` and not the body. `--no-nudge` types neither line. A watch of another session types nothing for a message and raises no owner line; the file's own watch still does both. The record stays. The report nudge wins the pane: a pass that types it does not also type the ring. A message older than `nudge_wait` whose box is not free raises one owner line naming the id and the recipient, types nothing, and leaves the record where it is. Nothing in this build writes that record. A report still leaves as the nudge.
@@ -462,6 +477,7 @@ Needs a new approval: `watch.checks` changed.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
+Owner-authorization fingerprint: 1a1bc27b94ff488693c2d91d7c4c578250af5482557b8ccc4a0054954f31c019
 Approved. The record is in ~/.config/team/beacon-<hash>; signed with key fe21ef6293de; check the rest with `team doctor`.
 exit 0
 ```
@@ -532,6 +548,6 @@ seats:
 ```console
 $ team approve ; echo "exit $?"
 team approve: line 9: watch.checks can't turn off attention: attention, missing, model-drift, approval always run
-team approve: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, attention, unsent, idle, extra, team-idle, approval, load, memory, disk, swap-free, swap-growth, budget
+team approve: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, attention, provider-error, unsent, idle, extra, team-idle, approval, load, memory, disk, swap-free, swap-growth, budget
 exit 2
 ```

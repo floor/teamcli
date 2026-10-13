@@ -14,6 +14,7 @@ import type { Caller } from '../src/caller.ts';
 import type { CheckSources } from '../src/check/team.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
+import { runAskShow } from '../src/commands/ask-show.ts';
 import { runApprove, type ApproveSources, type Waiting } from '../src/commands/approve.ts';
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
@@ -24,6 +25,9 @@ import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
 import { plantMessage, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { runIssues } from '../src/commands/issues.ts';
+import { runList, type ListSources } from '../src/commands/list.ts';
+import { runLock } from '../src/commands/lock.ts';
+import { runUnlock } from '../src/commands/unlock.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
@@ -41,6 +45,7 @@ import { findRoot, loadTeamFile } from '../src/file/load.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
 import type { Key, Terminal } from '../src/launch/terminal.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -1650,8 +1655,8 @@ scene('release.configuration', async (place) => {
 });
 scene('release.usage', async (place) => show(await released(place, [], new Map()), 'a subcommand is required'));
 
-async function status(place: Place, argv: string[], sources: StatusSources): Promise<Ran> {
-  const io = testIo(place.root, owner);
+async function status(place: Place, argv: string[], sources: StatusSources, caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
   return { code: await runStatus(argv, io, sources), out: io.out, err: io.err };
 }
 
@@ -1686,6 +1691,16 @@ scene('status.agrees', async (place) => {
 scene('status.difference', async (place) => {
   write(place, TEAM);
   return show(await status(place, [], statusSources(quiet)), 'is in the file and is not running');
+});
+scene('status.file-owner', async (place) => show(await status(place, ['--file', '.agents/team.yaml'], statusSources(quiet), other), "--file is the owner's"));
+scene('status.session-owner', async (place) => show(await status(place, ['--session', 'team'], statusSources(quiet), other), "--session is the owner's"));
+scene('status.not-yours', async (place) => {
+  // A caller that does not pass learns nothing, even when the target does not load: the answer is
+  // the one fixed sentence, byte for byte, on stderr, and nothing else anywhere.
+  const ran = await status(place, [], { ...statusSources(quiet), home: place.home, gate: { standing: () => ({ kind: 'none' }) } }, other);
+  expect(ran.err).toBe('team status: this team is not yours to read\n');
+  expect(ran.out).toBe('');
+  return ran;
 });
 
 async function up(place: Place, argv: string[], caller: Caller, sources: UpSources): Promise<Ran> {
@@ -1871,6 +1886,13 @@ scene('watch.file-owner', async (place) => {
   write(place, TEAM);
   return show(await watched(place, ['--file', '.agents/team.yaml'], other), "--file is the owner's");
 });
+scene('watch.watchdog', async (place) => {
+  updateState(place.root, (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.watchdog = { file: join(place.root, 'custom', 'team.yaml'), pane: 'w2:p1' };
+  });
+  return show(await watched(place, ['--session', 'acme'], other), 'watchdog pane');
+});
 scene('watch.no-nudge', async (place) => {
   write(place, TEAM);
   return show(await watched(place, ['--no-nudge'], other), '--no-nudge');
@@ -1905,6 +1927,21 @@ scene('usage.block', async (place) => {
   return show(await used(place, [], other), 'usage on this machine');
 });
 scene('usage.invocation', async (place) => show(await used(place, ['extra']), 'unexpected'));
+
+async function listed(place: Place, argv: string[], sources: ListSources): Promise<Ran> {
+  const io = testIo(place.root, owner);
+  return { code: await runList(argv, io, sources), out: io.out, err: io.err };
+}
+
+const noTeam: ListSources = { sessions: () => [], roster: () => [], team: () => null };
+scene('list.invocation', async (place) => show(await listed(place, ['--nope'], noTeam), 'unknown option'), false);
+scene('list.herdr-down', async (place) => show(await listed(place, [], { ...noTeam, sessions: () => null }), 'herdr is not running'), false);
+scene('list.empty', async (place) => show(await listed(place, [], noTeam), 'no running sessions'), false);
+scene('list.shown', async (place) => show(await listed(place, [], {
+  sessions: () => [{ name: 'acme', running: true }],
+  roster: () => [],
+  team: () => null,
+}), 'orphan'), false);
 // The one refusal beside the invocation: the stores folder itself cannot be read. It is a file
 // where the folder belongs, and the caller here is the owner, who alone reads its message.
 scene('usage.store', async (place) => {
@@ -2565,6 +2602,67 @@ scene('issues.shape', async (place) => {
 scene('issues.invocation', async (place) => show(await issued(place, ['extra']), 'unexpected'));
 scene('issues.not-a-repo', async (place) => show(await issued(place), 'not inside a git repository'), false);
 
+// A machine lock is a directory under the scene's own home. The holder and the clock are
+// injected, so these scenes never read a team file or the wall clock. The project refusals are
+// the exception: they are that read, of a folder that has no team file.
+const LOCK_OWNER: LockIdentity = { team: 'acme', by: 'owner' };
+const LOCK_SEAT: LockIdentity = { team: 'acme', by: 'lead' };
+
+function lockSources(place: Place, identity?: LockIdentity): LockSources {
+  return {
+    home: place.home,
+    ...(identity ? { identity } : {}),
+    now: () => NOW,
+    sleep: () => {},
+  };
+}
+
+async function locked(place: Place, argv: string[], identity?: LockIdentity): Promise<Ran> {
+  const io = testIo(place.root, owner);
+  const code = await runLock(argv, io, lockSources(place, identity));
+  return { code, out: io.out, err: io.err };
+}
+
+async function unlocked(place: Place, argv: string[], identity?: LockIdentity): Promise<Ran> {
+  const io = testIo(place.root, owner);
+  const code = await runUnlock(argv, io, lockSources(place, identity));
+  return { code, out: io.out, err: io.err };
+}
+
+scene('lock.taken', async (place) => show(await locked(place, ['heavy-run', '--for', 'release CI'], LOCK_OWNER), 'heavy-run: taken'));
+scene('lock.held', async (place) => {
+  await locked(place, ['heavy-run', '--for', 'release CI'], LOCK_OWNER);
+  return show(await locked(place, ['heavy-run'], LOCK_SEAT), 'held since');
+});
+scene('lock.io', async (place) => {
+  mkdirSync(join(place.home, '.config'), { recursive: true });
+  writeFileSync(join(place.home, '.config', 'team'), 'not a folder\n');
+  return show(await locked(place, ['heavy-run'], LOCK_OWNER), 'not a directory');
+});
+scene('lock.invocation', async (place) => show(await locked(place, [], LOCK_OWNER), 'a <name> is required'));
+scene('lock.project', async (place) => show(await locked(place, ['heavy-run']), 'no team file'));
+
+scene('unlock.released', async (place) => {
+  await locked(place, ['heavy-run'], LOCK_OWNER);
+  return show(await unlocked(place, ['heavy-run'], LOCK_OWNER), 'heavy-run: released');
+});
+scene('unlock.io', async (place) => {
+  await locked(place, ['heavy-run'], LOCK_OWNER);
+  writeFileSync(join(lockDirectory(place.home, 'heavy-run'), 'extra'), 'leave me\n');
+  return show(await unlocked(place, ['heavy-run'], LOCK_OWNER), 'could not remove');
+});
+scene('unlock.not-held', async (place) => show(await unlocked(place, ['heavy-run'], LOCK_OWNER), 'not held'));
+scene('unlock.not-yours', async (place) => {
+  await locked(place, ['heavy-run', '--for', 'release CI'], LOCK_OWNER);
+  return show(await unlocked(place, ['heavy-run'], LOCK_SEAT), 'not you');
+});
+scene('unlock.unknown-holder', async (place) => {
+  mkdirSync(lockDirectory(place.home, 'heavy-run'), { recursive: true });
+  return show(await unlocked(place, ['heavy-run'], LOCK_OWNER), 'its holder file is not there yet');
+});
+scene('unlock.invocation', async (place) => show(await unlocked(place, [], LOCK_OWNER), 'a <name> is required'));
+scene('unlock.project', async (place) => show(await unlocked(place, ['heavy-run']), 'no team file'));
+
 async function nexted(place: Place, argv: string[] = [], caller: Caller = leadSeat): Promise<Ran> {
   const io = testIo(place.root, caller);
   return { code: await runNext(argv, io, { home: place.home }), out: io.out, err: io.err };
@@ -2812,6 +2910,12 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
       }
       return { ok: true };
     },
+    native: {
+      typeText: () => false,
+      pressEnter: () => false,
+      status: () => null,
+      wait: async () => {},
+    },
     now: () => NOW,
     home: place.home,
   };
@@ -2823,6 +2927,46 @@ async function sent(place: Place, argv: string[], caller: Caller, host: SendHost
   const code = await runSend(argv, io, host);
   return { code, out: io.out, err: io.err };
 }
+
+const ASK_SHOW_MARKER =
+  '{"v":1,"request_id":"req-ask-show-v1","question_sha256":"7fa2d11897a567998b667f4b453ac20b68a6813fde68222e583f90a5bf453b96","expires_at":"2026-10-12T18:00:00.000Z","mac":"8d53d07c074d438d6676e20b45b11ea021b54e30d36d840b48e4f7a41223cbce"}';
+
+function askShowFiles(place: Place, marker = `${ASK_SHOW_MARKER}\n`): void {
+  writeFileSync(join(place.root, 'ask.txt'), 'TeamCLI signed ask v1\n{"question":"Status?","request_id":"req-ask-show-v1"}\n');
+  writeFileSync(join(place.root, 'marker.json'), marker);
+  writeFileSync(join(place.root, 'key.txt'), 'QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\n');
+}
+
+async function askShown(place: Place, argv: string[], now = new Date('2026-10-12T18:00:00.000Z')): Promise<Ran> {
+  const io = testIo(place.root);
+  const code = await runAskShow(argv, io, now);
+  return { code, out: io.out, err: io.err };
+}
+
+scene('ask-show.shown', async (place) => {
+  askShowFiles(place);
+  return show(
+    await askShown(place, ['req-ask-show-v1', '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt']),
+    'Status?',
+  );
+}, false);
+scene('ask-show.expired', async (place) => {
+  askShowFiles(place);
+  const past = new Date(Date.parse('2026-10-12T18:00:00.000Z') + 5_001);
+  return show(
+    await askShown(place, ['req-ask-show-v1', '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'], past),
+    'the ask has expired',
+  );
+}, false);
+scene('ask-show.refused', async (place) => {
+  askShowFiles(place, `${ASK_SHOW_MARKER.replace(/e"}$/, 'f"}')}\n`);
+  return show(
+    await askShown(place, ['req-ask-show-v1', '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt']),
+    'the marker does not verify',
+  );
+}, false);
+scene('ask-show.invocation', async (place) =>
+  show(await askShown(place, []), 'a request id, --ask, --marker and --key are required'), false);
 
 scene('send.usage', async (place) => show(await sent(place, [], owner, sendHost(place)), 'a seat and a message are required'));
 scene('send.configuration', async (place) =>
@@ -2838,6 +2982,10 @@ scene('send.unreachable', async (place) => {
 scene('send.delivered', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place)), 'lead: delivered');
+});
+scene('send.dry-run', async (place) => {
+  write(place, TEAM);
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the cross-session socket; nothing was sent');
 });
 scene('send.answered', async (place) => {
   write(place, TEAM);

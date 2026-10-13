@@ -423,6 +423,7 @@
           "propertyNames": {
             "enum": [
               "restored",
+              "provider-error",
               "unsent",
               "idle",
               "extra",
@@ -500,7 +501,13 @@
             "$comment": "relative to the project, or a trust path"
           },
           "label": {
-            "type": "string"
+            "type": "string",
+            "$comment": "accepted, and not the herdr title; the title is the display, and the effort when set"
+          },
+          "effort": {
+            "type": "string",
+            "minLength": 1,
+            "$comment": "optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it"
           },
           "mode": {
             "enum": [
@@ -521,6 +528,46 @@
           "count": {
             "type": "integer",
             "minimum": 1
+          },
+          "reach": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "to": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "enum": [
+                    "grokbot"
+                  ]
+                },
+                "$comment": "the fronts this seat may be reached from; owner-only, default off"
+              },
+              "alias": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                "$comment": "the projection alias; defaults to the name, lowercased"
+              },
+              "route": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                "$comment": "the bridge's relay-side route; defaults to the alias"
+              },
+              "key_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                "$comment": "defaults to seat-<alias>-1"
+              },
+              "guard_dir": {
+                "type": "string",
+                "minLength": 1,
+                "$comment": "absolute; where the seat's public key is read; defaults to <lobby>/guard-floor-<alias>"
+              }
+            },
+            "required": [
+              "to"
+            ],
+            "$comment": "one seat's reach grant; projected into reach-roster.json by up, add and remove (src/reach/projection.ts)"
           }
         },
         "required": [
@@ -532,7 +579,7 @@
           "version",
           "launch"
         ],
-        "$comment": "account must name a key of budgets.accounts; label defaults to the model and version; a seat with count is neither lead"
+        "$comment": "account must name a key of budgets.accounts; the herdr title is the display and the effort; a written label is kept and does not title the workspace; a seat with count is neither lead"
       }
     },
     "releases": {

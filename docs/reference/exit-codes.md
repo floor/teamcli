@@ -107,6 +107,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `approve.overrides` | `approve` | 2 | the overrides file can't be parsed | `team approve` |
 | `approve.placed` | `approve` | 2 | a path would trust the project's parent | `team approve` |
 | `approve.revalidate` | `approve` | 2 | the file does not validate | `team approve` |
+| `ask-show.shown` | `ask-show` | 0 | the question is printed | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
+| `ask-show.expired` | `ask-show` | 1 | the marker matches and the ask is past expires_at plus 5 seconds | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
+| `ask-show.refused` | `ask-show` | 1 | the marker does not verify, or a file cannot be read | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
+| `ask-show.invocation` | `ask-show` | 2 | the invocation cannot be read | `team ask-show` |
 | `broker.stopped` | `broker` | 0 | the broker served until it was stopped | `team broker` |
 | `broker.bind` | `broker` | 1 | the socket could not be bound | `team broker` |
 | `broker.busy` | `broker` | 1 | a broker is already answering on this clone's socket | `team broker` |
@@ -200,6 +204,15 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `issues.shape` | `issues` | 1 | a record is not a task, or the task file is not a list | `team issues` |
 | `issues.invocation` | `issues` | 2 | the invocation can't be read | `team issues extra` |
 | `issues.not-a-repo` | `issues` | 2 | not inside a git repository | `team issues` |
+| `list.empty` | `list` | 0 | herdr answered and there is nothing to list | `team list` |
+| `list.herdr-down` | `list` | 0 | herdr cannot be asked, so the list is empty | `team list` |
+| `list.shown` | `list` | 0 | the sessions are printed | `team list` |
+| `list.invocation` | `list` | 2 | the arguments are not this command's | `team list --nope` |
+| `lock.taken` | `lock` | 0 | the lock was taken | `team lock heavy-run` |
+| `lock.held` | `lock` | 1 | the lock is already held | `team lock heavy-run` |
+| `lock.io` | `lock` | 1 | the lock directory could not be written | `team lock heavy-run` |
+| `lock.invocation` | `lock` | 2 | the invocation can't be read | `team lock` |
+| `lock.project` | `lock` | 2 | the caller's project can't be read | `team lock heavy-run` |
 | `mcp.clear` | `mcp` | 0 | the bridge is clear: doctor found nothing missing | `team mcp doctor` |
 | `mcp.up` | `mcp` | 0 | every observed bridge leg is up | `team mcp status` |
 | `mcp.down` | `mcp` | 1 | at least one leg is down or unknown | `team mcp status` |
@@ -293,7 +306,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.locked` | `remove` | 2 | the locked edit does not validate | `team remove worker` |
 | `remove.not-a-repo` | `remove` | 2 | not inside a git repository | `team remove worker` |
 | `send.answered` | `send` | 0 | the seat's reply came back within the window | `team send worker hello --wait` |
-| `send.delivered` | `send` | 0 | the seat's socket took the frame | `team send worker hello` |
+| `send.delivered` | `send` | 0 | the seat's channel took the message | `team send worker hello` |
+| `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
 | `send.timeout` | `send` | 1 | delivered, but the seat's reply did not arrive in the window | `team send worker hello --wait --timeout 10` |
@@ -302,17 +316,27 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |
+| `status.file-owner` | `status` | 1 | --file is the owner's | `team status --file .agents/team.yaml` |
+| `status.session-owner` | `status` | 1 | --session is the owner's | `team status --session team` |
 | `status.file` | `status` | 2 | the team file can't be read | `team status --file missing.yaml` |
 | `status.file-invalid` | `status` | 2 | the team file can't be parsed | `team status --file team.yaml` |
 | `status.herdr` | `status` | 2 | herdr doesn't answer | `team status` |
 | `status.invocation` | `status` | 2 | the invocation can't be read | `team status extra` |
 | `status.not-a-repo` | `status` | 2 | not inside a git repository | `team status` |
+| `status.not-yours` | `status` | 2 | the caller may not read this team | `team status` |
 | `team.command-help` | `team` | 0 | a command's help was printed | `team status --help` |
 | `team.help` | `team` | 0 | help was printed | `team --help` |
 | `team.version` | `team` | 0 | the version was printed | `team --version` |
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
+| `unlock.released` | `unlock` | 0 | the lock was released | `team unlock heavy-run` |
+| `unlock.io` | `unlock` | 1 | the lock directory could not be removed | `team unlock heavy-run` |
+| `unlock.not-held` | `unlock` | 1 | the lock is not held | `team unlock heavy-run` |
+| `unlock.not-yours` | `unlock` | 1 | the lock is held by someone else | `team unlock heavy-run` |
+| `unlock.unknown-holder` | `unlock` | 1 | the lock's holder can't be read | `team unlock heavy-run` |
+| `unlock.invocation` | `unlock` | 2 | the invocation can't be read | `team unlock` |
+| `unlock.project` | `unlock` | 2 | the caller's project can't be read | `team unlock heavy-run` |
 | `up.dry-run` | `up` | 0 | a dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) | `team up --dry-run` |
 | `up.ready` | `up` | 0 | the launch finished | `team up` |
 | `up.agents` | `up` | 1 | the agents can't be read | `team up` |
@@ -352,6 +376,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `watch.file-owner` | `watch` | 1 | --file is the owner's | `team watch --file .agents/team.yaml` |
 | `watch.no-notify` | `watch` | 1 | a seat passed --no-notify | `team watch --no-notify` |
 | `watch.no-nudge` | `watch` | 1 | a seat passed --no-nudge | `team watch --no-nudge` |
+| `watch.watchdog` | `watch` | 1 | only the recorded watchdog pane may read the file up recorded | `team watch --session acme` |
 | `watch.file` | `watch` | 2 | the team file can't be read | `team watch --file missing.yaml` |
 | `watch.file-invalid` | `watch` | 2 | the team file can't be parsed | `team watch --file team.yaml` |
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |

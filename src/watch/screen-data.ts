@@ -104,6 +104,9 @@ type StatusThenOne = {
   wrap?: Wrap;
   frameRows: number;
   border?: Border;
+  /** Rows the pane draws of its own between the input row and the status row, declared
+   *  only where a capture shows them. They are not the person's text. */
+  ownRows?: RegExp[];
 };
 type TwoRules = {
   mode: 'two-rules-footer-below';
@@ -135,6 +138,12 @@ export type ScreenData = {
    *  version range it was captured on. A stage without `tested` cannot exist: the loader
    *  requires the range, so a screen is never called a vendor notice without a record. */
   vendor_notice?: Stage;
+  /** The CLI's provider failed and the prompt is back. Read before `working` and the composer,
+   *  so an idle box under the error is not a free prompt. */
+  provider_error?: Stage;
+  /** A usage limit, with a reset time somewhere in the window. Same place in the order as
+   *  `provider_error`: the box under it is not a free prompt. */
+  rate_limit?: Stage;
   working?: Stage;
   composer: Composer;
   profile?: ScreenProfile;

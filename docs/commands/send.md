@@ -1,12 +1,23 @@
 # team send
 
-Writes one message to one seat over the cross-session message socket — the channel a Claude Code
-session exposes at the runtime temp folder's `cc-socks/<pid>.sock` — and never types into the
-seat's pane. One send is one JSON line on that socket, and nothing comes back on the connection
-itself: `delivered` means the socket took the frame, not that the seat's agent read it. The
-receiving session's own inbound policy decides when the frame surfaces, and a session started
-without `crossSessionInbound: accept` holds a frame from an unidentified sender until its owner
-lets it through.
+Writes one message to one seat. A Claude Code seat takes it on the cross-session message
+socket — the channel that session exposes at the runtime temp folder's `cc-socks/<pid>.sock` —
+and the command never types into that pane. One send is one JSON line on that socket, and
+nothing comes back on the connection itself: `delivered` means the socket took the frame, not
+that the seat's agent read it. The receiving session's own inbound policy decides when the frame
+surfaces, and a session started without `crossSessionInbound: accept` holds a frame from an
+unidentified sender until its owner lets it through.
+
+A native CLI (codex, cursor, grok, antigravity) has no socket. The body is written whole to a
+drop file, mode 0600, by renaming a temporary file into place, and the pane is given one short
+trigger line that names that file. The body is never typed, and it is never split across several
+writes. `delivered` there means herdr reported the seat `working` — or `done` or `blocked`, and
+not the status read before Enter — after that one line and Enter. The exit code of the typing
+commands is not that evidence, and the command does not read the pane. On herdr 0.7.1 that
+status is the pane hint `ctrl+c to stop` for cursor, a spinner in the terminal title for codex,
+and the `esc to cancel` footer for agy. A cursor pane narrow enough to wrap the hint can submit
+while herdr stays idle; that run is `unreachable`, not a silent success. `--wait` is refused for
+a native seat: this build does not carry its reply.
 
 `--wait` asks for the seat's answer. The command opens a listener at its own
 `cc-socks/<pid>.sock` — the address the receiving session derives from the connection, the one
@@ -24,15 +35,13 @@ written down: the log keeps the seat and the sizes.
 
 The outcome is always confirmed — one of `delivered`, `answered`, `timeout`, `unreachable` or
 `refused` — printed and matched by the exit code, or written as one machine-readable document
-with `--json`. `--list` sends nothing: it prints the file's addressable seats. This build
-carries the socket channel only: a seat of a native CLI (codex, cursor, grok, antigravity) is
-refused with the reason, because the daemon that delivers to a native CLI, and broadcast, are
-later increments.
+with `--json`. `--list` sends nothing: it prints the file's addressable seats. Broadcast is not
+in this build.
 
 ## Synopsis
 
-    team send <seat> <message> [--wait] [--timeout <s>] [--json]
-    team send <seat> --file <path> [--wait] [--timeout <s>] [--json]
+    team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send --list [--json]
 
 `<seat>` names one seat of the team file — the same resolution `team status` uses. The message
@@ -41,19 +50,26 @@ instead (and then takes no message words). A seat that has both a message and `-
 usage error. `--timeout` is a whole number of seconds, 1 to 86,400, and is only meaningful with
 `--wait`; without it a wait runs 120 seconds. `--json` prints one result document instead of
 the lines — `{seat, status, exit, reply?, error?, ids}` — where `ids.sent` is the composed
-frame's id and `ids.reply` the reply frame's own, when there is one.
+frame's id and `ids.reply` the reply frame's own, when there is one. `--dry-run` resolves the
+seat and names the channel. It writes no drop file and types nothing; it appends one line to
+`.agents/team.log`.
 
 ## What it reads and writes
 
-Reads the team file, the caller's placement, the herdr session's agents, the processes of the
-seat's pane, and the socket file's presence in `cc-socks`. The socket is the first of the pane's
-processes — the foreground processes first, then the shell — with a file at
-`<sockets dir>/<pid>.sock`. The command holds the seat's lock
+Reads the team file, the caller's placement, and the herdr session's agents. A Claude Code
+seat also reads the processes of the seat's pane and the socket file's presence in `cc-socks`.
+The socket is the first of the pane's processes — the foreground processes first, then the
+shell — with a file at `<sockets dir>/<pid>.sock`. A native seat writes
+`.agents/send-drops/<session>/<seat>/<id>` (the file mode 0600). `send-drops`, the session
+directory, and the seat directory are each mode 0700. This command never deletes a delivered
+drop file; the owner removes `.agents/send-drops` when those messages are no longer needed. The
+command types one trigger line into that seat's pane. The command holds the seat's lock
 (`<state dir>/seat-locks/<session>/<seat>`) around the write, so a launch of the same seat
-cannot act beside it; a `--wait` send holds it until the reply or the timeout, because the
-outstanding request is the thing the lock serializes. The wait listens at this process's own
-`<sockets dir>/<pid>.sock` and removes it when the send ends. It writes one line to
-`.agents/team.log`.
+cannot act beside it and two native sends cannot type into one pane at once; a `--wait` send
+holds it until the reply or the timeout, because the outstanding request is the thing the lock
+serializes. The wait listens at this process's own `<sockets dir>/<pid>.sock` and removes it
+when the send ends. It writes one line to `.agents/team.log`. The log keeps the seat and the
+size, never the message.
 
 ## Who may run it
 
@@ -75,12 +91,13 @@ nothing, so it needs no caller check.
 | usage | 2 | `team send: <message>` and the usage on stderr |
 | configuration | 2 | `team send: <message>` on stderr |
 
-`unreachable` is the seat's channel not being open: no live agent of that name, no socket file
-for the pane's processes, or a connection that would not take the frame. `timeout` is the
-delivery landing and the seat staying silent for the whole window. `refused` is nothing being
-sent on purpose: an unknown seat (the file's seats are named), a native-CLI seat, a frame over
-the limit, a reply listener that could not be opened, a lock another command holds, or a caller
-that may not send.
+`unreachable` is the seat's channel not confirming: no live agent of that name, no socket file
+for the pane's processes, a connection that would not take the frame, or a native seat whose
+herdr status did not show the trigger was submitted. `timeout` is the socket delivery landing
+and the seat staying silent for the whole window. `refused` is nothing being sent on purpose:
+an unknown seat (the file's seats are named), `--wait` to a native CLI, a frame over the socket
+limit, a trigger longer than the measured line, a reply listener that could not be opened, a
+lock another command holds, or a caller that may not send.
 
 ## Examples
 
@@ -176,10 +193,26 @@ team send: refused: nobody: it is not a declared seat; the file's seats are clau
 exit 1
 ```
 
-A native-CLI seat is refused: this build does not carry that channel yet, and nothing is sent.
+A native-CLI seat is a drop file and one trigger. `delivered` is herdr reporting the seat working:
 
 ```console
 $ team send gpt-reviewer "hello" ; echo "exit $?"
-team send: refused: gpt-reviewer runs codex: this build carries the cross-session socket channel only, and the delivery daemon for a native CLI is not built yet; nothing was sent
+gpt-reviewer: delivered
+exit 0
+```
+
+`--wait` on that seat is refused, and nothing is written. This build does not carry the reply.
+
+```console
+$ team send gpt-reviewer "hello" --wait ; echo "exit $?"
+team send: refused: gpt-reviewer runs codex: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent
 exit 1
+```
+
+`--dry-run` names the channel. It writes no drop file and types nothing; it appends one line to `.agents/team.log`:
+
+```console
+$ team send gpt-reviewer "hello" --dry-run ; echo "exit $?"
+gpt-reviewer: dry-run: codex via a 0600 drop file and one trigger line; nothing was written
+exit 0
 ```

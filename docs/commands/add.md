@@ -157,7 +157,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | ``team add: the file is not the approved one (<differences>): run `team approve` `` | 1 |
 | ``team add: the approved copy can't be read: run `team approve` `` | 1 |
 | `team add: the approved file has no seat "<name>"` | 1 |
-| `team add: <name> is already running` | 1 |
+| `team add: <name> is already running`. When that seat's screen is one the profile does not recognise, the owner is also told `team remove <name> --abandon closes its workspace without typing`; anyone else is told `the owner runs team remove <name> --abandon, which closes its workspace without typing` | 1 |
 | `team add: no launch profile for \`<cli>\` in this version` | 1 |
 | `team add: the approval allows <n> seats; <m> would be running` / `… <n> temporary seats; …` / `… <n> <vendor> seats; …` | 1 |
 | `team add: refused: <account> <window> left <n>%, inside its <reserve>% reserve, changed <age> ago; accounts with room: <accounts>` | 1 |
@@ -257,6 +257,11 @@ $ team add claude-beacon ; echo "exit $?"
 team add: claude-beacon is already running
 exit 1
 ```
+
+A seat whose screen the profile does not recognise gets that same refusal with the way out named.
+The owner is told `team remove <name> --abandon closes its workspace without typing`. Anyone else
+is told `the owner runs team remove <name> --abandon, which closes its workspace without typing`.
+A screen the profile recognises keeps the sentence above.
 
 An implementer's seat is neither the orchestrator's nor the operator's, so it adds nothing — not even
 itself:

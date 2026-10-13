@@ -681,7 +681,7 @@ describe('team up', () => {
     const lines = run.out.split('\n');
     expect(lines[0]).toContain(`! up would refuse: the file is legacy: migrate trust to absolute paths including the lobby ${home}/.config/team/lobby:`);
     expect(run.out).toContain(
-      `+ herdr --session acme-web workspace create --cwd ${root} --label 'claude opus 5.5' --no-focus\n`,
+      `+ herdr --session acme-web workspace create --cwd ${root} --label 'Claude Opus 5.5' --no-focus\n`,
     );
     expect(run.out).toContain(
       "+ herdr --session acme-web pane run <pane of claude-coordinator-acme> 'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt '\\''Rules for this session, from the team file:",

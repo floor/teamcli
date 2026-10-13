@@ -3,13 +3,16 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/approval.ts';
+import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, mayLaunchSeats } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
-import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
+import { declaredModel } from '../file/model.ts';
+import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
+import { workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import {
   agentList,
@@ -40,7 +43,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { launchedIdentity, seatProcessVerdict } from '../launch/identity.ts';
+import { launchedIdentity, paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
@@ -57,7 +60,9 @@ import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbySeen 
 import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedLobbyFiles } from '../profiles/index.ts';
+import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
+import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -139,11 +144,6 @@ export type Launch = {
 function aim(session: string): string | undefined {
   return session === 'default' ? undefined : session;
 }
-
-/** Said instead of `watch: started` when a flagless watch in the watchdog's start folder would
- *  not read the file `up` was given. One line: the watch was not started, why, and what to do. */
-export const WATCH_NOT_STARTED =
-  'watch: not started: a watch started there could not read this file, or would read another one under this session\'s name. Move the file to .agents/team.yaml in the folder the watch starts in. A fuller repair is planned.';
 
 function sameFile(a: string, b: string): boolean {
   const real = (path: string) => {
@@ -290,6 +290,36 @@ function modelDrift(
   return { kind: 'skip' };
 }
 
+/** A record with no process identity whose pane is a bare shell or another model. `up` does not
+ *  close it: without an identity there is no proof the pane is the seat's. Null when the record
+ *  has an identity, or when the pane cannot be told apart from the seat the file describes. */
+function unidentifiedHold(
+  team: TeamFile,
+  seat: Seat,
+  recorded: SeatState,
+  processes: Readonly<Record<string, PaneProcesses | null>>,
+  screenOf: (pane: string) => string | null,
+): string | null {
+  if (recorded.launched || !recorded.pane) return null;
+  const proc = processes[seat.name];
+  const repair = unidentifiedRepair(team, seat.name);
+  if (paneHoldsShell(proc ?? null)) {
+    return `its pane runs no CLI and its process was never recorded (${repair})`;
+  }
+  // No process reading: the screen is not consulted. A ready seat keeps today's relaunch note,
+  // and a seat still at launch is finished.
+  if (proc == null) return null;
+  // A seat still at launch is finished: a CLI is in the pane. Only a seat already recorded
+  // ready is left in place when its screen names another model.
+  if (recorded.stage !== 'ready') return null;
+  if (!canShowModel(seat) || !seat.version) return null;
+  const text = screenOf(recorded.pane);
+  if (text == null || text === '') return null;
+  const running = seatModel(seat, text);
+  if (!running || !modelDiffers(running, { model: seat.model, version: seat.version })) return null;
+  return `its screen runs ${running.model} ${running.version}; the file says ${declaredModel(seat)}; its process was never recorded (${repair})`;
+}
+
 function seatPlan(
   standing: Standing,
   team: TeamFile,
@@ -309,7 +339,7 @@ function seatPlan(
     cli: seat.cli,
     launch: seat.launch,
     cwd: seat.cwd,
-    label: seat.label,
+    label: workspaceLabel(seat),
     model: seat.model,
     version: seat.version,
     // The team file's own repair for this seat — a lead seat is told only the whole-team
@@ -340,6 +370,10 @@ function seatPlan(
       ...(live ? {} : { resumeGap: named.length === 0 ? 'none' as const : 'many' as const }),
     };
   }
+  // A record with no process identity cannot prove its pane. A bare shell or another model is
+  // reported, with the repair that works, and is not closed and not launched again.
+  const hold = unidentifiedHold(team, seat, recorded, processes, screenOf);
+  if (hold) return { ...planned, stage: recorded.stage, unidentifiedHold: hold };
   // The pane is the seat only while the process team launched is still in it: a pane that runs
   // no CLI, or one whose process is not the recorded one, is not the seat. Its workspace is
   // closed without input and the seat is launched fresh — the stage it stopped at is not
@@ -476,9 +510,24 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // and nothing here tells the caller to run a herdr command.
   let clearStopped = false;
 
+  // One verified snapshot carries the whole command: the refusal when there is
+  // one, and the ceilings the launch holds. A legacy or refused record is not
+  // an approval in force, and says so in its own words. Read before the caller
+  // gate so an out-of-band owner token can be matched against what `up` would launch.
+  const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
+  // The out-of-band owner authorization: a non-owner caller is admitted as the owner for this one
+  // launch when the token equals the fingerprint of the approved record `up` would launch — its
+  // fingerprints and generation, recomputed now. Only when an approval is in force, and never on a
+  // delegated run (the gate decides those). Downstream treats it as a no-terminal owner: it never
+  // prompts, which is right for an agent with no terminal.
+  const upFp =
+    standing.kind === 'verified' ? upFingerprint(standing.record.approval.fingerprints, standing.generation) : undefined;
+  const ownerToken =
+    !mayLaunchSeats(caller) && verdict === null && upFp !== undefined && ownerAuthorized(io.env, upFp);
+
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
-  if (!mayLaunchSeats(caller)) {
+  if (!mayLaunchSeats(caller) && !ownerToken) {
     if (verdict === null) {
       refusals.push(
         `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
@@ -487,10 +536,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       refusals.push(verdict.text);
     }
   }
-  // One verified snapshot carries the whole command: the refusal when there is
-  // one, and the ceilings the launch holds. A legacy or refused record is not
-  // an approval in force, and says so in its own words.
-  const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified') refusals.push(notInForce(standing));
   else {
     const differences = approvalDifferencesOf(standing, team);
@@ -518,7 +563,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // decision. Written only when this call is one that may run `up` — the refusals above
       // accumulate rather than return, so a caller the caller gate refused must leave every
       // file as it was — and not on a dry run, which decides nothing.
-      if (!dry && (mayLaunchSeats(caller) || delegated !== null)) {
+      if (!dry && (mayLaunchSeats(caller) || delegated !== null || ownerToken)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
       refusals.push(problem);
@@ -599,7 +644,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const processes: Record<string, PaneProcesses | null> = {};
   if (state === 'running' && sources.launch?.processInfo) {
     for (const [name, held] of Object.entries(recorded?.seats ?? {})) {
-      if (held.launched && held.pane) processes[name] = sources.launch.processInfo(session, held.pane);
+      // A pane with no recorded identity is read too: a bare shell is visible without one.
+      // The close path still requires the identity; this reading only lets the plan say so.
+      if (held.pane) processes[name] = sources.launch.processInfo(session, held.pane);
     }
   }
   const readings = loadReadings(dir);
@@ -639,7 +686,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     );
     // A stopped seat, one without a profile, and one already ready are left out of the budget.
     // A seat resumed into a live workspace starts nowhere new, but its reading is still said.
-    if (planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
+    if (planned.unidentifiedHold || planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
       seats.push(planned);
       continue;
     }
@@ -718,7 +765,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const declaredLobbyFiles = shippedLobbyFiles();
   if (isMigratedTrust(team.trust)) {
     const launching = seats.some((seat) => {
-      if (seat.stopped || seat.launchProblem) return false;
+      if (seat.unidentifiedHold || seat.stopped || seat.launchProblem) return false;
       if (!profileFor(seat.cli)) return false;
       const fresh = seat.stage === undefined || !seat.pane || (seat.stage === 'launched' && !seat.agentLive);
       if (!fresh) return false;
@@ -740,11 +787,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   }
   const watch = recorded?.watch;
   const watchAlive = Boolean(watch && sources.alive?.(watch.pid));
-  // The watchdog starts in `root` and runs `watch` with no `--file`. Start it only when that
-  // load reads the file this command was given. Anything else would miss this file, or read
-  // another one under this session's name.
-  const startWatch = watchWouldRead(root, loaded.path, sources.home);
-  const watchMissed = !watchAlive && !startWatch;
+  // The watchdog starts in `root` and runs `watch` with no `--file`. When that load would miss
+  // this file, or read another one, the resolved path is recorded for the watchdog pane.
+  const watchFile = watchWouldRead(root, loaded.path, sources.home) ? undefined : loaded.path;
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
   const buildPlan = () => upPlan({
@@ -755,24 +800,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     sessionRunning: state === 'running' || state === 'stopped',
     seats,
     watchAlive,
-    startWatch,
     watchLine: (sources.watchCommand ?? watchCommand)(session),
+    ...(watchFile ? { watchFile } : {}),
   });
-  // Exit 1, including when every seat is ready: a team that comes up with no watch looks
-  // finished, and that is how a watch that never read its file was missed. The owner has to
-  // see it. A dry run prints the same line. That exit is decided with the launch, after the
-  // plan, so a dry run does not take it.
-  // One physical line, through the cleaned writer every other line of this command uses.
-  // `plainLine` folds it. A real run writes it on stderr, where `watch: started` is: stdout
-  // is the records alone. A dry run writes it on stdout, with the plan. The sentence does not
-  // copy the path the command line named, so an escape in that path is not printed.
-  const sayWatchMissed = () => {
-    if (!watchMissed) return;
-    const line = `${plainLine(WATCH_NOT_STARTED)}\n`;
-    if (dry) out.stdout(line);
-    else out.stderr(line);
-    if (!dry) logLine(dir, 'up', describeCaller(caller), WATCH_NOT_STARTED, sources.now?.() ?? new Date());
-  };
 
   if (dry) {
     // The same cause can reach the list twice — the gate and `doctor` both read the
@@ -780,7 +810,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // return below, so the status and the exit id are that refusal's; the words stay these.
     for (const refusal of [...new Set(refusals)]) out.stdout(`! up would refuse: ${plainText(refusal)}\n`);
     out.stdout(plainText(formatPlan(buildPlan())));
-    sayWatchMissed();
   }
   if (refusals.length) {
     if (!dry) for (const refusal of [...new Set(refusals)]) out.stderr(`team up: ${plainText(refusal)}\n`);
@@ -833,6 +862,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // so the delegation is on the record before the first workspace is made. A dry run returned
     // above and writes nothing; a run that refused never got here.
     if (delegated !== null) (sources.logDelegated ?? logDelegated)(dir, delegated, 'up', sources.now?.());
+    // Provenance for an owner-token launch: the caller that ran it, and that the owner authorized
+    // it out of band for this approved record.
+    if (ownerToken) logLine(dir, 'up', callerLabel(caller), 'owner-token-authorized', sources.now?.() ?? new Date());
 
     if (createLobby) {
       // The run's first write, under the lock: the lobby the read-only pass above found absent.
@@ -954,6 +986,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return overCeiling(ceilings, running, seat);
       },
       record(name, patch) {
+        let replaced: string | undefined;
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[name] ?? { stage: patch.stage };
@@ -967,7 +1000,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           if (written === null) delete seat.waiting;
           else if (written) seat.waiting = written;
           current.seats[name] = seat;
+          if (patch.pane) {
+            replaced = prior.pane !== patch.pane ? prior.pane : undefined;
+            current.launched_file = loaded.path;
+          }
         });
+        if (patch.pane) {
+          if (replaced) forgetLaunchedPane(sources.home, replaced);
+          noteLaunchedPane(sources.home, loaded.path, patch.pane);
+        }
       },
       running(name) {
         if (running.some((item) => item.name === name)) return;
@@ -975,10 +1016,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         if (seat) running.push({ name, vendor: seat.vendor, temporary: false });
       },
       drop(name) {
+        let pane: string | undefined;
         updateState(dir, (file) => {
           const seats = file.sessions[session]?.seats;
+          pane = seats?.[name]?.pane;
           if (seats) delete seats[name];
         });
+        if (pane) forgetLaunchedPane(sources.home, pane);
       },
       // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
       // here with the same function the records use: no escape sequence or bidi override reaches
@@ -993,6 +1037,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return sources.doctor.version(profile.binary);
       },
       log: (who, what) => logLine(dir, 'up', callerLabel(caller), `${who}: ${what}`, now()),
+      noteWatch(pane, file) {
+        updateState(dir, (state) => {
+          const current = (state.sessions[session] ??= emptySession());
+          current.watchdog = { file, pane };
+        });
+      },
       /**
        * §3/§4: what happens to a seat this run finds at a dialog. The owner at a terminal is
        * asked, in `pause.ts`, with `o`/`s`/`q`; an owner whose stdin is not a terminal never
@@ -1077,7 +1127,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     });
 
     const report = await executePlan(plan, session, host);
-    sayWatchMissed();
+    // The reach projection, after the plan's effects and outside the lobby's identity rechecks
+    // (its temporary is a declared lobby file): the owner-approved `reach` grants written where
+    // the bridge and the seat-shuttle daemon read them. A skip — no lobby, a lobby not 0700,
+    // nothing changed — is a log line, never a refusal: the launch is done.
+    const projectionNote = reachProjectionNote(writeReachProjection(team, sources.home));
+    if (projectionNote) logLine(dir, 'up', callerLabel(caller), projectionNote, now());
     const afterwards = readState(dir).sessions[session]?.seats ?? {};
     const pending = team.seats.filter((seat) => {
       if (seat.stopped || !profileFor(seat.cli)) return false;
@@ -1089,7 +1144,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.pending
     // exit: up.server
     // exit: up.watch
-    return pending.length || report.serverFailed || report.watchFailed || report.held || watchMissed ? 1 : 0;
+    return pending.length || report.serverFailed || report.watchFailed || report.held ? 1 : 0;
   } finally {
     runLock.release();
   }

@@ -21,6 +21,21 @@ export type BudgetAccount = {
   check: string | null;
 };
 
+/**
+ * A seat's `reach` block, the owner's grant that this seat's signed replies may be served to the
+ * named fronts (the seat auto-discovery seam). Kept exactly as the file wrote it — alias, route,
+ * key_id and guard_dir are derived at projection time, one default each in
+ * `src/reach/projection.ts` — and it is part of the seat's digest, so writing or editing a grant
+ * needs a new approval.
+ */
+export type SeatReach = {
+  to: string[];
+  alias?: string;
+  route?: string;
+  keyId?: string;
+  guardDir?: string;
+};
+
 export type Seat = {
   role: string;
   name: string;
@@ -42,11 +57,22 @@ export type Seat = {
   display: string;
   launch: string;
   cwd: string;
-  /** Herdr workspace title. Omitted in the file, it is `<model> <version>` in lowercase. */
+  /**
+   * The file's label: written, or `<model> <version>` in lowercase. Hashed with the seat.
+   * It does not title the herdr workspace; `workspaceLabel` does, from `display` and `effort`.
+   */
   label: string;
+  /**
+   * The seat's effort word, when the file sets one. Absent otherwise, so a file that omits it
+   * keeps the digest it had. A lab with a vocabulary warns when the word is outside it; the
+   * warning does not fail the file, and launch does not read the field.
+   */
+  effort?: string;
   mode: Mode;
   parked: boolean;
   stopped: boolean;
+  /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
+  reach?: SeatReach;
   // The entry's `name` and `count` as written, and this seat's place in it (1 for the first).
   declared: string;
   count: number;

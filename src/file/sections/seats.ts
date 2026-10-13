@@ -1,9 +1,12 @@
+import { isAbsolute } from 'node:path';
 import { CLIS } from '../../clis.ts';
+import { shippedEfforts } from '../../profiles/efforts.ts';
+import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
 import type { Check } from '../check.ts';
-import type { Mode, Seat } from '../types.ts';
+import type { Mode, Seat, SeatReach } from '../types.ts';
 import type { LeadMark, Section } from './section.ts';
 import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
@@ -46,15 +49,29 @@ export const seats: Section = {
         display: { type: 'string', $comment: 'defaults to "model version"; must contain the version as a token of its own' },
         launch: { type: 'string', minLength: 1 },
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
-        label: { type: 'string' },
+        label: { type: 'string', $comment: 'accepted, and not the herdr title; the title is the display, and the effort when set' },
+        effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it' },
         mode: { enum: MODES },
         parked: { type: 'boolean' },
         stopped: { type: 'boolean' },
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         count: { type: 'integer', minimum: 1 },
+        reach: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            to: { type: 'array', minItems: 1, items: { enum: FRONTS }, $comment: 'the fronts this seat may be reached from; owner-only, default off' },
+            alias: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$', $comment: 'the projection alias; defaults to the name, lowercased' },
+            route: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$', $comment: 'the bridge\'s relay-side route; defaults to the alias' },
+            key_id: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$', $comment: 'defaults to seat-<alias>-1' },
+            guard_dir: { type: 'string', minLength: 1, $comment: 'absolute; where the seat\'s public key is read; defaults to <lobby>/guard-floor-<alias>' },
+          },
+          required: ['to'],
+          $comment: 'one seat\'s reach grant; projected into reach-roster.json by up, add and remove (src/reach/projection.ts)',
+        },
       },
       required: ['role', 'name', 'cli', 'vendor', 'model', 'version', 'launch'],
-      $comment: 'account must name a key of budgets.accounts; label defaults to the model and version; a seat with count is neither lead',
+      $comment: 'account must name a key of budgets.accounts; the herdr title is the display and the effort; a written label is kept and does not title the workspace; a seat with count is neither lead',
     },
   },
 };
@@ -77,8 +94,8 @@ function readSeats(
   const seats: DraftSeat[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
-      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'mode',
-      'parked', 'stopped', 'count', 'leads',
+      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
+      'parked', 'stopped', 'count', 'leads', 'reach',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -123,8 +140,13 @@ function readSeats(
     if (leads && name && leadsField) marks.push({ name, line: leadsField.value.line });
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     const label = check.text(fields.get('label'), `${at}: label`);
-    // Left out, the herdr title is the model and version. A written label wins, so a file that
-    // already names one keeps the title, and the fingerprint, it had.
+    const effort = readEffort(fields.get('effort'), at, vendor, check);
+    // The written label, or the lowercase model and version, stays on the seat: `seatDigest`
+    // hashes `label`, and an approved file keeps its key. It does not title the workspace.
+    // `up` and `add` use `workspaceLabel` (the display, and the effort when set).
+    // The owner-only reach grant. In the seat's digest like every other field: a grant reaches
+    // the bridge and the shuttle daemon only through an owner's approval of the file.
+    const reach = readReach(fields.get('reach'), at, check);
     if (!role || !name || !cli || !vendor || !model || !version || !launch || !display) {
       if (name) broken.add(name);
       continue;
@@ -139,17 +161,60 @@ function readSeats(
         count,
         instance,
         ...(account ? { account } : {}),
+        // Omitted when the file has no effort, so `seatDigest` hashes the same fields as before.
+        ...(effort ? { effort } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
+        ...(reach ? { reach } : {}),
       });
     }
   }
   reportCollisions(seats, 'name', check);
+  reportReach(seats, check);
   return seats;
 }
 
 export function defaultLabel(model: string, version: string): string {
   return `${model} ${version}`.toLowerCase();
+}
+
+/**
+ * The herdr workspace title `up` and `add` give a seat: its display, and ` · ` plus
+ * its effort when the file sets one. No seat name and no role. Count instances share
+ * it. `execute.ts` keys a place on the seat's name ("the display label may be shared"),
+ * and a herdr 0.7.1 sidebar drew the workspace label on line 1 and `idle · <agent name>`
+ * on line 2, so the name is not lost when the title is shared.
+ */
+export function workspaceLabel(seat: { display: string; effort?: string }): string {
+  return seat.effort ? `${seat.display} · ${seat.effort}` : seat.display;
+}
+
+function readEffort(
+  entry: YamlEntry | undefined, at: string, vendor: string | undefined, check: Check,
+): string | undefined {
+  const effort = check.text(entry, `${at}: effort`);
+  if (effort === undefined || !entry || !vendor) return effort;
+  // Launch does not read `effort`. The word stays on the seat either way, so a later label can
+  // see what the file wrote, and the approval key changes when the field is added.
+  // The vocabulary is read only once a seat sets the field, so a file that omits it opens
+  // nothing new and cannot fail because the list is missing.
+  const efforts = shippedEfforts();
+  if (!efforts.ok) {
+    check.warnings.push({ line: entry.value.line, message: efforts.message });
+    return effort;
+  }
+  const allowed = efforts.labs[vendor];
+  // A lab with no entry accepts any word: the vocabulary leaves that lab out rather than invent
+  // one. A lab with a list warns and names its words. The warning does not fail check, approve
+  // or up. No file that loaded before can contain `effort` — an unknown field already fails —
+  // so the warning is not a regression for those files.
+  if (allowed && !allowed.includes(effort)) {
+    check.warnings.push({
+      line: entry.value.line,
+      message: `${at}: effort "${effort}" is not one of ${vendor}'s: ${allowed.join(', ')}`,
+    });
+  }
+  return effort;
 }
 
 function readVersion(entry: YamlEntry | undefined, at: string, line: number, check: Check): string | undefined {
@@ -190,6 +255,91 @@ function reportCollisions(seats: DraftSeat[], field: 'name', check: Check): void
     if (!first) seen.set(seat[field], seat);
     else if (first.line !== seat.line || first.instance === seat.instance) {
       check.fail(seat.line, `two seats have the ${field} "${seat[field]}" (the other is on line ${first.line}${first.count > 1 || seat.count > 1 ? ', after count is expanded' : ''})`);
+    }
+  }
+}
+
+// The reach grant as written. Only `to` is required: the other four have one default each, and
+// the projection is where they are filled in (`src/reach/projection.ts`), so a default can never
+// drift between the digest — which holds exactly what the file wrote — and the projection.
+function readReach(entry: YamlEntry | undefined, at: string, check: Check): SeatReach | undefined {
+  if (!entry) return undefined;
+  const fields = check.fields(entry.value, `${at}: reach`, ['to', 'alias', 'route', 'key_id', 'guard_dir']);
+  const to: string[] = [];
+  const toEntry = fields.get('to');
+  if (!toEntry) {
+    if (entry.value.kind === 'map' || (entry.value.kind === 'scalar' && entry.value.value === null)) {
+      check.fail(entry.value.line, `${at}: reach.to is required: at least one front`);
+    }
+  } else {
+    const items = check.list(toEntry, `${at}: reach.to`);
+    if (items.length === 0 && (toEntry.value.kind === 'seq' || (toEntry.value.kind === 'scalar' && toEntry.value.value === null))) {
+      check.fail(toEntry.value.line, `${at}: reach.to is required: at least one front`);
+    }
+    for (const item of items) {
+      if ((FRONTS as readonly string[]).includes(item.value)) to.push(item.value);
+      else check.fail(item.line, `${at}: reach.to "${item.value}" must be one of: ${FRONTS.join(', ')}`);
+    }
+  }
+  const alias = readReachName(fields.get('alias'), `${at}: reach.alias`, REACH_ALIAS, check);
+  const route = readReachName(fields.get('route'), `${at}: reach.route`, REACH_ROUTE, check);
+  const keyId = readReachName(fields.get('key_id'), `${at}: reach.key_id`, REACH_ROUTE, check);
+  const guardDir = readReachGuardDir(fields.get('guard_dir'), at, check);
+  return {
+    to,
+    ...(alias !== undefined ? { alias } : {}),
+    ...(route !== undefined ? { route } : {}),
+    ...(keyId !== undefined ? { keyId } : {}),
+    ...(guardDir !== undefined ? { guardDir } : {}),
+  };
+}
+
+function readReachName(entry: YamlEntry | undefined, name: string, rule: RegExp, check: Check): string | undefined {
+  const value = check.text(entry, name);
+  if (value === undefined || !entry) return undefined;
+  if (!rule.test(value)) {
+    check.fail(entry.value.line, `${name} "${value}" takes letters, digits, ".", "_" and "-" (a letter or digit first, 64 at most)`);
+    return undefined;
+  }
+  return value;
+}
+
+function readReachGuardDir(entry: YamlEntry | undefined, at: string, check: Check): string | undefined {
+  const value = check.text(entry, `${at}: reach.guard_dir`);
+  if (value === undefined || !entry) return undefined;
+  if (!isAbsolute(value)) {
+    check.fail(entry.value.line, `${at}: reach.guard_dir must be an absolute path`);
+    return undefined;
+  }
+  return value;
+}
+
+/** The projection's rules on the built seats: every granted seat's alias must satisfy the
+ *  readers' rule — the defaults can outgrow it only here (a long name, a key_id of `seat-<alias>-1`
+ *  past 64 characters) — and two seats must not land on one alias, the readers' duplicate rule.
+ *  The projection holds at most REACH_MAX_SEATS seats. */
+function reportReach(seats: DraftSeat[], check: Check): void {
+  const seen = new Map<string, DraftSeat>();
+  let granted = 0;
+  for (const seat of seats) {
+    const reach = seat.reach;
+    if (!reach) continue;
+    granted += 1;
+    if (granted > REACH_MAX_SEATS) {
+      check.fail(seat.line, `reach: the projection holds at most ${REACH_MAX_SEATS} seats — this seat is number ${granted}`);
+      continue;
+    }
+    const alias = (reach.alias ?? seat.name).toLowerCase();
+    if (!REACH_ALIAS.test(alias)) {
+      check.fail(seat.line, `seat "${seat.name}": the reach alias "${alias}" takes letters, digits, ".", "_" and "-" (a letter or digit first, 64 at most)`);
+    }
+    if (reach.keyId === undefined && `seat-${alias}-1`.length > 64) {
+      check.fail(seat.line, `seat "${seat.name}": the default reach key_id "seat-${alias}-1" is longer than 64; name a shorter alias or a key_id`);
+    }
+    const first = seen.get(alias);
+    if (first === undefined) seen.set(alias, seat);
+    else {
+      check.fail(seat.line, `two seats reach the same alias "${alias}" (the other is on line ${first.line}${first.count > 1 || seat.count > 1 ? ', after count is expanded' : ''})`);
     }
   }
 }

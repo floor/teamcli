@@ -16,7 +16,7 @@ import { canonicalLanding, insideTrust, isLegacyTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { declaredModel } from '../file/model.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
-import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, type HerdrAgent } from '../herdr.ts';
+import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, workspaceList, workspacePanes, type HerdrAgent } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { resolveLobby, verifyLobby } from '../lobby/gate.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
@@ -59,6 +59,12 @@ export type DoctorSources = {
   /** This machine's own figures, read for the one check no machine can ever meet. Absent in a test
    *  that does not read them; absent is not "fine", it is nothing said. */
   machine?(root: string): Machine;
+  /** Whether the watch's pid is alive. Absent: a fresh heartbeat is read as running, as before. */
+  watchAlive?(pid: number): boolean;
+  /** The process's own name, never its arguments. Null when it cannot be read. */
+  processComm?(pid: number): string | null;
+  /** Whether the session still has this pane. Null when herdr can't say, which says nothing. */
+  watchPane?(session: string, pane: string, workspace?: string): boolean | null;
 };
 
 export type CommandRunner = (binary: string, args: string[]) => { status: number | null; stdout: string } | null;
@@ -69,6 +75,20 @@ export function run(binary: string, args: string[]): { status: number | null; st
 }
 
 export const realCommandRunner = run;
+
+/** The process's own name: `ps` `comm`, the file name only, never an argument. A name that is
+ *  not a single token is unreadable — a path's directory and a command line are not the name. */
+export function processComm(pid: number): string | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  const result = spawnSync('ps', ['-p', String(pid), '-o', 'comm='], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 2_000,
+  });
+  if (result.error || result.status !== 0) return null;
+  const base = result.stdout.trim().split('/').pop() ?? '';
+  return /^[A-Za-z0-9._+-]+$/.test(base) ? base : null;
+}
 
 export function checkLogin(profile: Profile, runner: CommandRunner = run): boolean | null {
   if (!profile.loginCheck) return null;
@@ -105,6 +125,26 @@ export const realSources: DoctorSources = {
   runCheck: (path) => runCommand(path),
   paneText: (session, pane) => paneRead(pane, 40, session) ?? undefined,
   machine: readMachine,
+  watchAlive(pid) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  },
+  processComm,
+  watchPane(session, pane, workspace) {
+    const aim = session === 'default' ? undefined : session;
+    const id = workspace || pane.split(':')[0];
+    if (!id) return null;
+    const listed = workspaceList(aim);
+    if (listed === null) return null;
+    if (!listed.some((item) => item.id === id)) return false;
+    const panes = workspacePanes(id, aim);
+    if (panes === null) return null;
+    return panes.includes(pane);
+  },
 };
 
 export const USAGE = 'Usage: team doctor [--session <name>] [--file <path>] [--login]\n';
@@ -115,7 +155,11 @@ export type Finding = { level: Level; text: string };
 // A missing or stale watch is not a reason for `up` to refuse: `up` starts the watch itself.
 export function blocksLaunch(finding: Finding): boolean {
   if (finding.level !== 'miss') return false;
-  return !finding.text.startsWith('no watch has run') && !finding.text.startsWith("the watch's heartbeat");
+  // A watch with no pane is `up`'s to repair: refusing the launch would make the repair impossible.
+  return !finding.text.startsWith('no watch has run')
+    && !finding.text.startsWith("the watch's heartbeat")
+    && !finding.text.startsWith("the watch's pane is gone")
+    && !finding.text.startsWith('the watch ended with its pane');
 }
 
 export const doctor: Command = (argv, io) => runDoctor(argv, io, realSources);
@@ -336,7 +380,14 @@ export function machineFindings(team: TeamFile, root: string, sources: DoctorSou
 
 // `watch` is the watch values in force — the approved ones — so an unapproved interval edit can't
 // move the verdict either way.
-function watchFindings(watch: TeamFile['watch'], dir: string, session: string, running: boolean | null, now: Date): Finding[] {
+function watchFindings(
+  watch: TeamFile['watch'],
+  dir: string,
+  session: string,
+  running: boolean | null,
+  now: Date,
+  sources: DoctorSources,
+): Finding[] {
   const recorded = readState(dir).sessions[session]?.watch;
   if (!running) return [];
   if (!recorded) return [{ level: 'miss', text: `no watch has run for session ${session}: start \`team watch\`` }];
@@ -348,6 +399,20 @@ function watchFindings(watch: TeamFile['watch'], dir: string, session: string, r
         text: `the watch's heartbeat is ${Math.round(age / 60)} min old (two intervals are ${(2 * watch.interval) / 60} min): start \`team watch\``,
       },
     ];
+  }
+  // The pane is the one the watch recorded. Herdr not answering is not a missing pane.
+  if (recorded.pane && sources.watchPane && sources.watchAlive) {
+    const there = sources.watchPane(session, recorded.pane, recorded.workspace);
+    if (there === false) {
+      if (sources.watchAlive(recorded.pid)) {
+        const name = sources.processComm?.(recorded.pid) ?? 'process';
+        return [{
+          level: 'miss',
+          text: `the watch's pane is gone and ${name} (pid ${recorded.pid}) is still running: stop it, then run \`team up\``,
+        }];
+      }
+      return [{ level: 'miss', text: 'the watch ended with its pane: run `team up`' }];
+    }
   }
   return [{ level: 'ok', text: 'the watch is running' }];
 }
@@ -575,7 +640,7 @@ export function doctorFindings(
   findings.push(...identityFindings(team, dir, session));
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
 
-  findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now()));
+  findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
   findings.push(...trustFindings(team, dir, session, sources));
 
   const lobby = resolveLobby(sources.home, team);

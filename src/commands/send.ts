@@ -1,48 +1,60 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerVerdict, describeCaller, judgeCallerIn, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
-import { agentList, paneProcesses, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, paneProcesses, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
+import { dropMessage, submitTrigger, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../send/uds.ts';
 
-export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json]
-       team send <seat> --file <path> [--wait] [--timeout <s>] [--json]
+export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
+       team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send --list [--json]
 
-Writes one message to one seat over the cross-session message socket — the channel a
-Claude Code session exposes, never typing into its pane. Only the owner, or the
-orchestrator from its own seat, may call it; a worker seat may not. --list sends nothing:
-it prints the file's seats and needs no caller check.
+Writes one message to one seat. A Claude Code seat gets one frame on the cross-session
+message socket, never typed into its pane. A native CLI (codex, cursor, grok, antigravity)
+has no socket: the body is written whole to a drop file (mode 0600, atomic rename) and the
+pane receives one short trigger line, never the body and never several typed chunks. Only
+the owner, or the orchestrator from its own seat, may call it; a worker seat may not.
+--list sends nothing: it prints the file's seats and needs no caller check. --dry-run
+resolves the seat and the channel, writes no drop file, and types nothing. It appends
+one line to the team log.
 
 The outcome is one of five, and none of them is silent:
-  delivered    the seat's socket took the frame (exit 0)
-  answered     --wait: the seat's reply came back; the reply follows on stdout (exit 0)
-  timeout      --wait: delivered, but no reply within the window (exit 1)
-  unreachable  that socket could not take it (exit 1): the session is not running, no
-               live agent carries the seat's name, no socket file was found for its
-               pane's processes, or the connection would not take the frame
-  refused      nothing was sent (exit 1): not a declared seat, a channel this build
-               does not carry yet, a message over the socket's measured limit, a reply
-               listener that could not be opened, or a caller that may not send
+  delivered    the channel took it (exit 0). For a socket, the socket accepted the frame.
+               For a native CLI, herdr reported the seat working — or done or blocked,
+               changed from the status read before Enter — after one send-text and one
+               Enter. That status is the evidence, not the exit code of the typing
+               commands and not the pane's text. Cursor's working bit is the hint
+               "ctrl+c to stop", codex's is a spinner in the terminal title, and agy's
+               is the "esc to cancel" footer; a wrapped cursor pane can submit while
+               herdr stays idle, and that run is unreachable rather than a silent success
+  answered     --wait, socket only: the seat's reply came back; the reply follows on
+               stdout (exit 0)
+  timeout      --wait, socket only: delivered, but no reply within the window (exit 1)
+  unreachable  the channel did not confirm (exit 1): the session is not running, no live
+               agent carries the seat's name, no socket took the frame, or a native seat
+               did not move to working after the trigger
+  refused      nothing was sent (exit 1): not a declared seat, a native --wait (this
+               build has no reply path for it), a socket frame over the measured limit,
+               a trigger that would exceed the measured line length, a reply listener
+               that could not be opened, or a caller that may not send
 
-The send is one frame with no acknowledgement: this channel reports nothing back, so
-"delivered" means the socket accepted the frame — the receiving session's own inbound
-policy decides when it surfaces. --wait blocks for the seat's reply, listening at this
-process's own <sockets dir>/<pid>.sock — the address the receiving session answers to —
-for --timeout seconds (default 120; --timeout is only meaningful with --wait). --json
-prints one result document instead of the lines: {seat, status, exit, reply?, error?,
-ids}. --file reads the body from a file instead of the one <message> argument.
+--wait blocks for a Claude Code seat's reply, listening at this process's own
+<sockets dir>/<pid>.sock, for --timeout seconds (default 120; --timeout is only
+meaningful with --wait). A native seat has no reply path here, so --wait is refused
+and nothing is written. --json prints one result document instead of the lines:
+{seat, status, exit, reply?, error?, ids}. --file reads the body from a file instead
+of the one <message> argument.
 
-Not in this build, and marked TODO where they will land: delivery to a native-CLI seat
-(the daemon) and broadcast.
+Not in this build: broadcast, and a native seat's reply.
 `;
 
 export type SendHost = {
@@ -53,6 +65,8 @@ export type SendHost = {
   /** The folder the session sockets live in; the real one is the runtime temp folder's. */
   socketsDir: string;
   deliver(socketPath: string, frame: string): Promise<SendOutcome>;
+  /** Types a native seat's trigger and reads herdr's status. Tests pass a fake. */
+  native: NativePane;
   now(): Date;
   home: string;
 };
@@ -65,6 +79,12 @@ export const realHost: SendHost = {
   // API contract).
   socketsDir: join(tmpdir(), 'cc-socks'),
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
+  native: {
+    typeText: (session, pane, text) => typeText(pane, text, session),
+    pressEnter: (session, pane) => pressEnter(pane, session),
+    status: (session, pane) => agentStatus(pane, session),
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  },
   now: () => new Date(),
   home: homedir(),
 };
@@ -83,7 +103,7 @@ export const MAX_WAIT_S = 86_400;
 type Report = { json: boolean; seat: string | null; sent: string | null };
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  const args = readArgs(argv, ['file', 'timeout'], ['wait', 'json', 'list']);
+  const args = readArgs(argv, ['file', 'timeout'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
   const report: Report = { json: args.flags.has('json'), seat: seatName ?? null, sent: null };
   if (args.error) return usage(io, args.error, report);
@@ -133,15 +153,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (!configured) {
     return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
   }
-  // Delivery picks the channel by seat kind. Only the socket channel is built in this
-  // increment. TODO (a later increment, delivered by its own build): a native-vendor-CLI
-  // seat (codex, cursor, grok, antigravity) delivers through the delivery daemon —
-  // file-drop and a short trigger, never this process typing into the pane. --wait's reply
-  // for such a seat comes from the same daemon, not from here.
-  if (configured.cli !== 'claude-code') {
-    return refuse(io, dir, who, `${seatName} runs ${configured.cli}: this build carries the cross-session socket channel only, and the delivery daemon for a native CLI is not built yet; nothing was sent`, host, report);
-  }
-
   let body: string;
   if (file !== undefined) {
     try {
@@ -153,6 +164,32 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     body = words.join(' ');
   }
   if (body.trim() === '') return usage(io, 'the message is empty', report);
+
+  const dry = args.flags.has('dry-run');
+  // A native CLI has no cross-session socket. The body is never typed: it is written whole
+  // to a 0600 drop file, and the pane gets one trigger line. --wait has no reply path here.
+  if (configured.cli !== 'claude-code') {
+    if (wait && !dry) {
+      return refuse(io, dir, who, `${seatName} runs ${configured.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`, host, report);
+    }
+    const msgId = randomUUID();
+    const dropDir = join(dir, 'send-drops', team.session, seatName);
+    const dropPath = join(dropDir, msgId);
+    const trigger = triggerLine(dropPath);
+    if (trigger === null) {
+      return refuse(io, dir, who, `${seatName}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
+    }
+    if (dry) {
+      return dryRun(io, dir, who, seatName, `${configured.cli} via a 0600 drop file and one trigger line; nothing was written`, host, report);
+    }
+    const found = findAgent(host, team.session, seatName);
+    if (!found.ok) {
+      if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
+      return unreachable(io, dir, who, seatName, found.reason, host, report);
+    }
+    report.sent = msgId;
+    return deliverNative(io, dir, who, team.session, seatName, found.pane, dropDir, msgId, body, trigger, host, report);
+  }
 
   // One JSON line, exactly the frame the probe measured: `type:"user"`, the content, and a
   // msg_id for a reader's own correlation. No `from`: this process has no session socket, so
@@ -167,19 +204,16 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (frame.length > FRAME_LIMIT) {
     return refuse(io, dir, who, `${seatName}: the message is too large for this channel: the frame is ${String(frame.length)} characters and the socket's measured limit is ${String(FRAME_LIMIT)}; nothing was sent`, host, report);
   }
+  if (dry) {
+    return dryRun(io, dir, who, seatName, 'claude-code via the cross-session socket; nothing was sent', host, report);
+  }
 
-  const agents = host.agents(team.session);
-  if (agents === null) {
-    return unreachable(io, dir, who, seatName, `the session "${team.session}" could not be read`, host, report);
+  const found = findAgent(host, team.session, seatName);
+  if (!found.ok) {
+    if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
+    return unreachable(io, dir, who, seatName, found.reason, host, report);
   }
-  const named = agents.filter((agent) => agent.name === seatName);
-  if (named.length === 0) {
-    return unreachable(io, dir, who, seatName, 'no live agent carries that name in the session', host, report);
-  }
-  if (named.length > 1) {
-    return refuse(io, dir, who, `${seatName}: herdr lists more than one agent of this name; nothing was sent`, host, report);
-  }
-  const pane = (named[0] as { pane: string }).pane;
+  const pane = found.pane;
   const processes = host.processInfo(team.session, pane);
   if (processes === null) {
     return unreachable(io, dir, who, seatName, "the pane's processes could not be read", host, report);
@@ -233,6 +267,85 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   } finally {
     lock.release();
   }
+}
+
+type Found = { ok: true; pane: string } | { ok: false; kind: 'unreachable' | 'refused'; reason: string };
+
+/** The one live agent of this name, or why the send cannot use a pane. */
+function findAgent(host: SendHost, session: string, seatName: string): Found {
+  const agents = host.agents(session);
+  if (agents === null) return { ok: false, kind: 'unreachable', reason: `the session "${session}" could not be read` };
+  const named = agents.filter((agent) => agent.name === seatName);
+  if (named.length === 0) return { ok: false, kind: 'unreachable', reason: 'no live agent carries that name in the session' };
+  if (named.length > 1) return { ok: false, kind: 'refused', reason: `${seatName}: herdr lists more than one agent of this name; nothing was sent` };
+  return { ok: true, pane: (named[0] as { pane: string }).pane };
+}
+
+/**
+ * Writes the drop file under the seat lock, types the one trigger, and reports delivered only
+ * when herdr's status says the seat took it. The lock is held across the typing so a second
+ * send cannot append into the same composer.
+ */
+async function deliverNative(
+  io: Io,
+  dir: string,
+  who: string,
+  session: string,
+  seatName: string,
+  pane: string,
+  dropDir: string,
+  msgId: string,
+  body: string,
+  trigger: string,
+  host: SendHost,
+  report: Report,
+): Promise<number> {
+  const lock = acquireSeatLock(dir, session, seatName);
+  if (!('release' in lock)) {
+    return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
+  }
+  try {
+    let path: string;
+    try {
+      sealDropTree(dir, session, seatName);
+      path = dropMessage(dropDir, msgId, body);
+    } catch {
+      return refuse(io, dir, who, `${seatName}: the drop file could not be written; nothing was typed`, host, report);
+    }
+    const outcome = await submitTrigger(host.native, session, pane, trigger);
+    if (!outcome.ok) {
+      return unreachable(io, dir, who, seatName, `${outcome.reason}; the drop file is at ${path}`, host, report);
+    }
+    logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, herdr status ${outcome.status})`, host.now());
+    return delivered(io, seatName, report);
+  } finally {
+    lock.release();
+  }
+}
+
+/** `send-drops`, the session directory, and the seat directory are each mode 0700.
+ *  The leaf alone would leave the parents at the umask, so other users could list
+ *  session ids and seat names. `.agents` itself is not changed. */
+function sealDropTree(dir: string, session: string, seat: string): void {
+  const root = join(dir, 'send-drops');
+  const sessionDir = join(root, session);
+  const leaf = join(sessionDir, seat);
+  mkdirSync(leaf, { recursive: true });
+  chmodSync(root, 0o700);
+  chmodSync(sessionDir, 0o700);
+  chmodSync(leaf, 0o700);
+}
+
+/** The seat and channel. No drop file and nothing typed. One team.log line. Exit 0, always. */
+function dryRun(io: Io, dir: string, who: string, seat: string, what: string, host: SendHost, report: Report): number {
+  report.sent = null;
+  logLine(dir, 'send', who, `${seat}: dry-run: ${what}`, host.now());
+  if (report.json) {
+    io.stdout(document({ seat, status: 'dry-run', exit: 0, ids: { sent: null, reply: null } }));
+  } else {
+    io.stdout(`${seat}: dry-run: ${what}\n`);
+  }
+  return 0; // exit: send.dry-run
 }
 
 /** `--list`: the file's seats, nothing sent and no caller check. Exit 0, always. */
