@@ -130,6 +130,8 @@ clearing key runs first — and a dry run says so in a note under its typing ste
 | `session default: herdr's default session is never stopped` | the default session is herdr's own |
 | `<name>: its record is not an approved seat; left running (the owner cleans it: team remove <name> --abandon)` | herdr lists a name the approved copy does not carry |
 | `<name>: herdr lists more than one agent of this name; left as it is` | more than one live agent of an approved name |
+| `pane <pane>: not recorded for a seat of this team; left as it is` | an unnamed pane whose pane and workspace match no seat record |
+| `<seat>: pane <pane> is not the process this team launched; left as it is` | the state records that pane and workspace, and a launched process that is no longer in the pane |
 | `watch: its pid is only in the state; left running` | the state records a watch pid that is alive; this run does not kill it |
 
 It prints `session <session> is not running: nothing to stop` and exits 0 when there is nothing to

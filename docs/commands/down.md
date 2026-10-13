@@ -2,8 +2,10 @@
 
 Stops the team: asks every running seat the approved copy names to exit, closes its workspace, and
 stops the herdr session. The stop list is that copy — a name it does not carry is left running. A
-seat is only asked when it is free, so a working, blocked or half-typed seat is left running and
-named. `--dry-run` prints the plan and runs nothing.
+pane with no name is closed when the state records that pane and that workspace for one seat, and,
+when that record also holds the process `up` launched, that process is still in the pane. Any other
+unnamed pane is left as it is and named. A seat is only asked when it is free, so a working, blocked
+or half-typed seat is left running and named. `--dry-run` prints the plan and runs nothing.
 
 ## Synopsis
 
