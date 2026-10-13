@@ -842,6 +842,7 @@ describe('team down', () => {
     });
     expect(run.out).toStartWith(
       [
+        'pane x:p1: not recorded for a seat of this team; left as it is',
         'deepseek-acme-tmp-1: its record is not an approved seat; left running (the owner cleans it: team remove deepseek-acme-tmp-1 --abandon)',
         'stranger: its record is not an approved seat; left running (the owner cleans it: team remove stranger --abandon)',
         'watch: its pid is only in the state; left running',
