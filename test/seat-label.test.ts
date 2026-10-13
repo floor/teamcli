@@ -1,10 +1,6 @@
-// The herdr title of a seat is derived from the seat's own configuration — its `display` —
-// never from a hand-written `label:`, which the file still accepts so every file written so
-// far loads, checks, approves and runs unchanged. A written label repeated the seat's name and
-// drifted ("builder1.Grok7"); herdr already shows the seat's name on its own line, so the
-// title must not carry it. The effort a seat may one day carry joins the title with ` · `;
-// that field is the effort change's (#263) — here its half of `workspaceLabel`'s contract is
-// pinned as a plain call, and the through-file coverage follows #263's merge.
+// Line 1 is the seat's written label, or `<name> · <role>` when the file writes none. The
+// stored label (written, or the lowercase model and version) stays what the seat digest hashes.
+// Line 2 is `displayAgent`: the display, and the effort when the file sets one.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -15,7 +11,7 @@ import { runTeamCheck } from '../src/check/team.ts';
 import { runApprove } from '../src/commands/approve.ts';
 import { runDoctor, seatNameFindings, type DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type UpSources } from '../src/commands/up.ts';
-import { workspaceLabel } from '../src/file/sections/seats.ts';
+import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
@@ -38,10 +34,8 @@ seats:
     launch: claude --model claude-opus-5-5
 `;
 
-// A roster with one seat of each shape the label is derived from: the lowercase default, a
-// display the file writes, a counted entry, a written label that must not decide anything.
-// (`effort` on a seat is the effort change's field, not this branch's; the ` · ` it would add
-// is pinned below as workspaceLabel's own contract.)
+// A roster with one seat of each shape: a written label, no label, a display the file writes,
+// a counted entry, and a stopped seat.
 const mixed = `format: 1
 project: acme
 coordinator: lead
@@ -113,55 +107,47 @@ function withLabel(label: string): string {
 const DIGEST_OMITTED = '9680f5f846ed89d816396590ff3883fd44ce864808fabd4c91a0482350db8c1a';
 const DIGEST_WRITTEN = '21a216ffade36f87249b66e39ada2b3fdc849a73543e320e3ce5e1a5ceac3e2f';
 
-describe('the derived label of a seat', () => {
-  // The title `up` and `add` give the workspace is `workspaceLabel(seat)`; the seat's stored
-  // `label` keeps what the file wrote (or the lowercase default) and no longer titles anything.
-  test('is the display alone when the seat has no effort, in the display\'s own case', () => {
-    expect(workspaceLabel(seatNamed(valid(minimal), 'lead'))).toBe('Claude Opus 5.5');
+describe('the workspace title of a seat', () => {
+  test('a seat with no written label is titled with its name and role', () => {
+    expect(workspaceLabel(seatNamed(valid(minimal), 'lead'))).toBe('lead · coordinator');
   });
 
-  // The seat type carries no `effort` until the effort change lands (#263); `workspaceLabel`
-  // keeps the half of its contract that reads one, so it is pinned as a plain call.
-  test('is the display and the effort, spaced by a middle dot', () => {
-    expect(workspaceLabel({ display: 'Grok 4.7', effort: 'high' })).toBe('Grok 4.7 · high');
+  test('line 2 is the display and the effort, spaced by a middle dot', () => {
+    expect(displayAgent({ display: 'Grok 4.7', effort: 'high' })).toBe('Grok 4.7 · high');
+    expect(displayAgent(seatNamed(valid(minimal), 'lead'))).toBe('Claude Opus 5.5');
   });
 
-  test('a written label no longer decides the title, and the file still loads', () => {
+  test('a written label titles the workspace, and the file still loads', () => {
     const team = valid(withLabel('builder1.Grok7'));
-    expect(workspaceLabel(seatNamed(team, 'lead'))).toBe('Claude Opus 5.5');
+    expect(workspaceLabel(seatNamed(team, 'lead'))).toBe('builder1.Grok7');
     expect(team.seats[0]?.label).toBe('builder1.Grok7');
-    expect(workspaceLabel(seatNamed(valid(mixed), 'lead'))).toBe('Claude Opus 5.5');
+    expect(workspaceLabel(seatNamed(valid(mixed), 'lead'))).toBe('builder1.Grok7');
   });
 
-  test('every seat of a mixed roster is titled from its own configuration', () => {
+  test('every seat of a mixed roster is titled from its label or its name and role', () => {
     expect(valid(mixed).seats.map((seat) => [seat.name, workspaceLabel(seat)])).toEqual([
-      ['lead', 'Claude Opus 5.5'],
-      ['researcher', 'Grok 4.7'],
-      ['implementer', 'GPT-6 Sol'],
-      ['maker', 'DeepSeek V4.1 Flash'],
-      ['maker-2', 'DeepSeek V4.1 Flash'],
-      ['reviewer', 'Gemini 3'],
+      ['lead', 'builder1.Grok7'],
+      ['researcher', 'researcher · researcher'],
+      ['implementer', 'implementer · implementer'],
+      ['maker', 'maker · implementer'],
+      ['maker-2', 'maker-2 · implementer'],
+      ['reviewer', 'reviewer · reviewer'],
     ]);
   });
 
-  test('carries no seat\'s name and no seat\'s role', () => {
+  test('line 1 never carries the model', () => {
     for (const seat of valid(mixed).seats) {
       const title = workspaceLabel(seat);
-      expect(title.includes(seat.name)).toBe(false);
-      expect(title.includes(seat.role)).toBe(false);
-      expect(title.toLowerCase().includes(seat.name.toLowerCase())).toBe(false);
+      expect(title.includes(seat.model)).toBe(false);
+      expect(title.includes(seat.display)).toBe(false);
     }
   });
 
-  // Nothing keys two seats apart by their label: `execute.ts` looks every pane up by the seat's
-  // name ("the display label may be shared; the seat's name is the only key"), the waiting proof
-  // finds the workspace by its id and then compares the label, and herdr 0.7.1 itself took two
-  // `workspace create --label "Grok 4.7 · high"` calls in one scratch session and listed both
-  // workspaces side by side (run of 2026-10-12, quoted in the pull request). So a counted entry
-  // needs no `-N` on the label: both instances carry the same title.
-  test('a counted entry shares one label across its instances, with no number', () => {
+  // A counted entry's instances must not share line 1. With no written label the names already
+  // differ; a written label keeps the `-<n>` the stored label has always carried.
+  test('a counted entry gives each instance its own line 1', () => {
     const counted = valid(mixed).seats.filter((seat) => seat.declared === 'maker');
-    expect(counted.map((seat) => workspaceLabel(seat))).toEqual(['DeepSeek V4.1 Flash', 'DeepSeek V4.1 Flash']);
+    expect(counted.map((seat) => workspaceLabel(seat))).toEqual(['maker · implementer', 'maker-2 · implementer']);
   });
 
   // The stored `label` — the one `seatDigest` hashes, not the title — keeps the `-N` a counted
@@ -175,8 +161,9 @@ describe('the derived label of a seat', () => {
     expect(written.seats.filter((seat) => seat.declared === 'maker').map((seat) => seat.label)).toEqual(['desk', 'desk-2']);
   });
 
-  test('a display the file writes is the label verbatim, and still needs the version as its own token', () => {
-    expect(workspaceLabel(seatNamed(valid(mixed), 'implementer'))).toBe('GPT-6 Sol');
+  test('a display the file writes is line 2, and still needs the version as its own token', () => {
+    expect(displayAgent(seatNamed(valid(mixed), 'implementer'))).toBe('GPT-6 Sol');
+    expect(workspaceLabel(seatNamed(valid(mixed), 'implementer'))).toBe('implementer · implementer');
     const refused = validateTeamFile(minimal.replace('    launch:', '    display: GPT Sol Six\n    launch:'));
     expect(refused.ok).toBe(false);
     if (!refused.ok) {
@@ -184,16 +171,16 @@ describe('the derived label of a seat', () => {
     }
   });
 
-  test('the readme example titles every seat from its display', () => {
+  test('the readme example titles every seat from its name and role', () => {
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
     const fence = readme.split('```yaml\n')[1]?.split('\n```')[0] ?? '';
     const team = valid(fence);
     expect(team.seats.map((seat) => [seat.name, workspaceLabel(seat)])).toEqual([
-      ['coordinator', 'Meridian 1'],
-      ['implementer', 'GPT-6 Sol'],
-      ['implementer-deepseek', 'DeepSeek V4.1 Flash'],
-      ['implementer-deepseek-2', 'DeepSeek V4.1 Flash'],
-      ['reviewer', 'Gemini 3'],
+      ['coordinator', 'coordinator · coordinator'],
+      ['implementer', 'implementer · implementer'],
+      ['implementer-deepseek', 'implementer-deepseek · implementer'],
+      ['implementer-deepseek-2', 'implementer-deepseek-2 · implementer'],
+      ['reviewer', 'reviewer · reviewer'],
     ]);
     expect(seatNameFindings(team, team.session)).toEqual([]);
   });
@@ -305,8 +292,9 @@ describe('check, approve and up on a file from before the change', () => {
       doctor: doctor(home),
     } satisfies Partial<UpSources> as UpSources);
     expect(upCode, `${up.out}${up.err}`).toBe(0);
-    expect(up.out).toContain(`--label 'Claude Opus 5.5'`);
-    expect(up.out).not.toContain('--label coordinator');
+    expect(up.out).toContain('--label coordinator');
+    expect(up.out).toContain(`--display-agent 'Claude Opus 5.5'`);
+    expect(up.out).not.toContain(`--label 'Claude Opus 5.5'`);
     rmSync(base, { recursive: true, force: true });
   });
 
@@ -324,12 +312,13 @@ describe('check, approve and up on a file from before the change', () => {
       doctor: doctor(home),
     } satisfies Partial<UpSources> as UpSources);
     expect(upCode, `${up.out}${up.err}`).toBe(0);
-    expect(up.out).toContain(`--label 'Grok 4.7'`);
-    expect(up.out).toContain(`--label 'Claude Opus 5.5'`);
+    expect(up.out).toContain('--label builder1.Grok7');
+    expect(up.out).toContain(`--label 'researcher · researcher'`);
+    expect(up.out).toContain(`--display-agent 'Grok 4.7'`);
     expect(up.out).toContain('<pane of researcher>');
     expect(up.out).toContain('<pane of maker-2>');
-    expect(up.out).not.toContain('builder1.Grok7');
-    expect(up.out).not.toContain('--label researcher');
+    expect(up.out).not.toContain(`--label 'Claude Opus 5.5'`);
+    expect(up.out).not.toContain(`--label 'Grok 4.7'`);
     rmSync(base, { recursive: true, force: true });
   });
 });

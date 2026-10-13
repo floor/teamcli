@@ -12,7 +12,7 @@ import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { declaredModel } from '../file/model.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
-import { workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import {
   agentList,
@@ -23,6 +23,7 @@ import {
   paneProcesses,
   paneRead,
   paneRun,
+  reportDisplayAgent,
   paneShellBack,
   sessionDelete,
   sessionStop,
@@ -114,6 +115,8 @@ export type Launch = {
   sessionUp(session: string): boolean | null;
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
+  /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
+  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   renameAgent(session: string, pane: string, name: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
   agentPanes(session: string): string[] | null;
@@ -177,6 +180,7 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
+  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
@@ -340,6 +344,7 @@ function seatPlan(
     launch: seat.launch,
     cwd: seat.cwd,
     label: workspaceLabel(seat),
+    displayAgent: displayAgent(seat),
     model: seat.model,
     version: seat.version,
     // The team file's own repair for this seat — a lead seat is told only the whole-team
@@ -924,6 +929,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
+      ...(launch.reportDisplayAgent
+        ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
+        : {}),
       typeLine: () => false,
       deliverRules: async (session, pane, cli, file, seconds) => {
         // The rules go to the file first; nothing is typed until it holds them. The writer

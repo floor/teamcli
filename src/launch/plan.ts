@@ -1,4 +1,5 @@
 import { isAbsolute, join, resolve } from 'node:path';
+import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { profileFor } from '../profiles/index.ts';
 import { launchCommand, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
@@ -20,6 +21,8 @@ export type Op =
   /** The watchdog's workspace: no seat, so no seat repair either. */
   | { do: 'create'; seat?: undefined; label: string; cwd: string; notice?: string; lobby?: undefined }
   | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string }
+  /** Sidebar line 2. A failure is one line and does not leave the seat out. */
+  | { do: 'display-agent'; seat: string; text: string; pane?: string }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -111,6 +114,8 @@ export interface UpSeat {
   /** Relative to the root. */
   cwd: string;
   label: string;
+  /** Sidebar line 2, set on the pane after launch. Absent: the plan does not report one. */
+  displayAgent?: string;
   /** The team file's repair for this seat (`relaunchRepair`'s markdown text): every line this
    *  run prints that names a repair prints this one, never a `remove --keep` a lead seat's file
    *  would refuse. */
@@ -408,6 +413,13 @@ export function upPlan(input: UpInput): Step[] {
         ...(said ? { note: `${said}; would launch` } : {}),
         do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, ...(said ? { notice: said } : {}) },
       });
+      if (seat.displayAgent) {
+        steps.push({
+          kind: 'run',
+          argv: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent),
+          do: { do: 'display-agent', seat: seat.name, text: seat.displayAgent, pane: seat.pane },
+        });
+      }
     }
     const rules = profile.rulesOption === null ? 'message' : 'option';
     // A waiting seat is asked even when its stage says named: the prompt is the only way its

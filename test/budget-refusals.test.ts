@@ -23,8 +23,8 @@ const OWNER = { kind: 'owner' } as const;
 const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
 const TAIL = 'openai weekly left 5%, inside its 10% reserve, changed 1m ago; accounts with room: anthropic';
 const WHY = `refused: ${TAIL}`;
-/** The herdr title both seats share: display, not the written label. */
-const TITLE = 'Claude Opus 5.5';
+/** Line 1 of the lead, its written label. The worker's written label is `worker`. */
+const TITLE = 'lead';
 
 const BASE = `format: 1
 project: acme
@@ -237,7 +237,7 @@ describe('a stored reading refuses one seat', () => {
     const dry = await up(['--dry-run'], world());
     expect(dry.code).toBe(0);
     expect(dry.out).toContain(`  skip worker: would refuse: ${TAIL}\n`);
-    expect(dry.out).toContain(`--label '${TITLE}'`);
+    expect(dry.out).toContain(`--label ${TITLE}`);
     expect(dry.out).not.toContain('<pane of worker>');
     expect(dry.labels).toEqual([]);
 
@@ -396,7 +396,7 @@ describe('a stored reading refuses one seat', () => {
     expect(live.code).toBe(0);
     expect(live.err).toContain('worker: openai is unknown\n');
     expect(live.out).toContain('worker: ready\n');
-    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
+    expect(live.labels).toEqual([TITLE, 'worker', 'watchdog']);
   });
 
   test('the tightest window is the one named', () => {
@@ -485,7 +485,7 @@ describe('a spend floor refuses one seat', () => {
     storeSpend([spend('openai', 8)]);
     const above = await up([], world());
     expect(above.code).toBe(0);
-    expect(above.labels).toEqual([TITLE, TITLE, 'watchdog']);
+    expect(above.labels).toEqual([TITLE, 'worker', 'watchdog']);
     expect(above.out).not.toContain('refused');
     expect(above.out).not.toContain('is unknown');
   });
@@ -525,7 +525,7 @@ describe('a spend floor refuses one seat', () => {
     storeSpend([spend('openai', 5.0001)]);
     const above = await up([], world());
     expect(above.code).toBe(0);
-    expect(above.labels).toEqual([TITLE, TITLE, 'watchdog']);
+    expect(above.labels).toEqual([TITLE, 'worker', 'watchdog']);
     expect(above.out).not.toContain('refused');
   });
 
@@ -542,7 +542,7 @@ describe('a spend floor refuses one seat', () => {
     const live = await up([], world());
     expect(live.code).toBe(0);
     expect(live.err).toContain('worker: openai is unknown\n');
-    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
+    expect(live.labels).toEqual([TITLE, 'worker', 'watchdog']);
   });
 
   test('no reading at all reads unknown', async () => {
@@ -558,7 +558,7 @@ describe('a spend floor refuses one seat', () => {
     expect(dry.out).toContain('openai is unknown; would launch');
     const live = await up([], world());
     expect(live.code).toBe(0);
-    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
+    expect(live.labels).toEqual([TITLE, 'worker', 'watchdog']);
   });
 
   test('add refuses the same seat before launching it', async () => {
@@ -631,7 +631,7 @@ describe('a subscription check reading refuses one seat', () => {
     store([reading('anthropic', 80), reading('openai', 4), checkReading('openai', 80)]);
     const live = await up([], world());
     expect(live.code).toBe(0);
-    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
+    expect(live.labels).toEqual([TITLE, 'worker', 'watchdog']);
     expect(live.out).not.toContain('refused');
     expect(live.out).not.toContain('is unknown');
   });
@@ -646,7 +646,7 @@ describe('a subscription check reading refuses one seat', () => {
     expect(dry.out).toContain('openai is unknown; would launch');
     const live = await up([], world());
     expect(live.code).toBe(0);
-    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
+    expect(live.labels).toEqual([TITLE, 'worker', 'watchdog']);
 
     // § 3: a lower source is used when the higher one is stale — the screen's own figure decides.
     store([reading('anthropic', 80), checkReading('openai', 50, old), reading('openai', 4)]);
@@ -677,7 +677,7 @@ describe('a subscription check reading refuses one seat', () => {
     const cleared = await up([], world());
     expect(cleared.code).toBe(0);
     expect(cleared.out).not.toContain('refused');
-    expect(cleared.labels).toEqual([TITLE, TITLE, 'watchdog']);
+    expect(cleared.labels).toEqual([TITLE, 'worker', 'watchdog']);
   });
 
   test('an account whose sources do not name the check never reads one', async () => {
@@ -828,7 +828,7 @@ describe('two accounts on one vendor', () => {
     expect(live.out).toContain('work: left out: refused: openai-work weekly left 5%, inside its 10% reserve, changed 1m ago; accounts with room: anthropic, openai-home\n');
     expect(live.out).toContain('lead: ready\n');
     expect(live.out).toContain('home: ready\n');
-    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
+    expect(live.labels).toEqual([TITLE, 'home', 'watchdog']);
   });
 });
 
@@ -850,7 +850,7 @@ describe('an unapproved edit to the budgets', () => {
     approve(WEAKER);
     const after = await up([], world());
     expect(after.code).toBe(0);
-    expect(after.labels).toEqual([TITLE, TITLE, 'watchdog']);
+    expect(after.labels).toEqual([TITLE, 'worker', 'watchdog']);
     expect(after.out).not.toContain('would refuse');
   });
 
@@ -864,6 +864,6 @@ describe('an unapproved edit to the budgets', () => {
     approve(WEAKER);
     const after = await add(['worker'], world());
     expect(after.code).toBe(0);
-    expect(after.labels).toEqual([TITLE]);
+    expect(after.labels).toEqual(['worker']);
   });
 });

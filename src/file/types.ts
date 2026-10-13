@@ -59,9 +59,14 @@ export type Seat = {
   cwd: string;
   /**
    * The file's label: written, or `<model> <version>` in lowercase. Hashed with the seat.
-   * It does not title the herdr workspace; `workspaceLabel` does, from `display` and `effort`.
+   * A written one is the workspace title; `workspaceLabel` uses the name and role when it was omitted.
    */
   label: string;
+  /**
+   * Set when the file wrote `label:`. Not hashed: the stored `label` string is what an approval
+   * seals, and this mark only tells a written label from the lowercase default.
+   */
+  labelWritten?: true;
   /**
    * The seat's effort word, when the file sets one. Absent otherwise, so a file that omits it
    * keeps the digest it had. A lab with a vocabulary warns when the word is outside it; the

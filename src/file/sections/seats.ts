@@ -49,7 +49,7 @@ export const seats: Section = {
         display: { type: 'string', $comment: 'defaults to "model version"; must contain the version as a token of its own' },
         launch: { type: 'string', minLength: 1 },
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
-        label: { type: 'string', $comment: 'accepted, and not the herdr title; the title is the display, and the effort when set' },
+        label: { type: 'string', $comment: 'the workspace title when written; left out, the title is the seat name and its role, and this stored value stays the model and version in lowercase' },
         effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it' },
         mode: { enum: MODES },
         parked: { type: 'boolean' },
@@ -71,7 +71,7 @@ export const seats: Section = {
         },
       },
       required: ['role', 'name', 'cli', 'vendor', 'model', 'version', 'launch'],
-      $comment: 'account must name a key of budgets.accounts; the herdr title is the display and the effort; a written label is kept and does not title the workspace; a seat with count is neither lead',
+      $comment: 'account must name a key of budgets.accounts; the workspace title is the written label, or the seat name and role when none is written; display and effort are the pane display; a seat with count is neither lead',
     },
   },
 };
@@ -142,8 +142,8 @@ function readSeats(
     const label = check.text(fields.get('label'), `${at}: label`);
     const effort = readEffort(fields.get('effort'), at, vendor, check);
     // The written label, or the lowercase model and version, stays on the seat: `seatDigest`
-    // hashes `label`, and an approved file keeps its key. It does not title the workspace.
-    // `up` and `add` use `workspaceLabel` (the display, and the effort when set).
+    // hashes `label`, and an approved file keeps its key. `labelWritten` is not hashed: it only
+    // records that the file wrote the field, so `workspaceLabel` can tell the two apart.
     // The owner-only reach grant. In the seat's digest like every other field: a grant reaches
     // the bridge and the shuttle daemon only through an owner's approval of the file.
     const reach = readReach(fields.get('reach'), at, check);
@@ -157,6 +157,7 @@ function readSeats(
         role, cli, vendor, model, version, display, launch, cwd, parked, stopped, line,
         name: name + suffix,
         label: (label ?? defaultLabel(model, version)) + suffix,
+        ...(label !== undefined ? { labelWritten: true as const } : {}),
         declared: name,
         count,
         instance,
@@ -179,13 +180,18 @@ export function defaultLabel(model: string, version: string): string {
 }
 
 /**
- * The herdr workspace title `up` and `add` give a seat: its display, and ` · ` plus
- * its effort when the file sets one. No seat name and no role. Count instances share
- * it. `execute.ts` keys a place on the seat's name ("the display label may be shared"),
- * and a herdr 0.7.1 sidebar drew the workspace label on line 1 and `idle · <agent name>`
- * on line 2, so the name is not lost when the title is shared.
+ * Line 1, the herdr workspace title `up` and `add` give a seat. A written label is that
+ * title, and a `count` instance after the first already carries `-<n>` on the stored label
+ * (the same suffix as its name), so the lines differ. A seat with no written label is
+ * `<name> · <role>`; count instances already have distinct names. The model is never the title.
  */
-export function workspaceLabel(seat: { display: string; effort?: string }): string {
+export function workspaceLabel(seat: { name: string; role: string; label: string; labelWritten?: boolean }): string {
+  if (seat.labelWritten) return seat.label;
+  return `${seat.name} · ${seat.role}`;
+}
+
+/** Line 2, the pane's display_agent: the display, and ` · ` plus the effort when the file sets one. */
+export function displayAgent(seat: { display: string; effort?: string }): string {
   return seat.effort ? `${seat.display} · ${seat.effort}` : seat.display;
 }
 
