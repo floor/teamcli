@@ -145,6 +145,8 @@ export interface UpSeat {
   /** The waiting seat's recorded pane, when the host no longer lists it. The seat is launched
    *  in a fresh workspace, and this id is the one line that says the old pane was replaced. */
   replacedPane?: string;
+  /** The recorded workspace, when the host still lists it. Named on that same line, and not closed. */
+  leftWorkspace?: string;
   /** The seat works in worktrees: it waits in the lobby until a brief names its worktree. */
   lobby?: boolean;
   /**
@@ -361,7 +363,9 @@ export function upPlan(input: UpInput): Step[] {
     if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
     else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;
     if (seat.replacedPane) {
-      const gone = `its recorded pane ${seat.replacedPane} was gone and was replaced`;
+      const gone = seat.leftWorkspace
+        ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its workspace ${seat.leftWorkspace} was left`
+        : `its recorded pane ${seat.replacedPane} was gone and was replaced`;
       notice = notice ? `${notice}; ${gone}` : gone;
     }
     const takeNotice = (): string | undefined => {

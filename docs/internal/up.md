@@ -297,8 +297,10 @@ its pane and workspace, nothing created for it — verifies the current screen w
 and enters the same pause, **before** the ordinary unnamed or wrong-name handling, while the host
 still lists the recorded pane. A recorded pane the host no longer lists is replaced: a fresh
 workspace is made, the seat launches, and one line says `<seat>: its recorded pane <pane> was gone
-and was replaced`. A pane the host still lists is never closed or recreated. No agent of that
-name while the pane is still listed, or more than one, is not a reason to launch again: nothing
+and was replaced`. When the host still lists the recorded workspace, that same line names it
+(`; its workspace <workspace> was left`). The workspace is not closed. A pane the host still
+lists is never closed or recreated. No agent of that name while the pane is still listed, or
+more than one, is not a reason to launch again: nothing
 is created, the record kept, and the final record is
 `<seat>: left out: its waiting pane is gone` or
 `<seat>: left out: herdr lists more than one agent of this name; left as it is`, with the team file's own repair under it on stderr —
@@ -428,7 +430,7 @@ record it belongs to, as its meaning says.
 | `<seat>: waiting for owner (<classification>)` | the provisional record drawn while the seat's owner is asked, at a terminal (the pause, above); it is rewritten in place when the classification changes, and is not the seat's final record |
 | `<seat>: left out: skipped by owner` | the owner pressed `[s]`: the seat's workspace was closed without input and its launch state cleared, the `waiting` record with it |
 | `<seat>: left out: stopped cleanly` | the owner pressed `[q]` (or Ctrl-C) at this or an earlier seat, and this seat had no final record: a workspace this invocation created for it — not already ready or closed — was closed without input and its state cleared |
-| `<seat>: its recorded pane <pane> was gone and was replaced` | a later `up` found the seat recorded waiting and the host no longer lists that pane: a fresh workspace was made and the seat launched. A pane the host still lists is never this line |
+| `<seat>: its recorded pane <pane> was gone and was replaced` / `<seat>: its recorded pane <pane> was gone and was replaced; its workspace <workspace> was left` | a later `up` found the seat recorded waiting and the host no longer lists that pane: a fresh workspace was made and the seat launched. The second line is that same line when the host still lists the recorded workspace: the workspace is named and not closed. A pane the host still lists is never this line |
 | `<seat>: left out: its waiting pane is gone` / `<seat>: left out: its waiting pane holds another process` | a later `up` found the seat recorded waiting and the host still lists that pane but no agent of the seat's name, or the pane no longer holds the recorded process: nothing was created, nothing closed, the record kept; the repair under the record on stderr is the team file's own for this seat — `team down` then `team up` (to restart the whole team) for an orchestrator or operator, `team remove <seat> --keep` then `team add <seat>` (or the whole team) for any other — and the owner answers or closes by hand first when the seat sits at a dialog, or its pane holds an agent `team` cannot name (above) |
 | `<seat>: left out: <reading>; its workspace did not close; left as it is` | the close of that workspace failed, with `<reading>` one of `trust`, `permission`, `question` or `vendor notice` — a run without a terminal closing it, or the pause's own close at the prompt: nothing claims it was closed, and the seat is left exactly as it was, its state kept — a later `up` resumes it |
 | `<seat>: left out: runs <model> <version>; the file says <model> <version>; left at launched, not named. Add <flag> <id> to its launch, or correct the file's model and version and run team approve` | the idle screen shows a different model than the file. The seat is not renamed and gets no rules; its pane stays open. The flag is that CLI's model flag, and the id is the one the profile maps to the file's model. When the profile knows no id, the line says `<id>` |
