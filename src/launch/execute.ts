@@ -643,32 +643,16 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           final(op.seat, { kind: 'left out', reason: 'has no pane to read; left at launched' });
           break;
         }
-        // What an idle screen means for the seat, wherever it was found: the model check, then
-        // the identity record. The seat carries on to its rename or its delivery either way.
+        // What an idle screen means for the seat, wherever it was found: the screen, then the
+        // process, then the model comparison. The model comes from that screen read, so the
+        // process read sits after it and before the comparison: a model the CLI is not running
+        // still leaves a `launched` identity, and the read stays ahead of the process read.
         const idleOnwards = (): void => {
-          // After the idle wait, before the rename and the rules: the same "differs" the watch uses.
-          // Unread is not a difference, and the seat continues. A different model is left unnamed.
-          if (op.model !== undefined && op.version !== undefined) {
-            const screen = host.paneText?.(session, here.pane) ?? null;
-            const running = screen === null ? null : seatModel({ cli: op.cli, model: op.model }, screen);
-            const declared = { model: op.model, version: op.version };
-            // `init` writes version "0" — the placeholder before the owner fills the release
-            // number in — and the release before this one left whole teams carrying it. Exactly
-            // that literal is read as "no version declared": the family is still compared, and
-            // any other value ("0.0", "00", a real number) is compared as today.
-            const differs = running !== null
-              && (op.version === '0' ? running.model !== op.model : modelDiffers(running, declared));
-            if (differs) {
-              dropped.add(op.seat);
-              final(op.seat, { kind: 'left out', reason: modelLeft(running, declared, op.cli) });
-              return;
-            }
-            if (!running) {
-              // The note is not a record: it is held and said as the seat's record's detail —
-              // stderr alone — and the log keeps the one line the record writes, `ready`.
-              hold(op.seat, `${op.seat}: its screen doesn't show a model this version knows; not checked\n`);
-            }
-          }
+          const model = op.model;
+          const version = op.version;
+          const screen = model !== undefined && version !== undefined
+            ? (host.paneText?.(session, here.pane) ?? null)
+            : null;
           // The seat's own process, read now that its idle prompt is on the screen: the pane's
           // shell and the pids in front of it that are not the shell. Nothing is recorded when
           // herdr can't tell: a seat without the record keeps today's behaviour.
@@ -681,6 +665,32 @@ export async function executePlan(steps: readonly Step[], session: string, host:
               launched: identity,
               ...(here.workspace ? { workspace: here.workspace } : {}),
             });
+          }
+          // After the idle wait, before the rename and the rules: the same "differs" the watch uses.
+          // Unread is not a difference, and the seat continues. A different model is left unnamed.
+          if (model !== undefined && version !== undefined) {
+            const running = screen === null ? null : seatModel({ cli: op.cli, model }, screen);
+            const declared = { model, version };
+            // `init` writes version "0" — the placeholder before the owner fills the release
+            // number in — and the release before this one left whole teams carrying it. Exactly
+            // that literal is read as "no version declared": the family is still compared, and
+            // any other value ("0.0", "00", a real number) is compared as today.
+            const differs = running !== null
+              && (version === '0' ? running.model !== model : modelDiffers(running, declared));
+            if (differs) {
+              dropped.add(op.seat);
+              final(
+                op.seat,
+                { kind: 'left out', reason: modelLeft(running, declared, op.cli) },
+                `  pane ${here.pane}; ${op.repairLine}, clears it\n`,
+              );
+              return;
+            }
+            if (!running) {
+              // The note is not a record: it is held and said as the seat's record's detail —
+              // stderr alone — and the log keeps the one line the record writes, `ready`.
+              hold(op.seat, `${op.seat}: its screen doesn't show a model this version knows; not checked\n`);
+            }
           }
         };
         if (op.waiting) {

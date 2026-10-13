@@ -3804,6 +3804,137 @@ describe('team up, the pause', () => {
     expect(io.out).not.toContain('not checked');
   });
 
+// The file names a model the running CLI is not. The pane stays, unnamed. The record has to
+// name that pane and the process in it, and say what clears it; once the file names the model
+// the screen shows, the next up finishes the seat and down stops the session.
+test('a mismatched model leaves its pane recorded, and the corrected file lets up and down finish', async () => {
+  const path = join(root, '.agents/team.yaml');
+  const cursorSeat = [
+    '  - role: implementer',
+    '    name: cursor-acme',
+    '    cli: cursor',
+    '    vendor: xai',
+    '    model: Grok',
+    '    version: "4.7"',
+    '    launch: cursor-agent',
+    '    mode: shared',
+  ].join('\n');
+  writeFileSync(path, makeExample(base, root, EXAMPLE
+    .replace(
+      '    count: 2                   # deepseek-acme, deepseek-acme-2\n',
+      '    count: 2\n    stopped: true\n',
+    )
+    .replace(/  - role: implementer\n    name: codex-acme[\s\S]*?stopped: true\n/, `${cursorSeat}\n`)));
+  await approve();
+  const shown = readFileSync(join(import.meta.dir, '../fixtures/cursor/2026.10.01/gpt-sol-idle.txt'), 'utf8');
+  const made = world((_pane, label) => (label === 'grok 4.7' ? shown : IDLE));
+  made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
+  const labels = new Map<string, string>();
+  const createWorkspace = made.launch.createWorkspace;
+  made.launch.createWorkspace = (session, cwd, label) => {
+    const created = createWorkspace(session, cwd, label);
+    if (created) labels.set(created.pane, label);
+    return created;
+  };
+  const pasted = new Map<string, string>();
+  const working = new Set<string>();
+  const readPane = made.launch.paneText;
+  made.launch.agentStatus = (_session, id) => (working.has(id) ? 'working' : 'idle');
+  made.launch.paneText = (session, id) => {
+    const text = pasted.get(id);
+    if (text === undefined) return readPane(session, id);
+    if (labels.get(id) === 'grok 4.7') {
+      const [first = '', ...rest] = text.split('\n');
+      return shown.replace('  → Plan, search, build anything', [`  → ${first}`, ...rest.map((line) => `    ${line}`)].join('\n'));
+    }
+    return claudeBox(text);
+  };
+  made.launch.typeText = (_session, id, text) => { pasted.set(id, text); return true; };
+  made.launch.pressEnter = (_session, id) => { pasted.delete(id); working.add(id); return true; };
+  const io = testIo(root, { kind: 'owner-no-tty' });
+  const code = await runUp(FILE, io, sources({}, made));
+  const held = readState(join(root, '.agents')).sessions['acme-web']?.seats['cursor-acme'];
+  const pane = held?.pane ?? '';
+  const workspace = held?.workspace ?? '';
+  expect(code).toBe(1);
+  expect(pane).not.toBe('');
+  expect(workspace).not.toBe('');
+  expect(made.renames).not.toContain('cursor-acme');
+  expect(io.out).toContain('left at launched, not named');
+
+  writeFileSync(path, readFileSync(path, 'utf8').replace(
+    '    name: cursor-acme\n    cli: cursor\n    vendor: xai\n    model: Grok\n    version: "4.7"\n',
+    '    name: cursor-acme\n    cli: cursor\n    vendor: xai\n    model: GPT Sol\n    version: "5.6"\n',
+  ));
+  await approve();
+  const seats = () => readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+  const listed = (): HerdrAgent[] => Object.entries(seats()).flatMap(([name, seat]) => {
+    if (!seat.pane || !seat.workspace) return [];
+    const titled = seat.stage === 'ready' || seat.stage === 'named' ? name : null;
+    return [{
+      name: titled,
+      agent: name.includes('cursor') ? 'cursor' : 'claude',
+      pane: seat.pane,
+      workspace: seat.workspace,
+      status: 'idle',
+      cwd: null,
+    }];
+  });
+  const seen = listed();
+  made.launch.agents = () => seen;
+  const next = testIo(root, { kind: 'owner-no-tty' });
+  const code2 = await runUp(FILE, next, sources({
+    agents: () => seen,
+    sessionState: () => 'running',
+  }, made));
+  const after = seats()['cursor-acme'];
+
+  const closed: string[] = [];
+  const stopped: string[] = [];
+  const downLaunch: DownLaunch = {
+    typeText: () => true,
+    sendKey: () => true,
+    pressEnter: () => true,
+    agentPanes: () => listed().map((agent) => agent.pane),
+    closeWorkspace(_session, workspace) {
+      closed.push(workspace);
+      return true;
+    },
+    stopSession(session) {
+      stopped.push(session);
+      return true;
+    },
+    deleteSession: () => true,
+    kill: () => true,
+    sleep: async () => {},
+    now: () => NOW,
+  };
+  const downIo = testIo(root, { kind: 'owner' });
+  const code3 = await runDown(FILE, downIo, {
+    sessionRunning: () => stopped.length === 0,
+    agents: listed,
+    alive: () => false,
+    screen: () => ({ kind: 'unknown' }),
+    screenText: () => '',
+    status: () => 'idle',
+    foreground: () => ['zsh'],
+    shellBack: () => true,
+    now: () => NOW,
+    home,
+    launch: downLaunch,
+  });
+
+  expect(next.out + next.err).not.toContain("doesn't record");
+  expect({ code: code2, out: next.out, err: next.err, stage: after?.stage ?? null }).toMatchObject({ code: 0, stage: 'ready' });
+  expect(downIo.out).not.toContain('not stopped');
+  expect(code3).toBe(0);
+  expect(stopped).toEqual(['acme-web']);
+  expect(closed).toContain(workspace);
+  expect(held?.launched).toEqual({ shell: 400, cli: [401] });
+  expect(io.err).toContain(`  pane ${pane}; `);
+  expect(io.err).toContain(', clears it\n');
+});
+
 describe('team up, delegated', () => {
   // A caller in a pane of another session, as the `delegates` section names one. The gate is
   // faked everywhere here — its preflights are its own file's tests; these pin what `up` does
