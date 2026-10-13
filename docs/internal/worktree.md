@@ -1,9 +1,12 @@
 # `team worktree`: rationale and known limits
 
-What moved off [the `team worktree` page](../commands/worktree.md): what the two
+What moved off [the `team worktree` page](../commands/worktree.md): what the
 subcommands read and write, how far the approved copy reaches, the behaviour behind the
 lines they print, the refusals in their own words, and the known limits. The synopsis, the
-flags, the caller table and the exit codes stay on the page.
+flags, the caller table and the exit codes stay on the page. `list` prints every recorded
+worktree in this state file — the same rows the limit counts — and writes nothing. A row
+whose folder is gone names `team worktree remove <task>`, which drops that record and
+prunes, and does not delete the branch.
 
 ## What the two subcommands do
 
@@ -108,7 +111,7 @@ same way.
 | ``team worktree: seat <name> is not in the approved file: run `team approve` `` — a seat the file declares and the approved copy does not | 1 |
 | `team worktree: --seat "x" names no declared seat` | 1 |
 | `team worktree: "t" is already recorded` / `"t" is already recorded in session x` | 1 |
-| `team worktree: the worktree limit is 8, and 8 are open` | 1 |
+| `team worktree: the worktree limit is 8, and 8 are open (workspace.limit in the team file)` then one line per recorded worktree | 1 |
 | `team worktree: <folder> already exists` / `branch <b> already exists` / `<remote>/<b> already exists` | 1 |
 | `team worktree: "b" is not a branch name` | 1 |
 | `team worktree: workspace.base "main" is not a branch here; nothing was created` | 1 |

@@ -2160,6 +2160,10 @@ scene('worktree.created', async (place) => {
   approve(place, worktreeText());
   return show(await worktree(place, ['new', 'task', '--kind', 'fix']), '../worktrees/acme/task');
 });
+scene('worktree.listed', async (place) => {
+  approve(place, worktreeText());
+  return show(await worktree(place, ['list']), '0 open, limit');
+});
 scene('worktree.remove-task', async (place) => {
   approve(place, worktreeText());
   return show(await worktree(place, ['remove', '../task']), 'one segment');

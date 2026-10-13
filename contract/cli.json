@@ -1233,6 +1233,41 @@
             },
             {
               "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "list",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team worktree list [--session <name>] [--file <path>]"
+          ]
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--kind",
               "repeatable": false,
               "takesValue": true
@@ -1314,6 +1349,7 @@
       ],
       "usage": [
         "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]",
+        "team worktree list [--session <name>] [--file <path>]",
         "team worktree remove <task> [--session <name>] [--file <path>]"
       ]
     }

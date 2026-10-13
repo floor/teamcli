@@ -514,7 +514,10 @@ describe('team worktree and the approved copy', () => {
     edit(teamText({ limit: 8 }));
     const io = await run(['new', 'other-task', '--kind', 'fix']);
     expect(io.code).toBe(1);
-    expect(io.err).toBe(`${note}team worktree: the worktree limit is 1, and 1 are open\n`);
+    expect(io.err).toBe(
+      `${note}team worktree: the worktree limit is 1, and 1 are open (workspace.limit in the team file)\n` +
+      'select-width session acme ../worktrees/acme/select-width folder exists\n',
+    );
     expect(existsSync(join(base, 'worktrees', 'acme', 'other-task'))).toBe(false);
   });
 
@@ -752,5 +755,93 @@ seats:
     expect(io.code).toBe(1);
     expect(io.err).toBe(`${note}team worktree: ../worktrees/renamed/select-width is outside the approved trust paths\n`);
     expect(existsSync(join(base, 'worktrees', 'renamed'))).toBe(false);
+  });
+});
+
+describe('team worktree list', () => {
+  const statePath = () => join(project, '.agents', 'team.state.json');
+  const logPath = () => join(project, '.agents', 'team.log');
+
+  test('an empty record prints the count and the limit, and writes nothing', async () => {
+    expect(existsSync(statePath())).toBe(false);
+    expect(existsSync(logPath())).toBe(false);
+    const io = await run(['list']);
+    expect(io.code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toBe('0 open, limit 8 (workspace.limit)\n');
+    expect(existsSync(statePath())).toBe(false);
+    expect(existsSync(logPath())).toBe(false);
+  });
+
+  test('a recorded worktree is one line, and a gone folder stays recorded', async () => {
+    expect((await run(['new', 'select-width', '--kind', 'fix', '--seat', 'lead'])).code).toBe(0);
+    const stateBefore = readFileSync(statePath(), 'utf8');
+    const logBefore = readFileSync(logPath(), 'utf8');
+    const listed = await run(['list']);
+    expect(listed.code).toBe(0);
+    expect(listed.err).toBe('');
+    expect(listed.out).toBe(
+      '1 open, limit 8 (workspace.limit)\n' +
+      'select-width session acme seat lead ../worktrees/acme/select-width folder exists\n',
+    );
+    expect(readFileSync(statePath(), 'utf8')).toBe(stateBefore);
+    expect(readFileSync(logPath(), 'utf8')).toBe(logBefore);
+
+    rmSync(join(base, 'worktrees', 'acme', 'select-width'), { recursive: true, force: true });
+    const gone = await run(['list']);
+    expect(gone.code).toBe(0);
+    expect(gone.out).toBe(
+      '1 open, limit 8 (workspace.limit)\n' +
+      'select-width session acme seat lead ../worktrees/acme/select-width folder gone; team worktree remove select-width\n',
+    );
+    expect(readState(join(project, '.agents')).sessions.acme?.worktrees['select-width']?.branch).toBe('fix/select-width');
+    expect(git(project, 'rev-parse', '--verify', 'refs/heads/fix/select-width').trim().length).toBeGreaterThan(0);
+  });
+
+  test('rows are ordered by session, then task', async () => {
+    updateState(join(project, '.agents'), (state) => {
+      const later = (state.sessions.z ??= emptySession());
+      later.worktrees.beta = { path: '../worktrees/acme/beta', branch: 'fix/beta', setup: 'ok' };
+      const earlier = (state.sessions.m ??= emptySession());
+      earlier.worktrees.alpha = { path: '../worktrees/acme/alpha', branch: 'fix/alpha', setup: 'ok', seat: 'lead' };
+    });
+    const io = await run(['list']);
+    expect(io.code).toBe(0);
+    expect(io.out).toBe(
+      '2 open, limit 8 (workspace.limit)\n' +
+      'alpha session m seat lead ../worktrees/acme/alpha folder gone; team worktree remove alpha\n' +
+      'beta session z ../worktrees/acme/beta folder gone; team worktree remove beta\n',
+    );
+  });
+
+  test('the limit refusal keeps its first clause and names the same rows', async () => {
+    approve(teamText({ limit: 1 }));
+    expect((await run(['new', 'select-width', '--kind', 'fix', '--seat', 'lead'])).code).toBe(0);
+    const limited = await run(['new', 'other-task', '--kind', 'fix']);
+    expect(limited.code).toBe(1);
+    expect(limited.err).toBe(
+      'team worktree: the worktree limit is 1, and 1 are open (workspace.limit in the team file)\n' +
+      'select-width session acme seat lead ../worktrees/acme/select-width folder exists\n',
+    );
+    expect(existsSync(join(base, 'worktrees', 'acme', 'other-task'))).toBe(false);
+  });
+
+  test('a seat that is not the orchestrator or the operator is refused', async () => {
+    recordSeat('lead', 'w1:p1');
+    const leadList = await run(['list'], lead);
+    expect(leadList.code).toBe(0);
+    expect(leadList.out).toBe('0 open, limit 8 (workspace.limit)\n');
+    const other = await run(['list'], { kind: 'seat', name: 'stranger', pane: 'w2:p1' });
+    expect(other.code).toBe(1);
+    expect(other.err).toBe('team worktree: only the owner, the orchestrator or the operator runs it; this call is stranger\n');
+  });
+
+  test('a task, --kind or --seat is refused', async () => {
+    const extra = await run(['list', 'nope']);
+    expect(extra.code).toBe(2);
+    expect(extra.err).toContain('unexpected "nope"');
+    const flags = await run(['list', '--seat', 'lead']);
+    expect(flags.code).toBe(2);
+    expect(flags.err).toContain('list takes no --kind or --seat');
   });
 });
