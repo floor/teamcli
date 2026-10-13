@@ -273,6 +273,7 @@ describe('status: --session for a non-owner', () => {
         return verifiedStanding();
       },
       now: () => NOW,
+      home,
     };
     const io = testIo(root);
     io.callerSources = underHerdr(calls);
