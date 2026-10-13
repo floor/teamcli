@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 
 const example = readFileSync(new URL('../examples/team.yaml', import.meta.url), 'utf8');
@@ -34,13 +35,21 @@ describe('the fictional example file', () => {
     ]);
   });
 
-  test('labels are numbered with the names under count', () => {
-    expect(team.seats.filter((seat) => seat.declared === 'nimbus-beacon').map((seat) => seat.label)).toEqual([
-      'nimbus',
-      'nimbus-2',
-      'nimbus-3',
+  test('labels are derived from each seat\'s display, and a count shares one', () => {
+    // The example still writes `label:` on every seat — an accepted field, kept on the seat —
+    // but the workspace title is derived from the seat's own configuration: its display, never
+    // the written label, and no number under count (nothing keys two seats apart by their
+    // label; herdr shows the name).
+    expect(team.seats.map((seat) => [seat.name, workspaceLabel(seat)])).toEqual([
+      ['codex-keeper', 'GPT-2 Compass'],
+      ['codex-signal', 'GPT-2 Compass'],
+      ['codex-beacon', 'GPT-3 Comet'],
+      ['cursor-beacon', 'Meridian 1'],
+      ['nimbus-beacon', 'Nimbus 1'],
+      ['nimbus-beacon-2', 'Nimbus 1'],
+      ['nimbus-beacon-3', 'Nimbus 1'],
     ]);
-    expect(team.seats[0]).toMatchObject({ label: 'coordinator', declared: 'codex-keeper', count: 1, instance: 1 });
+    expect(team.seats[0]).toMatchObject({ declared: 'codex-keeper', count: 1, instance: 1 });
   });
 
   test('the coordinator and the operator run the same CLI', () => {

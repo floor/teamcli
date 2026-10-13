@@ -102,6 +102,30 @@ Usage:
 
 None.
 
+## `ask-show`
+
+Hidden: no
+
+Usage:
+
+    team ask-show <request_id> --ask <path> --marker <path> --key <path>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--ask` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `--marker` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `request_id` | no | no |
+
 ## `broker`
 
 Hidden: no
@@ -303,6 +327,50 @@ Usage:
 ### Positionals
 
 None.
+
+## `list`
+
+Hidden: no
+
+Usage:
+
+    team list [--all] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+## `lock`
+
+Hidden: no
+
+Usage:
+
+    team lock <name> [--for <text>] [--wait <seconds>]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--for` | yes | no | no |
+| `--help` | no | no | no |
+| `--wait` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `name` | no | no |
 
 ## `mcp`
 
@@ -538,14 +606,15 @@ Hidden: no
 
 Usage:
 
-    team send <seat> <message> [--wait] [--timeout <s>] [--json]
-    team send <seat> --file <path> [--wait] [--timeout <s>] [--json]
+    team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send --list [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
@@ -582,6 +651,27 @@ Usage:
 ### Positionals
 
 None.
+
+## `unlock`
+
+Hidden: no
+
+Usage:
+
+    team unlock <name>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `name` | no | no |
 
 ## `up`
 

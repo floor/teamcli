@@ -9,60 +9,30 @@ The commits are a separate run, [`team commits check`](commits.md).
 
     team pr check <file> [--file <path>]
 
-## What it reads and writes
+## Flags
 
-Reads the team file (or the one `--file` names), the ledger of this machine's store, and the file
-holding the body (`-` reads standard input). It writes nothing, and it runs no git command: the
-folder it runs in needs no repository.
+| Flag | Value | Effect |
+| --- | --- | --- |
+| `<file>` | a path, or `-` | the pull request's body; `-` reads standard input |
+| `--file <path>` | a team file | the team file to read, instead of `.agents/team.yaml` |
+| `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
 
-Anyone. It needs no herdr session, no terminal and no approval of its own; CI runs it on a push,
-with the body written to a file or piped in with `-`.
-
-## Flags
-
-| Flag | Meaning |
+| Caller | May |
 | --- | --- |
-| `<file>` | the pull request's body; `-` reads standard input |
-| `--file <path>` | the team file, instead of `.agents/team.yaml` |
-| `--help`, `-h` | the usage, and exit 0 |
+| anyone — a seat, an agent-run CLI, or the owner, from any folder | run it: it needs no herdr session, no terminal and no approval of its own |
+| CI, on a push | run it, with the body written to a file or piped in with `-` |
 
-## What it finds
+## Output and exit codes
 
-The body is printed as one section, its findings under it:
+| Outcome | What is printed | Exit |
+| --- | --- | --- |
+| the body passes | `team pr check: 1 pull request body checked: ok` | 0 |
+| the body was refused | the body as one section, `pull request body`, with one line per finding under it, then `team pr check: 1 pull request body checked: the pull request body refused` | 1 |
+| the check can't run: a bad invocation, a team file that can't be read, or a body file that can't be read | `team pr check: <reason>`, with the usage for a bad invocation | 2 |
 
-    pull request body
-      line 5: forbidden pattern ^Claude-Session:
-
-| Finding | Meaning |
-| --- | --- |
-| `no signature: expected "**Agent:** {display} · {role}" in the last line` | the body carries no signature on its last line |
-| `forbidden pattern <source>` | the line matches one of the file's patterns, or one of the two defaults |
-
-The closing line says `team pr check: 1 pull request body checked: ok`, or
-`…: the pull request body refused`.
-
-## Refusals
-
-| Message | Exit |
-| --- | --- |
-| `team pr check: a <file> is required` (with the usage) | 2 |
-| `team pr check: one <file> at most` (with the usage) | 2 |
-| `team pr check: unknown option --<name>` (with the usage) | 2 |
-| `team pr check: <path>, line <n>: <message>` | 2 |
-| `team pr check: can't read the pull request body: <error>` | 2 |
-
-The old spelling `team check … --pr <file>` still runs this body check, one notice line first:
-[`team check`](check.md).
-
-## Exit codes
-
-- `0` — the body passes.
-- `1` — the body was refused.
-- `2` — the check can't run: a bad invocation, a team file that can't be read, or a body file that can't be read.
-
-## Examples
+## Example
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -115,49 +85,4 @@ team pr check: 1 pull request body checked: ok
 exit 0
 ```
 
-This one forgot the signature:
-
-```file file=body.md
-Bump the retry window to thirty seconds.
-
-The old one timed out on the flaky test.
-```
-
-```console
-$ team pr check body.md ; echo "exit $?"
-team pr check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-pull request body
-  no signature: expected "**Agent:** {display} · {role}" in the last line
-team pr check: 1 pull request body checked: the pull request body refused
-exit 1
-```
-
-And this one signs, but leaks the line the file forbids:
-
-```file file=leak.md
-Tidy the logs.
-
-The reader printed one line too many.
-
-Claude-Session: 8f21c4a9
-**Agent:** Claude Opus 5.5 · implementer
-```
-
-```console
-$ team pr check leak.md ; echo "exit $?"
-team pr check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-pull request body
-  line 5: forbidden pattern ^Claude-Session:
-    Claude-Session: 8f21c4a9
-team pr check: 1 pull request body checked: the pull request body refused
-exit 1
-```
-
-A body file that isn't there can't be read:
-
-```console
-$ team pr check missing.md ; echo "exit $?"
-team pr check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-team pr check: can't read the pull request body: ENOENT: no such file or directory, open './missing.md'
-exit 2
-```
+Rationale, behaviour, refusals and known limits: [docs/internal/pr.md](../internal/pr.md).

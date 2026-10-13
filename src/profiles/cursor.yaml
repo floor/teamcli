@@ -260,6 +260,13 @@ screen:
     # The box read strips up to two trailing empty rows as that frame; a row beyond them is
     # one the typed text does not have.
     frame_rows: 2
+    # The background-task count the pane draws of its own between the empty
+    # placeholder and the status row. Captured 2026-10-12 on cursor-agent
+    # 2026.10.01-14929f9 in a 54-column pane (scratch session, not a live seat):
+    # one blank row, then `  1 task` or `  2 tasks`, then the status row. The
+    # box itself held only `→ Add a follow-up`. That row is not unsent text.
+    own_rows:
+      - '^  [0-9]+ tasks?$'
     # The box's own border, as the captures of 2026-10-05 draw it: one row of `▄` directly
     # above the input row and one row of `▀` directly below the input rows, both whole rows
     # at the pane's width, with the status row directly under the bottom one. In every real

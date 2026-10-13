@@ -29,6 +29,8 @@ export const CLASSIFICATIONS = [
   'trust',
   'permission',
   'question',
+  'provider error',
+  'rate limit',
   'vendor notice',
   'login',
   'unknown',
@@ -39,7 +41,7 @@ export const CLASSIFICATIONS = [
 export type Classification = (typeof CLASSIFICATIONS)[number];
 
 /** A classification from outside the program — the state file is the one place one enters —
- *  validated against the closed list: one of the eight, or `unknown` for anything else. */
+ *  validated against the closed list: one of that list, or `unknown` for anything else. */
 export function cleanClassification(value: unknown): Classification {
   return typeof value === 'string' && (CLASSIFICATIONS as readonly string[]).includes(value)
     ? (value as Classification)

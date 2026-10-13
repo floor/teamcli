@@ -1,0 +1,22 @@
+
+
+  Start two background shells, sleep 600 and
+  sleep 601, and do not wait for either.
+  Reply with only the word ready.
+
+
+  $ sleep 600 4.4s (background)
+
+  $ sleep 601 4.4s (background)
+
+  ready
+
+
+
+
+  → Add a follow-up
+
+
+  2 tasks
+  Grok 4.7 256K High · 6.3%          Run Everything
+  <workspace>
