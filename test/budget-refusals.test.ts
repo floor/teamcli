@@ -23,6 +23,8 @@ const OWNER = { kind: 'owner' } as const;
 const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
 const TAIL = 'openai weekly left 5%, inside its 10% reserve, changed 1m ago; accounts with room: anthropic';
 const WHY = `refused: ${TAIL}`;
+/** The herdr title both seats share: display, not the written label. */
+const TITLE = 'Claude Opus 5.5';
 
 const BASE = `format: 1
 project: acme
@@ -235,8 +237,8 @@ describe('a stored reading refuses one seat', () => {
     const dry = await up(['--dry-run'], world());
     expect(dry.code).toBe(0);
     expect(dry.out).toContain(`  skip worker: would refuse: ${TAIL}\n`);
-    expect(dry.out).toContain('--label lead');
-    expect(dry.out).not.toContain('--label worker');
+    expect(dry.out).toContain(`--label '${TITLE}'`);
+    expect(dry.out).not.toContain('<pane of worker>');
     expect(dry.labels).toEqual([]);
 
     const live = await up([], world());
@@ -244,8 +246,7 @@ describe('a stored reading refuses one seat', () => {
     expect(live.out).toContain(`worker: left out: ${WHY}\n`);
     expect(live.out).toContain('lead: ready\n');
     expect(live.out).not.toContain('worker: ready');
-    expect(live.labels).toContain('lead');
-    expect(live.labels).not.toContain('worker');
+    expect(live.labels).toEqual([TITLE, 'watchdog']);
   });
 
   test('a stale reading with its reset still ahead keeps refusing', async () => {
@@ -280,7 +281,7 @@ describe('a stored reading refuses one seat', () => {
     const first = await up(['--dry-run'], world());
     expect(first.out).not.toContain('would refuse');
     expect(first.out).toContain('openai: first sight only, not yet counted; would launch');
-    expect(first.out).toContain('--label worker');
+    expect(first.out).toContain('<pane of worker>');
     const firstLive = await up([], world());
     expect(firstLive.code).toBe(0);
     expect(firstLive.err).toContain('worker: openai: first sight only, not yet counted\n');
@@ -304,7 +305,7 @@ describe('a stored reading refuses one seat', () => {
     const missing = await up(['--dry-run'], world());
     expect(missing.out).not.toContain('would refuse');
     expect(missing.out).not.toContain('is unknown');
-    expect(missing.out).toContain('--label worker');
+    expect(missing.out).toContain('<pane of worker>');
   });
 
   test('a stale figure with no reset only counts well outside the reserve', async () => {
@@ -319,7 +320,7 @@ describe('a stored reading refuses one seat', () => {
     const far = await up(['--dry-run'], world());
     expect(far.out).not.toContain('would refuse');
     expect(far.out).not.toContain('is unknown');
-    expect(far.out).toContain('--label worker');
+    expect(far.out).toContain('<pane of worker>');
     // ...at exactly twice it and inside it, a depleted figure is unknown — never a clearance.
     expect(seatBudget(budgets, [reading('openai', 20, old)], worker, now))
       .toEqual({ kind: 'unknown', account: 'openai', text: 'openai is unknown' });
@@ -367,7 +368,7 @@ describe('a stored reading refuses one seat', () => {
     expect(live.err).toContain(`worker: ${TAIL}\n`);
     expect(live.out).not.toContain('refused');
     expect(live.out).toContain('worker: ready\n');
-    expect(live.labels).not.toContain('worker');
+    expect(live.labels).toEqual([TITLE, 'watchdog']);
 
     remember('launched');
     const blocked = world();
@@ -395,7 +396,7 @@ describe('a stored reading refuses one seat', () => {
     expect(live.code).toBe(0);
     expect(live.err).toContain('worker: openai is unknown\n');
     expect(live.out).toContain('worker: ready\n');
-    expect(live.labels).toContain('worker');
+    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
   });
 
   test('the tightest window is the one named', () => {
@@ -465,15 +466,14 @@ describe('a spend floor refuses one seat', () => {
     const dry = await up(['--dry-run'], world());
     expect(dry.code).toBe(0);
     expect(dry.out).toContain(`  skip worker: would refuse: ${SPEND_TAIL}\n`);
-    expect(dry.out).not.toContain('--label worker');
+    expect(dry.out).not.toContain('<pane of worker>');
     expect(dry.labels).toEqual([]);
 
     const live = await up([], world());
     expect(live.code).toBe(1);
     expect(live.out).toContain(`worker: left out: ${SPEND_WHY}\n`);
     expect(live.out).toContain('lead: ready\n');
-    expect(live.labels).toContain('lead');
-    expect(live.labels).not.toContain('worker');
+    expect(live.labels).toEqual([TITLE, 'watchdog']);
   });
 
   test('exactly at the floor refuses; above it launches', async () => {
@@ -485,7 +485,7 @@ describe('a spend floor refuses one seat', () => {
     storeSpend([spend('openai', 8)]);
     const above = await up([], world());
     expect(above.code).toBe(0);
-    expect(above.labels).toContain('worker');
+    expect(above.labels).toEqual([TITLE, TITLE, 'watchdog']);
     expect(above.out).not.toContain('refused');
     expect(above.out).not.toContain('is unknown');
   });
@@ -525,7 +525,7 @@ describe('a spend floor refuses one seat', () => {
     storeSpend([spend('openai', 5.0001)]);
     const above = await up([], world());
     expect(above.code).toBe(0);
-    expect(above.labels).toContain('worker');
+    expect(above.labels).toEqual([TITLE, TITLE, 'watchdog']);
     expect(above.out).not.toContain('refused');
   });
 
@@ -542,7 +542,7 @@ describe('a spend floor refuses one seat', () => {
     const live = await up([], world());
     expect(live.code).toBe(0);
     expect(live.err).toContain('worker: openai is unknown\n');
-    expect(live.labels).toContain('worker');
+    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
   });
 
   test('no reading at all reads unknown', async () => {
@@ -558,7 +558,7 @@ describe('a spend floor refuses one seat', () => {
     expect(dry.out).toContain('openai is unknown; would launch');
     const live = await up([], world());
     expect(live.code).toBe(0);
-    expect(live.labels).toContain('worker');
+    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
   });
 
   test('add refuses the same seat before launching it', async () => {
@@ -612,15 +612,14 @@ describe('a subscription check reading refuses one seat', () => {
     const dry = await up(['--dry-run'], world());
     expect(dry.code).toBe(0);
     expect(dry.out).toContain(`  skip worker: would refuse: ${CHECK_TAIL}\n`);
-    expect(dry.out).not.toContain('--label worker');
+    expect(dry.out).not.toContain('<pane of worker>');
     expect(dry.labels).toEqual([]);
 
     const live = await up([], world());
     expect(live.code).toBe(1);
     expect(live.out).toContain(`worker: left out: ${CHECK_WHY}\n`);
     expect(live.out).toContain('lead: ready\n');
-    expect(live.labels).toContain('lead');
-    expect(live.labels).not.toContain('worker');
+    expect(live.labels).toEqual([TITLE, 'watchdog']);
 
     const refused = await add(['worker'], world());
     expect(refused.code).toBe(1);
@@ -632,7 +631,7 @@ describe('a subscription check reading refuses one seat', () => {
     store([reading('anthropic', 80), reading('openai', 4), checkReading('openai', 80)]);
     const live = await up([], world());
     expect(live.code).toBe(0);
-    expect(live.labels).toContain('worker');
+    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
     expect(live.out).not.toContain('refused');
     expect(live.out).not.toContain('is unknown');
   });
@@ -647,7 +646,7 @@ describe('a subscription check reading refuses one seat', () => {
     expect(dry.out).toContain('openai is unknown; would launch');
     const live = await up([], world());
     expect(live.code).toBe(0);
-    expect(live.labels).toContain('worker');
+    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
 
     // § 3: a lower source is used when the higher one is stale — the screen's own figure decides.
     store([reading('anthropic', 80), checkReading('openai', 50, old), reading('openai', 4)]);
@@ -671,14 +670,14 @@ describe('a subscription check reading refuses one seat', () => {
     const live = await up([], world());
     expect(live.code).toBe(1);
     expect(live.out).toContain('worker: left out: refused: openai weekly left 5%, inside its 10% reserve, read 31m ago; accounts with room: anthropic\n');
-    expect(live.labels).not.toContain('worker');
+    expect(live.labels).toEqual([TITLE, 'watchdog']);
 
     // A fresh lower source still wins: the status line's own figure clears the account.
     store([reading('anthropic', 80), checkReading('openai', 5, old), reading('openai', 50)]);
     const cleared = await up([], world());
     expect(cleared.code).toBe(0);
     expect(cleared.out).not.toContain('refused');
-    expect(cleared.labels).toContain('worker');
+    expect(cleared.labels).toEqual([TITLE, TITLE, 'watchdog']);
   });
 
   test('an account whose sources do not name the check never reads one', async () => {
@@ -820,7 +819,8 @@ describe('two accounts on one vendor', () => {
     const dry = await up(['--dry-run'], world());
     expect(dry.code).toBe(0);
     expect(dry.out).toContain('  skip work: would refuse: openai-work weekly left 5%, inside its 10% reserve, changed 1m ago; accounts with room: anthropic, openai-home\n');
-    expect(dry.out).toContain('--label home');
+    expect(dry.out).toContain('<pane of home>');
+    expect(dry.out).not.toContain('<pane of work>');
     expect(dry.labels).toEqual([]);
 
     const live = await up([], world());
@@ -828,9 +828,7 @@ describe('two accounts on one vendor', () => {
     expect(live.out).toContain('work: left out: refused: openai-work weekly left 5%, inside its 10% reserve, changed 1m ago; accounts with room: anthropic, openai-home\n');
     expect(live.out).toContain('lead: ready\n');
     expect(live.out).toContain('home: ready\n');
-    expect(live.labels).toContain('lead');
-    expect(live.labels).toContain('home');
-    expect(live.labels).not.toContain('work');
+    expect(live.labels).toEqual([TITLE, TITLE, 'watchdog']);
   });
 });
 
@@ -852,7 +850,7 @@ describe('an unapproved edit to the budgets', () => {
     approve(WEAKER);
     const after = await up([], world());
     expect(after.code).toBe(0);
-    expect(after.labels).toContain('worker');
+    expect(after.labels).toEqual([TITLE, TITLE, 'watchdog']);
     expect(after.out).not.toContain('would refuse');
   });
 
@@ -866,6 +864,6 @@ describe('an unapproved edit to the budgets', () => {
     approve(WEAKER);
     const after = await add(['worker'], world());
     expect(after.code).toBe(0);
-    expect(after.labels).toContain('worker');
+    expect(after.labels).toEqual([TITLE]);
   });
 });

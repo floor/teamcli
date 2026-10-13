@@ -25,7 +25,7 @@ if (tsc.status !== 0) {
 
 mkdirSync(join('dist', 'profiles'), { recursive: true });
 for (const name of readdirSync(join('src', 'profiles'))) {
-  if (name.endsWith('.yaml')) {
+  if (name.endsWith('.yaml') || name.endsWith('.json')) {
     copyFileSync(join('src', 'profiles', name), join('dist', 'profiles', name));
   }
 }

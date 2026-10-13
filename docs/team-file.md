@@ -71,6 +71,35 @@ The file at `path` is a YAML list of task records. `team issues` reads it. `team
 record from it, and claims one from a broker source's read the same way — the lease stays local
 either way. Nothing in this build writes the file or the tracker.
 
+## `seats`
+
+Each seat names a model and how it is launched. The fields are in the README's
+[file format](../README.md#the-files-format). Two of them decide the herdr workspace title, and
+one no longer does:
+
+- `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
+  as a token of its own when the file writes it.
+- `up` and `add` title the workspace `<display> · <effort>` when the seat sets `effort`,
+  and `<display>` when it does not. The title has no seat name and no role. Seats expanded from
+  `count` share it: herdr shows the seat's name on its own line.
+- `label`, written or left out, is still a field the file may carry. A written one is accepted.
+  It does not title the workspace. Left out, the stored title stays the model and version in
+  lowercase, which is what an approval of a file written that way already sealed.
+
+`effort` is optional. It is a known field: a file may set it, and a file that leaves it out
+loads as before. The words a lab allows are [`src/profiles/efforts.json`](../src/profiles/efforts.json),
+format 1, keyed by the seat's `vendor`. Each list is the words that lab's own CLI help printed.
+A lab whose help or model list names none is left out of the file, and a vendor with no entry
+accepts any effort.
+
+A word outside its lab's list is a warning, and the warning names the words that lab allows.
+It does not fail `team check`, `team approve` or `team up`. That is not a regression for a file
+that already loaded: an unknown field is refused, so no such file contains `effort`. Left out,
+the field is not stored on the seat, and the seat's approval key is unchanged. Adding it, in
+or out of the list, changes that key, because the word is part of the seat.
+
+Nothing in the launch line reads `effort`.
+
 ## `delegates`
 
 Names panes outside the team's session that may run some operational commands as a delegate of

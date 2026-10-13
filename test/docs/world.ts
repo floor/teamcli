@@ -13,6 +13,7 @@ import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { DownLaunch, DownSources } from '../../src/commands/down.ts';
 import type { McpSources, PathStat } from '../../src/commands/mcp.ts';
 import type { RemoveSources } from '../../src/commands/remove.ts';
+import type { ListSources } from '../../src/commands/list.ts';
 import type { StatusSources } from '../../src/commands/status.ts';
 import type { Launch, UpSources } from '../../src/commands/up.ts';
 import type { WatchSources } from '../../src/commands/watch.ts';
@@ -230,6 +231,7 @@ export type World = {
   addSources(): AddSources;
   checkSources(): CheckSources;
   statusSources(): StatusSources;
+  listSources(): ListSources;
   watchSources(): WatchSources;
   doctorSources(): DoctorSources;
   mcpSources(): McpSources;
@@ -643,6 +645,26 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         now,
         home,
         machine,
+      };
+    },
+    listSources(): ListSources {
+      return {
+        sessions() {
+          if (herdr === 'none') return null;
+          if (herdr === 'absent') return [];
+          return [{ name: session, running: herdr === 'running' }];
+        },
+        roster() {
+          if (herdr !== 'running') return null;
+          return agents().map((agent) => ({
+            name: agent.name,
+            status: agent.status && agent.status !== 'unknown' ? agent.status : null,
+          }));
+        },
+        team(asked) {
+          if (!team || asked !== team.session) return null;
+          return { project: team.project, root, seats: team.seats.length, unreadable: false };
+        },
       };
     },
     checkSources(): CheckSources {

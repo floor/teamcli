@@ -108,6 +108,24 @@ export default watch;
 
 export const USAGE = 'Usage: team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]\n';
 
+/** The file `up` recorded for this session's watchdog pane, or a refusal for any other non-owner.
+ *  Absent when this folder records no watchdog: a flagless watch then reads what it always did. */
+function watchdogGrant(
+  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
+): { file: string } | { refuse: string } | undefined {
+  const recorded = recordedWatchdog(cwd, session ?? 'default');
+  if (!recorded) return undefined;
+  if (caller.kind === 'pane' && caller.pane === recorded.pane) return { file: recorded.file };
+  if (isOwner(caller)) return undefined;
+  return {
+    refuse: `only the watchdog pane this session records may read the file up recorded; this call is ${describeCaller(caller)}`,
+  };
+}
+
+function recordedWatchdog(cwd: string, session: string): { file: string; pane: string } | undefined {
+  return readState(cwd).sessions[session]?.watchdog;
+}
+
 // How often the watch writes the machine's readings to the log, in seconds. Not the pass rate:
 // the default pass is 120s and the machine moves on an hourly scale, so a line per pass would be
 // 720 a day saying what one every ten minutes says.
@@ -124,14 +142,23 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // writes beside it: a non-owner aiming `--file` must not make this command read and validate
   // another project's team file, nor leave its `last_valid`, its log line or its heartbeat in
   // that project's state. The one place every command whose `--file` is the owner's decides it is
-  // `fileOwnerRefusal` (caller.ts) — and the watch `up` starts carries no flag at all.
+  // `fileOwnerRefusal` (caller.ts). The watch `up` starts carries no `--file`: a non-owner pane
+  // would be refused. The file is recorded on the session instead, and only that pane may read it.
   const fileRefusal = fileOwnerRefusal(io, args.values.file);
   if (fileRefusal !== undefined) {
     io.stderr(`team watch: ${fileRefusal}\n`);
     // exit: watch.file-owner
     return 1;
   }
-  const first = currentTeam(io.cwd, args.values.file, sources.now(), sources.home, false);
+  const caller = callerOf(io, args.values.session);
+  const grant = args.values.file ? undefined : watchdogGrant(io.cwd, args.values.session, caller);
+  if (grant && 'refuse' in grant) {
+    io.stderr(`team watch: ${grant.refuse}\n`);
+    // exit: watch.watchdog
+    return 1;
+  }
+  const aimed = args.values.file ?? (grant && 'file' in grant ? grant.file : undefined);
+  const first = currentTeam(io.cwd, aimed, sources.now(), sources.home, false);
   if (!first.ok) {
     for (const problem of first.errors) io.stderr(`team watch: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${problem.message}\n`);
     // exit: watch.not-a-repo
@@ -146,9 +173,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // or the operator's desktop notices. The owner's own `--no-notify` still cannot silence a
   // report addressed to the owner: those are routed below.
   if (args.flags.has('no-nudge') || args.flags.has('no-notify')) {
-    const caller = callerOf(io, session);
-    if (!isOwner(caller)) {
-      io.stderr(`team watch: --no-nudge and --no-notify are the owner's, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
+    const placed = callerOf(io, session);
+    if (!isOwner(placed)) {
+      io.stderr(`team watch: --no-nudge and --no-notify are the owner's, from a terminal outside herdr; this call is ${describeCaller(placed)}\n`);
       // exit: watch.no-nudge
       // exit: watch.no-notify
       return 1;
@@ -190,7 +217,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   try {
     for (;;) {
       // The file is read again on every pass, so a seat parked or stopped since is seen.
-      const current = currentTeam(io.cwd, args.values.file, sources.now(), sources.home);
+      const current = currentTeam(io.cwd, aimed, sources.now(), sources.home);
       const team = current.ok ? current.team : first.team;
       const root = current.ok ? current.root : first.root;
       // The one read of the approval store for the whole pass: the drift line, the
