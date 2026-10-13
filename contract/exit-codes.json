@@ -2172,6 +2172,20 @@
       "trigger": "team status"
     },
     {
+      "code": 1,
+      "command": "status",
+      "id": "status.file-owner",
+      "meaning": "--file is the owner's",
+      "trigger": "team status --file .agents/team.yaml"
+    },
+    {
+      "code": 1,
+      "command": "status",
+      "id": "status.session-owner",
+      "meaning": "--session is the owner's",
+      "trigger": "team status --session team"
+    },
+    {
       "code": 2,
       "command": "status",
       "id": "status.file",
@@ -2204,6 +2218,13 @@
       "command": "status",
       "id": "status.not-a-repo",
       "meaning": "not inside a git repository",
+      "trigger": "team status"
+    },
+    {
+      "code": 2,
+      "command": "status",
+      "id": "status.not-yours",
+      "meaning": "the caller may not read this team",
       "trigger": "team status"
     },
     {

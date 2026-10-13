@@ -60,7 +60,9 @@ import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbySeen 
 import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedLobbyFiles } from '../profiles/index.ts';
+import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
+import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -984,6 +986,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return overCeiling(ceilings, running, seat);
       },
       record(name, patch) {
+        let replaced: string | undefined;
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[name] ?? { stage: patch.stage };
@@ -997,7 +1000,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           if (written === null) delete seat.waiting;
           else if (written) seat.waiting = written;
           current.seats[name] = seat;
+          if (patch.pane) {
+            replaced = prior.pane !== patch.pane ? prior.pane : undefined;
+            current.launched_file = loaded.path;
+          }
         });
+        if (patch.pane) {
+          if (replaced) forgetLaunchedPane(sources.home, replaced);
+          noteLaunchedPane(sources.home, loaded.path, patch.pane);
+        }
       },
       running(name) {
         if (running.some((item) => item.name === name)) return;
@@ -1005,10 +1016,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         if (seat) running.push({ name, vendor: seat.vendor, temporary: false });
       },
       drop(name) {
+        let pane: string | undefined;
         updateState(dir, (file) => {
           const seats = file.sessions[session]?.seats;
+          pane = seats?.[name]?.pane;
           if (seats) delete seats[name];
         });
+        if (pane) forgetLaunchedPane(sources.home, pane);
       },
       // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
       // here with the same function the records use: no escape sequence or bidi override reaches
@@ -1113,6 +1127,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     });
 
     const report = await executePlan(plan, session, host);
+    // The reach projection, after the plan's effects and outside the lobby's identity rechecks
+    // (its temporary is a declared lobby file): the owner-approved `reach` grants written where
+    // the bridge and the seat-shuttle daemon read them. A skip — no lobby, a lobby not 0700,
+    // nothing changed — is a log line, never a refusal: the launch is done.
+    const projectionNote = reachProjectionNote(writeReachProjection(team, sources.home));
+    if (projectionNote) logLine(dir, 'up', callerLabel(caller), projectionNote, now());
     const afterwards = readState(dir).sessions[session]?.seats ?? {};
     const pending = team.seats.filter((seat) => {
       if (seat.stopped || !profileFor(seat.cli)) return false;

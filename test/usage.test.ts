@@ -865,7 +865,7 @@ describe('team usage', () => {
     expect(owner.out).toContain('anthropic  unknown\n  acme    unknown  pace not known\n  (acme: no pattern can read this account)\n');
 
     // A caller who is not the owner reads one fixed sentence per line instead — this project's
-    // own path, the line, and where the reason is — and never a body: the loader's bodies can name
+    // own path, the line, and the owner as the reader of the reason — and never a body: the loader's bodies can name
     // paths outside this project (`trust: must list the lobby <home>/…`). The three problems here
     // all name line 1, so the one sentence prints once; the machine's own counts stand in the
     // header, and no lab or line of this project's is rendered, because none of it can be read.
@@ -874,13 +874,13 @@ describe('team usage', () => {
     expect(mine.out).toBe([
       'usage on this machine, 1 team, 2 labs, 2 accounts',
       '',
-      'note: .agents/team.yaml does not load (line 1): run team status for the reason',
+      'note: .agents/team.yaml does not load (line 1): the owner reads the reason',
     ].join('\n') + '\n');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { mine: string | null; labs: unknown[]; notes: unknown[] };
     expect(doc.mine).toBeNull();
     expect(doc.labs).toEqual([]);
-    expect(doc.notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml does not load (line 1): run team status for the reason' }]);
+    expect(doc.notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml does not load (line 1): the owner reads the reason' }]);
     expectNoDerivedPath([mine.out, raw]);
   });
 
@@ -926,12 +926,12 @@ describe('team usage', () => {
 
     // Validation: three problems, all on line 1 — one fixed sentence, once.
     writeFileSync(file, 'format: 1\nproject: acme\n');
-    expect(await faces(root)).toContain('note: .agents/team.yaml does not load (line 1): run team status for the reason\n');
+    expect(await faces(root)).toContain('note: .agents/team.yaml does not load (line 1): the owner reads the reason\n');
 
     // Placement, no line: the trust list omits the lobby, whose absolute path the loader's body
     // names (`trust: must list the lobby <home>/.config/team/lobby`).
     writeFileSync(file, teamText().replace('  - ~/.config/team/lobby\n', ''));
-    expect(await faces(root)).toContain('note: .agents/team.yaml does not load: run team status for the reason\n');
+    expect(await faces(root)).toContain('note: .agents/team.yaml does not load: the owner reads the reason\n');
 
     // Placement, with a line: a trust entry is a symbolic link; the loader's body names the entry
     // and the target it resolves to, both absolute.
@@ -942,11 +942,11 @@ describe('team usage', () => {
     const withLink = teamText().replace(`  - ${root}`, `  - ${linked}\n  - ${root}`);
     writeFileSync(file, withLink);
     const entry = withLink.split('\n').findIndex((line) => line.includes(linked)) + 1;
-    expect(await faces(root)).toContain(`note: .agents/team.yaml does not load (line ${entry}): run team status for the reason\n`);
+    expect(await faces(root)).toContain(`note: .agents/team.yaml does not load (line ${entry}): the owner reads the reason\n`);
 
     // YAML that does not parse: the parser's own line.
     writeFileSync(file, 'project: [unclosed\n');
-    expect(await faces(root)).toContain('note: .agents/team.yaml does not load (line 1): run team status for the reason\n');
+    expect(await faces(root)).toContain('note: .agents/team.yaml does not load (line 1): the owner reads the reason\n');
 
     // A file that exists and cannot be read: the read fails with a bare errno error.
     rmSync(file);

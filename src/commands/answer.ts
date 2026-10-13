@@ -7,6 +7,7 @@ import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, fileOwnerR
 import { trustPolicy } from '../file/dialogs.ts';
 import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
 import { loadTeamFile } from '../file/load.ts';
+import { launchedTeamFile } from '../file/launched-file.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { agentList, agentRename, agentStatus, paneForeground, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey as herdrSendKey, typeText, type PaneProcesses } from '../herdr.ts';
@@ -102,30 +103,43 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     // exit: answer.file-owner
     return 1;
   }
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: host.home });
+  // The owner is a terminal outside herdr, and the walk alone decides that: a non-owner aiming
+  // `--session` is refused here, before `launchedTeamFile` or any other call that reaches herdr,
+  // and before the flag's session is read — no agent list, no pane root, no state write. (A seat
+  // cannot be named in this refusal: placing it would read a session, and that is what must not
+  // happen yet.) When this folder has a team file, the refusal's log line sits beside it. When
+  // it does not, the sentence is the only output: no `.agents` folder and no log are created.
+  if (args.values.session !== undefined) {
+    const walked = walkCaller(io);
+    if (!isOwner(walked)) {
+      const local = loadTeamFile(io.cwd, { home: host.home });
+      return refuse(
+        io,
+        json,
+        local.ok ? dirname(local.path) : undefined,
+        logWho(walked, local.ok ? local.team : undefined),
+        seatName,
+        host,
+        {
+          class: 'caller',
+          message: `team answer: ${sessionOwnerRefusal(walked)}`,
+        },
+      );
+    }
+  }
+  const launched = args.values.file ? undefined : launchedTeamFile(io, host.home);
+  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), home: host.home });
   if (!loaded.ok) {
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return configuration(io, json, message || 'the team file cannot be read');
   }
   const { team, root } = loaded;
   const dir = dirname(loaded.path);
-  // The owner is a terminal outside herdr, and the walk alone decides that: a non-owner aiming
-  // `--session` is refused here, before the flag's session is read — no agent list, no pane root,
-  // no state write; the refusal's own log line is the only line written. (A seat cannot be named
-  // in this refusal: placing it would read a session, and that is what must not happen yet.)
-  if (args.values.session !== undefined) {
-    const walked = walkCaller(io);
-    if (!isOwner(walked)) {
-      return refuse(io, json, dir, logWho(walked, team), seatName, host, {
-        class: 'caller',
-        message: `team answer: ${sessionOwnerRefusal(walked)}`,
-      });
-    }
-  }
-  // The gate judges the caller placed in the session this command asks about. With no `--session`
-  // the session judged is the caller's own placement: the file's session first, then a session
-  // the state records this caller's pane in (`team up --session <other>`) — never one a non-owner
-  // chose. The refusal names the caller's own placement, exactly as main described it.
+  // A non-owner's `--session` has already returned, above, so this arm is the owner's: the flag's
+  // session, placed with `callerOf`. With no `--session` the session judged is the caller's own
+  // placement: the file's session first, then a session the state records this caller's pane in
+  // (`team up --session <other>`) — never one a non-owner chose. The refusal names the caller's
+  // own placement, exactly as main described it.
   const judged = args.values.session !== undefined
     ? { caller: callerOf(io, args.values.session), session: args.values.session }
     : judgeCallerIn(io, dir, team);
@@ -240,14 +254,15 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   }
 }
 
-/** The caller class the caller check returned, as the log's bracket. */
-function logWho(caller: Caller, team: TeamFile): string {
+/** The caller class the caller check returned, as the log's bracket. With no team file yet, a seat
+ *  stays a seat: telling an orchestrator from any other seat would read that file. */
+function logWho(caller: Caller, team?: TeamFile): string {
   // `owner-no-tty` is refused before anything logs (it is not on a terminal), but the bracket
   // it would carry is the owner's, as everywhere else.
   if (caller.kind === 'owner' || caller.kind === 'owner-no-tty') return 'owner';
   if (caller.kind === 'unplaced') return 'unplaced';
   if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
-  return caller.name === team.orchestrator ? 'orchestrator' : 'seat';
+  return team !== undefined && caller.name === team.orchestrator ? 'orchestrator' : 'seat';
 }
 
 function callerProblemOf(caller: Caller, team: TeamFile, seat: string, at?: SeatStanding): Refusal | null {
@@ -414,13 +429,15 @@ function recovery(io: Io, json: boolean, seat: string, reason: string, human: st
 function refuse(
   io: Io,
   json: boolean,
-  dir: string,
+  dir: string | undefined,
   who: string,
   seat: string,
   host: AnswerHost,
   reason: Refusal,
 ): number {
-  logLine(dir, 'answer', who, `${seat}: refused trust: ${reason.class}`, host.now());
+  // No directory means this folder had no team file to log beside. Writing the line would create
+  // `.agents` and `team.log` wherever the command was run.
+  if (dir !== undefined) logLine(dir, 'answer', who, `${seat}: refused trust: ${reason.class}`, host.now());
   if (json) io.stdout(`${JSON.stringify({ seat, dialog: 'trust', status: 'refused', reason: reason.message })}\n`);
   else io.stderr(`${reason.message}\n`);
   // exit: answer.caller

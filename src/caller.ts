@@ -223,10 +223,11 @@ export function anotherPaneRefusal(name: string, recordedPane: string): string {
  * lives here, beside `walkCaller`, so an eighth command cannot forget it. (The gate grew command
  * by command: `add`, `remove` and `worktree` once read the flagged file and asked the host for its
  * session before their own `--file` check; `watch` opened the flagged file and wrote its
- * `last_valid`, log and heartbeat beside it. The readers were then split from it: `status --file`
- * went back to any caller — a read is a read, and a plain folder's own seats carry the flag —
- * with its one write made conditional on this walk instead, in currentTeam's `remember`.
- * `watch` keeps the refusal: it writes state of its own.)
+ * `last_valid`, log and heartbeat beside it. The readers were then split from it, and for a while
+ * `status --file` was any caller's, with its one write made conditional on this walk instead, in
+ * currentTeam's `remember`. `status` now asks this before it reads anything, the same as the
+ * commands that write: a plain folder's seat runs from the folder that holds `.agents`, because
+ * the lookup does not walk up. `watch` keeps the refusal: it writes state of its own.)
  */
 export function fileOwnerRefusal(
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,

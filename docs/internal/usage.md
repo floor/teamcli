@@ -46,7 +46,7 @@ differs; a file never approved on this machine has no budgets in force at all, a
 
 A file that does not load, or cannot be read, cannot be resolved as the caller's own project — a
 caller who is not the owner reads no block of their own for it, the machine's counts and one fixed
-sentence per distinct line (`note: .agents/team.yaml does not load (line 4): run team status for the
+sentence per distinct line (`note: .agents/team.yaml does not load (line 4): the owner reads the
 reason`) in their place — while the owner reads the loader's own messages and the figures the
 approval stored. When the caller's own project is resolved but no copy in force can be read, the
 block carries no name and no row: `note: no figures (the file could not be read)` and
@@ -230,7 +230,7 @@ copy in force (a live `project:` edit after approval is not shown), the loader's
 sentences, the state's own reason with this project's own path relative to its root, and the
 `note:` lines above. A file that does not load reads, one note per distinct line,
 
-    note: .agents/team.yaml does not load (line 4): run team status for the reason
+    note: .agents/team.yaml does not load (line 4): the owner reads the reason
 
 a file that cannot be read reads `.agents/team.yaml cannot be read: the owner reads the reason`, and
 a state that cannot be read reads the tool's own reason with the project's own relative path

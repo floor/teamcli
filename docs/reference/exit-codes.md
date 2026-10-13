@@ -316,11 +316,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |
+| `status.file-owner` | `status` | 1 | --file is the owner's | `team status --file .agents/team.yaml` |
+| `status.session-owner` | `status` | 1 | --session is the owner's | `team status --session team` |
 | `status.file` | `status` | 2 | the team file can't be read | `team status --file missing.yaml` |
 | `status.file-invalid` | `status` | 2 | the team file can't be parsed | `team status --file team.yaml` |
 | `status.herdr` | `status` | 2 | herdr doesn't answer | `team status` |
 | `status.invocation` | `status` | 2 | the invocation can't be read | `team status extra` |
 | `status.not-a-repo` | `status` | 2 | not inside a git repository | `team status` |
+| `status.not-yours` | `status` | 2 | the caller may not read this team | `team status` |
 | `team.command-help` | `team` | 0 | a command's help was printed | `team status --help` |
 | `team.help` | `team` | 0 | help was printed | `team --help` |
 | `team.version` | `team` | 0 | the version was printed | `team --version` |

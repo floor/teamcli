@@ -15,6 +15,7 @@ import { rulesOf } from '../launch/rules.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { clearStopped, hasSeat, restoreSeat, seatIsStopped } from '../file/lines.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
+import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
@@ -38,6 +39,7 @@ import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor, shippedLobbyFiles } from '../profiles/index.ts';
+import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { emptySession, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
@@ -194,7 +196,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
 
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: sources.home });
+  const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
+  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), home: sources.home });
   if (!loaded.ok) {
     for (const problem of loaded.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
     // exit: add.not-a-repo
@@ -601,6 +604,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       const parsed = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
       // The amendment re-signs from the command's own one snapshot, read at its gate.
       if (parsed.ok) recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);
+      // The reach projection, from the file just written: a seat added with a `reach` grant
+      // reaches the bridge and the shuttle at this approval, without waiting for an `up`.
+      if (parsed.ok) {
+        const projectionNote = reachProjectionNote(writeReachProjection(parsed.team, sources.home));
+        if (projectionNote) logLine(dir, 'add', describeCaller(caller), projectionNote, sources.now());
+      }
     }
 
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
@@ -609,7 +618,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
       caller: who, owner: caller.kind === 'owner', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
-      verifiedLobby, records,
+      verifiedLobby, records, teamFile: path,
       doctor: sources.doctor,
       // The lobby is read again directly before the workspace this run makes in it, with nothing
       // in between (`execute.ts`). Null when it is still the folder the gate read and every file
@@ -790,6 +799,7 @@ function hostOf(input: {
   seat: Seat; temporary?: SeatState['temporary']; caller: string; owner: boolean; now(): Date; launch: Launch;
   readMachine?: (root: string) => Machine; samples: SwapSample[]; limits: TeamFile['machine']; io: Io;
   standing: Standing;
+  teamFile: string;
   verifiedLobby: string | null;
   /** The run's writer, made by the caller before the launch-line note is said. */
   records: Progress;
@@ -883,6 +893,7 @@ function hostOf(input: {
       return ceilingProblem(input.ceilings, running, seat, Boolean(temporary));
     },
     record(name, patch) {
+      let replaced: string | undefined;
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: patch.stage };
@@ -894,7 +905,15 @@ function hostOf(input: {
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;
         current.seats[name] = seatState;
+        if (patch.pane) {
+          replaced = prior.pane !== patch.pane ? prior.pane : undefined;
+          current.launched_file = input.teamFile;
+        }
       });
+      if (patch.pane) {
+        if (replaced) forgetLaunchedPane(input.home, replaced);
+        noteLaunchedPane(input.home, input.teamFile, patch.pane);
+      }
     },
     running(name) {
       if (!running.some((item) => item.name === name)) running.push({ name, vendor: seat.vendor, temporary: Boolean(temporary) });
@@ -903,10 +922,13 @@ function hostOf(input: {
       // A temporary seat's rules file goes with the seat. The remover builds the path itself,
       // from the approval in force and the seat's name, and walks the writer's checked chain.
       if (temporary && name === seat.name) removeRulesFile(input.standing, name, input.root, input.home);
+      let pane: string | undefined;
       updateState(dir, (file) => {
         const seats = file.sessions[session]?.seats;
+        pane = seats?.[name]?.pane;
         if (seats) delete seats[name];
       });
+      if (pane) forgetLaunchedPane(input.home, pane);
     },
     // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
     // here with the same function the records use: no escape sequence or bidi override reaches

@@ -1,5 +1,6 @@
 // A launch profile, read from the CLI's YAML file. The screen is loaded separately.
 import { readFileSync } from 'node:fs';
+import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
 import { WINDOWS, type QuotaPattern, type WindowName } from './quota.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
@@ -203,20 +204,28 @@ export function profileFor(cli: string): Profile | null {
   return Object.hasOwn(SHIPPED, cli) ? (SHIPPED[cli]?.profile ?? null) : null;
 }
 
-/** The `lobby_files` of every profile the tool ships: all a lobby may hold beside the seats.
- *  The lobby is one folder per machine, shared by every team on it, so the set cannot depend
- *  on which seats a run starts nor on a team's file — a file another team's CLI left must not
- *  block a team with no seat of that CLI. Only a shipped profile can declare the key — the
- *  loader reads no profile from outside the tool — so nothing a user writes widens the set. */
+/** The files the tool itself keeps in the lobby, beside the profiles' own: the reach projection
+ *  `up`, `add` and `remove` regenerate (`src/reach/projection.ts`) and the temporary its atomic
+ *  write passes through. Declared below so the closed-tree gate passes a lobby holding them,
+ *  whatever team runs; absent from the lobby, they cost nothing. */
+export const TOOL_LOBBY_FILES: readonly string[] = [REACH_ROSTER_FILE, REACH_ROSTER_TEMP];
+
+/** What a lobby may hold beside the seats: the `lobby_files` of every profile the tool ships,
+ *  plus the tool's own files. The lobby is one folder per machine, shared by every team on it,
+ *  so the set cannot depend on which seats a run starts nor on a team's file — a file another
+ *  team's CLI left must not block a team with no seat of that CLI. Only a shipped profile can
+ *  declare the key — the loader reads no profile from outside the tool — and `TOOL_LOBBY_FILES`
+ *  is a constant, so nothing a user writes widens the set. */
 export function shippedLobbyFiles(): readonly string[] {
   const paths = new Set<string>();
   for (const shipped of Object.values(SHIPPED)) for (const path of shipped.profile.lobbyFiles) paths.add(path);
+  for (const path of TOOL_LOBBY_FILES) paths.add(path);
   return [...paths].sort();
 }
 
-/** Which shipped profiles declare each lobby file, by the profile's own `cli` name. Two
- *  profiles may declare one path; the reader then names them both. For `doctor`, which says
- *  of every declared file present in the lobby whose it is. */
+/** Which shipped profiles declare each lobby file, by the profile's own `cli` name — the tool's
+ *  own files name the tool. Two profiles may declare one path; the reader then names them both.
+ *  For `doctor`, which says of every declared file present in the lobby whose it is. */
 export function lobbyFileOwners(): ReadonlyMap<string, readonly string[]> {
   const owners = new Map<string, string[]>();
   for (const shipped of Object.values(SHIPPED)) {
@@ -226,6 +235,7 @@ export function lobbyFileOwners(): ReadonlyMap<string, readonly string[]> {
       owners.set(path, named);
     }
   }
+  for (const path of TOOL_LOBBY_FILES) owners.set(path, ['the team tool']);
   return owners;
 }
 

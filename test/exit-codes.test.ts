@@ -1655,8 +1655,8 @@ scene('release.configuration', async (place) => {
 });
 scene('release.usage', async (place) => show(await released(place, [], new Map()), 'a subcommand is required'));
 
-async function status(place: Place, argv: string[], sources: StatusSources): Promise<Ran> {
-  const io = testIo(place.root, owner);
+async function status(place: Place, argv: string[], sources: StatusSources, caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
   return { code: await runStatus(argv, io, sources), out: io.out, err: io.err };
 }
 
@@ -1691,6 +1691,16 @@ scene('status.agrees', async (place) => {
 scene('status.difference', async (place) => {
   write(place, TEAM);
   return show(await status(place, [], statusSources(quiet)), 'is in the file and is not running');
+});
+scene('status.file-owner', async (place) => show(await status(place, ['--file', '.agents/team.yaml'], statusSources(quiet), other), "--file is the owner's"));
+scene('status.session-owner', async (place) => show(await status(place, ['--session', 'team'], statusSources(quiet), other), "--session is the owner's"));
+scene('status.not-yours', async (place) => {
+  // A caller that does not pass learns nothing, even when the target does not load: the answer is
+  // the one fixed sentence, byte for byte, on stderr, and nothing else anywhere.
+  const ran = await status(place, [], { ...statusSources(quiet), home: place.home, gate: { standing: () => ({ kind: 'none' }) } }, other);
+  expect(ran.err).toBe('team status: this team is not yours to read\n');
+  expect(ran.out).toBe('');
+  return ran;
 });
 
 async function up(place: Place, argv: string[], caller: Caller, sources: UpSources): Promise<Ran> {
