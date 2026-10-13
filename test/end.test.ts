@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { judgeMerge, readMerge } from '../src/end/condition.ts';
@@ -154,9 +154,53 @@ describe('read from a repository', () => {
 
   test('a branch that starts with a dash is refused', () => {
     setup();
-    const read = readMerge(project, '-not-a-branch', 'main', true);
-    expect(read).toMatchObject({ verdict: 'unproven', ownNow: 0 });
-    expect(read.detail).toContain('nothing is removed');
+    expect(readMerge(project, '-not-a-branch', 'main', true)).toEqual({
+      verdict: 'unproven',
+      ownNow: 0,
+      detail: 'the branch is not a name git accepts; nothing is removed',
+    });
+  });
+
+  test('rev-list and diff put --end-of-options before the branch and the remote', () => {
+    setup();
+    git(project, 'checkout', '-q', '-b', 'fix/own');
+    git(project, 'commit', '-q', '--allow-empty', '-m', 'own');
+    const bin = join(base, 'bin');
+    const log = join(base, 'git-args.log');
+    mkdirSync(bin);
+    const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    writeFileSync(join(bin, 'git'), `#!/usr/bin/env bun
+import { appendFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const args = process.argv.slice(2);
+appendFileSync(process.env.GIT_ARGV_LOG ?? '', JSON.stringify(args) + '\\n');
+const run = spawnSync(process.env.REAL_GIT ?? '', args, { stdio: 'inherit' });
+process.exit(run.status === null ? 1 : run.status);
+`, { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath ?? ''}`;
+    process.env.GIT_ARGV_LOG = log;
+    process.env.REAL_GIT = realGit;
+    try {
+      expect(readMerge(project, 'fix/own', 'main', false)).toMatchObject({ verdict: 'open', ownNow: 1 });
+    } finally {
+      process.env.PATH = savedPath;
+      delete process.env.GIT_ARGV_LOG;
+      delete process.env.REAL_GIT;
+    }
+    const calls = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as string[]);
+    const revList = calls.find((args) => args[0] === 'rev-list');
+    const diff = calls.find((args) => args[0] === 'diff');
+    expect(revList).toBeDefined();
+    expect(diff).toBeDefined();
+    for (const [args, names] of [
+      [revList!, ['fix/own', '^origin/main']],
+      [diff!, ['origin/main', 'fix/own']],
+    ] as const) {
+      const separator = args.indexOf('--end-of-options');
+      expect(separator).toBeGreaterThanOrEqual(0);
+      for (const name of names) expect(args.indexOf(name)).toBeGreaterThan(separator);
+    }
   });
 
   test('a deleted branch and a failed fetch are unproven', () => {
