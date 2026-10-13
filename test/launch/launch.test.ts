@@ -216,9 +216,12 @@ describe('up --dry-run', () => {
 
   test('never holds a command that answers, closes or deletes', () => {
     const plan = upPlan({ root: '/work/a', session: 'a', sessionRunning: false, seats: [seat('one'), seat('two')] });
-    const verbs = plan.flatMap((step) =>
-      step.kind === 'run' && step.argv[0] === 'herdr' ? [step.argv.slice(3, 5).join(' ')] : [],
-    );
+    const verbs = plan.flatMap((step) => {
+      if (step.kind !== 'run') return [];
+      return [step.argv, ...(step.also ? [step.also] : [])]
+        .filter((argv) => argv[0] === 'herdr')
+        .map((argv) => argv.slice(3, 5).join(' '));
+    });
     expect(new Set(verbs)).toEqual(new Set(['workspace create', 'pane run', 'pane report-metadata', 'agent rename']));
   });
 });

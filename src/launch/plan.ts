@@ -20,9 +20,16 @@ export type Op =
   | { do: 'create'; seat: string; label: string; cwd: string; repairLine: string; notice?: string; lobby?: true }
   /** The watchdog's workspace: no seat, so no seat repair either. */
   | { do: 'create'; seat?: undefined; label: string; cwd: string; notice?: string; lobby?: undefined }
-  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string }
-  /** Sidebar line 2. A failure is one line and does not leave the seat out. */
-  | { do: 'display-agent'; seat: string; text: string; pane?: string }
+  | {
+      do: 'launch';
+      seat: string;
+      label: string;
+      command: string;
+      pane?: string;
+      notice?: string;
+      /** Sidebar line 2, reported on the pane after the launch command. A failure is one line. */
+      displayAgent?: string;
+    }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -100,8 +107,9 @@ export type Op =
 
 /** One thing `up` or `down` does, in order. */
 export type Step =
-  /** A command that is run. */
-  | { kind: 'run'; argv: string[]; note?: string; do?: Op }
+  /** A command that is run. `also` is a second command printed with it; the live run performs
+   *  that work inside this step's `do`, so it adds no step and no wait of its own. */
+  | { kind: 'run'; argv: string[]; also?: string[]; note?: string; do?: Op }
   /** A wait, with its time limit. */
   | { kind: 'wait'; text: string; note?: string; do?: Op }
   /** A seat that is left out, and why. */
@@ -410,16 +418,20 @@ export function upPlan(input: UpInput): Step[] {
       steps.push({
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
+        ...(seat.displayAgent
+          ? { also: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent) }
+          : {}),
         ...(said ? { note: `${said}; would launch` } : {}),
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, ...(said ? { notice: said } : {}) },
+        do: {
+          do: 'launch',
+          seat: seat.name,
+          label: seat.label,
+          command,
+          pane: seat.pane,
+          ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
+          ...(said ? { notice: said } : {}),
+        },
       });
-      if (seat.displayAgent) {
-        steps.push({
-          kind: 'run',
-          argv: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent),
-          do: { do: 'display-agent', seat: seat.name, text: seat.displayAgent, pane: seat.pane },
-        });
-      }
     }
     const rules = profile.rulesOption === null ? 'message' : 'option';
     // A waiting seat is asked even when its stage says named: the prompt is the only way its
@@ -704,10 +716,12 @@ export function downPlan(input: DownInput): Step[] {
 export function formatPlan(steps: readonly Step[]): string {
   const lines = steps.map((step) => {
     if (step.kind === 'run') {
-      const command = step.argv
+      const show = (argv: readonly string[]) => argv
         .map((word) => (/^<pane of .+>$|^[A-Z_]+=\$[A-Z_]+$/.test(word) ? word : shellQuote(word)))
         .join(' ');
-      return `+ ${command}${step.note ? `\n    (${step.note})` : ''}`;
+      const note = step.note ? `\n    (${step.note})` : '';
+      const extra = step.also ? `\n+ ${show(step.also)}` : '';
+      return `+ ${show(step.argv)}${note}${extra}`;
     }
     if (step.kind === 'wait') return `  wait ${step.text}${step.note ? `\n    (${step.note})` : ''}`;
     return `  skip ${step.text}${step.note ? `\n    (${step.note})` : ''}`;
