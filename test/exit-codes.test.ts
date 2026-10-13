@@ -14,6 +14,7 @@ import type { Caller } from '../src/caller.ts';
 import type { CheckSources } from '../src/check/team.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
+import { runAskShow } from '../src/commands/ask-show.ts';
 import { runApprove, type ApproveSources, type Waiting } from '../src/commands/approve.ts';
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
@@ -2823,6 +2824,46 @@ async function sent(place: Place, argv: string[], caller: Caller, host: SendHost
   const code = await runSend(argv, io, host);
   return { code, out: io.out, err: io.err };
 }
+
+const ASK_SHOW_MARKER =
+  '{"v":1,"request_id":"req-ask-show-v1","question_sha256":"7fa2d11897a567998b667f4b453ac20b68a6813fde68222e583f90a5bf453b96","expires_at":"2026-10-12T18:00:00.000Z","mac":"8d53d07c074d438d6676e20b45b11ea021b54e30d36d840b48e4f7a41223cbce"}';
+
+function askShowFiles(place: Place, marker = `${ASK_SHOW_MARKER}\n`): void {
+  writeFileSync(join(place.root, 'ask.txt'), 'TeamCLI signed ask v1\n{"question":"Status?","request_id":"req-ask-show-v1"}\n');
+  writeFileSync(join(place.root, 'marker.json'), marker);
+  writeFileSync(join(place.root, 'key.txt'), 'QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\n');
+}
+
+async function askShown(place: Place, argv: string[], now = new Date('2026-10-12T18:00:00.000Z')): Promise<Ran> {
+  const io = testIo(place.root);
+  const code = await runAskShow(argv, io, now);
+  return { code, out: io.out, err: io.err };
+}
+
+scene('ask-show.shown', async (place) => {
+  askShowFiles(place);
+  return show(
+    await askShown(place, ['req-ask-show-v1', '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt']),
+    'Status?',
+  );
+}, false);
+scene('ask-show.expired', async (place) => {
+  askShowFiles(place);
+  const past = new Date(Date.parse('2026-10-12T18:00:00.000Z') + 5_001);
+  return show(
+    await askShown(place, ['req-ask-show-v1', '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'], past),
+    'the ask has expired',
+  );
+}, false);
+scene('ask-show.refused', async (place) => {
+  askShowFiles(place, `${ASK_SHOW_MARKER.replace(/e"}$/, 'f"}')}\n`);
+  return show(
+    await askShown(place, ['req-ask-show-v1', '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt']),
+    'the marker does not verify',
+  );
+}, false);
+scene('ask-show.invocation', async (place) =>
+  show(await askShown(place, []), 'a request id, --ask, --marker and --key are required'), false);
 
 scene('send.usage', async (place) => show(await sent(place, [], owner, sendHost(place)), 'a seat and a message are required'));
 scene('send.configuration', async (place) =>

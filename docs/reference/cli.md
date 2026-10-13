@@ -102,6 +102,30 @@ Usage:
 
 None.
 
+## `ask-show`
+
+Hidden: no
+
+Usage:
+
+    team ask-show <request_id> --ask <path> --marker <path> --key <path>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--ask` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `--marker` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `request_id` | no | no |
+
 ## `broker`
 
 Hidden: no
