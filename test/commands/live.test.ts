@@ -351,53 +351,6 @@ describe('team up, live', () => {
     }
   });
 
-  // The launch line already carries -m for the file's model. The first idle screens still show
-  // another model (the capture's own row); the screen after that shows the file's model. The
-  // seat is named from the screen it settles on.
-  test('a codex seat is named when its screen settles on the file\'s model', async () => {
-    const path = join(root, '.agents/team.yaml');
-    writeFileSync(path, makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
-    await approve();
-    const capture = readFileSync(join(import.meta.dir, '../fixtures/codex/0.161.0/idle.txt'), 'utf8');
-    const pinned = fileModel(capture);
-    const made = world((_pane, label) => (label === 'GPT-6 Sol' ? capture : IDLE));
-    let codexPane = '';
-    let reads = 0;
-    let pasted = false;
-    let typed = '';
-    let status = 'idle';
-    const sent: string[] = [];
-    const create = made.launch.createWorkspace;
-    made.launch.createWorkspace = (session, cwd, label) => {
-      const created = create(session, cwd, label);
-      if (label === 'GPT-6 Sol' && created) codexPane = created.pane;
-      return created;
-    };
-    const read = made.launch.paneText;
-    const boxed = () => {
-      const [first = '', ...rest] = wrappedRows(typed);
-      return pinned.replace('› Ask Codex to do anything', [`› ${first}`, ...rest.map((line) => `  ${line}`)].join('\n'));
-    };
-    made.launch.agentStatus = () => status;
-    made.launch.paneText = (session, pane) => {
-      if (pane !== codexPane) return read(session, pane);
-      if (pasted) return boxed();
-      reads += 1;
-      return reads <= 2 ? capture : pinned;
-    };
-    made.launch.typeText = (_session, _pane, text) => { typed = text; sent.push(text); pasted = true; return true; };
-    made.launch.pressEnter = () => { sent.push('Enter'); status = 'working'; pasted = false; return true; };
-    const io = testIo(root, { kind: 'owner' });
-    const code = await runUp(FILE, io, sources({}, made));
-    const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['codex-acme'];
-    expect(made.runs.some((run) => run.command.includes('-m gpt-6-sol'))).toBe(true);
-    expect(io.out).not.toContain('left at launched, not named');
-    expect(made.renames).toContain('codex-acme');
-    expect(seat).toMatchObject({ stage: 'ready' });
-    expect(code).toBe(0);
-    expect(sent.length).toBeGreaterThan(0);
-  });
-
   test('a codex seat whose screen stays on another model is left unnamed', async () => {
     const path = join(root, '.agents/team.yaml');
     writeFileSync(path, makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));

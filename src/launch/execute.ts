@@ -646,12 +646,10 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           break;
         }
         // What an idle screen means for the seat, wherever it was found: the screen, then the
-        // process, then the model comparison. The process read sits after the first screen read
-        // and before the comparison: a model the CLI is not running still leaves a `launched`
-        // identity, and the read stays ahead of the process read. The fresh launch's idle
-        // deadline, when this wait already has one; a resumed seat has none yet.
-        let settleUntil: number | null = null;
-        const idleOnwards = async (): Promise<void> => {
+        // process, then the model comparison. The model comes from that screen read, so the
+        // process read sits after it and before the comparison: a model the CLI is not running
+        // still leaves a `launched` identity, and the read stays ahead of the process read.
+        const idleOnwards = (): void => {
           const model = op.model;
           const version = op.version;
           const screen = model !== undefined && version !== undefined
@@ -671,33 +669,17 @@ export async function executePlan(steps: readonly Step[], session: string, host:
             });
           }
           // After the idle wait, before the rename and the rules: the same "differs" the watch uses.
-          // Unread is not a difference, and the seat continues. A different model on the first
-          // idle screen is not the last word: the same wait continues until the screen shows the
-          // file's model or the idle time runs out. A screen that stays on another model is left
-          // unnamed. A later unread frame does not clear a difference already seen.
+          // Unread is not a difference, and the seat continues. A different model is left unnamed.
           if (model !== undefined && version !== undefined) {
+            const running = screen === null ? null : seatModel({ cli: op.cli, model }, screen);
             const declared = { model, version };
             // `init` writes version "0" — the placeholder before the owner fills the release
             // number in — and the release before this one left whole teams carrying it. Exactly
             // that literal is read as "no version declared": the family is still compared, and
             // any other value ("0.0", "00", a real number) is compared as today.
-            const off = (found: Running): boolean =>
-              version === '0' ? found.model !== model : modelDiffers(found, declared);
-            let running = screen === null ? null : seatModel({ cli: op.cli, model }, screen);
-            if (running !== null && off(running)) {
-              const until = settleUntil ?? host.now() + op.seconds * 1000;
-              while (host.now() < until) {
-                const before = host.now();
-                await host.sleep(IDLE_POLL_MS);
-                if (host.now() <= before) break;
-                const nextScreen = host.paneText?.(session, here.pane) ?? null;
-                const next = nextScreen === null ? null : seatModel({ cli: op.cli, model }, nextScreen);
-                if (next === null) continue;
-                running = next;
-                if (!off(running)) break;
-              }
-            }
-            if (running !== null && off(running)) {
+            const differs = running !== null
+              && (version === '0' ? running.model !== model : modelDiffers(running, declared));
+            if (differs) {
               dropped.add(op.seat);
               final(
                 op.seat,
@@ -728,7 +710,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
             ...(op.waiting.launched ? { launched: op.waiting.launched } : {}),
             repairLine: op.repairLine,
           });
-          if (settled === 'idle') await idleOnwards();
+          if (settled === 'idle') idleOnwards();
           break;
         }
         const startedAt = host.now();
@@ -790,8 +772,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           if (host.now() <= before) break;
         }
         if (outcome === 'idle') {
-          settleUntil = deadline;
-          await idleOnwards();
+          idleOnwards();
           break;
         }
         const workspace = here.workspace ?? places.get(op.seat)?.workspace;
@@ -806,7 +787,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
             // for a dialog found before the seat was ever recorded — and it is the identity a
             // refused close writes back, so the next `up` has one to compare against.
             const settled = await atDialog(op.seat, here, op.label, reading, dialogIdentity(op.seat, here.pane), op.repairLine);
-            if (settled === 'idle') await idleOnwards();
+            if (settled === 'idle') idleOnwards();
             break;
           }
           // A trust question is closed with no key and no text. The same for a permission or a
@@ -841,7 +822,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           // takes the same stop as any dialog it finds: closed without input, its record saying
           // the timeout — never left at launched, which only a run that can ask may do.
           const settled = await atDialog(op.seat, here, op.label, 'timeout', dialogIdentity(op.seat, here.pane), op.repairLine);
-          if (settled === 'idle') await idleOnwards();
+          if (settled === 'idle') idleOnwards();
           break;
         }
         dropped.add(op.seat);
