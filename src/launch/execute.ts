@@ -106,6 +106,8 @@ export type Host = {
   drop(seat: string): void;
   say(line: string): void;
   log(who: string, what: string): void;
+  /** Records the file the watchdog pane may read, before that pane's command runs. */
+  noteWatch?(pane: string, file: string): void;
   /** The seat's line: first drawn before its workspace is created, rewritten in place as it
    *  advances. Present on `up` and `add`; `down` has none, and its records keep their old lines. */
   progress?(seat: string, state: ProgressState): void;
@@ -921,6 +923,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
       }
       case 'watch': {
         const here = places.get(op.label);
+        if (here && op.file) host.noteWatch?.(here.pane, op.file);
         if (!here || !host.paneRun(session, here.pane, op.command)) {
           watchFailed = true;
           host.say('watch: it did not start\n');

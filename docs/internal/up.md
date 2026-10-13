@@ -81,7 +81,7 @@ A dry run that reaches a refusal the real run would give before doing anything r
 - `up.run-lock`, another run holds the session (`src/commands/up.ts:726`)
 - `up.lobby`, the lobby could not be created (`src/commands/up.ts:742`)
 - `up.clear`, a stopped session this team records did not clear (`src/commands/up.ts:758`)
-- `up.pending`, a seat left short of ready; `up.server`, the server did not start; `up.watch`, the watch did not start, including a watch that would not read this file (`src/commands/up.ts:981-984`)
+- `up.pending`, a seat left short of ready; `up.server`, the server did not start; `up.watch`, the watch did not start (`src/commands/up.ts:1110`)
 
 A pane of another session the approved file's `delegates` section names may run `up` when that
 entry's `commands` list names it. The ordinary rule above refuses such a caller first, and only
@@ -142,10 +142,9 @@ operator is never cycled this way; it keeps the whole-team line above.
 
 A command run in a folder that is not a git repository reads `.agents/team.yaml` in that folder,
 and nowhere above it. A link at `.agents` or at `team.yaml` is not followed. When `--file` names a
-file a watch started in the project folder would not read, `up` starts no watch and prints this
-instead of `watch: started`, and exits 1 even when every seat is ready:
-
-    watch: not started: a watch started there could not read this file, or would read another one under this session's name. Move the file to .agents/team.yaml in the folder the watch starts in. A fuller repair is planned.
+file a flagless watch in the project folder would not read, `up` still starts the watch, and the
+command it runs carries no `--file`. The resolved path is recorded for the watchdog pane. That
+pane may read it. Any other non-owner is refused. The command line and the plan do not print the path.
 
 A seat is its pane only while the process `team` launched is still in it. A seat the state records
 whose pane no longer holds that process is not "already ready": its workspace is closed without a
@@ -527,7 +526,9 @@ watch itself.
 
 ## Known issues
 
-A team file that is not `.agents/team.yaml` in the folder the watch starts in is not watched. A real `up` prints `watch: not started: …` and exits 1. A dry run prints that line with its plan and exits 0. Move the file to that path. A fuller repair is planned.
+A team file that is not `.agents/team.yaml` in the folder the watch starts in is still watched.
+`up` records the resolved path for the watchdog pane and starts `watch` with no `--file`. That
+pane reads the recorded file. Any other non-owner is refused.
 
 ## The examples the page keeps
 
