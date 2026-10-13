@@ -369,6 +369,37 @@ describe('team up, live', () => {
     );
   });
 
+  test('a codex seat whose screen shows the file\'s model is named with no word of the form', async () => {
+    const path = join(root, '.agents/team.yaml');
+    writeFileSync(path, makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
+    await approve();
+    const capture = (name: string) => readFileSync(join(import.meta.dir, `../fixtures/codex/0.157.0/${name}.txt`), 'utf8');
+    const made = world((_pane, label) => (label === 'GPT-6 Sol' ? fileModel(capture('idle')) : IDLE));
+    let codexPane = '';
+    let status = 'idle';
+    const read = made.launch.paneText;
+    let pasted = false;
+    let typed = '';
+    const boxed = () => {
+      const [first = '', ...rest] = wrappedRows(typed);
+      return capture('idle').replace('› Ask Codex to do anything', [`› ${first}`, ...rest.map((line) => `  ${line}`)].join('\n'));
+    };
+    made.launch.agentStatus = () => status;
+    made.launch.typeText = (_session, pane, text) => { codexPane = pane; typed = text; pasted = true; return true; };
+    made.launch.pressEnter = () => { status = 'working'; pasted = false; return true; };
+    made.launch.paneText = (session, pane) => pane === codexPane
+      ? (pasted ? boxed() : capture('working')) : read(session, pane);
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(FILE, io, sources({}, made));
+    expect(code).toBe(0);
+    expect(made.renames).toContain('codex-acme');
+    expect(io.out).toContain('codex-acme: ready');
+    // The sentence naming the form belongs to the mismatch alone: a seat whose screen shows
+    // the file's model never sees it, on stdout or on stderr.
+    expect(io.out).not.toContain('This CLI is told its model');
+    expect(io.err).not.toContain('This CLI is told its model');
+  });
+
   test.each(['accepted', 'trust', 'swallowed'] as const)('Antigravity first-message rules: %s', async (outcome) => {
     const path = join(root, '.agents/team.yaml');
     const gemini = [
