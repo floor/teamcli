@@ -32,7 +32,7 @@ generation, certificate minting — is not in this build yet.
 | --- | --- | --- |
 | `status`: every observed leg is up | one section per leg — helper, each bridge, the front, each guard — with a state column, closing with `state: up` | 0 |
 | `status`: a leg is down, or the lobby holds no bridge config at all | the same sections, with the `MISS` rows, closing with `state: down` or `state: not-set-up` | 1 |
-| `doctor`: nothing missing | one finding per line — the level, then the sentence — with a `fix:` line under each finding that has one, then `team mcp doctor: nothing missing, 0 warnings` | 0 |
+| `doctor`: nothing missing | one finding per line — the level, then the sentence — with a `fix:` line under each finding that has one, then `team mcp doctor: nothing missing, <n> warnings` (`0 warnings` when there are none) | 0 |
 | `doctor`: at least one `MISS` | the same findings, and the closing count | 1 |
 | the invocation can't be read: no subcommand, an unknown one, an option this build does not know | `team mcp: <reason>`, with the usage | 2 |
 
