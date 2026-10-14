@@ -2636,6 +2636,13 @@
     {
       "code": 0,
       "command": "worktree",
+      "id": "worktree.listed",
+      "meaning": "the recorded worktrees were listed",
+      "trigger": "team worktree list"
+    },
+    {
+      "code": 0,
+      "command": "worktree",
       "id": "worktree.record-gone",
       "meaning": "the record was removed after the folder was already gone",
       "trigger": "team worktree remove task"

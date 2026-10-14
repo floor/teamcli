@@ -382,6 +382,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |
 | `watch.not-a-repo` | `watch` | 2 | not inside a git repository | `team watch` |
 | `worktree.created` | `worktree` | 0 | the worktree was created | `team worktree new task --kind fix` |
+| `worktree.listed` | `worktree` | 0 | the recorded worktrees were listed | `team worktree list` |
 | `worktree.record-gone` | `worktree` | 0 | the record was removed after the folder was already gone | `team worktree remove task` |
 | `worktree.removed` | `worktree` | 0 | the worktree was removed | `team worktree remove task` |
 | `worktree.another-pane` | `worktree` | 1 | the state records another pane for the caller's seat | `team worktree new task` |

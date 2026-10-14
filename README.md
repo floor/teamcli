@@ -271,7 +271,7 @@ check, and this build acts on what the commands below read.
 | `team answer <seat> trust` | presses the one recorded key of a seat's folder-trust dialog, when the file's `dialogs` policy allows it; every check passes on two fresh reads of the pane, and anything else sends nothing | the owner, or the coordinator from its own seat |
 | `team release check <package@version>` | checks one release's public npm and GitHub records: the version and its checksums, the tag, the release, the changelog entry | anyone; read only |
 | `team remove <name>` | stops one seat, then takes it out of the file; `--keep` leaves it stopped; `--abandon` is the owner's, and types nothing | the owner, the coordinator or the operator; only the owner removes the coordinator or the operator |
-| `team worktree new <task>` / `team worktree remove <task>` | creates a task worktree from an up-to-date base, or removes its folder; a failed setup is kept and recorded; the branch is never deleted; ignored files in the worktree are deleted with it | the owner, the coordinator or the operator |
+| `team worktree list` / `team worktree new <task>` / `team worktree remove <task>` | lists the recorded worktrees, creates one from an up-to-date base, or removes its folder; a failed setup is kept and recorded; the branch is never deleted; ignored files in the worktree are deleted with it; `list` writes nothing | the owner, the coordinator or the operator |
 
 Each command has its own page in [docs/commands](https://github.com/floor/teamcli/tree/main/docs/commands): the synopsis, what it reads and
 writes, who may run it, every flag, the refusals with their exact text, the exit codes, and examples
@@ -309,7 +309,7 @@ existing login check command (`cursor-agent status`, `agy models`, `codex login 
 It never answers prompts and performs no sign-in action.
 
 `team up`, `team down`, `team add`, `team remove`, `team worktree new` and `team worktree remove`
-run live. `up`, `down` and `add` take `--dry-run` to print every command they would run, and every
+run live. `team worktree list` prints the recorded worktrees and writes nothing. `up`, `down` and `add` take `--dry-run` to print every command they would run, and every
 refusal, and change nothing.
 
 ## Approvals are signed
