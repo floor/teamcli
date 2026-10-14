@@ -10,6 +10,7 @@ import type { PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { usesLauncher } from '../launch/line.ts';
 import { profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
 import type { SessionState } from '../state.ts';
@@ -297,6 +298,7 @@ export function pass({
         account,
         quota: [],
         identity: 'unknown',
+        launcher: false,
         continuity: 'other',
         running: false,
         recorded: state.seats[name]?.stage,
@@ -344,6 +346,7 @@ export function pass({
       account,
       quota: quotaOf(cli, screen, pane, reportedLiveAgent(foreground?.[agent.pane] ?? null, profileFor(cli)?.processNames ?? []), patternsOf(cli)),
       identity: verdict,
+      launcher: seat ? usesLauncher(seat) : false,
       continuity: replacedSeat(verdict, {
         asked: true,
         namedOnPane: state.seats[name]?.pane === agent.pane,

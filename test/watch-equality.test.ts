@@ -2,7 +2,8 @@
 // `oldPass` below is src/watch/pass.ts as it stood before the checks were split into modules
 // (the merge of #45), copied in unchanged — except the one field read the lead's rename moved,
 // `team.coordinator` to `team.orchestrator`, the same value under the section's canonical name,
-// and the unrecognised-screen fail-safe's quiet-unknown line, added to both sides below —
+// and the unrecognised-screen fail-safe's quiet-unknown line, added to both sides below,
+// and the model-drift line's restart, which the check now names —
 // and used by this file alone. Every scenario runs both
 // implementations over the same fixtures, step for step, and demands equal PassResults and equal
 // pending state — for a team file without `watch.checks`, which is every fixture here.
@@ -106,7 +107,10 @@ function oldPass(
     if (seat) {
       const running = seatModel(seat, live.screens[agent.pane]);
       if (running && (running.model !== seat.model || running.version !== seat.version)) {
-        once(`model:${name}`, `${name} runs ${running.model} ${running.version}; the file says ${seat.display}: it signs with the wrong model`);
+        const repair = name === team.orchestrator || name === team.operator
+          ? 'team down, then team up (to restart the whole team)'
+          : `team remove ${name} --keep, then team add ${name}`;
+        once(`model:${name}`, `${name} runs ${running.model} ${running.version}; the file says ${seat.display}: it signs with the wrong model — ${repair}`);
       }
     }
 
