@@ -455,7 +455,7 @@ describe('the lobby gate', () => {
     const made = world();
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
     expect(existsSync(join(lobby, '.gitkeep'))).toBe(true);
   });
 
@@ -654,7 +654,7 @@ describe('the lobby gate', () => {
     const made = world();
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
   });
 
   test('findRepoRoot accepts .git as a file (worktree / submodule style)', () => {
@@ -1165,7 +1165,7 @@ seats:
     const upWorld = codexWorld();
     const run = await runUpCmd([], upWorld);
     expect(run.code).toBe(0);
-    expect(upWorld.workspaces).toContainEqual({ label: 'GPT Sol 6', cwd: root });
+    expect(upWorld.workspaces).toContainEqual({ label: 'lead', cwd: root });
     expect(upWorld.workspaces.some((workspace) => workspace.cwd === lobby)).toBe(false);
 
     const addWorld = codexWorld();
