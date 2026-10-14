@@ -235,6 +235,11 @@ export interface UpSeat {
    * says it, so the owner is not left with a seat that is "already ready" and stale.
    */
   restartNote?: string;
+  /**
+   * Set when this `up` is the granted orchestrator's and this seat is that seat. The plan
+   * skips it before any close or launch: the run does not relaunch or close the caller's pane.
+   */
+  grantKeep?: string;
 }
 
 export interface UpInput {
@@ -291,6 +296,10 @@ export function upPlan(input: UpInput): Step[] {
   }
 
   for (const seat of input.seats) {
+    if (seat.grantKeep) {
+      steps.push({ kind: 'skip', text: `${seat.name}: ${seat.grantKeep}` });
+      continue;
+    }
     if (seat.stopped) {
       steps.push({ kind: 'skip', text: `${seat.name}: stopped in the file; start it with \`team add ${seat.name}\`` });
       continue;

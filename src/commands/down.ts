@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
+import { grantGate, logGranted } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -78,6 +79,10 @@ export type DownSources = {
   delegate?: DelegateSources;
   /** The audit line a delegated run leaves. Tests record it; the shipped command writes it. */
   audit?: typeof logDelegated;
+  /** The grant gate. Tests hand in a verdict; the shipped command asks the real one. */
+  grantGate?: typeof grantGate;
+  /** The audit line a granted run leaves. Tests record it; the shipped command writes it. */
+  grantAudit?: typeof logGranted;
 };
 
 export type DownLaunch = {
@@ -561,7 +566,18 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // agent list unreadable), and a run that takes the lock remembers once that lock is held,
   // before anything the stop itself can fail at. A delegated run has no loaded path and still
   // remembers nothing.
-  const callerRefused = rule.kind !== 'ok' && !branching();
+  // A grant, when the file has one, is what admits the orchestrator's own `down`. The operator
+  // and the owner stay on the rule above. A passed grant keeps this run a seat's run: both lead
+  // seats stay in `keep`. A file that omits `grant` does not ask, and today's `down` stands.
+  let grantSeat: string | undefined;
+  let grantRefusal: string | undefined;
+  if (!branching() && rule.kind === 'ok' && caller.kind === 'seat' && caller.name === team.orchestrator && team.grant) {
+    const said = (sources.grantGate ?? grantGate)({ act: 'down', io, home: sources.home });
+    if (said.kind === 'passed') grantSeat = said.grant.seat;
+    else grantRefusal = said.text;
+  }
+
+  const callerRefused = (rule.kind !== 'ok' && !branching()) || grantRefusal !== undefined;
   const abandonRefused = args.flags.has('abandon') && granted === undefined && !callerOwns(caller) && verdict === undefined;
   const mayRemember = !callerRefused && !abandonRefused && !dry && current.path !== undefined;
   const remember = (): void => {
@@ -575,13 +591,13 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.herdr
     return 2;
   }
-  if (!running) {
+  if (!running && grantRefusal === undefined) {
     io.stdout(`session ${session} is not running: nothing to stop${dry ? '\ndry run: nothing was run' : ''}\n`);
     remember();
     // exit: down.idle
     return 0;
   }
-  let agents = sources.agents(session);
+  let agents = running ? sources.agents(session) : [];
   if (agents === null) {
     io.stderr(`team down: the agents of session ${session} can't be read\n`);
     remember();
@@ -589,6 +605,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     return 2;
   }
 
+  if (grantRefusal !== undefined) refusals.push(grantRefusal);
   if (rule.kind !== 'ok' && !branching()) {
     // The ordinary rule has refused, and only now is the gate asked. With no delegate in the live
     // file nothing changes. A refusal takes the ordinary refusal's place, in the same place and at
@@ -803,6 +820,10 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.delegate-placement
     // exit: down.delegate-command
     // exit: down.delegate-flag
+    // exit: down.grant-approval
+    // exit: down.grant-approved-copy
+    // exit: down.grant-drift
+    // exit: down.grant-scope
     return 1;
   }
   if (dry) {
@@ -833,6 +854,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // returns at its own check, before any caller rule), never when a refusal held the run, and
     // never when herdr is out of reach.
     if (granted !== undefined) (sources.audit ?? logDelegated)(dir, granted, 'down', sources.now());
+    // The granted seat's line, at the same moment, before the first close.
+    if (grantSeat !== undefined) (sources.grantAudit ?? logGranted)(dir, grantSeat, 'down', sources.now());
 
     const now = () => sources.now();
     const host: Host = {
