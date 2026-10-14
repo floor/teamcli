@@ -28,6 +28,7 @@ import {
   type SendDaemonHandle,
 } from '../src/send/daemon.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
+import { triggerLine } from '../src/send/native.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 
@@ -261,42 +262,36 @@ describe('the send daemon\'s boundaries', () => {
   });
 
   test('a daemon that dies between the trigger and the Enter leaves no body text in the pane', async () => {
-    // The crash is the daemon's own queue worker rejecting; under the runner that rejection
-    // would fail this file instead of the daemon, so the scene runs in its own process
-    // (test/send-crash-run.ts) and reports what survived it.
-    const proc = Bun.spawn(['bun', 'test/send-crash-run.ts'], {
-      cwd: new URL('..', import.meta.url).pathname,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const exit = await proc.exited;
-    const out = await new Response(proc.stdout).text();
-    const err = await new Response(proc.stderr).text();
-    expect(exit, err || out).toBe(0);
-
-    const scene = JSON.parse(out) as {
-      response: unknown;
-      rejections: string[];
-      typed: { pane: string; text: string }[];
-      triggerFits: boolean;
-      triggerHeld: boolean;
-      bodyNeverTyped: boolean;
-      dropContent: string;
-      dropMode: number;
-      historyIds: string[];
-      logHasDelivered: boolean;
+    const world = setupWorld();
+    const host = makeHost(world);
+    host.native.pressEnter = () => {
+      throw new Error('the daemon died between the trigger and the Enter');
     };
-    const id = '11111111-1114-4111-8111-111111111111';
-    expect(scene.response).toBeNull();
-    expect(scene.rejections.length).toBe(1);
-    expect(scene.rejections[0]).toContain('the daemon died between the trigger and the Enter');
-    expect(scene.typed.length).toBe(1);
-    expect(scene.triggerFits).toBe(true);
-    expect(scene.triggerHeld).toBe(true);
-    expect(scene.bodyNeverTyped).toBe(true);
-    expect(scene.dropContent).toBe('the body that must never reach the composer');
-    expect(scene.dropMode).toBe(0o600);
-    expect(scene.historyIds).not.toContain(id);
-    expect(scene.logHasDelivered).toBe(false);
+    const started = await startSendDaemon({ root: world.root, dir: world.dir, team: world.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    const body = 'the body that must never reach the composer';
+    const io = ownerIo(world.root);
+    expect(await runSend(['lead', body], io, host)).toBe(1);
+    expect(io.err).toContain('unreachable: delivery interrupted before completion');
+
+    expect(host.typed.length).toBe(1);
+    expect(host.enters).toEqual([]);
+    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'lead');
+    const files = readdirSync(drops);
+    expect(files.length).toBe(1);
+    const dropPath = join(drops, files[0]!);
+    const line = triggerLine(dropPath);
+    if (line === null) throw new Error('the fixture path makes a trigger line the native gate would refuse');
+    expect(host.typed[0]?.text).toBe(line);
+    expect(host.typed[0]?.text.includes(body)).toBe(false);
+    expect(readFileSync(dropPath, 'utf8')).toBe(body);
+    expect(lstatSync(dropPath).mode & 0o777).toBe(0o600);
+
+    const history = readHistory('acme', world.root, world.home);
+    expect(history.ok && history.entries.map((entry) => entry.outcome)).toEqual(['unreachable']);
+    const log = existsSync(join(world.dir, LOG_FILE)) ? readFileSync(join(world.dir, LOG_FILE), 'utf8') : '';
+    expect(log).not.toContain('delivered');
   });
 });
