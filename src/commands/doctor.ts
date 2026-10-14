@@ -20,7 +20,7 @@ import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, worksp
 import type { Command, Io } from '../io.ts';
 import { resolveLobby, verifyLobby } from '../lobby/gate.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
-import { lobbyFileOwners, profileFor, shippedLobbyFiles } from '../profiles/index.ts';
+import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
 import { checkRulesFile, rulesFilePathOf } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
@@ -647,26 +647,28 @@ export function doctorFindings(
   findings.push(...trustFindings(team, root, dir, session, sources));
 
   const lobby = resolveLobby(sources.home, team);
-  // The same closed tree the launch's gate walks: the `lobby_files` of every profile the tool
-  // ships, the one set `up`, `add` and this finding all read, so this finding says of the
-  // lobby exactly what the launch's gate would — a `miss` here blocks the launch, and the
-  // callers cannot disagree about a declared file.
-  const declaredLobbyFiles = shippedLobbyFiles();
-  const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, files: declaredLobbyFiles, lobby });
+  // The same walk `up` and `add` use before a launch into the lobby: a path a shipped CLI
+  // reads at start is a miss. A file a CLI only writes is named afterwards, so an owner
+  // still sees whose lock is sitting in the folder.
+  const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, reads: shippedStartupReads(), lobby });
   if (!gate.ok) {
     findings.push({ level: 'miss', text: gate.text });
   } else if ('missing' in gate) {
     findings.push({ level: 'ok', text: `the lobby ${lobby}: will be created at the first launch` });
   } else {
     findings.push({ level: 'ok', text: `the lobby ${lobby}: verified` });
-    // Each declared file the lobby holds is named with the profile it belongs to, so an owner
-    // reading this knows whose file is sitting in the shared folder (`lobbyFileOwners`). Every
-    // present file has an owner by construction: the gate holds only names the shipped
-    // profiles declare, which is where the owners come from.
     const owners = lobbyFileOwners();
-    for (const file of gate.files) {
-      const whose = owners.get(file.path);
-      if (whose !== undefined) findings.push({ level: 'ok', text: `the lobby ${lobby}: ${file.path} is ${whose.join("'s and ")}'s` });
+    for (const rel of shippedLobbyFiles()) {
+      const full = join(lobby, rel);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(full);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink() || !stat.isFile()) continue;
+      const whose = owners.get(rel);
+      if (whose !== undefined) findings.push({ level: 'ok', text: `the lobby ${lobby}: ${rel} is ${whose.join("'s and ")}'s` });
     }
   }
 

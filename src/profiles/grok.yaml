@@ -46,6 +46,12 @@ timeouts:
 # No `status_model`: the model stands on the box's footer row, and a status row is read only
 # from the composer modes that draw one (none of the box-to-rule box), so a grok seat's model
 # is not checked; `up` writes that its screen shows no model this version can read.
+startup_reads:
+  - AGENTS.md
+  - CLAUDE.md
+  - CLAUDE.local.md
+  - .claude/CLAUDE.md
+  - .claude/rules/
 models:
   option:
     - --model

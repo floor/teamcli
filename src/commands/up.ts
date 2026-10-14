@@ -59,7 +59,7 @@ import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts'
 import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
 import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
-import { profileFor, shippedLobbyFiles } from '../profiles/index.ts';
+import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -664,9 +664,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // unblocks nothing, not even the seat a dry run would plan.
   const budgets = budgetsInForceOf(standing, team);
 
+  // A file a CLI reads at start refuses only a launch into the lobby. `doctor` reports it
+  // as a miss, and that miss is applied once `launchingIntoLobby` is known, below.
+  const startupReadRefusals: string[] = [];
   if (sources.doctor) {
     const findings = doctorFindings(team, root, dir, session, sources.doctor, loaded.warnings, standing);
-    for (const finding of findings) if (blocksLaunch(finding)) refusals.push(finding.text);
+    for (const finding of findings) {
+      if (!blocksLaunch(finding)) continue;
+      if (finding.text.includes(' is read at start by ')) startupReadRefusals.push(finding.text);
+      else refusals.push(finding.text);
+    }
   }
   const samples: SwapSample[] = [];
   const readAt = () => (sources.now?.() ?? new Date()).getTime();
@@ -874,33 +881,40 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   let verifiedLobby: string | null = null;
   let lobbySeen: LobbySeen | null = null;
   let createLobby = false;
-  // What the lobby may hold beside the seats: the `lobby_files` of every profile the tool
-  // ships. The lobby is one folder per machine, shared by every team on it, so what it may
-  // hold cannot depend on which seats this run starts nor on this team's file: a seat already
-  // ready is planned without the lobby mark, and another team's CLI may hold the folder too
-  // (`profiles/*.yaml`, the capture behind each entry).
-  const declaredLobbyFiles = shippedLobbyFiles();
+  // Paths a shipped CLI reads at start. The set does not depend on which seats this run
+  // starts: another team's CLI may read a file this team does not launch.
+  const startupReads = shippedStartupReads();
   if (isMigratedTrust(team.trust)) {
-    const launching = seats.some((seat) => {
-      if (seat.unidentifiedHold || seat.stopped || seat.launchProblem) return false;
+    // Only a fresh seat whose start is the lobby. A lead starts in the project and does not
+    // open this folder; a seat already ready is not launched again.
+    const launchingIntoLobby = seats.some((seat) => {
+      if (!seat.lobby || seat.unidentifiedHold || seat.stopped || seat.launchProblem) return false;
       if (!profileFor(seat.cli)) return false;
       const fresh = seat.stage === undefined || !seat.pane || (seat.stage === 'launched' && !seat.agentLive);
       if (!fresh) return false;
       return seat.budget?.kind !== 'refuse';
     });
+    if (launchingIntoLobby) {
+      for (const text of startupReadRefusals) refusals.push(text);
+    }
+    // Every migrated run checks links and ownership. A file a CLI reads at start is refused
+    // only when a seat is about to start in the lobby.
     // Read-only: a refusal stops the run before anything is made, and the run lock below is
     // held before the first write. A lobby that is simply absent is not a refusal here — the
     // creating pass runs under the lock (`createLobby`). Making it here, as this once did, is
     // the run's first filesystem effect outside the lock, and two fresh runs can both see the
     // lobby absent: the loser's mkdir meets the winner's component and `verifyLobby` turns the
     // EEXIST into a refusal the losing run never earned (`lobby/gate.ts`, the create branch).
-    const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby: teamLobby });
+    const gate = verifyLobby(sources.home, {
+      create: false, getuid: sources.getuid, fs: sources.fs,
+      reads: launchingIntoLobby ? startupReads : [], lobby: teamLobby,
+    });
     if (!gate.ok) refusals.push(gate.text);
     else if ('path' in gate) {
       verifiedLobby = gate.path;
       lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
       for (const seat of seats) if (seat.lobby) seat.cwd = gate.path;
-    } else createLobby = !dry && launching;
+    } else if (launchingIntoLobby) createLobby = !dry;
   }
   const watch = recorded?.watch;
   const watchAlive = Boolean(watch && sources.alive?.(watch.pid));
@@ -985,7 +999,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // The run's first write, under the lock: the lobby the read-only pass above found absent.
       // Serialised here, no competing mkdir can turn into this run's refusal, and this run's own
       // make cannot land on another run's — which is what the read-only pass exists for.
-      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby: teamLobby });
+      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby });
       if (!gate.ok) {
         out.stderr(`team up: ${plainText(gate.text)}\n`);
         // exit: up.lobby
@@ -1036,7 +1050,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // it allowed still the file it read. The declared files travel with it, so the recheck
       // walks the same closed tree the gate did.
       confirmLobby() {
-        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby: teamLobby }) : null;
+        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
       typeLine: () => false,
