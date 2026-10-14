@@ -43,7 +43,7 @@ plan and runs nothing.
 | a seat was left running — busy, blocked, at its own exit question, on an unreadable screen | its `  skip` line, and the last line naming it | 0 |
 | there was nothing to stop | `session <session> is not running: nothing to stop` | 0 |
 | `--dry-run` | the plan; `dry run: nothing was run` | the refusal's own exit, else 0 |
-| the run was refused, or a step failed | `team down: <reason>` | 1 |
+| the run was refused, or a step was held | `team down: <reason>` for a refusal; a held step ends on its own line instead, `<seat>: left out: <reason>` | 1 |
 | the invocation, the team file or herdr can't be read | `team down: <problem>` and the usage | 2 |
 
 ## Example
