@@ -1322,6 +1322,48 @@
       "classify": "unsent",
       "composer": "unsent",
       "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/exit-typed.txt",
+      "cli": "grok",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/exit.txt",
+      "cli": "grok",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/idle.txt",
+      "cli": "grok",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/permission.txt",
+      "cli": "grok",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/question.txt",
+      "cli": "grok",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/working.txt",
+      "cli": "grok",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
     }
   ],
   "yaml": [

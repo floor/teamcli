@@ -251,17 +251,17 @@
     },
     "grok": {
       "idle": {
-        "real": 3,
+        "real": 4,
         "constructed": 0,
         "undocumented": 0
       },
       "working": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       },
       "unsent": {
-        "real": 5,
+        "real": 6,
         "constructed": 0,
         "undocumented": 0
       },
@@ -271,7 +271,7 @@
         "undocumented": 0
       },
       "question": {
-        "real": 0,
+        "real": 2,
         "constructed": 0,
         "undocumented": 0
       },
@@ -301,7 +301,7 @@
         "undocumented": 0
       },
       "unknown": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       }
@@ -1427,6 +1427,42 @@
     },
     {
       "file": "grok/1.0.50/working-tool.txt",
+      "cli": "grok",
+      "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/exit-typed.txt",
+      "cli": "grok",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/exit.txt",
+      "cli": "grok",
+      "kind": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/idle.txt",
+      "cli": "grok",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/permission.txt",
+      "cli": "grok",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/question.txt",
+      "cli": "grok",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.52/working.txt",
       "cli": "grok",
       "kind": "working",
       "provenance": "capture"
