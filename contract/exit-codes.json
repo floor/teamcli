@@ -284,6 +284,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.pretrust",
+      "meaning": "the lobby is not trusted for this seat's CLI",
+      "trigger": "team add worker"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.result-absolute",
       "meaning": "a result path is absolute",
       "trigger": "team add --temporary --like lead --until result:/tmp/out.md"
