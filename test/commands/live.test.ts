@@ -450,7 +450,6 @@ describe('team up, live', () => {
       'claude-coordinator-acme · project coordinator',
       'deepseek-acme · implementer',
       'deepseek-acme-2 · implementer',
-      'watchdog',
     ]);
     expect(made.renames).toEqual(['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2']);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
@@ -1169,7 +1168,7 @@ describe('team up, live', () => {
       '  already ready; left as it is; a relaunch records its process: ' +
         'team down, then team up (to restart the whole team)\n',
     );
-    expect(made.creates).toEqual(['deepseek-acme-2 · implementer', 'watchdog']);
+    expect(made.creates).toEqual(['deepseek-acme-2 · implementer']);
     expect(made.renames).toContain('deepseek-acme');
     expect(made.renames).not.toContain('claude-coordinator-acme');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
@@ -1990,7 +1989,7 @@ describe('team up, live', () => {
     const made = world();
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({ machine: () => fine }, made))).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'watchdog']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
   });
 
   test("a doctor miss refuses, and the watch's missing heartbeat does not", async () => {
@@ -3449,7 +3448,6 @@ describe('team up, the pause', () => {
       // Then the later seats, the same way.
       'create:deepseek-acme · implementer', 'run:w2:p1', 'read:w2:p1', 'read:w2:p1', 'process:w2:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w2:p1:deepseek-acme',
       'create:deepseek-acme-2 · implementer', 'run:w3:p1', 'read:w3:p1', 'read:w3:p1', 'process:w3:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w3:p1:deepseek-acme-2',
-      'create:watchdog', 'run:w4:p1',
     ]);
     expect(typed).toEqual([]);
     expect(lockedWhileWaiting.length).toBeGreaterThanOrEqual(2);
@@ -4695,7 +4693,7 @@ describe('team up, delegated', () => {
     const code = await runUp(FILE, io, sources({ ...passed, logDelegated }, made));
     expect(code).toBe(0);
     expect(made.starts).toBe(1);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'watchdog']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(made.terminal.reads).toBe(0);
     expect(audits).toHaveLength(1);
