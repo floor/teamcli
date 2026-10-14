@@ -951,6 +951,28 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     expect(miss.out).toContain(`the lobby ${lobby}: CLAUDE.md${readBy}claude-code, cursor and grok\n`);
   });
 
+  test('a lobby whose .claude holds only the lock passes up, add and doctor', async () => {
+    approveYaml(migratedTeamYaml());
+    makeLobby();
+    mkdirSync(join(lobby, '.claude'));
+    writeFileSync(lock(), '{}\n');
+
+    const doc = await runDoctorCmd();
+    expect(doc.code).toBe(0);
+    expect(doc.out).toContain(`the lobby ${lobby}: verified\n`);
+    expect(doc.out).toContain(`ok    the lobby ${lobby}: .claude/scheduled_tasks.lock is claude-code's\n`);
+
+    const made = world();
+    const run = await runUpCmd([], made);
+    expect(run.code).toBe(0);
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: root });
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+
+    const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
+    expect(addRun.code).toBe(0);
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+  });
+
   test('up and add pass a lobby whose .claude holds only the lock, plus a readme and a notes folder', async () => {
     approveYaml(migratedTeamYaml());
     makeLobby();
