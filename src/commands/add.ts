@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
+import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -149,6 +149,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     out.stderr(`team add: ${plainText(args.error)}\n${USAGE}`);
     // exit: add.invocation
     return 2;
+  }
+  const detached = detachedRefusal(walkCaller(io));
+  if (detached !== undefined) {
+    out.stderr(`team add: ${detached}\n`);
+    // exit: add.detached
+    return 1;
   }
   const temporary = args.flags.has('temporary');
   const dry = args.flags.has('dry-run');

@@ -1,6 +1,6 @@
 import { readArgs } from '../args.ts';
 import { approvalCase, budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
-import { callerOf, describeCaller, fileOwnerRefusal, isOwner } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } from '../caller.ts';
 import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
@@ -147,6 +147,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     io.stderr(`team watch: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
     // exit: watch.invocation
     return 2;
+  }
+  const detached = detachedRefusal(callerOf(io));
+  if (detached !== undefined) {
+    io.stderr(`team watch: ${detached}\n`);
+    // exit: watch.caller
+    return 1;
   }
   // The `--file` check is the walk's too, and it runs before `currentTeam` reads that file or
   // writes beside it: a non-owner aiming `--file` must not make this command read and validate

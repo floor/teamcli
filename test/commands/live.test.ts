@@ -9,7 +9,8 @@ import { realSources as upReal, runUp, type Launch, type UpSources } from '../..
 import { delegateGate } from '../../src/delegate.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import { sessionState, setHerdrRun, workspacePanes, type HerdrAgent, type HerdrWorkspace } from '../../src/herdr.ts';
-import { readApproval, storePath, writeApproval } from '../../src/store/store.ts';
+import { upFingerprint, OWNER_APPROVAL_ENV } from '../../src/approve/owner-token.ts';
+import { approvalStanding, readApproval, storePath, writeApproval } from '../../src/store/store.ts';
 import { readState } from '../../src/state.ts';
 import { parseMemoryPressure, parseSwapUsage, type Machine } from '../../src/watch/machine.ts';
 import type { Key } from '../../src/launch/terminal.ts';
@@ -64,6 +65,16 @@ async function approve() {
   const io = testIo(root, { kind: 'owner' });
   const code = await runApprove(FILE, io, { ask: async () => '5', waiting: () => 'empty', now: () => NOW, home });
   expect(code).toBe(0);
+}
+
+/** An admitted run that is not the owner at a terminal: the token, on a seat. `up` launches and
+ *  does not prompt. A run placed with no terminal is refused before this path. */
+function quietIo() {
+  const standing = approvalStanding(root, home);
+  if (standing.kind !== 'verified') throw new Error('the no-prompt run needs a verified approval');
+  const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: 'acme-web' });
+  io.env[OWNER_APPROVAL_ENV] = upFingerprint(standing.record.approval.fingerprints, standing.generation);
+  return io;
 }
 
 function agent(name: string, pane: string, status = 'idle', kind = 'claude'): HerdrAgent {
@@ -299,7 +310,7 @@ describe('team up, live', () => {
     // §2: the trust dialog and the vendor notice are exactly what a caller with no terminal
     // cannot be asked about — its workspace is closed without input and the record says so.
     const dialogs = outcome === 'trust' || outcome === 'startup';
-    const io = testIo(root, { kind: dialogs ? 'owner-no-tty' : 'owner' });
+    const io = dialogs ? quietIo() : testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['codex-acme'];
     if (outcome === 'accepted') {
@@ -402,7 +413,7 @@ describe('team up, live', () => {
       ? (pasted ? boxed() : capture('working')) : read(session, pane));
     // The trust dialog under §2: a caller with no terminal is never asked; it closes the
     // workspace without input and says so. The other outcomes run with the owner at a terminal.
-    const io = testIo(root, { kind: outcome === 'trust' ? 'owner-no-tty' : 'owner' });
+    const io = outcome === 'trust' ? quietIo() : testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['gemini-acme'];
     if (outcome === 'accepted') {
@@ -500,7 +511,7 @@ describe('team up, live', () => {
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
     // §2: an owner whose stdin is not a terminal never prompts — the dialog's workspace is
     // closed without input, the record says why, and the other seats carry on.
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: permission (no terminal for owner)\n');
@@ -534,7 +545,7 @@ describe('team up, live', () => {
     // close reads back, so the close can prove nothing and does not happen.
     let n = 0;
     made.launch.processInfo = () => ({ shell: 700 + ++n, foreground: [700 + n, 701 + n] });
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     // §3: a workspace whose pane's process is not the one the dialog was found with is left
@@ -559,7 +570,7 @@ describe('team up, live', () => {
       { name: null, agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
     ];
     made.launch.agents = unnamed;
-    const next = testIo(root, { kind: 'owner-no-tty' });
+    const next = quietIo();
     const code2 = await runUp(FILE, next, sources({ agents: unnamed }, made));
     expect(code2).toBe(1);
     expect(next.out + next.err).not.toContain("doesn't record");
@@ -575,7 +586,7 @@ describe('team up, live', () => {
       { name: 'claude-coordinator-acme', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
     ];
     made.launch.agents = namedList;
-    const named = testIo(root, { kind: 'owner-no-tty' });
+    const named = quietIo();
     const code3 = await runUp(FILE, named, sources({ agents: namedList }, made));
     expect(code3).toBe(1);
     expect(named.out).toContain('claude-coordinator-acme: left out: its waiting pane holds another process\n');
@@ -630,7 +641,7 @@ describe('team up, live', () => {
       { name: null, agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
     ];
     made.launch.agents = listed;
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       agents: listed,
       workspaces: () => [{ id: 'w9', label: 'claude-coordinator-acme · project coordinator' }],
@@ -689,7 +700,7 @@ describe('team up, live', () => {
       { name: 'claude-coordinator-acme', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
     ];
     made.launch.agents = listed;
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       agents: listed,
       workspaces: () => [{ id: 'w9', label: 'claude-coordinator-acme · project coordinator' }],
@@ -747,7 +758,7 @@ describe('team up, live', () => {
       { name: 'claude-coordinator-acme', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
     ];
     made.launch.agents = listed;
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       agents: listed,
       workspaces: () => [{ id: 'w9', label: 'claude-coordinator-acme · project coordinator' }],
@@ -787,7 +798,7 @@ describe('team up, live', () => {
         cwd: null,
       }));
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     // The record names the reading; the close is its stderr detail; the log keeps the record.
@@ -865,7 +876,7 @@ describe('team up, live', () => {
     const made = world(shown);
     // §2, no terminal: a timeout is not a dialog, so the seat keeps today's record and nothing
     // is closed. (At a terminal the owner is asked about the timeout — its own tests.)
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
@@ -958,7 +969,7 @@ describe('team up, live', () => {
         ? `${command.split('\n')[0]}\n… Protected checkouts, relative to the project root: .\n${home}/.config/team/lobby 16:16:23\n❯\n`
         : IDLE;
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(0);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
@@ -975,7 +986,7 @@ describe('team up, live', () => {
     // launch ran and ended, so the wait goes to the deadline and the reading is a timeout.
     const made = world('restarted\n~ ❯\n');
     made.launch.shellBack = () => true;
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
@@ -1036,7 +1047,7 @@ describe('team up, live', () => {
       seen.set(pane, n);
       return n === 1;
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
@@ -1092,7 +1103,7 @@ describe('team up, live', () => {
       seen.set(pane, n);
       return n === 1 ? true : null;
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
@@ -2480,7 +2491,7 @@ describe('team up, a session that was restored', () => {
     made.launch.closeWorkspace = () => false;
     // The parked codex seat launched here never idles on its screen and its wait times out.
     // §2, no terminal: the timeout keeps today's record — this run never prompts.
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(
       FILE,
       io,
@@ -2892,7 +2903,7 @@ describe('team up, a session that was restored', () => {
       calls.push(`paneText:${pane}`);
       return pane === 'w1:p1' ? trust : origPaneText(session, pane);
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       agents: () => listed,
@@ -3033,7 +3044,7 @@ describe('team up, a session that was restored', () => {
       calls.push(`close:${ws}`);
       return origClose(session, ws);
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       agents: () => listed,
@@ -3114,7 +3125,7 @@ describe('team up, a session that was restored', () => {
       calls.push(`close:${ws}`);
       return origClose(session, ws);
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       agents: () => listed,
@@ -3183,7 +3194,7 @@ describe('team up, a session that was restored', () => {
       pane === 'w1:p1' ? { shell: 400, foreground: [400, 401] }
         : pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] }
           : pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       agents: () => listed,
@@ -4267,7 +4278,7 @@ describe('team up, the pause', () => {
     // The two screens the grammar does not accept run out the idle wait. §2, no terminal: a
     // timeout keeps today's record instead of asking the owner; the accepted screens never
     // reach a dialog, so the caller changes nothing for them.
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const say = io.stdout;
     io.stdout = (text: string) => { calls.push('report'); say(text); };
     const detail = io.stderr;
@@ -4386,7 +4397,7 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
   };
   made.launch.typeText = (_session, id, text) => { pasted.set(id, text); return true; };
   made.launch.pressEnter = (_session, id) => { pasted.delete(id); working.add(id); return true; };
-  const io = testIo(root, { kind: 'owner-no-tty' });
+  const io = quietIo();
   const code = await runUp(FILE, io, sources({}, made));
   const held = readState(join(root, '.agents')).sessions['acme-web']?.seats['cursor-acme'];
   const pane = held?.pane ?? '';
@@ -4417,7 +4428,7 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
   });
   const seen = listed();
   made.launch.agents = () => seen;
-  const next = testIo(root, { kind: 'owner-no-tty' });
+  const next = quietIo();
   const code2 = await runUp(FILE, next, sources({
     agents: () => seen,
     sessionState: () => 'running',
@@ -4866,11 +4877,9 @@ describe('team up, delegated', () => {
     expect(io.out + io.err).not.toContain('[o] open pane');
   });
 
-  // The other side of the same hold: a caller the ordinary rule accepts never enters the
-  // delegate branch. The owner without a terminal keeps everything as today — the gate is not
-  // asked, and its idle timeout stays the plain record that leaves the seat at launched, not
-  // the delegated run's close.
-  test('an owner without a terminal never enters the delegate branch: gate unasked, plain timeout', async () => {
+  // A run with no terminal is not admitted, so it never enters the delegate branch. The gate
+  // is not asked, the one sentence is the refusal, and nothing is launched.
+  test('a run with no terminal never enters the delegate branch', async () => {
     delegateFile();
     await approve();
     const made = world("❯ zsh ../tools/launcher.sh\nzsh: can't open input file: ../tools/launcher.sh\n~ ❯\n");
@@ -4887,8 +4896,8 @@ describe('team up, delegated', () => {
     expect(code).toBe(1);
     expect(asked).toBe(0);
     expect(audits).toEqual([]);
-    expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
-    expect(io.err).toContain('left at launched\n');
+    expect(io.err).toContain('team up: only the owner runs this, from a terminal outside herdr\n');
+    expect(io.out).not.toContain('left out:');
     expect(made.closes).toEqual([]);
   });
 

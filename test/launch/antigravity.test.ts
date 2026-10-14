@@ -27,7 +27,9 @@ describe('Antigravity launch and captured screens', () => {
     expect(antigravity.loginHint).toBe('agy');
     expect(antigravity.exit).toBe('/exit');
     expect(versionVerdict('1.2.16', antigravity.tested)).toBe('tested');
-    expect(versionVerdict('1.2.18', antigravity.tested)).toBe('newer');
+    expect(versionVerdict('1.2.18', antigravity.tested)).toBe('tested');
+    expect(versionVerdict('1.3.5', antigravity.tested)).toBe('tested');
+    expect(versionVerdict('1.3.6', antigravity.tested)).toBe('newer');
     expect(versionVerdict('1.2.10', antigravity.tested)).toBe('older');
   });
 
@@ -99,6 +101,9 @@ describe('Antigravity launch and captured screens', () => {
 
   test('launch model ids and the captured footer map to separate model and version fields', () => {
     expect(antigravity.modelOf('agy --model gemini-3.8-flash-high')).toEqual({ model: 'Gemini Flash', version: '3.8' });
+    expect(antigravity.modelOf('agy --model gemini-4-argon-low')).toEqual({ model: 'Gemini Argon', version: '4' });
+    expect(antigravity.modelOf('agy --model gemini-4-argon-medium')).toEqual({ model: 'Gemini Argon', version: '4' });
+    expect(antigravity.modelOf('agy --model gemini-4-argon-high')).toEqual({ model: 'Gemini Argon', version: '4' });
     expect(antigravity.modelOf('agy --model=gemini-3.1-pro-low')).toEqual({ model: 'Gemini Pro', version: '3.1' });
     expect(antigravity.modelOf('agy --model unknown-model')).toBeNull();
     expect(antigravity.modelOf('agy')).toBeNull();
@@ -108,6 +113,18 @@ describe('Antigravity launch and captured screens', () => {
     expect(runningModel('antigravity', fixture('idle'))).toEqual({ model: 'Gemini Flash', version: '3.8' });
     expect(runningModel('antigravity', fixture('rules-accepted'))).toEqual({ model: 'Gemini Flash', version: '3.8' });
     expect(runningModel('antigravity', fixture('trust'))).toBeNull();
+    const idle135 = readFileSync(new URL('../fixtures/antigravity/1.3.5/idle.txt', import.meta.url), 'utf8');
+    expect(runningModel('antigravity', idle135)).toEqual({ model: 'Gemini Argon', version: '4' });
+  });
+
+  test('1.3.5 captures keep the same dialog kinds', () => {
+    const current = (name: string) => readFileSync(new URL(`../fixtures/antigravity/1.3.5/${name}.txt`, import.meta.url), 'utf8');
+    expect(readScreen('antigravity', current('trust')).kind).toBe('trust');
+    expect(readScreen('antigravity', current('idle')).kind).toBe('idle');
+    expect(readScreen('antigravity', current('working')).kind).toBe('working');
+    expect(readScreen('antigravity', current('question')).kind).toBe('question');
+    expect(readScreen('antigravity', current('permission')).kind).toBe('permission');
+    expect(readScreen('antigravity', current('exit')).kind).toBe('unknown');
   });
 
   test('the plan delivers the one line through the guarded path, never a config file', () => {

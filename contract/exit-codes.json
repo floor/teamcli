@@ -158,6 +158,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team add worker"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.differs",
       "meaning": "the file differs from its approval",
       "trigger": "team add worker"
@@ -445,6 +452,13 @@
     {
       "code": 1,
       "command": "answer",
+      "id": "answer.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team answer lead trust"
+    },
+    {
+      "code": 1,
+      "command": "answer",
       "id": "answer.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team answer lead trust --file .agents/team.yaml"
@@ -622,6 +636,13 @@
       "command": "approve",
       "id": "approve.delegate-placement",
       "meaning": "the approved delegate must be an external non-seat pane",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.detached",
+      "meaning": "a run with no terminal",
       "trigger": "team approve"
     },
     {
@@ -818,6 +839,13 @@
       "command": "broker",
       "id": "broker.busy",
       "meaning": "a broker is already answering on this clone's socket",
+      "trigger": "team broker"
+    },
+    {
+      "code": 1,
+      "command": "broker",
+      "id": "broker.detached",
+      "meaning": "a run with no terminal",
       "trigger": "team broker"
     },
     {
@@ -1215,6 +1243,13 @@
     {
       "code": 1,
       "command": "down",
+      "id": "down.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team down"
+    },
+    {
+      "code": 1,
+      "command": "down",
       "id": "down.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team down --file .agents/team.yaml"
@@ -1347,6 +1382,34 @@
     },
     {
       "code": 0,
+      "command": "feed",
+      "id": "feed.ok",
+      "meaning": "the message feed was printed",
+      "trigger": "team feed"
+    },
+    {
+      "code": 1,
+      "command": "feed",
+      "id": "feed.unreadable",
+      "meaning": "the history log cannot be read",
+      "trigger": "team feed"
+    },
+    {
+      "code": 2,
+      "command": "feed",
+      "id": "feed.configuration",
+      "meaning": "the team file can't be read",
+      "trigger": "team feed"
+    },
+    {
+      "code": 2,
+      "command": "feed",
+      "id": "feed.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team feed extra"
+    },
+    {
+      "code": 0,
       "command": "init",
       "id": "init.restored",
       "meaning": "the approved copy was restored",
@@ -1357,6 +1420,13 @@
       "command": "init",
       "id": "init.wrote",
       "meaning": "a skeleton was written",
+      "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.detached",
+      "meaning": "a run with no terminal",
       "trigger": "team init"
     },
     {
@@ -2062,6 +2132,13 @@
     {
       "code": 1,
       "command": "remove",
+      "id": "remove.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team remove worker"
+    },
+    {
+      "code": 1,
+      "command": "remove",
       "id": "remove.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team remove worker --file .agents/team.yaml"
@@ -2211,6 +2288,13 @@
       "command": "send",
       "id": "send.listed",
       "meaning": "the addressable seats were printed, nothing was sent",
+      "trigger": "team send --list"
+    },
+    {
+      "code": 1,
+      "command": "send",
+      "id": "send.detached",
+      "meaning": "a run with no terminal",
       "trigger": "team send --list"
     },
     {
@@ -2545,6 +2629,13 @@
     {
       "code": 1,
       "command": "up",
+      "id": "up.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team up --session elsewhere"
+    },
+    {
+      "code": 1,
+      "command": "up",
       "id": "up.differs",
       "meaning": "the file differs from its approval",
       "trigger": "team up"
@@ -2769,6 +2860,13 @@
     {
       "code": 1,
       "command": "watch",
+      "id": "watch.caller",
+      "meaning": "a run with no terminal",
+      "trigger": "team watch"
+    },
+    {
+      "code": 1,
+      "command": "watch",
       "id": "watch.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team watch --file .agents/team.yaml"
@@ -2912,6 +3010,13 @@
       "id": "worktree.default-session",
       "meaning": "the session can't be \"default\"",
       "trigger": "team worktree new task --session default"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team worktree list"
     },
     {
       "code": 1,
