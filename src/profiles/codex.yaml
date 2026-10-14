@@ -50,6 +50,9 @@ trust_answer:
       indent: 2
       wrap: 51
       refuse_line: 'Trusting will apply to the repository root:'
+startup_reads:
+  - AGENTS.md
+  - .codex/config.toml
 models:
   option:
     - -m
