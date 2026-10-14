@@ -1,9 +1,10 @@
 // A seat that starts in the lobby is about to open a folder its CLI has never been
 // asked to trust. `up` and `add` write the record that CLI already reads, under the
 // seat's home, before the workspace is created. The approved launch line is left as
-// it is. A dry run writes nothing. Antigravity's record was not captured, so that
-// seat still starts: a guessed file is not written, and a refusal could not be cleared.
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+// it is. A dry run writes nothing. A config file or folder that is a link is left
+// untouched, and the seat gets the repair line. Antigravity's record was not captured,
+// so that seat still starts: a guessed file is not written, and a refusal could not be cleared.
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { profileFor } from '../profiles/index.ts';
 
@@ -96,6 +97,7 @@ const WRITERS: Readonly<Record<string, Writer>> = {
 function writeGrok(lobby: string, home: string, now: Date): void {
   const header = `[folders.${tomlString(lobby)}]`;
   const file = join(home, '.grok', 'trusted_folders.toml');
+  assertNoLink(file, home);
   const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
   if (tableValue(text, header, 'trusted') === 'true') return;
   const next = mergeTable(text, header, [
@@ -103,25 +105,31 @@ function writeGrok(lobby: string, home: string, now: Date): void {
     { key: 'decided_at', value: String(Math.floor(now.getTime() / 1000)) },
   ]);
   if (next === null) return;
-  writePrivate(file, next);
+  writePrivate(file, next, home);
 }
 
 /** The cursor-agent build writes this marker, and treats the file's presence as trust. */
 function writeCursor(lobby: string, home: string, now: Date): void {
   const file = join(home, '.cursor', 'projects', cursorSlug(lobby), '.workspace-trusted');
+  assertNoLink(file, home);
   if (existsSync(file)) return;
   const body = JSON.stringify(
     { trustedAt: now.toISOString(), workspacePath: lobby, trustMethod: 'cli-flag' },
     null,
     2,
   );
-  writePrivate(file, body);
+  writePrivate(file, body, home);
 }
 
 /** Claude Code reads `projects[<path>].hasTrustDialogAccepted` from `~/.claude.json`.
  *  A trust of the home directory is session-only, so that path is never written. */
 function claudeUnmergeable(home: string): boolean {
   const file = join(home, '.claude.json');
+  try {
+    assertNoLink(file, home);
+  } catch {
+    return true;
+  }
   if (!existsSync(file)) return false;
   try {
     const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
@@ -135,6 +143,7 @@ function claudeUnmergeable(home: string): boolean {
 function writeClaude(lobby: string, home: string): void {
   if (realpathSync(home) === lobby) throw new Error('home trust is session-only');
   const file = join(home, '.claude.json');
+  assertNoLink(file, home);
   let doc: Record<string, unknown> = {};
   if (existsSync(file)) {
     const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
@@ -163,18 +172,19 @@ function writeClaude(lobby: string, home: string): void {
   }
   if (entry.hasTrustDialogAccepted === true) return;
   entry.hasTrustDialogAccepted = true;
-  writePrivate(file, `${JSON.stringify(doc, null, 2)}\n`);
+  writePrivate(file, `${JSON.stringify(doc, null, 2)}\n`, home);
 }
 
 /** `codex exec` uses workspace-write once this table says the folder is trusted. */
 function writeCodex(lobby: string, home: string): void {
   const header = `[projects.${tomlString(lobby)}]`;
   const file = join(home, '.codex', 'config.toml');
+  assertNoLink(file, home);
   const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
   if (tableValue(text, header, 'trust_level') === '"trusted"') return;
   const next = mergeTable(text, header, [{ key: 'trust_level', value: '"trusted"' }]);
   if (next === null) return;
-  writePrivate(file, next);
+  writePrivate(file, next, home);
 }
 
 function plain(value: unknown): value is Record<string, unknown> {
@@ -190,9 +200,32 @@ function tomlString(value: string): string {
   return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
 }
 
-function writePrivate(file: string, text: string): void {
+function writePrivate(file: string, text: string, home: string): void {
+  assertNoLink(file, home);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, text, { mode: 0o600 });
+}
+
+/** The file and each folder under the home are opened as themselves. A link, including
+ *  one whose target is absent, is not a path this run reads or writes. */
+function assertNoLink(path: string, home: string): void {
+  let current = path;
+  while (current.startsWith(`${home}/`)) {
+    let linked = false;
+    try {
+      linked = lstatSync(current).isSymbolicLink();
+    } catch (error) {
+      if (!absent(error)) throw error;
+    }
+    if (linked) throw new Error('a symbolic link');
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+}
+
+function absent(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code: unknown }).code === 'ENOENT';
 }
 
 function tableValue(text: string, header: string, key: string): string | null {
