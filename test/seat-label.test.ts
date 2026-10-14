@@ -112,8 +112,8 @@ describe('the workspace title of a seat', () => {
     expect(workspaceLabel(seatNamed(valid(minimal), 'lead'))).toBe('lead · coordinator');
   });
 
-  test('line 2 is the display and the effort, spaced by a middle dot', () => {
-    expect(displayAgent({ display: 'Grok 4.7', effort: 'high' })).toBe('Grok 4.7 · high');
+  test('line 2 is the display and the effort, separated by a space', () => {
+    expect(displayAgent({ display: 'Grok 4.7', effort: 'high' })).toBe('Grok 4.7 high');
     expect(displayAgent(seatNamed(valid(minimal), 'lead'))).toBe('Claude Opus 5.5');
   });
 

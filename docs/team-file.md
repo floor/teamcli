@@ -87,8 +87,9 @@ either folder is left there. The fields are in the README's
   approval of a file written that way already sealed. That stored field stays in the seat's digest.
 - `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
   as a token of its own when the file writes it. After launch, `up` and `add` set the pane's
-  display_agent to `<display> · <effort>` when the seat sets `effort`, and to `<display>` when
-  it does not. That is line 2.
+  display_agent to `<display> <effort>` when the seat sets `effort`, and to `<display>` when
+  it does not. Herdr draws line 2 as its status word, then ` · `, then that text
+  (`idle · Grok 4.7 high`). That is line 2.
 
 `effort` is optional. It is a known field: a file may set it, and a file that leaves it out
 loads as before. The words a lab allows are [`src/profiles/efforts.json`](../src/profiles/efforts.json),

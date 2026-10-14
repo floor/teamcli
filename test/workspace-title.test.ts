@@ -1,6 +1,6 @@
 // Line 1 of a seat's workspace is its written label, or `<name> · <role>` when the file
 // writes none. The model stays off that line. Line 2 is the pane's display_agent: the
-// display, and the effort when the file sets one.
+// display, and a space plus the effort when the file sets one.
 import { describe, expect, test } from 'bun:test';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -99,7 +99,7 @@ describe('the pane display', () => {
   test('display_agent is the display, and the effort when the file sets one', () => {
     expect(displayAgent(seatNamed('lead', minimal))).toBe('Claude Opus 5.5');
     const effort = minimal.replace('    launch:', '    effort: high\n    launch:');
-    expect(displayAgent(seatNamed('lead', effort))).toBe('Claude Opus 5.5 · high');
+    expect(displayAgent(seatNamed('lead', effort))).toBe('Claude Opus 5.5 high');
     expect(displayAgent({ display: 'Grok 4.7' })).toBe('Grok 4.7');
   });
 
@@ -110,7 +110,7 @@ describe('the pane display', () => {
       launch: 'claude',
       cwd: '.',
       label: 'Priam · coordinator',
-      displayAgent: 'Claude Opus 5.5 · high',
+      displayAgent: 'Claude Opus 5.5 high',
       repairLine: '`team down` then `team up` (to restart the whole team)',
       stopped: false,
       rules: '',
@@ -123,7 +123,7 @@ describe('the pane display', () => {
       watchAlive: true,
     }));
     expect(plan).toContain("--label 'Priam · coordinator'");
-    expect(plan).toContain("pane report-metadata <pane of lead> --source team --display-agent 'Claude Opus 5.5 · high'");
+    expect(plan).toContain("pane report-metadata <pane of lead> --source team --display-agent 'Claude Opus 5.5 high'");
     expect(plan).not.toContain("--label 'Claude Opus 5.5");
   });
 
@@ -158,7 +158,7 @@ describe('the pane display', () => {
     const repair = '`team down` then `team up` (to restart the whole team)';
     const steps: Step[] = [
       { kind: 'run', argv: [], do: { do: 'create', seat: 'lead', label: 'Priam · coordinator', cwd: '/work', repairLine: repair } },
-      { kind: 'run', argv: [], do: { do: 'rename', seat: 'lead', label: 'Priam · coordinator', seconds: 1, rules: 'message', displayAgent: 'Claude Opus 5.5 · high' } },
+      { kind: 'run', argv: [], do: { do: 'rename', seat: 'lead', label: 'Priam · coordinator', seconds: 1, rules: 'message', displayAgent: 'Claude Opus 5.5 high' } },
       { kind: 'run', argv: [], do: { do: 'launch', seat: 'lead', label: 'Priam · coordinator', command: 'claude' } },
     ];
     await executePlan(steps, 'acme', host);
