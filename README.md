@@ -28,7 +28,7 @@ Node 22 or later runs the built command.
 
 ```sh
 npm install -g team       # or run it without installing: npx team
-team --version            # 0.4.6
+team --version            # 0.4.7
 ```
 
 ## The file is private to each clone
@@ -308,7 +308,7 @@ can never approve a widening of its own grant. `team approve` prints the section
 `project`, `session`, `rows` (`name`, `state`, `model`, `pane`), `notes`, `differences` (`what`, `repair`), and `notice`.
 
 `team doctor --login` checks read-only that each CLI in the file is signed in, using each profile's
-existing login check command (`cursor-agent status`, `agy models`, `codex login status`, `claude auth status`).
+existing login check command (`cursor-agent status`, `agy models`, `codex login status`, `claude auth status`, `grok models`).
 It never answers prompts and performs no sign-in action.
 
 `team up`, `team down`, `team add`, `team remove`, `team worktree new` and `team worktree remove`
@@ -367,7 +367,7 @@ cd team
 bun install
 bun run build
 npm install -g .          # puts `team` on the PATH
-team --version            # 0.4.6
+team --version            # 0.4.7
 ```
 
 Bun builds and tests the sources:

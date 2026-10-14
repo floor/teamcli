@@ -1,7 +1,8 @@
 # Grok's screen. The composer is a bordered box: an opening rule drawn `  ╭────…────╮`, the input
 # row `  │ ❯ text` under it, and a closing rule `  ╰────…────╯` that carries the footer title.
 # The closing rule's dash run moves with the title's length (11 leading dashes under
-# `Grok 4.7 (xhigh)`, 6 under `Grok 4.7 Fast (xhigh)` — captures), so the rule pattern is the
+# `Grok 4.7 (xhigh)`, 6 under `Grok 4.7 Fast (xhigh)`, and the 1.0.52 captures
+# `Grok 4.7 (high)` and `Grok 4.7 (high) · always-approve`), so the rule pattern is the
 # two dashes every rule of the box carries: the runs the read compares are then equal at any
 # width or title. `Resume this session with:` is the shell screen the CLI leaves behind on exit.
 format: 1
@@ -9,10 +10,11 @@ cli: grok
 binary: grok
 process_names:
   - grok
-# From a run: `grok --version` (2026-10-09) printed `grok 1.0.50 (c58f321264ba) [stable]`, exit 0.
+# From a run: `grok --version` printed `grok 1.0.52 (0920c8169e27) [stable]`, exit 0.
+# The 1.0.50 captures still match; the ceiling is the 1.0.52 capture.
 tested:
   from: '1.0.50'
-  to: '1.0.50'
+  to: '1.0.52'
 # From a run: `grok --help` lists `--always-approve` as "Auto-approve all tool executions". The
 # same text launched the pane every capture under test/fixtures/grok/1.0.50 was taken from.
 unattended:
@@ -67,6 +69,18 @@ models:
 screen:
   unknown:
     - any: ['Resume this session with:']
+  # The answer widget, from the 1.0.52 capture. A choice and a write approval draw the same
+  # chrome: `Waiting on answers`, the ┃ frame, `↑/↓ navigate`, `Enter:submit`, and
+  # `Tab:next answer`. A fresh directory drew no trust dialog, and a shell command in the
+  # default permission mode ran without a separate allow/deny screen, so this widget is the
+  # dialog the capture has. The chrome leaves the pane when the turn ends, so a transcript
+  # of the question is not the dialog.
+  question:
+    - all:
+        - 'Waiting on answers'
+        - '↑/↓ navigate'
+        - 'Enter:submit'
+        - 'Tab:next answer'
   working:
     # A running turn, from the captures: the braille spinner row over the box — the verb varies
     # with the moment (`⠴ Waiting for response…       2.0s ⇣1.32k [stop]` at the start,

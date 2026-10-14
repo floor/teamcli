@@ -7,7 +7,7 @@ process_names:
   - cursor-agent
 tested:
   from: '2026.10.01'
-  to: '2026.10.01'
+  to: '2026.10.14'
 unattended:
   - --force
   - --sandbox
@@ -39,6 +39,17 @@ trust_answer:
     label: '[a] Trust this workspace'
     action: '61'
     capture: cursor/2026.10.01/trust.txt
+    extract:
+      after: 'directory?'
+      before: '[a] Trust this workspace'
+      box: true
+  # The same dialog on cursor-agent 2026.10.14-0f9edde (`cursor/2026.10.14/trust.txt`).
+  # The marked row is still `[a] Trust this workspace` and the key is still `a`.
+  - from: '2026.10.14-0f9edde'
+    to: '2026.10.14-0f9edde'
+    label: '[a] Trust this workspace'
+    action: '61'
+    capture: cursor/2026.10.14/trust.txt
     extract:
       after: 'directory?'
       before: '[a] Trust this workspace'
@@ -155,6 +166,14 @@ screen:
           - 'Switch to Plan mode\?'
           - '→ Approve mode switch \(y\)'
           - 'Reject \(n or esc\)'
+    # A shell command that is not on the allowlist, from the 2026.10.14 capture
+    # (`cursor/2026.10.14/permission.txt`). The marked row is `Run (once) (y)`.
+    # The plan-mode dialog above does not draw these rows.
+    - all:
+        - 'Run this command\?'
+        - 'Not in allowlist:'
+        - '→ Run \(once\) \(y\)'
+        - 'Skip & tell the agent what to do instead'
   # The question tool's box: its border, the question counter, a selected option,
   # then the navigation footer, in that order. The footer words alone are not a question.
   question:
