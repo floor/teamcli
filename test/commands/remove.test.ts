@@ -569,6 +569,32 @@ describe('team remove', () => {
     expect(text).toContain('name: lead');
   });
 
+  test('--keep retains the seat id and last_active while a full remove clears them', async () => {
+    const id = 'seat_0123456789ab';
+    const lastActive = '2026-10-14T10:00:00.000Z';
+    updateState(join(dir, '.agents'), (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        id,
+        stage: 'ready',
+        pane: 'pane-1',
+        workspace: 'ws-1',
+        last_active: lastActive,
+      };
+    });
+    const made = world();
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'pane-1', workspace: 'ws-1', status: 'idle', cwd: null });
+    expect(await runRemove(['worker', '--keep', '--file', file], testIo(dir, owner), made.sources)).toBe(0);
+    const afterKeep = readState(join(dir, '.agents')).sessions.acme;
+    expect(afterKeep?.seats.worker).toBeUndefined();
+    expect(afterKeep?.retained_seats?.worker).toEqual({ id, last_active: lastActive });
+
+    made.agents.length = 0;
+    expect(await runRemove(['worker', '--file', file], testIo(dir, owner), made.sources)).toBe(0);
+    const afterFull = readState(join(dir, '.agents')).sessions.acme;
+    expect(afterFull?.seats.worker).toBeUndefined();
+    expect(afterFull?.retained_seats?.worker).toBeUndefined();
+  });
+
   test('remove --keep by the coordinator leaves a hand-edited launch line as drift', async () => {
     const parsed = validateTeamFile(FILE);
     if (!parsed.ok) throw new Error('fixture');

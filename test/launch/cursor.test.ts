@@ -31,8 +31,20 @@ describe('Cursor launch and captured screens', () => {
     expect(cursor.exit).toBe('/exit');
     expect(cursor.unattended).not.toContain('--trust');
     expect(versionVerdict('2026.10.01-14929f9', cursor.tested)).toBe('tested');
-    expect(versionVerdict('2026.10.02', cursor.tested)).toBe('newer');
+    expect(versionVerdict('2026.10.02', cursor.tested)).toBe('tested');
+    expect(versionVerdict('2026.10.14-0f9edde', cursor.tested)).toBe('tested');
+    expect(versionVerdict('2026.10.15', cursor.tested)).toBe('newer');
     expect(versionVerdict('2026.09.30', cursor.tested)).toBe('older');
+  });
+
+  test('2026.10.14 captures: a shell approval is permission, and the question box is a question', () => {
+    const current = (name: string) => readFileSync(new URL(`../fixtures/cursor/2026.10.14/${name}.txt`, import.meta.url), 'utf8');
+    expect(readScreen('cursor', current('trust')).kind).toBe('trust');
+    expect(readScreen('cursor', current('idle')).kind).toBe('idle');
+    expect(readScreen('cursor', current('working')).kind).toBe('working');
+    expect(readScreen('cursor', current('question')).kind).toBe('question');
+    expect(readScreen('cursor', current('permission')).kind).toBe('permission');
+    expect(readScreen('cursor', current('exit')).kind).toBe('unknown');
   });
 
   test.each([
@@ -1872,8 +1884,14 @@ const manifestScreens = JSON.parse(readFileSync(new URL('../fixtures/conformance
   .screens as Array<{ cli: string; classify: string; file: string }>;
 const dialogCaptures = manifestScreens
   .filter((entry) => entry.cli === 'cursor' && ['permission', 'trust', 'question'].includes(entry.classify))
-  .map((entry) => ({ ...entry, name: entry.file.split('/').pop()!.replace(/\.txt$/, '') }));
-const captureLines = (name: string) => fixture(name).split('\n');
+  .map((entry) => ({ ...entry, name: entry.file }));
+// A dialog capture is the manifest path (`cursor/<version>/<file>.txt`), every version folder.
+// A planted frame is a basename in the 2026-10-01 set.
+const captureLines = (name: string) =>
+  (name.includes('/')
+    ? readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8')
+    : fixture(name)
+  ).split('\n');
 const plantAt = (lines: string[], at: number, part: string[]) => [...lines.slice(0, at), ...part, ...lines.slice(at)];
 const plantPositions = (lines: string[]) =>
   [

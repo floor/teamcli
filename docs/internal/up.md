@@ -71,9 +71,10 @@ still plans.
 
 ## Who may run it
 
-The owner, from a terminal outside herdr — or without one: a run whose stdin is not a terminal
-launches seats like any other, but never reads stdin and never prompts, so every dialog is left for
-the owner (below). `--dry-run` is open to anyone: it reaches nothing and
+The owner, from a terminal outside herdr. A run with no terminal is refused with
+`only the owner runs this, from a terminal outside herdr` and launches nothing. An admitted run
+that is not that owner — the grant, a delegate, the token — never reads stdin and never prompts,
+so every dialog is left for the owner (below). `--dry-run` is open to anyone: it reaches nothing and
 changes nothing, prints the refusals it would hit as `! up would refuse: …` above the plan.
 A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch). It returns before these real-run failures, and never takes their status:
 
@@ -252,6 +253,13 @@ moment, in the same write), shows the provisional record
 and asks, exactly:
 
     claude-beacon is waiting at trust: [o] open pane, [s] skip seat, [q] stop cleanly
+
+The ask waits at most the profile's idle timeout (90 s today). That bound covers a trust or
+permission prompt too, including one re-read on each tick while the lead may answer it. When it
+ends with no `o`, `s` or `q`, the seat is left exactly as it is — workspace and waiting record
+kept, nothing focused, nothing closed — with `<seat>: left out: timed out after <n> s waiting
+for its owner; left as it is`, and `up` goes on to the next seat. The next `up` asks again, with
+the same cap. Pressing `o` spends the open-pane poll's own timeout and then starts a new ask.
 
 `o`, `s` and `q` are the whole answer. One chunk is one key only when it is exactly one byte and
 that byte is `o`, `s`, `q` or Ctrl-C; anything else — several bytes that arrived together (a paste,
@@ -522,7 +530,7 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 
 | Reason |
 | --- |
-| ``only the owner runs `up`, from a terminal outside herdr; this call is <caller>`` — the owner without a terminal is not refused: it runs, and never prompts. With a `delegates` section in the file, this refusal is the delegate gate's to say, in its own words below |
+| ``only the owner runs this, from a terminal outside herdr`` — a run with no terminal. ``only the owner runs `up`, from a terminal outside herdr; this call is <caller>`` — any other caller the ordinary rule refuses. With a `delegates` section in the file, that other refusal is the delegate gate's to say, in its own words below |
 | ``only the owner or the approved delegate runs `up`; this call is <caller>`` — the delegate gate: the file's `delegates` section names panes, and this caller is none of them |
 | ``--<flag> is the owner's; the approved delegate cannot use it`` — the delegate gate, for `--session` and `--file` on a delegated run, refused before the file or the session the flag names is read |
 | the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the approved copy unreadable, the live file drifted from the approved copy, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |

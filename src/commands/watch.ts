@@ -1,12 +1,13 @@
 import { readArgs } from '../args.ts';
 import { approvalCase, budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
-import { callerOf, describeCaller, fileOwnerRefusal, isOwner } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } from '../caller.ts';
 import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, pressEnter, reportDisplayAgent, typeText, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
@@ -122,16 +123,16 @@ export const USAGE = 'Usage: team watch [--session <name>] [--file <path>] [--no
  *  Absent when this folder records none: a flagless watch then reads what it always did.
  *  `'wait'` is a file recorded and a pid not written yet: the process `up` just spawned. */
 function watchdogGrant(
-  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
+  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>, pid: number,
 ): { file: string } | { refuse: string } | { wait: true } | undefined {
   const name = session ?? 'default';
   const recorded = recordedWatchdog(cwd, name);
   if (!recorded) return undefined;
   if (recorded.pane && caller.kind === 'pane' && caller.pane === recorded.pane) return { file: recorded.file };
   if (isOwner(caller)) return undefined;
-  const pid = readState(cwd).sessions[name]?.watch?.pid;
-  if (pid === process.pid) return { file: recorded.file };
-  if (pid === undefined && !recorded.pane) return { wait: true };
+  const watchPid = readState(cwd).sessions[name]?.watch?.pid;
+  if (watchPid === pid) return { file: recorded.file };
+  if (watchPid === undefined && !recorded.pane) return { wait: true };
   return {
     refuse: `only the watch this session records may read the file up recorded; this call is ${describeCaller(caller)}`,
   };
@@ -143,11 +144,11 @@ function recordedWatchdog(cwd: string, session: string): { file: string; pane?: 
 
 /** The grant, waiting out the moment between spawn and the pid landing in the state. */
 async function admittedWatchdog(
-  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
+  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>, pid: number,
 ): Promise<{ file: string } | { refuse: string } | undefined> {
   const deadline = Date.now() + 2000;
   for (;;) {
-    const grant = watchdogGrant(cwd, session, caller);
+    const grant = watchdogGrant(cwd, session, caller, pid);
     if (!grant || !('wait' in grant)) return grant;
     if (Date.now() >= deadline) {
       return {
@@ -156,6 +157,24 @@ async function admittedWatchdog(
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+}
+
+/** Whether `pid` is the detached watch process `up` recorded for this folder's session. */
+function isSpawnedWatchPid(cwd: string, session: string | undefined, pid: number): boolean {
+  if (pid <= 0) return false;
+  for (const dir of [join(cwd, '.agents'), cwd]) {
+    try {
+      const sessions = readState(dir).sessions;
+      if (session !== undefined) {
+        if (sessions[session]?.watch?.pid === pid) return true;
+      } else if (Object.values(sessions).some((entry) => entry?.watch?.pid === pid)) {
+        return true;
+      }
+    } catch {
+      // A unreadable state file does not admit a detached caller.
+    }
+  }
+  return false;
 }
 
 // How often the watch writes the machine's readings to the log, in seconds. Not the pass rate:
@@ -170,6 +189,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     // exit: watch.invocation
     return 2;
   }
+  const detached = detachedRefusal(callerOf(io));
   // The `--file` check is the walk's too, and it runs before `currentTeam` reads that file or
   // writes beside it: a non-owner aiming `--file` must not make this command read and validate
   // another project's team file, nor leave its `last_valid`, its log line or its heartbeat in
@@ -184,7 +204,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     return 1;
   }
   const caller = callerOf(io, args.values.session);
-  const grant = args.values.file ? undefined : await admittedWatchdog(io.cwd, args.values.session, caller);
+  const grant = args.values.file ? undefined : await admittedWatchdog(io.cwd, args.values.session, caller, sources.pid);
+  if (detached !== undefined && !(grant && 'file' in grant) && !isSpawnedWatchPid(io.cwd, args.values.session, sources.pid)) {
+    io.stderr(`team watch: ${detached}\n`);
+    // exit: watch.caller
+    return 1;
+  }
   if (grant && 'refuse' in grant) {
     io.stderr(`team watch: ${grant.refuse}\n`);
     // exit: watch.watchdog
@@ -307,7 +332,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         silent = true;
       } else {
         silent = false;
-        noteWorked(dir, session, live);
+        noteWorked(dir, session, live, sources.now());
         const state = readState(dir).sessions[session] ?? emptySession();
         const now = sources.now().getTime();
         // The check commands run here, outside the pass, at most every `check_every` (§ 5): the
@@ -588,19 +613,23 @@ function tellOnce(told: Set<string>, key: string, text: string, tell: (text: str
   tell(text, true);
 }
 
-function noteWorked(dir: string, session: string, live: Live): void {
+function noteWorked(dir: string, session: string, live: Live, now: Date): void {
   const recorded = readState(dir).sessions[session];
   if (!recorded) return;
   const due = live.agents.some((agent) => {
     const seat = agent.name ? recorded.seats[agent.name] : undefined;
-    return seat?.temporary && seat.stage === 'ready' && !seat.worked && agent.status === 'working';
+    return seat && seat.stage === 'ready' && agent.status === 'working';
   });
   if (!due) return;
+  const activeAt = now.toISOString();
   updateState(dir, (file) => {
     const seats = (file.sessions[session] ??= emptySession()).seats;
     for (const agent of live.agents) {
       const seat = agent.name ? seats[agent.name] : undefined;
-      if (seat?.temporary && seat.stage === 'ready' && agent.status === 'working') seat.worked = true;
+      if (seat && seat.stage === 'ready' && agent.status === 'working') {
+        if (seat.temporary) seat.worked = true;
+        seat.last_active = activeAt;
+      }
     }
   });
 }

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
@@ -8,10 +9,37 @@ import { cleanClassification, type Classification } from './launch/progress.ts';
 // readings, which outlive every session (§ 4.4). It lives beside the team file and is written by
 // team alone: every write holds the lock and goes through a temporary file.
 
+export const SEAT_ID_PATTERN = /^seat_[0-9a-f]{12}$/;
+
+export function isSeatId(value: unknown): value is string {
+  return typeof value === 'string' && SEAT_ID_PATTERN.test(value);
+}
+
+export function mintSeatId(): string {
+  return `seat_${randomBytes(6).toString('hex')}`;
+}
+
+export type RetainedSeat = {
+  id: string;
+  last_active?: string;
+};
+
 export type SeatState = {
+  /** Stable seat handle (`seat_<12 lowercase hex>`), minted when the seat is first recorded. */
+  id?: string;
   stage: 'launched' | 'named' | 'ready';
   /** The CLI the seat was launched with: `down` stops it under it when the file renamed it. */
   cli?: string;
+  /** The model token the seat was launched with. */
+  model?: string;
+  /** The version token the seat was launched with. */
+  version?: string;
+  /** The effort word the seat was launched with, when set. */
+  effort?: string;
+  /** The full shell launch command the seat was started with. */
+  launch_line?: string;
+  /** ISO 8601 timestamp when the seat last reached ready or was seen working. */
+  last_active?: string;
   pane?: string;
   /** The herdr workspace, so a later command can close it without listing agents. */
   workspace?: string;
@@ -68,6 +96,11 @@ export type WorktreeState = {
 export type SessionState = {
   started?: { at: string; by: string };
   seats: Record<string, SeatState>;
+  /**
+   * Seat handles retained across `remove --keep`, `down`, and `up` repair so a declared seat keeps
+   * its `id` and `last_active` when relaunched, while `seats` holds only active runtime records.
+   */
+  retained_seats?: Record<string, RetainedSeat>;
   worktrees: Record<string, WorktreeState>;
   watch?: { pid: number; heartbeat: string; pane?: string; workspace?: string };
   /**
@@ -130,10 +163,32 @@ export function readState(dir: string): State {
     // the log line a waiting seat writes, the status row and its `difference:` line, the prompt a
     // resumed wait draws — takes the reading from here, so a hand-edited or corrupted record can
     // never print whatever it holds.
+    const seenIds = new Set<string>();
     for (const seat of Object.values(session.seats)) {
+      if (seat.id !== undefined && (!isSeatId(seat.id) || seenIds.has(seat.id))) delete seat.id;
+      else if (seat.id !== undefined) seenIds.add(seat.id);
+      if (seat.model !== undefined && typeof seat.model !== 'string') delete seat.model;
+      if (seat.version !== undefined && typeof seat.version !== 'string') delete seat.version;
+      if (seat.effort !== undefined && typeof seat.effort !== 'string') delete seat.effort;
+      if (seat.launch_line !== undefined && typeof seat.launch_line !== 'string') delete seat.launch_line;
+      if (seat.last_active !== undefined && typeof seat.last_active !== 'string') delete seat.last_active;
       if (seat.waiting && typeof seat.waiting === 'object') {
         seat.waiting.classification = cleanClassification(seat.waiting.classification);
       }
+    }
+    if (session.retained_seats && typeof session.retained_seats === 'object') {
+      for (const [name, retained] of Object.entries(session.retained_seats)) {
+        if (!retained || typeof retained !== 'object' || !isSeatId(retained.id) || seenIds.has(retained.id)) {
+          delete session.retained_seats[name];
+          continue;
+        }
+        seenIds.add(retained.id);
+        if (retained.last_active !== undefined && typeof retained.last_active !== 'string') {
+          delete retained.last_active;
+        }
+      }
+    } else if (session.retained_seats !== undefined) {
+      delete session.retained_seats;
     }
     // Read old, write new: readings used to be held under a session. They are the project's
     // (§ 4.4), so every session's records are merged to the top level here — no reader loses one,

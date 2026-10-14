@@ -69,7 +69,8 @@ in the transcript above an ordinary box leaves the screen unknown.
 
 ## Who may run it
 
-Anyone, in any terminal. `up` starts one for the session as a background process, and records its
+Anyone, in any terminal. A run with no terminal is refused before the watch starts:
+`team watch: only the owner runs this, from a terminal outside herdr`. `up` starts one for the session as a background process, and records its
 pid. This is the one `team status` and `team doctor` look for. A person may run one by hand: it
 prints the same lines, and Ctrl-C stops it and exits 0. Two watches must not fight over the same
 session, so a second one refuses. `--no-nudge` and `--no-notify` are the owner's: a seat that

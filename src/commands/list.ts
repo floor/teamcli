@@ -4,8 +4,9 @@ import { agentList, sessionList, type HerdrSession } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { findTeam, type FoundTeam } from '../list/find.ts';
+import { waitOrStop } from '../wait.ts';
 
-export const USAGE = `Usage: team list [--all] [--json]
+export const USAGE = `Usage: team list [--all] [--watch] [--json]
 
 Run from any folder. Lists the herdr sessions on this machine, the running ones unless --all is given, and changes nothing.
 
@@ -26,6 +27,10 @@ export type ListSources = {
   roster(session: string): RosterSeat[] | null;
   /** Null when no team file names this session. */
   team(session: string): FoundTeam | null;
+  /** Waits between `--watch` passes; false ends the loop. */
+  wait?(seconds: number): Promise<boolean>;
+  /** Clock for `--watch` headers. */
+  now?(): Date;
 };
 
 const STATUS_ORDER = ['working', 'blocked', 'idle', 'done'];
@@ -171,9 +176,9 @@ export function realListSources(home: string = homedir()): ListSources {
   };
   return {
     sessions() {
-      const rows = listed();
-      if (rows === null) return null;
-      return rows.map((row) => ({ name: row.name, running: row.running }));
+      cache = sessionList();
+      if (cache === null) return null;
+      return cache.map((row) => ({ name: row.name, running: row.running }));
     },
     roster(session) {
       const agents = agentList(session);
@@ -187,6 +192,8 @@ export function realListSources(home: string = homedir()): ListSources {
       const dir = listed()?.find((row) => row.name === session)?.sessionDir ?? null;
       return findTeam(session, dir, home);
     },
+    wait: waitOrStop,
+    now: () => new Date(),
   };
 }
 
@@ -194,27 +201,51 @@ export const list: Command = (argv, io) => runList(argv, io);
 export default list;
 
 export async function runList(argv: string[], io: Io, sources: ListSources = realListSources()): Promise<number> {
-  const args = readArgs(argv, [], ['all', 'json']);
-  if (args.error || args.rest.length) {
-    io.stderr(`team list: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
+  const args = readArgs(argv, [], ['all', 'watch', 'json']);
+  if (args.error || args.rest.length || (args.flags.has('watch') && args.flags.has('json'))) {
+    const why = args.error
+      ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : "--watch and --json can't be used together");
+    io.stderr(`team list: ${why}\n${USAGE}`);
     // exit: list.invocation
     return 2;
   }
   const all = args.flags.has('all');
   const json = args.flags.has('json');
-  const listed = ask(() => sources.sessions(), null);
-  if (listed === null) {
-    io.stdout(json ? '[]\n' : 'herdr is not running\n');
-    // exit: list.herdr-down
-    return 0;
+  const watching = args.flags.has('watch');
+  if (watching) {
+    const wait = sources.wait ?? waitOrStop;
+    const now = sources.now ?? (() => new Date());
+    for (;;) {
+      const listed = ask(() => sources.sessions(), null);
+      const rows = listed === null ? null : rowsOf(listed, sources, all);
+      const body = rows === null
+        ? 'herdr is not running\n'
+        : rows.length === 0
+          ? all ? 'no sessions\n' : 'no running sessions\n'
+          : table(rows);
+      if (io.stdoutIsTTY) {
+        io.stdout(`\x1b[2J\x1b[H`);
+        io.stdout(`Every 2s: team list${all ? ' --all' : ''}  ${now().toISOString()}\n\n${body}`);
+      } else {
+        io.stdout(body);
+      }
+      if (!(await wait(2))) break;
+    }
+  } else {
+    const listed = ask(() => sources.sessions(), null);
+    if (listed === null) {
+      io.stdout(json ? '[]\n' : 'herdr is not running\n');
+      // exit: list.herdr-down
+      return 0;
+    }
+    const rows = rowsOf(listed, sources, all);
+    if (rows.length === 0) {
+      io.stdout(json ? '[]\n' : all ? 'no sessions\n' : 'no running sessions\n');
+      // exit: list.empty
+      return 0;
+    }
+    io.stdout(json ? jsonOf(rows) : table(rows));
   }
-  const rows = rowsOf(listed, sources, all);
-  if (rows.length === 0) {
-    io.stdout(json ? '[]\n' : all ? 'no sessions\n' : 'no running sessions\n');
-    // exit: list.empty
-    return 0;
-  }
-  io.stdout(json ? jsonOf(rows) : table(rows));
   // exit: list.shown
   return 0;
 }
