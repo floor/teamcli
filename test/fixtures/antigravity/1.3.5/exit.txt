@@ -1,0 +1,22 @@
+
+───────────────────────────────────────────────────
+> Run sleep 15 in the shell, then reply only
+  SLEEP_DONE. Do not read or write any file.
+
+○ Thought for 15.8s (The `run_command` with a 15-...)
+● Ran (sleep 15) (ctrl+o to expand)
+
+───────────────────────────────────────────────────
+> Reply with only the word HELLO. Do not use tools
+  and do not read or write any file.
+
+  HELLO
+
+──────────────────────────────────────────────────────
+>
+──────────────────────────────────────────────────────
+
+Resume with -c (or command below):
+agy --conversation=<session-id>
+<workspace> main        7m 31s 17:24:35
+❯

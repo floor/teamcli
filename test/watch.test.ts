@@ -1963,7 +1963,7 @@ describe('the sidebar of a running seat', () => {
     agyScene.screens['w9:p1'] = 'Gemini 4 Argon · medium\n';
     agyScene.workspaces.push({ id: 'w9', label: 'old' });
     const agy = pass({ team: file, watch: file.watch, state: emptySession(), live: agyScene, machine: fine, now: 0, memory: newMemory() });
-    expect(line(agy, 'grok-acme')).toBe('Gemini 3.8 Flash medium');
+    expect(line(agy, 'grok-acme')).toBe('Gemini Argon 4 medium');
 
     const grokFile = team();
     const grokScene = live();

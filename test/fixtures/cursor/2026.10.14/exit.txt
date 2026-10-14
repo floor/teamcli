@@ -1,0 +1,22 @@
+    AskQuestion Clarifyi Questions skipped by user
+                ng Quest
+                ions (1)
+    1. Which name do you want to choose?
+      [ ] alpha
+      [ ] beta
+
+  The choice between alpha and beta was skipped,
+  so no name was selected.
+
+
+
+
+  → Add a follow-up
+
+
+   → /exit                     Exit
+     /quit                     Exit
+
+  To resume this session: agent --resume=<session-id>
+<workspace> main      4m 1s 17:30:12
+❯
