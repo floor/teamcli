@@ -90,7 +90,9 @@ new approval is a change to an owner section
 (`trust`, `limits`, `machine`, `rules`, `identity`, `workspace`, `orchestrator`, `operator`,
 `session`, `visibility`, `tools`, `budgets`, `watch` — its timings included, down to `watch.checks`,
 whose turn-offs are their own line — and `delegates`, its entries, their panes and their command
-lists included) or to a seat's own fields. A seat taken out does not.
+lists included) or to a seat's own fields. A seat taken out does not, where the file declares its
+ceiling; where it declares no `limits`, the default counts the seats, so taking one out moves
+`limits` with it, above.
 Parking or stopping one does, except that `remove --keep` and `add` record the new digest
 themselves, so those commands do not send the owner back to `approve`. Until an edit is
 approved its section changes nothing: the watch, the budget reports, the check cadence, `up`'s and
@@ -371,7 +373,8 @@ Owner-authorization fingerprint: 7ad4da2e4116793b69477ec6d99fe04bb755622c17dbc46
 exit 0
 ```
 
-A new seat needs one too — a seat already approved may be taken out without bothering the owner.
+A new seat needs one too — a seat already approved may be taken out without bothering the owner,
+unless the file declares no `limits`: its default ceiling moves with the count (above).
 Parking or stopping one needs an approval, unless `remove --keep` or `add` wrote the mark and
 recorded the digest. A seat the file never had is not approved:
 
