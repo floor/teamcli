@@ -3722,7 +3722,7 @@ describe('team up, the pause', () => {
     expect(log).not.toContain('injected');
   });
 
-  test('a recorded waiting seat whose pane is gone fails closed, and the repair is named', async () => {
+  test('a recorded waiting seat whose pane is gone is launched in a fresh workspace', async () => {
     await approve();
     writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
       format: 1,
@@ -3751,7 +3751,7 @@ describe('team up, the pause', () => {
     made.seed('w3:p1', IDLE, true);
     made.session = 'running';
     // herdr no longer lists claude's pane: it is gone, whatever the record says. The other
-    // seats' panes are still there, so only the waiting seat fails closed.
+    // seats' panes are still there, so only that seat is launched again.
     const listed = () => [agent('deepseek-acme', 'w2:p1'), agent('deepseek-acme-2', 'w3:p1')];
     made.launch.agents = listed;
     made.launch.processInfo = (_session, pane) =>
@@ -3766,15 +3766,297 @@ describe('team up, the pause', () => {
       workspaces: () => [{ id: 'w1', label: 'Claude Opus 5.5' }, { id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
       agents: listed,
     }, made));
-    expect(code).toBe(1);
-    // Fail closed: nothing is created, closed or read from the terminal, and the record stays.
-    expect(io.out).toContain('claude-coordinator-acme: left out: its waiting pane is gone\n');
-    expect(io.err).toContain('  its record still names it; `team down` then `team up` (to restart the whole team), clears it\n');
+    expect(code).toBe(0);
+    // The recorded pane is not in herdr's list, so the seat is launched in a fresh workspace.
+    // Nothing is closed, and the terminal is not read.
+    expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w1:p1 was gone and was replaced; its workspace w1 was left\n');
+    expect(io.out).not.toContain('left out: its waiting pane is gone');
     expect(made.closes).toEqual([]);
-    expect(made.creates).toEqual([]);
+    expect(made.creates).toEqual(['Claude Opus 5.5']);
     expect(made.terminal.reads).toBe(0);
     expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.waiting)
-      .toEqual({ state: 'waiting-owner', classification: 'trust' });
+      .toBeUndefined();
+  });
+
+  test.each(['launched', 'named', 'ready'] as const)(
+    'a waiting %s seat whose recorded pane is gone is launched in a fresh workspace',
+    async (stage) => {
+      await approve();
+      writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: {
+              'claude-coordinator-acme': {
+                stage,
+                pane: 'w9:p1',
+                workspace: 'w9',
+                launched: { shell: 400, cli: [401] },
+                waiting: { state: 'waiting-owner', classification: 'trust' },
+              },
+              'deepseek-acme': { stage: 'ready', pane: 'w2:p1', workspace: 'w2', launched: { shell: 500, cli: [501] } },
+              'deepseek-acme-2': { stage: 'ready', pane: 'w3:p1', workspace: 'w3', launched: { shell: 510, cli: [511] } },
+            },
+            worktrees: {},
+            watch: { pid: 4242, heartbeat: '2026-10-03T14:01:00Z' },
+          },
+        },
+      }));
+      const made = world(IDLE);
+      made.session = 'running';
+      const others = () => [agent('deepseek-acme', 'w2:p1'), agent('deepseek-acme-2', 'w3:p1')];
+      made.launch.agents = others;
+      made.launch.processInfo = (_session, pane) =>
+        pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
+        pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
+      const host = {
+        sessionState: () => 'running' as const,
+        alive: () => true,
+        workspaces: () => [
+          { id: 'w9', label: 'Claude Opus 5.5' },
+          { id: 'w2', label: 'DeepSeek V4.1 Flash' },
+          { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+        ],
+        agents: others,
+      };
+      const io = testIo(root, { kind: 'owner' });
+      const code = await runUp(FILE, io, sources(host, made));
+      expect(code).toBe(0);
+      expect(made.creates).toEqual(['Claude Opus 5.5']);
+      expect(made.closes).toEqual([]);
+      expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1']);
+      expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced; its workspace w9 was left\n');
+      const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'];
+      expect(seat?.waiting).toBeUndefined();
+      expect(seat?.pane).toBe('w1:p1');
+      expect(seat?.stage).toBe('ready');
+      expect(readState(join(root, '.agents')).sessions['acme-web']?.watch?.pid).toBe(4242);
+
+      const again = () => [
+        agent('claude-coordinator-acme', 'w1:p1'),
+        agent('deepseek-acme', 'w2:p1'),
+        agent('deepseek-acme-2', 'w3:p1'),
+      ];
+      made.launch.agents = again;
+      const second = testIo(root, { kind: 'owner' });
+      const code2 = await runUp(FILE, second, sources({ ...host, agents: again }, made));
+      expect(code2).toBe(0);
+      expect(made.creates).toEqual(['Claude Opus 5.5']);
+      expect(made.closes).toEqual([]);
+      expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1']);
+      expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.pane).toBe('w1:p1');
+    },
+  );
+
+  test('a waiting seat whose recorded pane the host still lists is not replaced', async () => {
+    await approve();
+    writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
+      format: 1,
+      sessions: {
+        'acme-web': {
+          seats: {
+            'claude-coordinator-acme': {
+              stage: 'launched',
+              pane: 'w9:p1',
+              workspace: 'w9',
+              launched: { shell: 400, cli: [401] },
+              waiting: { state: 'waiting-owner', classification: 'trust' },
+            },
+            'deepseek-acme': { stage: 'ready', pane: 'w2:p1', workspace: 'w2', launched: { shell: 500, cli: [501] } },
+            'deepseek-acme-2': { stage: 'ready', pane: 'w3:p1', workspace: 'w3', launched: { shell: 510, cli: [511] } },
+          },
+          worktrees: {},
+          watch: { pid: 4242, heartbeat: '2026-10-03T14:01:00Z' },
+        },
+      },
+    }));
+    const made = world(IDLE);
+    made.session = 'running';
+    const listed = (): HerdrAgent[] => [
+      { name: null, agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
+      agent('deepseek-acme', 'w2:p1'),
+      agent('deepseek-acme-2', 'w3:p1'),
+    ];
+    made.launch.agents = listed;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(FILE, io, sources({
+      sessionState: () => 'running',
+      alive: () => true,
+      workspaces: () => [{ id: 'w9', label: 'Claude Opus 5.5' }],
+      agents: listed,
+    }, made));
+    expect(code).toBe(1);
+    expect(io.out).toContain('claude-coordinator-acme: left out: its waiting pane is gone\n');
+    expect(io.err).toContain(
+      '  its record still names it; `team down` then `team up` (to restart the whole team), clears it\n',
+    );
+    expect(made.creates).toEqual([]);
+    expect(made.closes).toEqual([]);
+    expect(made.runs).toEqual([]);
+    expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.pane).toBe('w9:p1');
+  });
+
+  test('a coordinator, an operator and the implementers whose waiting panes are gone are launched again', async () => {
+    const team = makeExample(base, root, EXAMPLE
+      .replace('operator: claude-coordinator-acme', 'operator: claude-operator-acme')
+      .replace('  seats: 6', '  seats: 8')
+      .replace(
+        '    mode: shared               # the coordinator reads; it never implements\n',
+        `    mode: shared               # the coordinator reads; it never implements
+
+  - role: operator
+    name: claude-operator-acme
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    mode: shared
+`,
+      ));
+    writeFileSync(join(root, '.agents/team.yaml'), team);
+    await approve();
+    const waiting = {
+      stage: 'launched',
+      launched: { shell: 400, cli: [401] },
+      waiting: { state: 'waiting-owner', classification: 'trust' },
+    };
+    writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
+      format: 1,
+      sessions: {
+        'acme-web': {
+          seats: {
+            'claude-coordinator-acme': { ...waiting, pane: 'w9:p1', workspace: 'w9' },
+            'claude-operator-acme': { ...waiting, pane: 'w8:p1', workspace: 'w8' },
+            'deepseek-acme': { ...waiting, pane: 'w7:p1', workspace: 'w7' },
+            'deepseek-acme-2': { ...waiting, pane: 'w6:p1', workspace: 'w6' },
+          },
+          worktrees: {},
+          watch: { pid: 4242, heartbeat: '2026-10-03T14:01:00Z' },
+        },
+      },
+    }));
+    const made = world(IDLE);
+    made.session = 'running';
+    made.launch.agents = () => [];
+    const host = {
+      sessionState: () => 'running' as const,
+      alive: () => true,
+      workspaces: () => [
+        { id: 'w9', label: 'Claude Opus 5.5' },
+        { id: 'w8', label: 'Claude Opus 5.5' },
+        { id: 'w7', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w6', label: 'DeepSeek V4.1 Flash' },
+      ],
+      agents: () => [],
+    };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(FILE, io, sources(host, made));
+    const report = `${io.out}${io.err}`;
+    expect(code).toBe(0);
+    expect(report).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced; its workspace w9 was left\n');
+    expect(report).toContain('claude-operator-acme: its recorded pane w8:p1 was gone and was replaced; its workspace w8 was left\n');
+    expect(report).toContain('deepseek-acme: its recorded pane w7:p1 was gone and was replaced; its workspace w7 was left\n');
+    expect(report).toContain('deepseek-acme-2: its recorded pane w6:p1 was gone and was replaced; its workspace w6 was left\n');
+    expect(report).not.toContain('left out: its waiting pane is gone');
+    expect(report).not.toContain('its record still names it');
+    expect(report).not.toContain('`team down` then `team up`');
+    expect(report).not.toContain('`team remove deepseek-acme --keep` then `team add deepseek-acme`');
+    expect(report).not.toContain('`team remove deepseek-acme-2 --keep` then `team add deepseek-acme-2`');
+    expect(made.creates).toEqual([
+      'Claude Opus 5.5',
+      'Claude Opus 5.5',
+      'DeepSeek V4.1 Flash',
+      'DeepSeek V4.1 Flash',
+    ]);
+    expect(made.closes).toEqual([]);
+    expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1', 'w2:p1', 'w3:p1', 'w4:p1']);
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats;
+    expect(seats?.['claude-coordinator-acme']?.pane).toBe('w1:p1');
+    expect(seats?.['claude-operator-acme']?.pane).toBe('w2:p1');
+    expect(seats?.['deepseek-acme']?.pane).toBe('w3:p1');
+    expect(seats?.['deepseek-acme-2']?.pane).toBe('w4:p1');
+    for (const name of ['claude-coordinator-acme', 'claude-operator-acme', 'deepseek-acme', 'deepseek-acme-2']) {
+      expect(seats?.[name]?.waiting).toBeUndefined();
+      expect(seats?.[name]?.stage).toBe('ready');
+    }
+    expect(readState(join(root, '.agents')).sessions['acme-web']?.watch?.pid).toBe(4242);
+
+    const again = () => [
+      agent('claude-coordinator-acme', 'w1:p1'),
+      agent('claude-operator-acme', 'w2:p1'),
+      agent('deepseek-acme', 'w3:p1'),
+      agent('deepseek-acme-2', 'w4:p1'),
+    ];
+    made.launch.agents = again;
+    const second = testIo(root, { kind: 'owner' });
+    const code2 = await runUp(FILE, second, sources({ ...host, agents: again }, made));
+    expect(code2).toBe(0);
+    expect(`${second.out}${second.err}`).not.toContain('was gone and was replaced');
+    expect(`${second.out}${second.err}`).not.toContain('its record still names it');
+    expect(made.creates).toEqual([
+      'Claude Opus 5.5',
+      'Claude Opus 5.5',
+      'DeepSeek V4.1 Flash',
+      'DeepSeek V4.1 Flash',
+    ]);
+    expect(made.closes).toEqual([]);
+    expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1', 'w2:p1', 'w3:p1', 'w4:p1']);
+    const kept = readState(join(root, '.agents')).sessions['acme-web']?.seats;
+    expect(kept?.['claude-coordinator-acme']?.pane).toBe('w1:p1');
+    expect(kept?.['claude-operator-acme']?.pane).toBe('w2:p1');
+    expect(kept?.['deepseek-acme']?.pane).toBe('w3:p1');
+    expect(kept?.['deepseek-acme-2']?.pane).toBe('w4:p1');
+  });
+
+  test('a gone waiting pane whose workspace the host does not list is replaced without naming one', async () => {
+    await approve();
+    writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
+      format: 1,
+      sessions: {
+        'acme-web': {
+          seats: {
+            'claude-coordinator-acme': {
+              stage: 'launched',
+              pane: 'w9:p1',
+              workspace: 'w9',
+              launched: { shell: 400, cli: [401] },
+              waiting: { state: 'waiting-owner', classification: 'trust' },
+            },
+            'deepseek-acme': { stage: 'ready', pane: 'w2:p1', workspace: 'w2', launched: { shell: 500, cli: [501] } },
+            'deepseek-acme-2': { stage: 'ready', pane: 'w3:p1', workspace: 'w3', launched: { shell: 510, cli: [511] } },
+          },
+          worktrees: {},
+          watch: { pid: 4242, heartbeat: '2026-10-03T14:01:00Z' },
+        },
+      },
+    }));
+    const made = world(IDLE);
+    made.session = 'running';
+    const others = () => [agent('deepseek-acme', 'w2:p1'), agent('deepseek-acme-2', 'w3:p1')];
+    made.launch.agents = others;
+    made.launch.processInfo = (_session, pane) =>
+      pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
+      pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(FILE, io, sources({
+      sessionState: () => 'running',
+      alive: () => true,
+      workspaces: () => [
+        { id: 'w2', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+      ],
+      agents: others,
+    }, made));
+    expect(code).toBe(0);
+    expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced\n');
+    expect(`${io.out}${io.err}`).not.toContain('was left');
+    expect(`${io.out}${io.err}`).not.toContain('workspace w9');
+    expect(made.closes).toEqual([]);
+    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'];
+    expect(seat?.waiting).toBeUndefined();
+    expect(seat?.pane).toBe('w1:p1');
   });
 });
 
