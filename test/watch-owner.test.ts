@@ -148,6 +148,7 @@ describe('a threshold edit, and the approval', () => {
       branch: () => 'main',
       standing: standingSource(home),
       now: () => NOW,
+      home,
     };
     const status = async () => {
       const io = testIo(root, { kind: 'owner' });
