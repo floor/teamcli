@@ -657,9 +657,9 @@ describe('the audit line', () => {
     expect(io.err).toContain("skip lead: left as it is; a granted up does not relaunch or close the orchestrator's seat\n");
     expect(trace.closed).toEqual([]);
     const workerAt = canonicalLanding(lobby).landing;
-    expect(trace.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: workerAt });
+    expect(trace.workspaces).toContainEqual({ label: 'worker', cwd: workerAt });
     // The operator starts in the project; the orchestrator's own seat does not: one workspace
     // at the root, never two.
-    expect(trace.workspaces.filter((one) => one.label === 'Claude Opus 5.5' && one.cwd === root)).toHaveLength(1);
+    expect(trace.workspaces.filter((one) => one.label === 'pilot' && one.cwd === root)).toHaveLength(1);
   });
 });
