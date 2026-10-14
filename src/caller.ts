@@ -245,9 +245,11 @@ export function sessionOwnerRefusal(walked: Caller): string {
   return `--session is the owner's, from a terminal outside herdr; this call is ${describeCaller(walked)}`;
 }
 
-// The owner, or the orchestrator's or the operator's seat: who may change a running team. The
-// no-pane and another-pane verdicts name the seat, so a command's refusal can say which seat the
-// state lost, or which pane it holds that the caller is not on.
+// The owner, or the orchestrator's or the operator's seat: who may change a running team.
+// Those are the names the file resolved (`coordinator:` or `leads: true`, and `operator:`),
+// not the seat's role, so a lead written `role: coordinator` is admitted when its name is
+// that lead. The no-pane and another-pane verdicts name the seat, so a command's refusal
+// can say which seat the state lost, or which pane it holds that the caller is not on.
 export function mayChangeTeamVerdict(caller: Caller, team: Pick<TeamFile, 'orchestrator' | 'operator'>, at?: SeatStanding): CallerVerdict {
   if (caller.kind === 'owner') return { kind: 'ok' };
   const asOrchestrator = callerVerdict(caller, team.orchestrator, at);
