@@ -263,6 +263,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.override-owner",
+      "meaning": "--model and --effort on a declared seat are the owner's",
+      "trigger": "team add worker --model claude-sonnet-5-5"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.placed",
       "meaning": "the seat would be placed outside the project",
       "trigger": "team add worker"
@@ -347,6 +354,13 @@
     {
       "code": 2,
       "command": "add",
+      "id": "add.effort",
+      "meaning": "the --effort override is not allowed for the seat's CLI or vendor",
+      "trigger": "team add worker --effort unknown"
+    },
+    {
+      "code": 2,
+      "command": "add",
       "id": "add.file",
       "meaning": "the team file can't be read",
       "trigger": "team add worker --file missing.yaml"
@@ -371,6 +385,13 @@
       "id": "add.locked",
       "meaning": "the locked edit does not validate",
       "trigger": "team add worker"
+    },
+    {
+      "code": 2,
+      "command": "add",
+      "id": "add.model",
+      "meaning": "the --model override is not known for the seat's CLI",
+      "trigger": "team add worker --model unknown"
     },
     {
       "code": 2,

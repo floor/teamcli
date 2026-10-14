@@ -10,6 +10,12 @@
         },
         {
           "hidden": false,
+          "name": "--effort",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true
@@ -23,6 +29,12 @@
         {
           "hidden": false,
           "name": "--like",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--model",
           "repeatable": false,
           "takesValue": true
         },
@@ -68,8 +80,8 @@
       ],
       "subcommands": [],
       "usage": [
-        "team add <name> [--dry-run] [--session <name>] [--file <path>]",
-        "team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--dry-run] [--session <name>] [--file <path>]"
+        "team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]",
+        "team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]"
       ]
     },
     {
