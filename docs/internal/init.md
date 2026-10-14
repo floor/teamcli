@@ -43,8 +43,12 @@ That line names the schema of the release that wrote the file — the tag `v` pl
 
 ## Who may run it
 
-The owner, from a terminal outside herdr. A seat or an agent-run CLI is refused with the caller
-named. A run with no terminal is refused with one sentence, before the repository is read.
+The owner, from a terminal outside herdr, or the orchestrator's seat on its recorded pane when the
+approved `grant` lists `init` (either on this repository's approved copy or on the team file that
+seat's pane was launched from). A granted run writes `grant [grant] <seat> init` to
+`.agents/team.log` beside the `init` log line and never signs an approval: the first approval of any
+repository stays the owner's. Any other seat or agent-run CLI is refused with the caller named. A
+run with no terminal is refused with one sentence, before the repository is read.
 
 ## Refusals
 
@@ -52,11 +56,18 @@ named. A run with no terminal is refused with one sentence, before the repositor
 | --- | --- |
 | `team init: only the owner runs this, from a terminal outside herdr` — a run with no terminal | 1 |
 | `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` | 1 |
+| `team init: a grant needs a verified approval: <reason>` | 1 |
+| `team init: a grant needs a readable approved copy: run \`team approve\`` | 1 |
+| `team init: a grant needs the approved file: the file is not the approved one (<diff>): run \`team approve\`` | 1 |
+| `team init: no pane is recorded for seat <seat> in this session: the owner stops that seat and runs \`team up\`` | 1 |
+| `team init: the state records pane <pane> for seat <seat> in this session, not the pane this call is on: the owner stops the team and starts it again (\`team down\`, then \`team up\`)` | 1 |
+| `team init: only the seat the grant names runs this: this call is <caller>` | 1 |
+| `team init: the grant does not list \`init\`` | 1 |
 | `team init: not inside a git repository` | 2 |
 | `team init: .agents/team.yaml is tracked by git, and a team file is private. Untrack it, keeping the file:` … | 1 |
 | `team init: .agents/team.yaml exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.` | 1 |
 | `team init: nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.` | 1 |
-| `team init: nothing was restored: the record for this folder was approved before records were signed: run `team approve` once.` — the record was written by an earlier `team`; the same shape, with the case, for a record that does not verify | 1 |
+| `team init: nothing was restored: the record for this folder was approved before records were signed: run \`team approve\` once.` — the record was written by an earlier `team`; the same shape, with the case, for a record that does not verify | 1 |
 | `team init: unknown option --<name>` (with the usage) | 2 |
 
 The tracked-file message names the repair:

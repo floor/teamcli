@@ -142,8 +142,10 @@ grant:
 - `team up` admits the orchestrator's seat when the approved grant lists `up`. The run is this
   folder's own file: `--session` and `--file` are refused, and the run does not relaunch or close
   the orchestrator's seat. `team down` admits that seat when the list includes `down`, and leaves
-  the orchestrator's seat and the operator's seat running. A file that omits `grant` keeps
-  today's `down`.
+  the orchestrator's seat and the operator's seat running. `team init` admits that seat when the
+  list includes `init`, writes `grant [grant] <seat> init` to `.agents/team.log`, and never
+  approves the file: the first approval of a team stays the owner's. A file that omits `grant`
+  keeps today's `down` and `init`.
 
 ## `delegates`
 

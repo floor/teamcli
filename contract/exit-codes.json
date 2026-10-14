@@ -1474,6 +1474,55 @@
     {
       "code": 1,
       "command": "init",
+      "id": "init.grant-another-pane",
+      "meaning": "the granted seat is not on its recorded pane",
+      "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.grant-approval",
+      "meaning": "a grant needs a verified approval",
+      "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.grant-approved-copy",
+      "meaning": "a grant needs a readable approved copy",
+      "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.grant-caller",
+      "meaning": "only the seat the grant names runs this",
+      "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.grant-drift",
+      "meaning": "a grant needs the approved file",
+      "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.grant-no-pane",
+      "meaning": "no pane is recorded for the granted seat",
+      "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.grant-scope",
+      "meaning": "the grant does not list init",
+      "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
       "id": "init.legacy",
       "meaning": "the record predates signed records",
       "trigger": "team init --restore"

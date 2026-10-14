@@ -3,7 +3,9 @@
 Writes the team file: a skeleton for this project, or with `--restore` the copy of
 `.agents/team.yaml` you last approved on this machine. It also lists the team file and its runtime
 files in `.git/info/exclude`, so git never sees them and a fresh clone never carries them. The owner
-alone runs it, from a terminal outside herdr, and a file that already exists is never overwritten.
+runs it, from a terminal outside herdr, or the orchestrator's seat when the approved `grant` lists
+`init`; a file that already exists is never overwritten, and the first approval of a team stays the
+owner's.
 
 ## Synopsis
 
@@ -22,7 +24,8 @@ alone runs it, from a terminal outside herdr, and a file that already exists is 
 | --- | --- |
 | the owner, from a terminal outside herdr | run it |
 | a run with no terminal | nothing: `team init: only the owner runs this, from a terminal outside herdr` |
-| a seat, or an agent-run CLI | nothing: `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` |
+| the orchestrator's seat, when the approved `grant` lists `init` | run it; writes `grant [grant] <seat> init` to `.agents/team.log`, and never approves the file |
+| a seat, or an agent-run CLI | nothing: `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>`, unless the approved `grant` admits the orchestrator's seat |
 
 ## Output and exit codes
 

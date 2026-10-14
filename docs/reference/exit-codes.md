@@ -216,6 +216,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `init.detached` | `init` | 1 | a run with no terminal | `team init` |
 | `init.exists` | `init` | 1 | the team file already exists | `team init` |
 | `init.git-silent` | `init` | 1 | git doesn't answer for this folder | `team init` |
+| `init.grant-another-pane` | `init` | 1 | the granted seat is not on its recorded pane | `team init` |
+| `init.grant-approval` | `init` | 1 | a grant needs a verified approval | `team init` |
+| `init.grant-approved-copy` | `init` | 1 | a grant needs a readable approved copy | `team init` |
+| `init.grant-caller` | `init` | 1 | only the seat the grant names runs this | `team init` |
+| `init.grant-drift` | `init` | 1 | a grant needs the approved file | `team init` |
+| `init.grant-no-pane` | `init` | 1 | no pane is recorded for the granted seat | `team init` |
+| `init.grant-scope` | `init` | 1 | the grant does not list init | `team init` |
 | `init.legacy` | `init` | 1 | the record predates signed records | `team init --restore` |
 | `init.not-owner` | `init` | 1 | not the owner | `team init` |
 | `init.nothing` | `init` | 1 | there is nothing to restore | `team init --restore` |

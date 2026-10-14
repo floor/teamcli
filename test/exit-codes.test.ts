@@ -23,7 +23,7 @@ import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
 import { runFeed } from '../src/commands/feed.ts';
 import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
-import { runInit } from '../src/commands/init.ts';
+import { runInit, type InitSources } from '../src/commands/init.ts';
 import { historyPath } from '../src/send/history.ts';
 import { plantMessage, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { runIssues } from '../src/commands/issues.ts';
@@ -1430,10 +1430,11 @@ async function initial(
   caller: Caller = owner,
   home = place.home,
   readStanding?: (root: string) => Standing,
+  sources?: InitSources,
 ): Promise<Ran> {
   const io = testIo(place.root, caller);
   try {
-    return { code: await runInit(argv, io, home, readStanding), out: io.out, err: io.err };
+    return { code: await runInit(argv, io, home, readStanding, sources), out: io.out, err: io.err };
   } catch (error) {
     return { code: reportFailure(error, (text) => io.stderr(text)), out: io.out, err: io.err };
   }
@@ -2069,6 +2070,46 @@ scene('up.grant-flag', async (place) => {
   approve(place, GRANTED);
   recordLead(place, 'w1:p1');
   return show(await up(place, ['--session', 'elsewhere'], leadSeat, upSources(place)), "--session is the owner's; the granted seat cannot use it");
+});
+
+const GRANT_INIT = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - init\n`;
+
+scene('init.grant-approval', async (place) => {
+  write(place, GRANT_INIT);
+  return show(await initial(place, [], leadSeat), 'a grant needs a verified approval');
+});
+scene('init.grant-approved-copy', async (place) => {
+  approve(place, GRANT_INIT);
+  return show(
+    await initial(place, [], leadSeat, place.home, undefined, {
+      grantGate: (input) => grantGate({ ...input, sources: { approvedCopy: () => null } }),
+    }),
+    'a grant needs a readable approved copy',
+  );
+});
+scene('init.grant-drift', async (place) => {
+  approve(place, GRANT_INIT);
+  write(place, readFileSync(place.file, 'utf8').replace('label: lead', 'label: renamed'));
+  return show(await initial(place, [], leadSeat), 'a grant needs the approved file');
+});
+scene('init.grant-caller', async (place) => {
+  approve(place, GRANT_INIT);
+  recordLead(place);
+  return show(await initial(place, [], other), 'only the seat the grant names');
+});
+scene('init.grant-no-pane', async (place) => {
+  approve(place, GRANT_INIT);
+  return show(await initial(place, [], leadSeat), 'no pane is recorded for seat lead');
+});
+scene('init.grant-another-pane', async (place) => {
+  approve(place, GRANT_INIT);
+  recordLead(place, 'other-pane');
+  return show(await initial(place, [], leadSeat), 'the state records pane other-pane for seat lead');
+});
+scene('init.grant-scope', async (place) => {
+  approve(place, GRANT_DOWN);
+  recordLead(place);
+  return show(await initial(place, [], leadSeat), 'the grant does not list `init`');
 });
 
 async function watched(place: Place, argv: string[], caller: Caller, sources: WatchSources = watchSources()): Promise<Ran> {

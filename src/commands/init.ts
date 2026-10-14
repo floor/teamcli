@@ -3,15 +3,23 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { TEAM_FILE, findRoot } from '../file/load.ts';
+import { launchedTeamFile } from '../file/launched-file.ts';
+import { TEAM_FILE, findRoot, loadTeamFile } from '../file/load.ts';
+import type { LoadResult } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
+import { grantGate, logGranted, type GrantVerdict } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
-import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
+import { approvalStanding, approvedCopy, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { version } from '../version.ts';
 import { realSources as doctorSources, type DoctorSources } from './doctor.ts';
+
+export type InitSources = Pick<DoctorSources, 'loggedIn'> & {
+  grantGate?: typeof grantGate;
+  logGranted?: typeof logGranted;
+};
 
 // What git must never pick up: the file and the runtime files beside it — the broker's start
 // files included: the lock, its takeover claim (a killed claim-holder can leave it), and the
@@ -135,6 +143,71 @@ export default init;
 
 export const USAGE = 'Usage: team init [--restore]\n';
 
+/**
+ * Evaluates the grant when a non-owner runs `team init`. Because `init` runs to create or
+ * `--restore` `.agents/team.yaml`, the file on disk in `root` is ordinarily absent. The gate
+ * checks in order:
+ * 1. `<root>/.agents/team.yaml` on disk, when it exists and declares `grant:`
+ * 2. `<root>`'s approved copy in the store, when it exists and declares `grant:`
+ * 3. the team file this caller's pane was launched from (`launchedTeamFile`), when it declares `grant:`
+ * Returns `null` when no grant is in play, leaving today's `init.not-owner` refusal unchanged.
+ */
+function grantForInit(
+  root: string | null,
+  io: Io,
+  home: string | undefined,
+  readStanding?: (root: string) => Standing,
+  gate: typeof grantGate = grantGate,
+): GrantVerdict | null {
+  const standingSource = readStanding ? { standing: readStanding } : {};
+  if (root !== null) {
+    const filePath = join(root, TEAM_FILE);
+    if (existsSync(filePath)) {
+      const loaded = loadTeamFile(root, home === undefined ? {} : { home });
+      if (loaded.ok && loaded.team.grant !== null) {
+        return gate({
+          act: 'init',
+          io: { ...io, cwd: root },
+          home,
+          sources: { load: () => loaded, ...standingSource },
+        });
+      }
+    } else {
+      const copy = home === undefined ? approvedCopy(root) : approvedCopy(root, home);
+      const validated = copy === null ? null : validateTeamFile(copy, { home, root });
+      if (validated && validated.ok && validated.team.grant !== null) {
+        const synthesized: LoadResult = {
+          ok: true,
+          path: filePath,
+          root,
+          text: copy!,
+          team: validated.team,
+          warnings: validated.warnings,
+        };
+        return gate({
+          act: 'init',
+          io: { ...io, cwd: root },
+          home,
+          sources: { load: () => synthesized, ...standingSource },
+        });
+      }
+    }
+  }
+  const launched = launchedTeamFile(io, home);
+  if (launched !== undefined) {
+    const loaded = loadTeamFile(io.cwd, { file: launched, ...(home === undefined ? {} : { home }) });
+    if (loaded.ok && loaded.team.grant !== null) {
+      return gate({
+        act: 'init',
+        io: { ...io, cwd: loaded.root },
+        home,
+        sources: { load: () => loaded, ...standingSource },
+      });
+    }
+  }
+  return null;
+}
+
 // `home` is where the user-level store is looked for; tests hand in a temporary one.
 // `readStanding` stands in for the store's one read, so a test can count it or swap the
 // record after the gate. `sources` is the one machine read the skeleton needs: which CLI the
@@ -144,7 +217,7 @@ export async function runInit(
   io: Io,
   home?: string,
   readStanding?: (root: string) => Standing,
-  sources: Pick<DoctorSources, 'loggedIn'> = doctorSources,
+  sources: InitSources = doctorSources,
 ): Promise<number> {
   const args = readArgs(argv, [], ['restore']);
   if (args.error || args.rest.length) {
@@ -159,12 +232,28 @@ export async function runInit(
     // exit: init.detached
     return 1;
   }
-  if (!isOwner(caller)) {
-    io.stderr(`team init: only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
-    // exit: init.not-owner
-    return 1;
-  }
   const root = findRoot(io.cwd);
+  let grantedSeat: string | null = null;
+  if (!isOwner(caller)) {
+    const verdict = grantForInit(root, io, home, readStanding, sources.grantGate ?? grantGate);
+    if (verdict === null) {
+      io.stderr(`team init: only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
+      // exit: init.not-owner
+      return 1;
+    }
+    if (verdict.kind === 'refused') {
+      io.stderr(`team init: ${verdict.text}\n`);
+      // exit: init.grant-another-pane
+      // exit: init.grant-approval
+      // exit: init.grant-approved-copy
+      // exit: init.grant-caller
+      // exit: init.grant-drift
+      // exit: init.grant-no-pane
+      // exit: init.grant-scope
+      return 1;
+    }
+    grantedSeat = verdict.grant.seat;
+  }
   if (!root) {
     io.stderr('team init: not inside a git repository\n');
     // exit: init.not-a-repo
@@ -219,6 +308,7 @@ export async function runInit(
   const added = exclude(root);
   writeFileSync(path, text, { flag: 'wx' });
   const what = args.flags.has('restore') ? 'restored the approved copy' : 'wrote a skeleton';
+  if (grantedSeat !== null) (sources.logGranted ?? logGranted)(dirname(path), grantedSeat, 'init');
   logLine(dirname(path), 'init', describeCaller(caller), `${what} as ${TEAM_FILE}; excluded ${added.length} path(s)`);
   io.stdout(args.flags.has('restore')
     ? `Restored ${TEAM_FILE} from the copy you last approved on this machine.\n\n${PRIVACY}\n`
