@@ -65,6 +65,7 @@ import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const owner = { kind: 'owner' } as const;
+const detachedCaller = { kind: 'owner-no-tty' } as const;
 const other = { kind: 'seat', name: 'other', pane: 'w9:p1' } as const;
 const leadSeat = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' } as const;
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
@@ -3277,6 +3278,22 @@ scene('mcp.invocation', async (place) => show(await mcpRan(place, []), 'a subcom
 // CLIs this version knows, and every one of them now has a launch profile, so no team file can
 // reach the refusals — they stand, rows and exit sites whole, for a CLI listed before its profile
 // ships, which is the state grok itself was in until now.
+const SENTENCE = 'only the owner runs this, from a terminal outside herdr';
+scene('add.detached', async (place) => show(await added(place, ['worker'], detachedCaller, addSources(place)), SENTENCE));
+scene('answer.detached', async (place) => show(await answered(place, ['lead', 'trust'], detachedCaller, answerHost(place, '')), SENTENCE));
+scene('approve.detached', async (place) => {
+  write(place, TEAM);
+  return show(await approved(place, [], detachedCaller, approveSources(place, '1')), SENTENCE);
+});
+scene('broker.detached', async (place) => show(await brokered(place, [], { keyReader: okKey }, detachedCaller), SENTENCE));
+scene('down.detached', async (place) => show(await down(place, [], detachedCaller, downSources()), SENTENCE));
+scene('init.detached', async (place) => show(await initial(place, [], detachedCaller), SENTENCE));
+scene('remove.detached', async (place) => show(await removed(place, ['worker'], detachedCaller, downSources()), SENTENCE));
+scene('send.detached', async (place) => show(await sent(place, ['--list'], detachedCaller, sendHost(place)), SENTENCE));
+scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), SENTENCE));
+scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), SENTENCE));
+scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), SENTENCE));
+
 const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'approve.revalidate', 'approve.placed', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
 
 const contract = loadContract();

@@ -141,11 +141,11 @@ describe('the caller is placed by its parent processes', () => {
 });
 
 describe('the classes read apart', () => {
-  test('isOwner stays the terminal case; mayLaunchSeats is the one that includes owner-no-tty', () => {
+  test('isOwner and mayLaunchSeats are the owner at a terminal', () => {
     expect(isOwner({ kind: 'owner' })).toBe(true);
     expect(isOwner({ kind: 'owner-no-tty' })).toBe(false);
     expect(mayLaunchSeats({ kind: 'owner' })).toBe(true);
-    expect(mayLaunchSeats({ kind: 'owner-no-tty' })).toBe(true);
+    expect(mayLaunchSeats({ kind: 'owner-no-tty' })).toBe(false);
     expect(mayLaunchSeats({ kind: 'unplaced', reason: 'x' })).toBe(false);
     expect(isOwner({ kind: 'pane', pane: 'w9:p1', session: 'main' })).toBe(false);
     expect(mayLaunchSeats({ kind: 'pane', pane: 'w9:p1', session: 'main' })).toBe(false);
@@ -154,9 +154,6 @@ describe('the classes read apart', () => {
   test('the log bracket is owner for both; a refusal reads as main\'s unplaced line', () => {
     expect(callerLabel({ kind: 'owner' })).toBe('owner');
     expect(callerLabel({ kind: 'owner-no-tty' })).toBe('owner');
-    // Byte-identical to main, where every caller without a terminal — owner or not — was refused
-    // as `unplaced` with this reason. `up` alone may now run for it; the refusal of every other
-    // command must not change shape for a script that reads it.
     expect(describeCaller({ kind: 'owner-no-tty' })).toBe('unplaced (it doesn\'t run on a terminal)');
     expect(describeCaller({ kind: 'pane', pane: 'w9:p1', session: 'main' })).toBe('it runs in pane main/w9:p1, which no grant lists');
     expect(describeCaller({ kind: 'pane', pane: 'w9:p1' })).toBe('it runs in pane w9:p1');
