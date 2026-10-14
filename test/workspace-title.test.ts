@@ -299,7 +299,8 @@ describe('the live line', () => {
     expect(liveDisplayAgent(cursor, '  Grok 4.7 256K High').line).toBe('Grok 4.7 high');
     expect(liveDisplayAgent(cursor, '  Grok 4.7 256K Extra High  Run Everything').line).toBe('Grok 4.7 xhigh');
     const agy = { cli: 'antigravity', model: 'Gemini Flash', version: '3.8', display: 'Gemini 3.8 Flash' };
-    expect(liveDisplayAgent(agy, 'Gemini 4 Argon · medium').line).toBe('Gemini 3.8 Flash medium');
+    expect(liveDisplayAgent(agy, 'Gemini 4 Argon · medium').line).toBe('Gemini Argon 4 medium');
+    expect(liveDisplayAgent(agy, 'Gemini 9 Mystery · medium').line).toBe('Gemini 3.8 Flash medium');
   });
 
   test('a screen with no effort word keeps the last word this process saw', () => {

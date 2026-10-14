@@ -1,0 +1,22 @@
+
+  main <workspace>     21K / 256K │ [Dashboard]
+
+
+     ❯ Create a file named synthetic-      5:15 PM
+       note.txt containing only the word
+       synthetic, but stop and ask me to
+       approve before you write it.                  █
+
+   ◆ Waiting on answers for Ap…   5.5s ⇣21.1k [stop]
+
+  ┃
+  ┃  Approve writing synthetic-note.txt with only
+  ┃  the word synthetic?
+  ┃
+  ┃
+  ┃  z (○) Type your answer here
+  ┃
+  ┃  ↑/↓ navigate · y copy          Enter:submit
+  ┃
+
+  Tab:next answer  │  Esc:scrollback  │  Shift+x:
