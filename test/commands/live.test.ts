@@ -6358,6 +6358,8 @@ describe('team up, a ready seat whose model drifted', () => {
     const ran = await dry(fileModel(terra()));
     expect(ran.code).toBe(0);
     expect(ran.out).toContain('skip codex-acme: already ready; left as it is');
+    expect(ran.out).toContain('workspace rename w92');
+    expect(ran.out).toContain("display-agent 'GPT-6 Sol default'");
     expect(ran.out).not.toContain('workspace close w92');
   });
 
