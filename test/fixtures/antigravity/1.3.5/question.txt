@@ -1,0 +1,23 @@
+> Run the command ls and wait for approval. Do not
+  write any file.
+
+● Ran (ls) (ctrl+o to expand)
+
+───────────────────────────────────────────────────
+> Use your question tool to ask me to choose between
+  the names alpha and beta before doing anything
+  else. Do not read or write any file.
+
+? Which name would you like to choose?
+
+Question
+──────────────────────────────────────────────────────
+
+Question 1/1: Which name would you like to choose?
+
+> 1. alpha
+  2. beta
+  3. Write-in...
+
+  ↑/↓ Navigate · enter Select · esc Skip
+esc to cancel                  Gemini 4 Argon · medium

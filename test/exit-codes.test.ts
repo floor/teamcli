@@ -894,6 +894,59 @@ scene('approve.delegate-approval', async (place) => {
   return show(await approved(place, [], other, approveSources(place, null)), 'delegation needs a verified approval');
 });
 
+// The grant's refusals of `approve`. The gate is the real one, asked when the file lists `grant`
+// and the ordinary rule has refused. A file that omits `grant` is not these scenes.
+const GRANT_APPROVE = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - approve\n`;
+const GRANT_UP_ONLY = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - up\n`;
+
+function grantApprove(place: Place, over: GrantSources = {}): Partial<ApproveSources> {
+  return { grantGate: (input) => grantGate({ ...input, sources: over }) };
+}
+
+scene('approve.grant-approval', async (place) => {
+  write(place, GRANT_APPROVE);
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'a grant needs a verified approval');
+});
+scene('approve.grant-approved-copy', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  return show(await approved(place, [], leadSeat, approveSources(place, null, place.home, 'empty', grantApprove(place, { approvedCopy: () => null }))), 'a grant needs a readable approved copy');
+});
+scene('approve.grant-not-ordinary', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  const side = join(place.base, 'side');
+  mkdirSync(side);
+  write(place, readFileSync(place.file, 'utf8').replace(`  - ${place.root}`, `  - ${place.root}\n  - ${side}`));
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'this change needs the owner');
+});
+scene('approve.grant-caller', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  return show(await approved(place, [], other, approveSources(place, null)), 'only the seat the grant names');
+});
+scene('approve.grant-no-pane', async (place) => {
+  approve(place, GRANT_APPROVE);
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'no pane is recorded for seat lead');
+});
+scene('approve.grant-another-pane', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w2:p1');
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'the state records pane w2:p1 for seat lead');
+});
+scene('approve.grant-scope', async (place) => {
+  approve(place, GRANT_UP_ONLY);
+  recordLead(place, 'w1:p1');
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'the grant does not list `approve`');
+});
+scene('approve.grant-flag', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  const foreign = join(place.base, 'other.yaml');
+  writeFileSync(foreign, 'format: [\n');
+  return show(await approved(place, ['--file', foreign], leadSeat, approveSources(place, null)), "--file is the owner's; the granted seat cannot use it");
+});
+
 async function checked(place: Place, argv: string[], caller: Caller, sources: CheckSources): Promise<Ran> {
   const io = testIo(place.root, caller);
   return { code: await check(argv, io, loader(place), sources), out: io.out, err: io.err };

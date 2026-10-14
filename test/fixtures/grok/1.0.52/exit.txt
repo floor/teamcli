@@ -1,0 +1,10 @@
+❯ grok
+
+Sleep then ask alpha versus beta
+> Before doing anything else, ask me to choose betwe…
+  You declined to choose between alpha and beta, so …
+
+Resume this session with:
+  grok --resume <session-id>
+<workspace> main      3m 51s 17:13:55
+❯

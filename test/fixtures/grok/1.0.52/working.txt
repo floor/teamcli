@@ -1,0 +1,22 @@
+
+  main <workspace>   20K / 256K │ [Dashboard]
+
+
+     ❯ Run sleep 12 in the shell, then    5:11 PM
+       reply only SLEEP_DONE. Do not
+       read or write any file.
+
+
+     ◈ Ran sleep for 12 seconds
+
+
+
+
+
+   ⠸ Waiting for response…        16s ⇣20.7k [stop]
+
+  ╭───────────────────────────────────────────────╮
+  │ ❯                                             │
+  ╰──────────── Grok 4.7 (high) · always-approve ─╯
+
+  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+.:

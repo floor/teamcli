@@ -25,6 +25,7 @@ import {
   daemonSocketPath,
   MAX_QUEUE_DEPTH,
   probeDaemonSocket,
+  requestDaemon,
   startSendDaemon,
   stopSendDaemon,
   type DaemonHost,
@@ -696,4 +697,60 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(host.typed[0]?.text ?? null).toBe(triggerLine(dropFile));
     expect(readFileSync(dropFile, 'utf8')).toBe('stored in state drops');
   });
+
+  test('refuses cross-session and non-orchestrator requests, and recovers cleanly if a throw occurs mid-delivery', async () => {
+    const w = setupWorld();
+    let shouldThrow = true;
+    const host = makeHost(w, {
+      native: {
+        typeText: (_s, pane, text) => {
+          if (shouldThrow) {
+            shouldThrow = false;
+            throw new Error('simulated mid-delivery crash');
+          }
+          host.typed.push({ pane, text });
+          return true;
+        },
+        pressEnter: (_s, pane) => {
+          host.enters.push(pane);
+          return true;
+        },
+        status: () => (host.enters.length > 0 ? 'working' : 'idle'),
+        wait: async () => {},
+      },
+    });
+
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    const crossSession = await requestDaemon(started.handle.socketPath, {
+      v: 1,
+      op: 'send',
+      session: 'other-session',
+      from: 'owner',
+      to: 'helper',
+      body: 'wrong session',
+    });
+    expect(crossSession && 'outcome' in crossSession ? crossSession.outcome : null).toBe('refused');
+
+    const workerSend = await requestDaemon(started.handle.socketPath, {
+      v: 1,
+      op: 'send',
+      from: 'helper',
+      to: 'native',
+      body: 'worker cannot send',
+    });
+    expect(workerSend && 'outcome' in workerSend ? workerSend.outcome : null).toBe('refused');
+
+    // First send throws inside typeText: Enter is never pressed, seat lock is released, and next send succeeds
+    const io1 = ownerIo(w.root);
+    expect(await runSend(['native', 'crash mid delivery'], io1, host)).toBe(1);
+    expect(host.enters).toEqual([]);
+
+    const io2 = ownerIo(w.root);
+    expect(await runSend(['native', 'recovers cleanly'], io2, host)).toBe(0);
+    expect(io2.out).toBe('native: delivered\n');
+  });
 });
+
