@@ -279,12 +279,15 @@ Hidden: no
 
 Usage:
 
-    team feed [--seat <name>] [--limit <n>] [--follow] [--json]
+    team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--audit` | yes | no | no |
+| `--briefs` | yes | no | no |
 | `--follow` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |

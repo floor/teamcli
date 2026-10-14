@@ -458,6 +458,24 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--audit",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--briefs",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--follow",
           "repeatable": false,
           "takesValue": false
@@ -498,7 +516,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team feed [--seat <name>] [--limit <n>] [--follow] [--json]"
+        "team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]"
       ]
     },
     {

@@ -88,6 +88,7 @@ export type DaemonSendRequest = {
   v: 1;
   op: 'send';
   id?: string;
+  session?: string;
   from: string;
   to: string;
   body: string;
@@ -477,15 +478,46 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     if (!queue) return;
     while (queue.length > 0) {
       const item = queue.shift()!;
-      const response = await executeQueuedSend(input.dir, input.root, input.team, host, item.request, alive);
-      item.resolve(response);
+      try {
+        const response = await executeQueuedSend(input.dir, input.root, input.team, host, item.request, alive);
+        item.resolve(response);
+      } catch {
+        item.resolve({
+          v: 1,
+          ok: false,
+          id: item.request.id ?? null,
+          seat: seatName,
+          outcome: 'unreachable',
+          detail: 'delivery interrupted before completion; nothing further was pressed',
+        });
+      }
     }
     queues.delete(seatName);
     activeWorkers.delete(seatName);
   };
 
   const enqueueSend = (request: DaemonSendRequest): Promise<DaemonSendResponse> => {
-    const seatName = request.to;
+    const seatName = typeof request.to === 'string' ? request.to : '';
+    if (request.session !== undefined && request.session !== input.team.session) {
+      return Promise.resolve({
+        v: 1,
+        ok: false,
+        id: null,
+        seat: seatName,
+        outcome: 'refused',
+        detail: `${seatName}: session "${request.session}" does not belong to this project's session "${input.team.session}"; nothing was sent`,
+      });
+    }
+    if (request.from !== 'owner' && request.from !== input.team.orchestrator) {
+      return Promise.resolve({
+        v: 1,
+        ok: false,
+        id: null,
+        seat: seatName,
+        outcome: 'refused',
+        detail: `a seat may not send (${String(request.from)}): only the owner, or the orchestrator from its own seat, can send`,
+      });
+    }
     const configured = input.team.seats.find((s) => s.name === seatName);
     if (!configured) {
       const names = input.team.seats.map((s) => s.name);
@@ -846,46 +878,52 @@ async function executeQueuedSend(
   let lock: { release(): void } | null = null;
   let beforeStatus: string | null = null;
 
-  for (;;) {
-    const remaining = Math.max(0, deadline - Date.now());
-    const acquired = await acquireSeatLockWithRetry(
-      dir,
-      team.session,
-      seatName,
-      remaining,
-      pollMs,
-      (ms) => host.native.wait(ms),
-      alive,
-    );
-    if (!acquired.ok) {
-      return recordHeld(`another command holds the seat (pid ${String(acquired.held)}); the drop file is at ${dropPath}`);
-    }
-    lock = acquired;
-
-    if (isBareShellPane(dir, team.session, seatName, host.processInfo(team.session, pane))) {
-      lock.release();
-      return recordUnreachable('the seat is back at its shell; nothing was typed');
-    }
-
-    const status = host.native.status(team.session, pane);
-    if (status === null) {
-      lock.release();
-      return recordUnreachable(`the seat's status could not be read; the drop file is at ${dropPath}`);
-    }
-
-    const rawScreen = host.native.paneText?.(team.session, pane) ?? null;
-    if (rawScreen !== null) {
-      const dialog = dialogKind(configured.cli, rawScreen);
-      if (dialog !== null) {
-        lock.release();
-        return recordHeld(`the screen reads ${dialog}; the drop file is at ${dropPath}`);
+  try {
+    for (;;) {
+      const remaining = Math.max(0, deadline - Date.now());
+      const acquired = await acquireSeatLockWithRetry(
+        dir,
+        team.session,
+        seatName,
+        remaining,
+        pollMs,
+        (ms) => host.native.wait(ms),
+        alive,
+      );
+      if (!acquired.ok) {
+        return recordHeld(`another command holds the seat (pid ${String(acquired.held)}); the drop file is at ${dropPath}`);
       }
-      const screenKind = readScreen(configured.cli, rawScreen).kind;
-      if (screenKind === 'unsent' && !boxHoldsText(configured.cli, trigger, rawScreen)) {
-        lock.release();
-        return recordHeld(`the composer already holds unsent text; the drop file is at ${dropPath}`);
+      lock = acquired;
+
+      if (isBareShellPane(dir, team.session, seatName, host.processInfo(team.session, pane))) {
+        return recordUnreachable('the seat is back at its shell; nothing was typed');
       }
-      if (status === 'working' || screenKind === 'working') {
+
+      const status = host.native.status(team.session, pane);
+      if (status === null) {
+        return recordUnreachable(`the seat's status could not be read; the drop file is at ${dropPath}`);
+      }
+
+      const rawScreen = host.native.paneText?.(team.session, pane) ?? null;
+      if (rawScreen !== null) {
+        const dialog = dialogKind(configured.cli, rawScreen);
+        if (dialog !== null) {
+          return recordHeld(`the screen reads ${dialog}; the drop file is at ${dropPath}`);
+        }
+        const screenKind = readScreen(configured.cli, rawScreen).kind;
+        if (screenKind === 'unsent' && !boxHoldsText(configured.cli, trigger, rawScreen)) {
+          return recordHeld(`the composer already holds unsent text; the drop file is at ${dropPath}`);
+        }
+        if (status === 'working' || screenKind === 'working') {
+          lock.release();
+          lock = null;
+          if (Date.now() >= deadline) {
+            return recordHeld(`the seat is working; the drop file is at ${dropPath}`);
+          }
+          await host.native.wait(pollMs);
+          continue;
+        }
+      } else if (status === 'working') {
         lock.release();
         lock = null;
         if (Date.now() >= deadline) {
@@ -894,21 +932,11 @@ async function executeQueuedSend(
         await host.native.wait(pollMs);
         continue;
       }
-    } else if (status === 'working') {
-      lock.release();
-      lock = null;
-      if (Date.now() >= deadline) {
-        return recordHeld(`the seat is working; the drop file is at ${dropPath}`);
-      }
-      await host.native.wait(pollMs);
-      continue;
+
+      beforeStatus = status;
+      break;
     }
 
-    beforeStatus = status;
-    break;
-  }
-
-  try {
     if (!host.native.typeText(team.session, pane, trigger)) {
       return recordUnreachable(`the pane did not take the trigger; the drop file is at ${dropPath}`);
     }
@@ -1007,6 +1035,8 @@ async function executeQueuedSend(
       status: submittedStatus,
       drop_path: dropPath,
     };
+  } catch {
+    return recordUnreachable(`delivery interrupted before completion; the drop file is at ${dropPath}`);
   } finally {
     lock?.release();
   }
