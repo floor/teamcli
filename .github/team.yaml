@@ -143,6 +143,15 @@ seats:
     display: Grok 4.7
     launch: cursor-agent
 
+  - role: builder
+    name: gemini-builder
+    cli: antigravity
+    vendor: google
+    model: Gemini Argon
+    version: "4"
+    display: Gemini 4 Argon
+    launch: agy
+
   - role: operator
     name: operator
     cli: antigravity

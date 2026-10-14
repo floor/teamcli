@@ -23,6 +23,7 @@ import { mayReadTeam } from '../read-gate.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
+import { renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
 
 // What `status` reads from outside the file and the state, so tests can stand in for it.
 export type StatusSources = {
@@ -109,10 +110,15 @@ export interface StatusJson {
   session: string;
   rows: Array<{
     name: string;
-    id?: string;
+    id?: string | null;
+    role?: string;
+    cli?: string;
     state: string;
     model: string;
+    effort?: string | null;
+    last_active?: string | null;
     pane: string;
+    launch_line?: string | null;
     start_cwd?: string;
   }>;
   notes: string[];
@@ -125,10 +131,10 @@ export interface StatusJson {
   budgets?: BudgetRow[];
 }
 
-export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--json]\n';
+export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n';
 
 export async function runStatus(argv: string[], io: Io, sources: StatusSources): Promise<number> {
-  const args = readArgs(argv, ['session', 'file'], ['json']);
+  const args = readArgs(argv, ['session', 'file'], ['all', 'json']);
   if (args.error || args.rest.length) {
     io.stderr(`team status: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
     // exit: status.invocation
@@ -187,8 +193,12 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // exit: status.herdr
     return 2;
   }
-  const budgets = budgetTable(budgetsInForceOf(standing, team), recall(whole.budgets), sources.now().getTime());
-  const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team));
+  const now = sources.now();
+  const budgets = budgetTable(budgetsInForceOf(standing, team), recall(whole.budgets), now.getTime());
+  const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
+  const all = args.flags.has('all');
+  const registryRows = all ? seatRegistryRows(team, state, live, comparison, now, true) : undefined;
+  const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
   if (standing.kind === 'verified') {
     const key = sources.home ? keyState(sources.home) : { kind: 'missing' as const };
     const ofKey = key.kind === 'key' ? `, key ${keyFingerprint(key.key)}` : '';
@@ -217,14 +227,20 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       format: 1,
       project: team.project,
       session,
-      rows: comparison.rows.map((row) => ({
-        name: row.name,
-        ...(row.id ? { id: row.id } : {}),
-        state: row.stored ?? row.state,
-        model: row.model,
-        pane: row.pane,
-        ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
-      })),
+      rows: comparison.rows.map((row) => {
+        const extra = registryByName?.get(row.name);
+        return {
+          name: row.name,
+          ...(extra ? { id: extra.id } : row.id ? { id: row.id } : {}),
+          ...(extra ? { role: extra.role, cli: extra.cli } : {}),
+          state: row.stored ?? row.state,
+          model: row.model,
+          ...(extra ? { effort: extra.effort, last_active: extra.last_active } : {}),
+          pane: row.pane,
+          ...(extra ? { launch_line: extra.launch_line } : {}),
+          ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
+        };
+      }),
       notes: comparison.notes,
       // Format 1: the extra facts a difference carries (needs/owner/approval) are for the
       // renderer, not the document.
@@ -234,7 +250,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     };
     io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
   } else {
-    io.stdout(render(team, session, comparison, budgets));
+    io.stdout(render(team, session, comparison, budgets, registryRows));
   }
   // exit: status.agrees
   // exit: status.difference
@@ -316,16 +332,26 @@ export function protectedCheckouts(team: TeamFile, root: string, sources: { bran
   return out;
 }
 
-function render(team: TeamFile, session: string, comparison: Comparison, budgets: BudgetRow[]): string {
+function render(
+  team: TeamFile,
+  session: string,
+  comparison: Comparison,
+  budgets: BudgetRow[],
+  registryRows?: SeatRegistryRow[],
+): string {
   const lines = [`team ${team.project}, session "${session}"`];
-  const widths = [0, 0, 0];
-  for (const row of comparison.rows) {
-    widths[0] = Math.max(widths[0] as number, row.name.length);
-    widths[1] = Math.max(widths[1] as number, row.state.length);
-    widths[2] = Math.max(widths[2] as number, row.model.length);
-  }
-  for (const row of comparison.rows) {
-    lines.push(`  ${row.name.padEnd(widths[0] as number)}  ${row.state.padEnd(widths[1] as number)}  ${row.model.padEnd(widths[2] as number)}  ${row.pane}`.trimEnd());
+  if (registryRows) {
+    lines.push(...renderSeatsTable(registryRows, '  ').trimEnd().split('\n'));
+  } else {
+    const widths = [0, 0, 0];
+    for (const row of comparison.rows) {
+      widths[0] = Math.max(widths[0] as number, row.name.length);
+      widths[1] = Math.max(widths[1] as number, row.state.length);
+      widths[2] = Math.max(widths[2] as number, row.model.length);
+    }
+    for (const row of comparison.rows) {
+      lines.push(`  ${row.name.padEnd(widths[0] as number)}  ${row.state.padEnd(widths[1] as number)}  ${row.model.padEnd(widths[2] as number)}  ${row.pane}`.trimEnd());
+    }
   }
   if (budgets.length) {
     lines.push('budgets:');
