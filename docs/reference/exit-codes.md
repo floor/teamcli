@@ -310,8 +310,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
-| `send.timeout` | `send` | 1 | delivered, but the seat's reply did not arrive in the window | `team send worker hello --wait --timeout 10` |
-| `send.unreachable` | `send` | 1 | the seat's channel is not open | `team send worker hello` |
+| `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
+| `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
 | `send.configuration` | `send` | 2 | the team file can't be read | `team send worker hello --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |

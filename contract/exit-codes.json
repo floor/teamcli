@@ -2133,14 +2133,14 @@
       "code": 1,
       "command": "send",
       "id": "send.timeout",
-      "meaning": "delivered, but the seat's reply did not arrive in the window",
+      "meaning": "sent on the socket, but no reply within the window",
       "trigger": "team send worker hello --wait --timeout 10"
     },
     {
       "code": 1,
       "command": "send",
       "id": "send.unreachable",
-      "meaning": "the seat's channel is not open",
+      "meaning": "the seat was not reached",
       "trigger": "team send worker hello"
     },
     {
