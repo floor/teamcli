@@ -375,13 +375,26 @@ function seatPlan(
   const asked = agents !== null;
   if (!resume || !recorded || seat.stopped) return planned;
   // §5: a seat recorded waiting takes precedence over everything below. Its recorded pane and
-  // workspace are reused — never launched again — whatever the process verdict says: the pause
-  // reads the pane fresh and verifies it before doing anything, and a pane that is gone is a
-  // fail-closed refusal there, not a reason to create another workspace.
+  // workspace are reused — never launched again — while the host still lists that pane: the
+  // pause reads it fresh and verifies it before doing anything. A pane the host no longer
+  // lists is not that refusal: a fresh workspace is made and the seat launches. A recorded
+  // workspace the host still lists is named on that line and left. A pane the host still
+  // lists, including one whose process this run cannot account for, is never closed or
+  // recreated.
   if (recorded.waiting) {
-    // The pane is herdr's one agent of this seat's name. The pane the state records selects
-    // nothing: a waiting seat with no such agent, or with two, is left out and not launched.
     const named = known.filter((agent) => agent.name === seat.name);
+    const paneListed = recorded.pane !== undefined && known.some((agent) => agent.pane === recorded.pane);
+    if (named.length === 0 && recorded.pane && !paneListed) {
+      // The old workspace stays when the host still lists it. A listed workspace still holds
+      // a pane — herdr closes a workspace with its last pane — so it is named, not closed.
+      const leftWorkspace = recorded.workspace !== undefined
+        && workspaces?.some((item) => item.id === recorded.workspace)
+        ? recorded.workspace
+        : undefined;
+      return { ...planned, replacedPane: recorded.pane, ...(leftWorkspace ? { leftWorkspace } : {}) };
+    }
+    // The pane is herdr's one agent of this seat's name. No such agent, or two, is left out
+    // and not launched: the recorded pane is still listed, or the name is ambiguous.
     const live = named.length === 1 ? named[0] : undefined;
     return {
       ...planned,
