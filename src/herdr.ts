@@ -12,6 +12,8 @@ export type HerdrAgent = {
   workspace: string;
   status: string;
   cwd: string | null;
+  /** Herdr's `agent_session`, when the integration reported one. Absent when it did not. */
+  session?: string;
 };
 
 export type HerdrRun = (args: string[], session?: string) => unknown;
@@ -31,14 +33,18 @@ function run(args: string[], session?: string): unknown {
 export function agentList(session?: string): HerdrAgent[] | null {
   try {
     const result = run(['agent', 'list'], session) as { agents?: Record<string, unknown>[] };
-    return (result.agents ?? []).map((agent) => ({
-      name: typeof agent.name === 'string' && agent.name ? agent.name : null,
-      agent: typeof agent.agent === 'string' ? agent.agent : null,
-      pane: String(agent.pane_id),
-      workspace: String(agent.workspace_id),
-      status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
-      cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
-    }));
+    return (result.agents ?? []).map((agent) => {
+      const session = typeof agent.agent_session === 'string' && agent.agent_session ? agent.agent_session : undefined;
+      return {
+        name: typeof agent.name === 'string' && agent.name ? agent.name : null,
+        agent: typeof agent.agent === 'string' ? agent.agent : null,
+        pane: String(agent.pane_id),
+        workspace: String(agent.workspace_id),
+        status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
+        cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
+        ...(session ? { session } : {}),
+      };
+    });
   } catch {
     return null;
   }

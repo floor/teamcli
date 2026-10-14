@@ -298,6 +298,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.session-doubt",
+      "meaning": "the pane holds a process the record cannot tie to the launch",
+      "trigger": "team add worker"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.session-owner",
       "meaning": "--session is the owner's",
       "trigger": "team add worker --session other"

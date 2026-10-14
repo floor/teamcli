@@ -9,7 +9,7 @@ import type { TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
-import { seatProcessVerdict } from '../launch/identity.ts';
+import { replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
 import type { SessionState } from '../state.ts';
@@ -281,6 +281,7 @@ export function pass({
         account,
         quota: [],
         identity: 'unknown',
+        continuity: 'other',
         running: false,
         recorded: state.seats[name]?.stage,
         quiet: false,
@@ -315,6 +316,7 @@ export function pass({
       history.idleSince ??= now;
     }
 
+    const verdict = seatProcessVerdict(state.seats[name]?.launched, processes?.[agent.pane] ?? null);
     observations.push({
       name,
       seat,
@@ -325,7 +327,13 @@ export function pass({
       vendor,
       account,
       quota: quotaOf(cli, screen, pane, reportedLiveAgent(foreground?.[agent.pane] ?? null, profileFor(cli)?.processNames ?? []), patternsOf(cli)),
-      identity: seatProcessVerdict(state.seats[name]?.launched, processes?.[agent.pane] ?? null),
+      identity: verdict,
+      continuity: replacedSeat(verdict, {
+        asked: true,
+        namedOnPane: state.seats[name]?.pane === agent.pane,
+        recordedSession: state.seats[name]?.agent_session,
+        liveSession: agent.session,
+      }),
       running: true,
       recorded: state.seats[name]?.stage,
       quiet,
