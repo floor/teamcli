@@ -1,11 +1,14 @@
 # `team worktree`: rationale and known limits
 
-What moved off [the `team worktree` page](../commands/worktree.md): what the two
+What moved off [the `team worktree` page](../commands/worktree.md): what the
 subcommands read and write, how far the approved copy reaches, the behaviour behind the
 lines they print, the refusals in their own words, and the known limits. The synopsis, the
-flags, the caller table and the exit codes stay on the page.
+flags, the caller table and the exit codes stay on the page. `list` prints every recorded
+worktree in this state file — the same rows the limit counts — and writes nothing. A row
+whose folder is gone names `team worktree remove <task>`, which drops that record and
+prunes, and does not delete the branch.
 
-## What the two subcommands do
+## What new and remove do
 
 Creates and removes a task worktree: a second checkout of the project on a branch of its own, where
 one seat does one task. `new` cuts the branch from `workspace.base`, records the worktree in the
@@ -18,7 +21,7 @@ Reads the team file and this machine's approval store, the session's state
 (`.agents/team.state.json`), and git: the base branch, the branch names, and the worktree itself.
 With `--session`, the state of that session instead of `team.session`.
 
-Every value the two subcommands read from the file is the **approved copy's** while a verified
+Every value the subcommands read from the file is the **approved copy's** while a verified
 approval is in force, whatever the file says now and whether or not the fingerprints match:
 `workspace` (mode, path, branch, base, setup and limit), `trust`, the caller rules (`orchestrator`
 and `operator`), the session, the names a public project forbids, and the seats `--seat` may name.
@@ -78,8 +81,8 @@ and a process of the same user that writes its own pane there under the orchestr
 renames its pane, passes. The check guards a mistaken agent, not a hostile process running as the
 same user.
 `--file` and `--session` are the owner's alone, from a terminal outside herdr: a non-owner aiming
-either is refused before the flagged file or session is read at all. Both subcommands refuse the
-same way.
+either is refused before the flagged file or session is read at all. `list`, `new` and `remove` refuse
+the same way.
 
 ## Refusals
 
@@ -108,7 +111,7 @@ same way.
 | ``team worktree: seat <name> is not in the approved file: run `team approve` `` — a seat the file declares and the approved copy does not | 1 |
 | `team worktree: --seat "x" names no declared seat` | 1 |
 | `team worktree: "t" is already recorded` / `"t" is already recorded in session x` | 1 |
-| `team worktree: the worktree limit is 8, and 8 are open` | 1 |
+| `team worktree: the worktree limit is 8, and 8 are open (workspace.limit in the team file)` then one line per recorded worktree | 1 |
 | `team worktree: <folder> already exists` / `branch <b> already exists` / `<remote>/<b> already exists` | 1 |
 | `team worktree: "b" is not a branch name` | 1 |
 | `team worktree: workspace.base "main" is not a branch here; nothing was created` | 1 |

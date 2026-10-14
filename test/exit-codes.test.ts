@@ -1130,7 +1130,7 @@ scene('doctor.missing', async (place) => {
 
 async function down(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
   const io = testIo(place.root, caller);
-  return runCompared(place, argv, (args) => runDown(args, io, sources), io);
+  return runCompared(place, argv, (args) => runDown(args, io, { ...sources, home: sources.home ?? place.home }), io);
 }
 
 scene('down.invocation', async (place) => show(await down(place, ['extra'], owner, downSources()), 'unexpected'));
@@ -1385,7 +1385,7 @@ PATH=${JSON.stringify(saved)} exec git "$@"
 
 async function removed(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
   const io = testIo(place.root, caller);
-  return { code: await runRemove(argv, io, sources), out: io.out, err: io.err };
+  return { code: await runRemove(argv, io, { ...sources, home: sources.home ?? place.home }), out: io.out, err: io.err };
 }
 
 scene('remove.invocation', async (place) => show(await removed(place, [], owner, downSources()), 'a seat name is required'));
@@ -2160,6 +2160,10 @@ scene('worktree.created', async (place) => {
   approve(place, worktreeText());
   return show(await worktree(place, ['new', 'task', '--kind', 'fix']), '../worktrees/acme/task');
 });
+scene('worktree.listed', async (place) => {
+  approve(place, worktreeText());
+  return show(await worktree(place, ['list']), '0 open, limit');
+});
 scene('worktree.remove-task', async (place) => {
   approve(place, worktreeText());
   return show(await worktree(place, ['remove', '../task']), 'one segment');
@@ -2911,9 +2915,9 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
       return { ok: true };
     },
     native: {
-      typeText: () => false,
-      pressEnter: () => false,
-      status: () => null,
+      typeText: () => true,
+      pressEnter: () => true,
+      status: () => 'working',
       wait: async () => {},
     },
     now: () => NOW,
@@ -2985,7 +2989,7 @@ scene('send.delivered', async (place) => {
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the cross-session socket; nothing was sent');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written');
 });
 scene('send.answered', async (place) => {
   write(place, TEAM);
@@ -2993,7 +2997,7 @@ scene('send.answered', async (place) => {
 });
 scene('send.timeout', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--wait', '--timeout', '1'], owner, sendHost(place)), 'timeout: delivered, but no reply within 1s');
+  return show(await sent(place, ['lead', 'hello', '--wait', '--timeout', '1'], owner, sendHost(place)), 'timeout: sent, no reply within 1s');
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);

@@ -65,7 +65,7 @@ that proceeds is attributed in the log before its effects, as
 | --- | --- |
 | `--temporary` | start a seat the file does not declare, beside the team |
 | `--like <seat>` | the approved seat a temporary seat is a copy of: its CLI, model and launch |
-| `--until <end>` | what the temporary seat works for: `result:<path>` (a file it writes, relative to the project) or `merged:<branch>` (a branch merged into the base) |
+| `--until <end>` | what the temporary seat works for: `result:<path>` or `merged:<branch>`, as below |
 | `--worktree <task>` | the worktree the temporary seat is started in, instead of the seat's own `cwd` |
 | `--session <name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--dry-run` | print whether this seat would launch or be refused. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) |
@@ -73,6 +73,17 @@ that proceeds is attributed in the log before its effects, as
 | `--help`, `-h` | the usage, and exit 0 |
 
 The temporary seat's name is the `--like` seat's, with `-tmp-<n>`: the first `n` that is free.
+
+`--until` accepts one of two ends, and nothing else.
+
+`result:<path>` is a file the seat writes. The path is relative to the project root, read as
+written: an absolute form (`/…`, a drive path, or `~`) is refused, and so is any `..` segment,
+including one that would still land inside the project. That check does not follow a symlink.
+Whether the file exists is asked only after the path has been accepted, and that question does
+follow a link, so a link that already sits inside the project can name a file outside it.
+
+`merged:<branch>` is a branch merged into the base. The branch is a name `git check-ref-format --branch`
+accepts and prints back unchanged, and it cannot start with `-`.
 
 ## What it prints
 
@@ -156,8 +167,8 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | ``team add: session <session> is stopped; clear it with `herdr session delete <session>` `` | 1 |
 | `team add: session <session> runs, and its agents can't be read` | 1 |
 | `team add: --until is result:<path> or merged:<branch>` | 1 |
-| `team add: a result path is relative to the project` / `team add: <path> already exists` | 1 |
-| `team add: workspace.base is required to read a merged end` / `team add: branch <branch> doesn't exist` | 1 |
+| `team add: a result path is relative to the project` / `team add: <path> already exists` — the first is an absolute path, a `~` path, or any path with `..` | 1 |
+| `team add: workspace.base is required to read a merged end` / `team add: "<branch>" is not a branch name` / `team add: branch <branch> doesn't exist` | 1 |
 | `team add: no worktree named "<task>" is recorded` | 1 |
 | `team add: worktree <task> has a failed setup; team worktree remove <task>` | 1 |
 | ``team add: the file is legacy: migrate trust to absolute paths including the lobby ~/.config/team/lobby: ...`` | 1 |

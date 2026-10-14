@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { migrationText } from '../file/migrate.ts';
 import { insideTrust, isLegacyTrust, isMigratedTrust, protectedBy } from '../file/paths.ts';
+import { isLeadSeat } from '../file/sections/lead.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 
@@ -74,11 +75,12 @@ export function protectedLanding(root: string, folder: string, checkouts: readon
 /** Where a seat starts: the folder it waits in, or why it can't start. */
 export type SeatStart = { cwd: string; lobby?: true } | { problem: string; once?: true };
 
-// Where a seat starts. In a migrated file, every seat (shared and worktree-mode alike)
-// starts in the machine lobby ~/.config/team/lobby. In a legacy file, a shared seat starts
-// in its cwd, and a worktree seat starts in the old derived lobby.
+// Where a seat starts. In a migrated file, the orchestrator and the operator start in the
+// project root, and every other seat (shared and worktree-mode alike) starts in the resolved
+// lobby. In a legacy file, a shared seat starts in its cwd, and a worktree seat starts in the
+// old derived lobby.
 export function seatStart(
-  team: Pick<TeamFile, 'project' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string,
+  team: Pick<TeamFile, 'project' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string,
 ): SeatStart {
   if (!team.trust || team.trust.length === 0) {
     const lobby = resolveLobby(home, team);
@@ -151,6 +153,20 @@ export function seatStart(
             'worktrees never land in a protected checkout',
         };
       }
+    }
+    // `.` is this project, which is where a lead starts. The check is whether that root
+    // physically lands inside some other protected checkout.
+    if (isLeadSeat(team, seat.name)) {
+      const others = team.workspace.protected.filter((checkout) => checkout !== '.');
+      const hit = others.length > 0 ? protectedLanding(root, '.', others) : null;
+      if (hit) {
+        return {
+          problem:
+            `seat ${seat.name} would start in the project, inside the protected checkout ${hit}; ` +
+            'a lead never starts in one',
+        };
+      }
+      return { cwd: root };
     }
     return { cwd: verifiedLobby ?? resolveLobby(home, team), lobby: true };
   }

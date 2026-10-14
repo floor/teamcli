@@ -218,8 +218,8 @@ export function anotherPaneRefusal(name: string, recordedPane: string): string {
  * that file is read, so every state of the flagged path — no file at all, an unparsable file, a
  * valid team file, a folder, an unreadable file — answers with these same bytes and the same
  * exit, and nothing of the flagged project and no session is read. `undefined` when the flag is
- * absent or the walk places the owner. Every command whose `--file` writes or launches (add,
- * remove, worktree new / remove, answer, down, watch) asks this before it reads anything; it
+ * absent or the walk places the owner. Every command whose `--file` is the owner's (add,
+ * remove, worktree list / new / remove, answer, down, watch) asks this before it reads anything; it
  * lives here, beside `walkCaller`, so an eighth command cannot forget it. (The gate grew command
  * by command: `add`, `remove` and `worktree` once read the flagged file and asked the host for its
  * session before their own `--file` check; `watch` opened the flagged file and wrote its
