@@ -70,6 +70,9 @@ export type Op =
       /** Sidebar line 2, reported once this rename has named the seat. A failure is one line. */
       displayAgent?: string;
     }
+  /** A seat already running, painted from the file without typing into it or launching it again.
+   *  Line 1 is the workspace title; line 2 is display_agent. A failed call is one line. */
+  | { do: 'relabel'; seat: string; pane: string; workspace: string; title: string; displayAgent: string }
   | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string }
   | { do: 'ready'; seat: string; rules: 'option' | 'message'; notice?: string }
   | {
@@ -402,6 +405,23 @@ export function upPlan(input: UpInput): Step[] {
           },
         });
         continue;
+      }
+      // Seats launched before the sidebar took the file's lines still show the CLI or the role.
+      // Repaint both lines from the file. Nothing is typed, and the seat is not launched again.
+      if (seat.pane && seat.workspace && seat.displayAgent) {
+        steps.push({
+          kind: 'run',
+          argv: herdr(session, 'workspace', 'rename', seat.workspace, seat.label),
+          also: herdr(session, 'pane', 'report-metadata', seat.pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent),
+          do: {
+            do: 'relabel',
+            seat: seat.name,
+            pane: seat.pane,
+            workspace: seat.workspace,
+            title: seat.label,
+            displayAgent: seat.displayAgent,
+          },
+        });
       }
       steps.push({
         kind: 'skip',

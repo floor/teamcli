@@ -24,6 +24,7 @@ import {
   paneRead,
   paneRun,
   reportDisplayAgent,
+  workspaceRename,
   paneShellBack,
   sessionDelete,
   sessionStop,
@@ -117,6 +118,8 @@ export type Launch = {
   paneRun(session: string, pane: string, command: string): boolean;
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
+  renameWorkspace?(session: string, workspace: string, label: string): boolean;
   renameAgent(session: string, pane: string, name: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
   agentPanes(session: string): string[] | null;
@@ -181,6 +184,7 @@ const realLaunch: Launch = {
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
+  renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
@@ -482,7 +486,13 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
-      return { ...planned, stage: 'ready', ...restartNote(team, seat.name, recorded, home, root) };
+      const listed = named ?? known.find((agent) => agent.pane === recorded.pane);
+      return {
+        ...planned,
+        stage: 'ready',
+        ...(listed ? { pane: listed.pane, workspace: listed.workspace } : {}),
+        ...restartNote(team, seat.name, recorded, home, root),
+      };
     }
     return planned;
   }
@@ -1060,6 +1070,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       paneRun: launch.paneRun,
       ...(launch.reportDisplayAgent
         ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
+        : {}),
+      ...(launch.renameWorkspace
+        ? { renameWorkspace: (session: string, workspace: string, label: string) => launch.renameWorkspace!(session, workspace, label) }
         : {}),
       typeLine: () => false,
       deliverRules: async (session, pane, cli, file, seconds) => {
