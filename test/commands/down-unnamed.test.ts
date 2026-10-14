@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Caller } from '../../src/caller.ts';
 import { runApprove } from '../../src/commands/approve.ts';
 import { runDown, type DownLaunch, type DownSources } from '../../src/commands/down.ts';
 import type { HerdrAgent, PaneProcesses } from '../../src/herdr.ts';
@@ -62,8 +63,9 @@ async function down(
   argv: string[],
   agents: HerdrAgent[],
   processes?: (pane: string) => PaneProcesses | null,
+  caller: Caller = OWNER,
 ) {
-  const io = testIo(root, OWNER);
+  const io = testIo(root, caller);
   const closed: string[] = [];
   let running = true;
   const launch: DownLaunch = {
@@ -97,7 +99,7 @@ async function down(
     launch,
     ...(processes ? { processes: (_session, pane) => processes(pane) } : {}),
   };
-  const code = await runDown([...argv, ...FILE], io, sources);
+  const code = await runDown(caller.kind === 'owner' ? [...argv, ...FILE] : argv, io, sources);
   return { code, out: io.out, err: io.err, closed, seats: readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {} };
 }
 
@@ -184,5 +186,71 @@ describe('an unnamed pane this team recorded', () => {
     expect(run.out).toContain('reviewer: its record is not an approved seat; left running (the owner cleans it: team remove reviewer --abandon)\n');
     expect(run.out).toContain('session acme-web: not stopped, 1 agent left in it\n');
     expect(run.out).not.toContain('titled reviewer');
+  });
+});
+
+const KEEP = "left running; only the owner stops the orchestrator's or the operator's seat";
+const LAUNCHED = { shell: 10, cli: [11] };
+const SAME: PaneProcesses = { shell: 10, foreground: [11] };
+const ORCHESTRATOR: Caller = { kind: 'seat', name: 'claude-coordinator-acme', pane: 'seat-1', session: 'acme-web' };
+const OPERATOR: Caller = { kind: 'seat', name: 'codex-acme', pane: 'seat-2', session: 'acme-web' };
+
+function distinctOperatorFile(): string {
+  return EXAMPLE.replace(/^operator: .*$/m, 'operator: codex-acme').replace(/^    parked: true\s*$/m, '');
+}
+
+async function approve(text: string): Promise<void> {
+  writeFileSync(join(root, '.agents/team.yaml'), text);
+  const approved = await runApprove(FILE, testIo(root, OWNER), {
+    ask: async () => '5',
+    waiting: () => 'empty',
+    now: () => NOW,
+    home,
+  });
+  expect(approved).toBe(0);
+}
+
+describe('a seat-run down keeps a lead whatever herdr calls its pane', () => {
+  async function kept(name: string, agent: HerdrAgent, caller: Caller) {
+    writeSeats({ [name]: recorded(agent.pane, agent.workspace, LAUNCHED) });
+    const run = await down([], [agent], () => SAME, caller);
+    expect(run.code).toBe(0);
+    expect(run.closed).toEqual([]);
+    expect(run.out).toContain(`${name}: ${KEEP}\n`);
+    expect(run.out).not.toContain('workspace was closed');
+    expect(run.seats[name]?.pane).toBe(agent.pane);
+    return run;
+  }
+
+  describe('the orchestrator', () => {
+    beforeEach(() => approve(EXAMPLE));
+
+    test('the owner still closes its unnamed pane', async () => {
+      writeSeats({ 'claude-coordinator-acme': recorded('seat-1', 'ws-1', LAUNCHED) });
+      const run = await down([], [unnamed('seat-1', 'ws-1')], () => SAME);
+      expect(run.code).toBe(0);
+      expect(run.closed).toEqual(['ws-1']);
+      expect(run.out).toContain('claude-coordinator-acme: created for this seat and never named; its workspace was closed\n');
+    });
+
+    test('an unnamed pane is kept', async () => {
+      await kept('claude-coordinator-acme', unnamed('seat-1', 'ws-1'), ORCHESTRATOR);
+    });
+
+    test('a pane titled something else is kept', async () => {
+      await kept('claude-coordinator-acme', titled('Claude Code', 'seat-1', 'ws-1'), ORCHESTRATOR);
+    });
+  });
+
+  describe('a distinct operator', () => {
+    beforeEach(() => approve(distinctOperatorFile()));
+
+    test('an unnamed pane is kept', async () => {
+      await kept('codex-acme', unnamed('seat-2', 'ws-2'), OPERATOR);
+    });
+
+    test('a pane titled something else is kept', async () => {
+      await kept('codex-acme', titled('Codex', 'seat-2', 'ws-2'), OPERATOR);
+    });
   });
 });
