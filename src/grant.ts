@@ -7,12 +7,13 @@ import { loadTeamFile } from './file/load.ts';
 import type { GrantScope, LoadResult, TeamFile } from './file/types.ts';
 import { validateTeamFile } from './file/validate.ts';
 import type { Io } from './io.ts';
+import { logLine } from './log.ts';
 import { approvalStanding, approvedCopy, type Standing } from './store/store.ts';
 
 /**
- * What a later step asks the grant, decided and not yet done. `passed` is the grant the
+ * What `up` and `down` ask the grant, decided and not yet done. `passed` is the grant the
  * approval in force names. `refused` is the sentence, with no newline; `id` is the exit id
- * a command records when it starts calling this.
+ * a command records when it refuses on this verdict.
  */
 export type GrantVerdict =
   | { kind: 'passed'; grant: { session: string; seat: string; scope: GrantScope[] } }
@@ -31,8 +32,17 @@ export type GrantSources = {
 };
 
 /**
+ * The audit line of a granted run, in the same shape as a delegated run's line. `up` and
+ * `down` call it when the gate has passed and the run is about to have effects, and not
+ * before: a dry run and a refusal write nothing.
+ */
+export function logGranted(dir: string, seat: string, act: GrantScope, now?: Date): void {
+  logLine(dir, 'grant', 'grant', `${seat} ${act}`, now);
+}
+
+/**
  * Whether this caller may perform `act` under the grant the approval in force names.
- * Later steps call this. It reads the live default file and the approval again on this
+ * `up` and `down` call this. It reads the live default file and the approval again on this
  * call: no remembered copy, no `--file`, and no walk of other sessions the state holds.
  * It decides and stops. It does not print, write, or launch.
  *

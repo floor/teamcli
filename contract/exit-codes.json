@@ -1166,6 +1166,34 @@
     {
       "code": 1,
       "command": "down",
+      "id": "down.grant-approval",
+      "meaning": "a grant needs a verified approval",
+      "trigger": "team down"
+    },
+    {
+      "code": 1,
+      "command": "down",
+      "id": "down.grant-approved-copy",
+      "meaning": "a grant needs a readable approved copy",
+      "trigger": "team down"
+    },
+    {
+      "code": 1,
+      "command": "down",
+      "id": "down.grant-drift",
+      "meaning": "a grant needs the approved file",
+      "trigger": "team down"
+    },
+    {
+      "code": 1,
+      "command": "down",
+      "id": "down.grant-scope",
+      "meaning": "the grant does not list down",
+      "trigger": "team down"
+    },
+    {
+      "code": 1,
+      "command": "down",
       "id": "down.held",
       "meaning": "a step was held",
       "trigger": "team down"
@@ -2421,6 +2449,62 @@
       "command": "up",
       "id": "up.doctor",
       "meaning": "doctor refuses the launch",
+      "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.grant-another-pane",
+      "meaning": "the granted seat is not on its recorded pane",
+      "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.grant-approval",
+      "meaning": "a grant needs a verified approval",
+      "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.grant-approved-copy",
+      "meaning": "a grant needs a readable approved copy",
+      "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.grant-caller",
+      "meaning": "only the seat the grant names runs this",
+      "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.grant-drift",
+      "meaning": "a grant needs the approved file",
+      "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.grant-flag",
+      "meaning": "a granted seat cannot aim --session or --file",
+      "trigger": "team up --file other"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.grant-no-pane",
+      "meaning": "no pane is recorded for the granted seat",
+      "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.grant-scope",
+      "meaning": "the grant does not list up",
       "trigger": "team up"
     },
     {
