@@ -272,6 +272,30 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `release.unknown` | `release` | 2 | a check is unknown | `team release check material@3.0.2` |
 | `release.configuration` | `release` | 64 | the team file can't be read | `team release check material@3.0.2` |
 | `release.usage` | `release` | 64 | the invocation can't be read | `team release` |
+| `reload.reloaded` | `reload` | 0 | the seat was closed at an idle prompt and the new launch reached ready | `team reload worker` |
+| `reload.same` | `reload` | 0 | the seat is already running what the file declares | `team reload worker` |
+| `reload.absent` | `reload` | 1 | the file has no seat of that name | `team reload missing` |
+| `reload.changed` | `reload` | 1 | the seat changed before it closed; nothing relaunched | `team reload worker` |
+| `reload.grant-another-pane` | `reload` | 1 | the state records another pane for the granted seat | `team reload worker` |
+| `reload.grant-approval` | `reload` | 1 | a grant needs a verified approval | `team reload worker` |
+| `reload.grant-approved-copy` | `reload` | 1 | a grant needs a readable approved copy | `team reload worker` |
+| `reload.grant-caller` | `reload` | 1 | only the seat the grant names runs this | `team reload worker` |
+| `reload.grant-drift` | `reload` | 1 | a grant needs the approved file | `team reload worker` |
+| `reload.grant-file` | `reload` | 1 | the team file can't be read | `team reload worker` |
+| `reload.grant-flag` | `reload` | 1 | --file is the owner's; the granted seat cannot use it | `team reload worker --file other.yaml` |
+| `reload.grant-no-pane` | `reload` | 1 | no pane is recorded for the granted seat | `team reload worker` |
+| `reload.grant-omitted` | `reload` | 1 | the approved file grants nothing | `team reload worker` |
+| `reload.grant-scope` | `reload` | 1 | the grant does not list reload | `team reload worker` |
+| `reload.launch` | `reload` | 1 | the close happened and the new launch did not reach ready | `team reload worker` |
+| `reload.not-idle` | `reload` | 1 | the seat is not at an idle prompt; nothing closed | `team reload worker` |
+| `reload.not-running` | `reload` | 1 | the seat has no ready pane to close | `team reload worker` |
+| `reload.run-lock` | `reload` | 1 | another session-mutating run is holding the session | `team reload worker` |
+| `reload.self` | `reload` | 1 | a granted reload does not close the caller's seat | `team reload lead` |
+| `reload.unrecorded` | `reload` | 1 | the model and effort were not recorded at launch | `team reload worker` |
+| `reload.unsent` | `reload` | 1 | the seat holds unsent text; nothing closed | `team reload worker` |
+| `reload.working` | `reload` | 1 | the seat is working; nothing closed | `team reload worker` |
+| `reload.file` | `reload` | 2 | the team file can't be read | `team reload worker --file missing.yaml` |
+| `reload.invocation` | `reload` | 2 | the invocation can't be read | `team reload` |
 | `remove.kept` | `remove` | 0 | a stopped seat was kept | `team remove worker --keep` |
 | `remove.removed` | `remove` | 0 | the seat was removed | `team remove worker` |
 | `remove.temporary` | `remove` | 0 | a temporary seat was removed | `team remove worker` |

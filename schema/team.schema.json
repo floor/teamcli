@@ -783,10 +783,11 @@
               "up",
               "down",
               "approve",
-              "init"
+              "init",
+              "reload"
             ]
           },
-          "$comment": "non-empty, distinct, order kept: up, down, approve, init"
+          "$comment": "non-empty, distinct, order kept: up, down, approve, init, reload"
         }
       },
       "$comment": "the orchestrator seat's grant. session is the file's session, seat is the orchestrator, scope names acts. omitted means no grant. any other key is refused"
