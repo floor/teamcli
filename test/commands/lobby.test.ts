@@ -1172,7 +1172,38 @@ seats:
     addWorld.session = 'running';
     const addRun = await runAddCmd(['worker'], addWorld);
     expect(addRun.code).toBe(1);
+    expect(addRun.err).toContain(`team add: warning: the lobby ${lobby}: ${sentence}\n`);
     expect(addRun.err).toContain(`team add: the lobby ${lobby}: ${sentence}\n`);
+  });
+
+  test('up with no lobby seat still refuses a symlink in the lobby', async () => {
+    approveYaml(codexTeamYaml());
+    makeLobby();
+    const outside = join(base, 'outside-lobby-link');
+    mkdirSync(outside);
+    symlinkSync(outside, join(lobby, 'bridge'), 'dir');
+
+    const made = codexWorld();
+    const run = await runUpCmd([], made);
+    expect(run.code).toBe(1);
+    expect(run.err).toContain(`${join(lobby, 'bridge')} is a symbolic link`);
+    expect(made.workspaces).toEqual([]);
+  });
+
+  test('add of a seat that starts in the project still refuses a symlink in the lobby', async () => {
+    // The worker is the operator and is not stopped, so it starts in the project. The lobby is still checked.
+    approveYaml(codexTeamYaml().replace('operator: lead', 'operator: worker').replace('    stopped: true\n', ''));
+    makeLobby();
+    const outside = join(base, 'outside-lobby-link');
+    mkdirSync(outside);
+    symlinkSync(outside, join(lobby, 'bridge'), 'dir');
+
+    const made = codexWorld();
+    made.session = 'running';
+    const run = await runAddCmd(['worker'], made);
+    expect(run.code).toBe(1);
+    expect(run.err).toContain(`${join(lobby, 'bridge')} is a symbolic link`);
+    expect(made.workspaces).toEqual([]);
   });
 
   test('the run\'s case: the claude-code seat already ready, the lock present, a second up starts the rest', async () => {

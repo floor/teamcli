@@ -896,20 +896,25 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     });
     if (launchingIntoLobby) {
       for (const text of startupReadRefusals) refusals.push(text);
-      // Read-only: a refusal stops the run before anything is made, and the run lock below is
-      // held before the first write. A lobby that is simply absent is not a refusal here — the
-      // creating pass runs under the lock (`createLobby`). Making it here, as this once did, is
-      // the run's first filesystem effect outside the lock, and two fresh runs can both see the
-      // lobby absent: the loser's mkdir meets the winner's component and `verifyLobby` turns the
-      // EEXIST into a refusal the losing run never earned (`lobby/gate.ts`, the create branch).
-      const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby });
-      if (!gate.ok) refusals.push(gate.text);
-      else if ('path' in gate) {
-        verifiedLobby = gate.path;
-        lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
-        for (const seat of seats) if (seat.lobby) seat.cwd = gate.path;
-      } else createLobby = !dry;
     }
+    // Every migrated run checks links and ownership. A file a CLI reads at start is refused
+    // only when a seat is about to start in the lobby.
+    // Read-only: a refusal stops the run before anything is made, and the run lock below is
+    // held before the first write. A lobby that is simply absent is not a refusal here — the
+    // creating pass runs under the lock (`createLobby`). Making it here, as this once did, is
+    // the run's first filesystem effect outside the lock, and two fresh runs can both see the
+    // lobby absent: the loser's mkdir meets the winner's component and `verifyLobby` turns the
+    // EEXIST into a refusal the losing run never earned (`lobby/gate.ts`, the create branch).
+    const gate = verifyLobby(sources.home, {
+      create: false, getuid: sources.getuid, fs: sources.fs,
+      reads: launchingIntoLobby ? startupReads : [], lobby: teamLobby,
+    });
+    if (!gate.ok) refusals.push(gate.text);
+    else if ('path' in gate) {
+      verifiedLobby = gate.path;
+      lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
+      for (const seat of seats) if (seat.lobby) seat.cwd = gate.path;
+    } else if (launchingIntoLobby) createLobby = !dry;
   }
   const watch = recorded?.watch;
   const watchAlive = Boolean(watch && sources.alive?.(watch.pid));

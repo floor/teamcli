@@ -482,9 +482,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       : []),
   ]) {
     if (blocksLaunch(finding)) {
-      // A file a CLI reads at start is refused only when this seat is about to start in the
-      // lobby, once `wouldLaunch` is known. Other misses still stop the run here.
-      if (finding.text.includes(' is read at start by ')) continue;
+      // A file a CLI reads at start is said here and refused later, only when this seat is
+      // about to start in the lobby. Other misses still stop the run here.
+      if (finding.text.includes(' is read at start by ')) {
+        const warning = `team add: warning: ${plainText(finding.text)}\n`;
+        if (dry) out.stdout(warning);
+        else out.stderr(warning);
+        continue;
+      }
       const launchText = launchProblem ? `${built.name}: ${launchProblemDetail ?? launchProblem}` : '';
       if (dry && launchProblem && !stray && finding.text === launchText) {
         const starting = seatPlan(standing, prepared.team, built.seat, start, root, sources.home);
@@ -565,10 +570,15 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.budget
     return 1;
   }
-  // Only a seat about to start in the lobby. A lead starts in the project.
-  const intoLobby = isMigratedTrust(prepared.team.trust) && wouldLaunch && start.lobby === true;
-  if (intoLobby) {
-    const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby });
+  // Links and ownership are checked on every migrated run. A file a CLI reads at start is
+  // refused only when this seat is about to start in the lobby. A lead starts in the project.
+  const migrated = isMigratedTrust(prepared.team.trust);
+  const intoLobby = migrated && wouldLaunch && start.lobby === true;
+  if (migrated) {
+    const gate = verifyLobby(sources.home, {
+      create: false, getuid: sources.getuid, fs: sources.fs,
+      reads: intoLobby ? startupReads : [], lobby,
+    });
     if (!gate.ok) return refuseLobby(out, built.name, gate.text, dry);
     if ('path' in gate) {
       verifiedLobby = gate.path;
