@@ -1,7 +1,6 @@
 // Line 1 is the seat's written label, or `<name> · <role>` when the file writes none. The
 // stored label (written, or the lowercase model and version) stays what the seat digest hashes.
-// Line 2 is `displayAgent`: a one-word model's display, or the first word and version of a
-// longer model (`gemini-3.8`), then a space and the effort, or `default` when none is set.
+// Line 2 is `displayAgent`: the display, ` · `, and the effort, or `default` when the file sets none.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -113,9 +112,9 @@ describe('the workspace title of a seat', () => {
     expect(workspaceLabel(seatNamed(valid(minimal), 'lead'))).toBe('lead · coordinator');
   });
 
-  test('line 2 is the display and the effort, separated by a space', () => {
-    expect(displayAgent({ display: 'Grok 4.7', model: 'Grok', version: '4.7', effort: 'high' })).toBe('Grok 4.7 high');
-    expect(displayAgent(seatNamed(valid(minimal), 'lead'))).toBe('claude-5.5 default');
+  test('line 2 is the display, a dot, and the effort or default', () => {
+    expect(displayAgent({ display: 'Grok 4.7', effort: 'high' })).toBe('Grok 4.7 · high');
+    expect(displayAgent(seatNamed(valid(minimal), 'lead'))).toBe('Claude Opus 5.5 · default');
   });
 
   test('a written label titles the workspace, and the file still loads', () => {
@@ -162,8 +161,8 @@ describe('the workspace title of a seat', () => {
     expect(written.seats.filter((seat) => seat.declared === 'maker').map((seat) => seat.label)).toEqual(['desk', 'desk-2']);
   });
 
-  test('a multi-word model is its first word and version, and a written display still needs the version token', () => {
-    expect(displayAgent(seatNamed(valid(mixed), 'implementer'))).toBe('gpt-6 default');
+  test('a display the file writes is line 2, and still needs the version as its own token', () => {
+    expect(displayAgent(seatNamed(valid(mixed), 'implementer'))).toBe('GPT-6 Sol · default');
     expect(workspaceLabel(seatNamed(valid(mixed), 'implementer'))).toBe('implementer · implementer');
     const refused = validateTeamFile(minimal.replace('    launch:', '    display: GPT Sol Six\n    launch:'));
     expect(refused.ok).toBe(false);
@@ -294,7 +293,7 @@ describe('check, approve and up on a file from before the change', () => {
     } satisfies Partial<UpSources> as UpSources);
     expect(upCode, `${up.out}${up.err}`).toBe(0);
     expect(up.out).toContain('--label coordinator');
-    expect(up.out).toContain(`--display-agent 'claude-5.5 default'`);
+    expect(up.out).toContain(`--display-agent 'Claude Opus 5.5 · default'`);
     expect(up.out).not.toContain(`--label 'Claude Opus 5.5'`);
     rmSync(base, { recursive: true, force: true });
   });
@@ -315,9 +314,9 @@ describe('check, approve and up on a file from before the change', () => {
     expect(upCode, `${up.out}${up.err}`).toBe(0);
     expect(up.out).toContain('--label builder1.Grok7');
     expect(up.out).toContain(`--label 'researcher · researcher'`);
-    expect(up.out).toContain(`--display-agent 'Grok 4.7 default'`);
-    expect(up.out).toContain(`--display-agent 'gpt-6 default'`);
-    expect(up.out).toContain(`--display-agent 'deepseek-v4.1 default'`);
+    expect(up.out).toContain(`--display-agent 'Grok 4.7 · default'`);
+    expect(up.out).toContain(`--display-agent 'GPT-6 Sol · default'`);
+    expect(up.out).toContain(`--display-agent 'DeepSeek V4.1 Flash · default'`);
     expect(up.out).toContain('<pane of researcher>');
     expect(up.out).toContain('<pane of maker-2>');
     expect(up.out).not.toContain(`--label 'Claude Opus 5.5'`);

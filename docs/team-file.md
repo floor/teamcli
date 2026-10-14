@@ -87,11 +87,10 @@ either folder is left there. The fields are in the README's
   approval of a file written that way already sealed. That stored field stays in the seat's digest.
 - `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
   as a token of its own when the file writes it. After launch, `up` and `add` set the pane's
-  display_agent to the model text, a space, and the effort, or `default` when the file sets
-  none. A model of one word keeps its display (`Grok 4.7 high`). A model of more than one
-  word keeps its first word and the version, lowercase, joined by a hyphen (`gemini-3.8`,
-  `gpt-5.6`). Herdr draws line 2 as its status word, then ` · `, then that text
-  (`idle · Grok 4.7 high`, `idle · gemini-3.8 default`). That is line 2.
+  display_agent to `<display> · <effort>` when the seat sets `effort`, and to `<display> · default`
+  when it does not. The display stays the proper-case name, including a multi-word model
+  (`DeepSeek V4.1 Flash`, `Gemini 3.8 Flash`). Herdr draws line 2 as its status word, then
+  ` · `, then that text (`done · Grok 4.7 · high`, `idle · Opus 5.5 · default`). That is line 2.
 
 `effort` is optional. It is a known field: a file may set it, and a file that leaves it out
 loads as before. The words a lab allows are [`src/profiles/efforts.json`](../src/profiles/efforts.json),

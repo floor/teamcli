@@ -1,7 +1,6 @@
 // Line 1 of a seat's workspace is its written label, or `<name> · <role>` when the file
 // writes none. The model stays off that line. Line 2 is the pane's display_agent: the
-// display for a one-word model, or the first model word and the version (`gemini-3.8`)
-// for a longer model, then a space and the effort, or `default` when the file sets none.
+// display, ` · `, and the effort, or `default` when the file sets none.
 import { describe, expect, test } from 'bun:test';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -97,14 +96,14 @@ seats:
 });
 
 describe('the pane display', () => {
-  test('display_agent is the model text, a space, and the effort or default', () => {
-    expect(displayAgent(seatNamed('lead', minimal))).toBe('claude-5.5 default');
+  test('display_agent is the display, a dot, and the effort or default', () => {
+    expect(displayAgent(seatNamed('lead', minimal))).toBe('Claude Opus 5.5 · default');
     const effort = minimal.replace('    launch:', '    effort: high\n    launch:');
-    expect(displayAgent(seatNamed('lead', effort))).toBe('claude-5.5 high');
-    expect(displayAgent({ display: 'Grok 4.7', model: 'Grok', version: '4.7', effort: 'high' })).toBe('Grok 4.7 high');
-    expect(displayAgent({ display: 'Opus 5.5', model: 'Opus', version: '5.5' })).toBe('Opus 5.5 default');
-    expect(displayAgent({ display: 'Gemini 3.8 Flash', model: 'Gemini Flash', version: '3.8' })).toBe('gemini-3.8 default');
-    expect(displayAgent({ display: 'GPT Terra 5.6', model: 'GPT Terra', version: '5.6', effort: 'high' })).toBe('gpt-5.6 high');
+    expect(displayAgent(seatNamed('lead', effort))).toBe('Claude Opus 5.5 · high');
+    expect(displayAgent({ display: 'Grok 4.7', effort: 'high' })).toBe('Grok 4.7 · high');
+    expect(displayAgent({ display: 'Opus 5.5' })).toBe('Opus 5.5 · default');
+    expect(displayAgent({ display: 'Gemini 3.8 Flash' })).toBe('Gemini 3.8 Flash · default');
+    expect(displayAgent({ display: 'DeepSeek V4.1 Flash', effort: 'high' })).toBe('DeepSeek V4.1 Flash · high');
   });
 
   test('the plan reports display_agent after the seat is named', () => {
@@ -114,7 +113,7 @@ describe('the pane display', () => {
       launch: 'claude',
       cwd: '.',
       label: 'Priam · coordinator',
-      displayAgent: 'claude-5.5 high',
+      displayAgent: 'Claude Opus 5.5 · high',
       repairLine: '`team down` then `team up` (to restart the whole team)',
       stopped: false,
       rules: '',
@@ -127,7 +126,7 @@ describe('the pane display', () => {
       watchAlive: true,
     }));
     expect(plan).toContain("--label 'Priam · coordinator'");
-    expect(plan).toContain("pane report-metadata <pane of lead> --source team --display-agent 'claude-5.5 high'");
+    expect(plan).toContain("pane report-metadata <pane of lead> --source team --display-agent 'Claude Opus 5.5 · high'");
     expect(plan).not.toContain("--label 'Claude Opus 5.5");
   });
 
@@ -162,7 +161,7 @@ describe('the pane display', () => {
     const repair = '`team down` then `team up` (to restart the whole team)';
     const steps: Step[] = [
       { kind: 'run', argv: [], do: { do: 'create', seat: 'lead', label: 'Priam · coordinator', cwd: '/work', repairLine: repair } },
-      { kind: 'run', argv: [], do: { do: 'rename', seat: 'lead', label: 'Priam · coordinator', seconds: 1, rules: 'message', displayAgent: 'claude-5.5 high' } },
+      { kind: 'run', argv: [], do: { do: 'rename', seat: 'lead', label: 'Priam · coordinator', seconds: 1, rules: 'message', displayAgent: 'Claude Opus 5.5 · high' } },
       { kind: 'run', argv: [], do: { do: 'launch', seat: 'lead', label: 'Priam · coordinator', command: 'claude' } },
     ];
     await executePlan(steps, 'acme', host);
