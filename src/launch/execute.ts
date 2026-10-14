@@ -2,7 +2,7 @@ import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, versionVerdict } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, seatModel, type Running } from '../status/statusline.ts';
-import { launchedIdentity, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
+import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { IDLE_POLL_MS, type Step } from './plan.ts';
 import {
   closeTarget,
@@ -99,6 +99,8 @@ export type Host = {
       rules?: 'option' | 'message';
       createdWorkspace?: boolean;
       launched?: LaunchedIdentity;
+      /** The agent session read with the process, stored beside `launched`. */
+      agent_session?: string;
       /** A waiting record to write, or null to remove the seat's waiting field. */
       waiting?: WaitingRecord | null;
     },
@@ -507,6 +509,14 @@ export async function executePlan(steps: readonly Step[], session: string, host:
 
     if (step.kind === 'skip') {
       if (op?.do === 'record' && op.seat) {
+        if (op.held) held = true;
+        if (op.launched) {
+          host.record(op.seat, {
+            stage: 'ready',
+            launched: op.launched,
+            ...(op.agentSession ? { agent_session: op.agentSession } : {}),
+          });
+        }
         final(op.seat, op.record, op.detail ?? '');
       } else if (op?.do === 'ready' && op.seat) {
         if (op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
@@ -663,11 +673,13 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
           if (identity) {
             identities.set(op.seat, identity);
+            const sessionId = host.agentList?.(session)?.find((agent) => agent.pane === here.pane)?.session;
             host.record(op.seat, {
               stage: 'launched',
               pane: here.pane,
               launched: identity,
               ...(here.workspace ? { workspace: here.workspace } : {}),
+              ...(sessionId ? { agent_session: sessionId } : {}),
             });
           }
           // After the idle wait, before the rename and the rules: the same "differs" the watch uses.
@@ -1089,6 +1101,33 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           final(op.seat, { kind: 'left out', reason: 'its pane could not be read; nothing closed' });
           break;
         } else if (verdict === 'replaced') {
+          // A program is in front. It is closed only when this plan still believes the pane is
+          // a shell; a program is either the stored session or a process the record cannot tie
+          // to the launch, and neither is closed.
+          const agents = host.agentList ? host.agentList(session) : null;
+          const listed = agents?.find((agent) => agent.name === op.seat && agent.pane === op.pane);
+          const stored = host.seatStates?.(session)?.[op.seat];
+          const continuity = replacedSeat(verdict, {
+            asked: agents !== null,
+            namedOnPane: Boolean(listed),
+            recordedSession: stored?.agent_session,
+            liveSession: listed?.session,
+          });
+          if (continuity === 'restored' && stored?.agent_session) {
+            const identity = launchedIdentity(host.processInfo?.(session, op.pane) ?? null);
+            if (identity) {
+              host.record(op.seat, {
+                stage: 'ready',
+                pane: op.pane,
+                workspace: op.workspace,
+                launched: identity,
+                agent_session: stored.agent_session,
+              });
+            }
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'ready' }, '  restored; left as it is\n');
+            break;
+          }
           const kind = host.classify(session, op.pane, op.cli);
           if (kind === 'unknown') {
             held = true;
@@ -1108,6 +1147,9 @@ export async function executePlan(steps: readonly Step[], session: string, host:
             final(op.seat, { kind: 'left out', reason: `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${op.seat})` });
             break;
           }
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its pane holds a process this record cannot tie to the launch' });
+          break;
         }
         if (!host.closeWorkspace(session, op.workspace)) {
           held = true;
@@ -1222,6 +1264,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         host.record(seat, { stage: 'ready', rules: op.rules });
         finishReady(seat);
       } else if (step.kind === 'skip' && op?.do === 'record') {
+        if (op.held) held = true;
         final(seat, op.record, op.detail ?? '');
       } else {
         dropped.add(seat);

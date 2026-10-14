@@ -103,7 +103,9 @@ follows as for any stopped seat; a dry run shows the close under the note `its C
 closed without typing`. A pane with no name that one seat records is closed the same way, and the
 line says it was created for that seat and never named. A pane herdr named with something other
 than the seat's name is closed the same way when one seat records that pane and that workspace,
-and the line names the title. A name no seat record accounts for is left running. A watch the
+and the line names the title. Neither close happens for the orchestrator's or the operator's
+seat when a seat calls: that seat is left running, whatever herdr calls its pane, and the skip
+line is the one in the table below. A name no seat record accounts for is left running. A watch the
 state records, and whose pid is alive, prints
 `watch: its pid is only in the state; left running` — this run does not kill it. The session prints
 `session <session>: stopped and cleared` — herdr keeps a stopped session listed until it is
@@ -134,7 +136,7 @@ clearing key runs first — and a dry run says so in a note under its typing ste
 | `<seat>: holds this CLI's exit text (<exit>) unsent in its input box; left running (the owner sends it or clears it in its pane)` | the box holds an earlier run's unconfirmed exit text, and the CLI has no key that empties a box |
 | `<seat>: shows a screen the profile does not recognise; left running` | nothing is typed into a screen it can't read; this line stands while the CLI is still the pane's foreground — a pane whose CLI has exited is closed instead (above) |
 | `<seat>: the state doesn't say which CLI it runs, so it can't be asked to exit; left running (`team down --abandon` closes it without typing)` | the state predates the CLI record and the file no longer names the seat: nothing links its pane to a profile, so its owner closes it |
-| `<seat>: left running; only the owner stops the orchestrator's or the operator's seat` | a seat's own call, and this is the orchestrator or the operator |
+| `<seat>: left running; only the owner stops the orchestrator's or the operator's seat` | a seat's own call, and this is the orchestrator or the operator, whatever herdr calls its pane |
 | `session default: herdr's default session is never stopped` | the default session is herdr's own |
 | `<name>: its record is not an approved seat; left running (the owner cleans it: team remove <name> --abandon)` | herdr lists a name the approved copy does not carry, and that pane and workspace match no seat record |
 | `<name>: herdr lists more than one agent of this name; left as it is` | more than one live agent of an approved name |

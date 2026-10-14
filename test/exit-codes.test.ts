@@ -630,6 +630,21 @@ scene('add.already-running', async (place) => {
     sessionState: () => 'running', agents: () => [agent('worker')], workspaces: () => [{ id: 'w1' }],
   })), 'already running');
 });
+scene('add.session-doubt', async (place) => {
+  approve(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.worker = { stage: 'ready', workspace: 'w1', pane: 'w1:p1', launched: { shell: 400, cli: [401] } };
+  });
+  const launch = launching(IDLE);
+  launch.processInfo = () => ({ shell: 400, foreground: [500] });
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, {
+    sessionState: () => 'running',
+    agents: () => [agent('worker')],
+    workspaces: () => [{ id: 'w1' }],
+    launch,
+  })), 'cannot tie to the launch');
+});
 scene('add.placed', async (place) => {
   const side = join(place.base, 'side');
   mkdirSync(side);
@@ -1776,9 +1791,9 @@ scene('up.run-lock', async (place) => {
   return show(await up(place, ['--file', place.file], owner, upSources(place, { launch: launching(IDLE) })), 'another session-mutating run is holding');
 });
 scene('up.lobby', async (place) => {
-  approve(place, TEAM);
-  // A fresh home holds no lobby: the read-only pass leaves it to the make under the run lock,
-  // and that make is the one made to fail. `mkdir` is the only call stood in.
+  // The lead starts in the project. The worker is the seat that starts in the lobby, so the
+  // make under the run lock is the one made to fail. `mkdir` is the only call stood in.
+  approve(place, TWO.replace('    stopped: true\n', ''));
   const fs = {
     ...defaultFs,
     mkdir() {

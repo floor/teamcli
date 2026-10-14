@@ -857,9 +857,10 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
     expect(out).not.toMatch(/codex-acme\s+idle/);
     expect(out).toContain(
-      'difference: codex-acme: the process in its pane is not the one team launched; nothing checks its model, account or rules\n' +
-        GONE_REPAIR,
+      'difference: codex-acme: its pane holds a process this record cannot tie to the launch\n' +
+        '  repair: look at the pane\n',
     );
+    expect(out).not.toContain('difference: codex-acme: the process in its pane is not the one team launched');
     const doc = JSON.parse((await status('--json')).out);
     expect(doc.rows.find((row: { name: string }) => row.name === 'codex-acme')).toEqual({
       name: 'codex-acme',
@@ -867,6 +868,17 @@ describe('a pane that no longer holds the process team launched', () => {
       model: '-',
       pane: 'w2:p1',
     });
+  });
+
+  test('a matching agent session is the seat, not a repair that names team up', async () => {
+    recordCodex({ agent_session: 'kept' });
+    const agents = built().agents.map((one) => one.name === 'codex-acme' ? { ...one, session: 'kept' } : one);
+    live = { ...built(), agents, processes: { 'w2:p1': { shell: 500, foreground: [501] } } };
+    const { out } = await status();
+    expect(out).not.toMatch(/codex-acme\s+restored, not launched by team/);
+    expect(out).not.toContain('codex-acme: its pane holds a process this record cannot tie to the launch');
+    expect(out).not.toContain('difference: codex-acme');
+    expect(out).toMatch(/codex-acme\s+idle/);
   });
 
   test('gone with no agent listed: its pane is read, not called a missing seat', async () => {
@@ -903,9 +915,10 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(code).toBe(1);
     expect(out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
     expect(out).toContain(
-      'difference: codex-acme: the process in its pane is not the one team launched; nothing checks its model, account or rules\n' +
-        GONE_REPAIR,
+      'difference: codex-acme: its pane holds a process this record cannot tie to the launch\n' +
+        '  repair: look at the pane\n',
     );
+    expect(out).not.toContain('repair: the owner runs team up\n');
     expect(out).not.toContain('is named "stranger"');
     expect(out).not.toContain('agent rename');
   });

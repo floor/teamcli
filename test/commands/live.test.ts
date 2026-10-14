@@ -2218,8 +2218,11 @@ describe('team up, one run at a time', () => {
 });
 
 // A restored session: herdr lists the names, and the processes behind them are not the ones team
-// launched. `up` closes each such workspace with no key and no text, clears the launch state, and
-// launches the seat fresh; a seat still holding its recorded process is skipped as ready.
+// launched. A pane back at its shell is closed with no key and no text and the seat launched
+// fresh, even when herdr still lists the seat's name. A pane held by another program is left,
+// unless its agent session is the one stored at launch, in which case the seat is kept and the
+// stored pids become the ones the pane holds now. A seat still holding its recorded process is
+// skipped as ready.
 describe('team up, a session that was restored', () => {
   test('four seats: one same, one gone, one replaced, one whose pane is missing', async () => {
     writeFileSync(join(root, '.agents/team.yaml'), makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
@@ -2257,9 +2260,8 @@ describe('team up, a session that was restored', () => {
       // A pane this run made: the CLI it has just launched.
       return { shell: 700, foreground: [700, 701] };
     };
-    // The repair re-reads herdr immediately before each close: the agent list, the process
-    // reading again, and — for a replaced pane — its screen. w93's pane shows an idle screen,
-    // so the replaced seat is closed only because its screen does not read working.
+    // The repair re-reads herdr immediately before the shell's close. The pane that holds
+    // another program has no stored session, so it is left.
     const agents = [
       agent('claude-coordinator-acme', 'w91:p1', 'idle'),
       agent('codex-acme', 'w92:p1', 'idle', 'codex'),
@@ -2309,36 +2311,149 @@ describe('team up, a session that was restored', () => {
     );
 
     expect(code).toBe(0);
-    // Each broken seat's workspace is closed before its own fresh launch, and the pane that holds
-    // the wrong process is never typed or run into.
-    expect(made.closes).toEqual(['w91', 'w93']);
-    // The reads of item 1 stand directly before each close, with nothing between: the agent
-    // list, the pane and process read; the screen only for the replaced seat.
+    // The shell is closed before its fresh launch. The pane that holds another program, with no
+    // stored session, is not closed and is never typed or run into. The coordinator's name is
+    // still in the agent list; that does not keep a shell.
+    expect(made.closes).toEqual(['w91']);
     const before = (at: string, n: number) => calls.slice(0, calls.indexOf(at)).slice(-n);
     expect(before('close w91', 2)).toEqual(['agents', 'process w91:p1']);
-    expect(before('close w93', 3)).toEqual(['agents', 'process w93:p1', 'paneText w93:p1']);
     expect(calls.indexOf('close w91')).toBeLessThan(calls.indexOf('run w1:p1'));
-    expect(calls.indexOf('close w93')).toBeLessThan(calls.indexOf('run w2:p1'));
+    expect(calls).not.toContain('close w93');
     expect(keys).toEqual([]);
     expect(made.runs.filter(({ pane }) => ['w91:p1', 'w92:p1', 'w93:p1', 'w94:p1'].includes(pane))).toEqual([]);
-    // Both fresh launches carry their rules; the fresh panes read the new identity back.
     expect(made.runs.find(({ pane }) => pane === 'w1:p1')?.command).toContain('--append-system-prompt');
     expect(made.runs.find(({ pane }) => pane === 'w1:p1')?.command).toContain('Agent: Claude Opus 5.5 · project coordinator');
-    expect(made.runs.find(({ pane }) => pane === 'w2:p1')?.command).toContain('DeepSeek V4.1 Flash');
-    // The report: the same seat already ready, the two relaunches as each one's record plus its
-    // stderr detail, the missing pane launched the way it always was.
     expect(io.out).toContain('codex-acme: ready\n');
     expect(io.err).toContain('  already ready; left as it is\n');
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(io.err).toContain('  its pane held no CLI; closed without input and launched again\n');
     expect(io.out).toContain('deepseek-acme: ready\n');
-    expect(io.err).toContain('  its pane held a process team did not launch; closed without input and launched again\n');
+    expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
+    expect(io.err).not.toContain('its pane held a process team did not launch');
     expect(io.out).toContain('deepseek-acme-2: ready\n');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['codex-acme']).toMatchObject({ stage: 'ready', pane: 'w92:p1', launched: { shell: 410, cli: [411] } });
     expect(seats['claude-coordinator-acme']).toMatchObject({ stage: 'ready', pane: 'w1:p1', launched: { shell: 700, cli: [701] } });
-    expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w2:p1', launched: { shell: 700, cli: [701] } });
-    expect(seats['deepseek-acme-2']).toMatchObject({ stage: 'ready', pane: 'w3:p1', launched: { shell: 700, cli: [701] } });
+    expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
+    expect(seats['deepseek-acme-2']).toMatchObject({ stage: 'ready', pane: 'w2:p1', launched: { shell: 700, cli: [701] } });
+  });
+
+  test('a matching agent session is not closed, and a drifted model on it is not closed', async () => {
+    writeFileSync(join(root, '.agents/team.yaml'), makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
+    await approve();
+    writeFileSync(
+      join(root, '.agents/team.state.json'),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: {
+              'codex-acme': { stage: 'ready', pane: 'w92:p1', workspace: 'w92', launched: { shell: 410, cli: [411] }, agent_session: 'kept' },
+              'deepseek-acme': { stage: 'ready', pane: 'w93:p1', workspace: 'w93', launched: { shell: 430, cli: [431] }, agent_session: 'kept' },
+            },
+            worktrees: {},
+          },
+        },
+      }),
+    );
+    const terra = readFileSync(join(import.meta.dir, '../fixtures/codex/0.161.0/idle.txt'), 'utf8');
+    const made = world();
+    made.session = 'running';
+    made.launch.processInfo = (_session, pane) => {
+      if (pane === 'w92:p1') return { shell: 800, foreground: [801] };
+      if (pane === 'w93:p1') return { shell: 900, foreground: [901] };
+      return { shell: 700, foreground: [700, 701] };
+    };
+    made.launch.paneText = (_session, pane) => (pane === 'w92:p1' ? terra : IDLE);
+    const keys: string[] = [];
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [{ id: 'w92', label: 'GPT-6 Sol' }, { id: 'w93', label: 'DeepSeek V4.1 Flash' }],
+          agents: () => [
+            { ...agent('codex-acme', 'w92:p1', 'idle', 'codex'), session: 'kept' },
+            { ...agent('deepseek-acme', 'w93:p1', 'idle'), session: 'kept' },
+          ],
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).not.toContain('w92');
+    expect(made.closes).not.toContain('w93');
+    expect(keys).toEqual([]);
+    expect(io.err).toContain('  restored; left as it is; its model drifted; left as it is\n');
+    expect(io.err).toContain('  restored; left as it is\n');
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+    expect(seats['codex-acme']).toMatchObject({ stage: 'ready', pane: 'w92:p1', launched: { shell: 800, cli: [801] }, agent_session: 'kept' });
+    expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 900, cli: [901] }, agent_session: 'kept' });
+  });
+
+  test('a different agent session is not closed', async () => {
+    writeFileSync(join(root, '.agents/team.yaml'), makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
+    await approve();
+    writeFileSync(
+      join(root, '.agents/team.state.json'),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: {
+              'claude-coordinator-acme': { stage: 'ready', pane: 'w91:p1', workspace: 'w91', launched: { shell: 420, cli: [421] } },
+              'codex-acme': { stage: 'ready', pane: 'w92:p1', workspace: 'w92', launched: { shell: 410, cli: [411] } },
+              'deepseek-acme': { stage: 'ready', pane: 'w93:p1', workspace: 'w93', launched: { shell: 430, cli: [431] }, agent_session: 'kept' },
+              'deepseek-acme-2': { stage: 'ready', pane: 'w94:p1', workspace: 'w94', launched: { shell: 440, cli: [441] } },
+            },
+            worktrees: {},
+          },
+        },
+      }),
+    );
+    const made = world();
+    made.session = 'running';
+    made.launch.processInfo = (_session, pane) => {
+      if (pane === 'w91:p1') return { shell: 420, foreground: [420, 421] };
+      if (pane === 'w92:p1') return { shell: 410, foreground: [410, 411] };
+      if (pane === 'w93:p1') return { shell: 900, foreground: [901] };
+      if (pane === 'w94:p1') return { shell: 440, foreground: [440, 441] };
+      return { shell: 700, foreground: [700, 701] };
+    };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [
+            { id: 'w91', label: 'Claude Opus 5.5' },
+            { id: 'w92', label: 'GPT-6 Sol' },
+            { id: 'w93', label: 'DeepSeek V4.1 Flash' },
+            { id: 'w94', label: 'DeepSeek V4.1 Flash' },
+          ],
+          agents: () => [
+            agent('claude-coordinator-acme', 'w91:p1', 'idle'),
+            agent('codex-acme', 'w92:p1', 'idle', 'codex'),
+            { ...agent('deepseek-acme', 'w93:p1', 'idle'), session: 'other' },
+            agent('deepseek-acme-2', 'w94:p1', 'idle'),
+          ],
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+    expect(seats['deepseek-acme']).toMatchObject({ pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 
   test('a workspace that does not close leaves the seat out with a line', async () => {
@@ -3328,11 +3443,12 @@ describe('team up, the pause', () => {
       'key:o', 'agents', 'agent-panes', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
       // The first poll: the sleep (the owner answers), then fresh reads — the pane is idle.
       'sleep:2000', 'agents', 'agent-panes', 'process:w1:p1', 'read:w1:p1',
-      // The ordinary path from the idle prompt: the model read, the identity, the rename.
-      'read:w1:p1', 'process:w1:p1', 'agent-panes', 'rename:w1:p1:claude-coordinator-acme',
+      // The ordinary path from the idle prompt: the model read, the identity, the agent list
+      // (so the session id can be stored with it), the rename.
+      'read:w1:p1', 'process:w1:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w1:p1:claude-coordinator-acme',
       // Then the later seats, the same way.
-      'create:deepseek-acme · implementer', 'run:w2:p1', 'read:w2:p1', 'read:w2:p1', 'process:w2:p1', 'agent-panes', 'rename:w2:p1:deepseek-acme',
-      'create:deepseek-acme-2 · implementer', 'run:w3:p1', 'read:w3:p1', 'read:w3:p1', 'process:w3:p1', 'agent-panes', 'rename:w3:p1:deepseek-acme-2',
+      'create:deepseek-acme · implementer', 'run:w2:p1', 'read:w2:p1', 'read:w2:p1', 'process:w2:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w2:p1:deepseek-acme',
+      'create:deepseek-acme-2 · implementer', 'run:w3:p1', 'read:w3:p1', 'read:w3:p1', 'process:w3:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w3:p1:deepseek-acme-2',
       'create:watchdog', 'run:w4:p1',
     ]);
     expect(typed).toEqual([]);
@@ -3593,7 +3709,7 @@ describe('team up, the pause', () => {
       'agents', 'process:w1:p1', 'read:w1:p1', 'key:o',
       'agents', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
       'sleep:2000', 'agents', 'process:w1:p1', 'read:w1:p1',
-      'read:w1:p1', 'process:w1:p1', 'agent-panes', 'rename:w1:p1:claude-coordinator-acme',
+      'read:w1:p1', 'process:w1:p1', 'agents', 'agent-panes', 'rename:w1:p1:claude-coordinator-acme',
     ]);
     expect(made.creates).toEqual([]);
     expect(made.runs).toEqual([]);

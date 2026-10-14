@@ -87,8 +87,10 @@ either folder is left there. The fields are in the README's
   approval of a file written that way already sealed. That stored field stays in the seat's digest.
 - `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
   as a token of its own when the file writes it. After launch, `up` and `add` set the pane's
-  display_agent to `<display> · <effort>` when the seat sets `effort`, and to `<display>` when
-  it does not. That is line 2.
+  display_agent to `<display> <effort>` when the seat sets `effort`, and to `<display> default`
+  when it does not. The display stays the proper-case name, including a multi-word model
+  (`DeepSeek V4.1 Flash`, `Gemini 3.8 Flash`). Herdr draws line 2 as its status word, then
+  ` · `, then that text (`done · Grok 4.7 high`, `idle · Opus 5.5 default`). That is line 2.
 
 `effort` is optional. It is a known field: a file may set it, and a file that leaves it out
 loads as before. The words a lab allows are [`src/profiles/efforts.json`](../src/profiles/efforts.json),
@@ -103,6 +105,36 @@ the field is not stored on the seat, and the seat's approval key is unchanged. A
 or out of the list, changes that key, because the word is part of the seat.
 
 Nothing in the launch line reads `effort`.
+
+## `grant`
+
+Records the grant the owner gives the orchestrator's seat. It is an owner section: adding,
+changing or removing it is a change to the file the owner approves. Omitted, it reads as `null`.
+
+```yaml
+grant:
+  session: acme          # the file's own session
+  seat: lead             # the orchestrator's seat
+  scope:                 # non-empty, distinct, order kept
+    - up
+    - down
+    - approve
+    - init
+```
+
+- `session` is the team's own session: the `session` key, or the project name when that key is
+  omitted. Any other value is `grant.session must be the file's session "<session>": "<written>"`.
+- `seat` is the orchestrator's name, the one `coordinator:` or `leads: true` resolves. The
+  operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":
+  "<written>"`.
+- `scope` names acts from the closed set `up`, `down`, `approve` and `init`. The list is
+  non-empty, each act appears once, and the order is part of the value the owner approves. An
+  empty list is `grant.scope must name at least one of: up, down, approve, init`. A repeated act
+  is `grant.scope names "<act>" twice`. Any other word is `grant.scope must name up, down,
+  approve, init: "<word>" is not one`.
+- `approve` in `scope` is an ordinary approval: the roster and `rules`. A change to `grant`
+  itself, and a change to any other owner section, stays the owner's to approve.
+- Any other key, including `path`, is an unknown field.
 
 ## `delegates`
 

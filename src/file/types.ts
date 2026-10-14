@@ -4,6 +4,17 @@ import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
+/** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation. */
+export const GRANT_SCOPES = ['up', 'down', 'approve', 'init'] as const;
+export type GrantScope = (typeof GRANT_SCOPES)[number];
+
+/**
+ * The orchestrator seat's grant, or null when the file has no `grant` section. `session` is the
+ * file's own session, `seat` is the orchestrator's name, and `scope` is the acts a later check
+ * may admit, in the order the file wrote them.
+ */
+export type Grant = { session: string; seat: string; scope: GrantScope[] } | null;
+
 export type Position = 'last-line' | 'trailer' | 'anywhere';
 export type Mode = 'worktree' | 'shared';
 
@@ -179,6 +190,12 @@ export type TeamFile = {
         policy?: TaskPolicy;
       }
     | null;
+  /**
+   * The orchestrator seat's grant, or null when the file has no `grant` section. An owner
+   * section: changing it needs a new approval. `approve` in `scope` is an ordinary approval;
+   * this section itself stays the owner's.
+   */
+  grant: Grant;
   /**
    * The panes outside the team's session that may run named operational commands, or null when
    * the file has no `delegates` section. An owner section: changing it needs a new approval.

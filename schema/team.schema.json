@@ -755,6 +755,42 @@
       },
       "$comment": "one task source. source file needs path; source linear needs the linear block. pull is self or any; fallback is file or id. a path that leaves the checkout, a linear block or policy with source file, and a policy that omits id or title are refused"
     },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session",
+        "seat",
+        "scope"
+      ],
+      "properties": {
+        "session": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "the file's own session: the session key, or the project name when that key is omitted"
+        },
+        "seat": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "the orchestrator seat's name, the one coordinator: or leads: true resolves"
+        },
+        "scope": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "up",
+              "down",
+              "approve",
+              "init"
+            ]
+          },
+          "$comment": "non-empty, distinct, order kept: up, down, approve, init"
+        }
+      },
+      "$comment": "the orchestrator seat's grant. session is the file's session, seat is the orchestrator, scope names acts. omitted means no grant. any other key is refused"
+    },
     "delegates": {
       "type": "array",
       "minItems": 1,

@@ -190,9 +190,9 @@ export function workspaceLabel(seat: { name: string; role: string; label: string
   return `${seat.name} · ${seat.role}`;
 }
 
-/** Line 2, the pane's display_agent: the display, and ` · ` plus the effort when the file sets one. */
+/** Line 2's display_agent: the display, a space, then the effort, or `default` when the file sets none. Herdr writes the status word and ` · ` in front of this text. */
 export function displayAgent(seat: { display: string; effort?: string }): string {
-  return seat.effort ? `${seat.display} · ${seat.effort}` : seat.display;
+  return `${seat.display} ${seat.effort || 'default'}`;
 }
 
 function readEffort(
