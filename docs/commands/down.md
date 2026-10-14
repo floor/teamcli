@@ -1,7 +1,8 @@
 # team down
 
 Stops the team: asks every running seat the approved copy names to exit, closes its workspace, and
-stops the herdr session. A pane herdr names with something that copy does not carry is closed when
+stops the herdr session — unless something was left in it: an agent still running at the end keeps
+the session up, and the last line says it is not stopped and counts what is left in it. A pane herdr names with something that copy does not carry is closed when
 the state records that pane and that workspace for one seat, and left running when no seat record
 accounts for it: the name is not what decides. A pane with no name is closed on that same record.
 When the record also holds the process `up` launched, the pane is closed only while that process
