@@ -1,7 +1,10 @@
 # team up
 
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
-declares and this machine can run, and the watchdog pane. Seats already ready are left as they are.
+declares and this machine can run, and the watchdog pane. A fresh launch of the orchestrator or the
+operator starts in the project folder. Every other seat starts in the team's lobby. A lead already
+running, in the lobby or in the project folder, is left as it is: its pane is not closed and not
+moved. Every other seat already ready is left as it is.
 
 ## Synopsis
 

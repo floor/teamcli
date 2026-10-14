@@ -13,6 +13,7 @@ import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts'
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
+import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, hasSeat, restoreSeat, seatIsStopped } from '../file/lines.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -619,7 +620,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
       caller: who, owner: caller.kind === 'owner', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
-      verifiedLobby, records, teamFile: path,
+      verifiedLobby, startCwd: planSeat.cwd, inLobby: planSeat.lobby === true, records, teamFile: path,
       doctor: sources.doctor,
       // The lobby is read again directly before the workspace this run makes in it, with nothing
       // in between (`execute.ts`). Null when it is still the folder the gate read and every file
@@ -667,11 +668,14 @@ function temporarySeat(
   if (!until) return { error: '--until is result:<path> or merged:<branch>' };
   let own: boolean | undefined;
   if (until.kind === 'result') {
-    if (until.path.startsWith('/') || until.path.startsWith('~')) return { error: 'a result path is relative to the project' };
+    const problem = resultPathProblem(root, until.path);
+    if (problem) return { error: problem };
     if (existsSync(resolve(root, until.path))) return { error: `${until.path} already exists` };
   } else if (!base) {
     return { error: 'workspace.base is required to read a merged end' };
   } else {
+    const name = branchProblem(root, until.branch);
+    if (name) return { error: name };
     const read = readMerge(root, until.branch, base, false);
     const here = branchPresent(root, until.branch);
     if (read.detail.includes('the branch is gone') || here === false) return { error: `branch ${until.branch} doesn't exist` };
@@ -803,6 +807,9 @@ function hostOf(input: {
   standing: Standing;
   teamFile: string;
   verifiedLobby: string | null;
+  /** The folder this seat's workspace is created in. A lead's is the project; a lobby seat's is the verified lobby. */
+  startCwd: string;
+  inLobby: boolean;
   /** The run's writer, made by the caller before the launch-line note is said. */
   records: Progress;
   doctor: DoctorSources;
@@ -903,7 +910,13 @@ function hostOf(input: {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: patch.stage };
         let start_cwd = prior.start_cwd;
-        if (!start_cwd && patch.createdWorkspace && input.verifiedLobby) start_cwd = input.verifiedLobby;
+        if (!start_cwd && patch.createdWorkspace) {
+          if (input.inLobby) {
+            if (input.verifiedLobby) start_cwd = input.verifiedLobby;
+          } else {
+            start_cwd = input.startCwd;
+          }
+        }
         // `waiting: null` removes the field alone; anything else written replaces it.
         const { waiting: written, ...rest } = patch;
         const seatState: SeatState = { ...prior, ...rest, ...(temporary && name === seat.name ? { temporary } : {}), ...(start_cwd ? { start_cwd } : {}) };

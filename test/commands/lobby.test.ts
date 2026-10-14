@@ -675,11 +675,102 @@ describe('the lobby gate', () => {
     if (!gate.ok) expect(gate.text).toContain(`${symHome} is a symbolic link`);
   });
 
-  test('dry run shows every seat in the machine lobby', async () => {
+  test('a fresh launch starts a lead in the project and records that folder', async () => {
+    approveYaml(migratedTeamYaml());
+    const made = world();
+    const run = await runUpCmd([], made);
+    expect(run.code).toBe(0);
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: root });
+    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+    const state = readState(dir);
+    expect(state.sessions['acme']?.seats.lead?.start_cwd).toBe(root);
+    expect(state.sessions['acme']?.seats.worker?.start_cwd).toBe(canonicalLanding(lobby).landing);
+  });
+
+  test('a running lead recorded in the lobby is left there', async () => {
+    approveYaml(migratedTeamYaml());
+    updateState(dir, (st) => {
+      st.sessions['acme'] = {
+        seats: {
+          lead: { stage: 'ready', pane: 'w0:p1', workspace: 'w0', launched: { shell: 1, cli: [2] }, start_cwd: lobby },
+        },
+        worktrees: {},
+      };
+    });
+    const made = world();
+    made.session = 'running';
+    const run = await runUpCmd([], made, {
+      agents: () => [{ name: 'lead', agent: 'claude', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: null }],
+    });
+    expect(run.code).toBe(0);
+    expect(run.out).toContain('lead: ready\n');
+    expect(run.err).not.toContain('moves it into the lobby');
+    expect(made.closed).toEqual([]);
+    expect(readState(dir).sessions['acme']?.seats.lead?.start_cwd).toBe(lobby);
+    expect(readState(dir).sessions['acme']?.seats.lead?.pane).toBe('w0:p1');
+  });
+
+  test('a running lead recorded in the project is left there', async () => {
+    approveYaml(migratedTeamYaml());
+    updateState(dir, (st) => {
+      st.sessions['acme'] = {
+        seats: {
+          lead: { stage: 'ready', pane: 'w0:p1', workspace: 'w0', launched: { shell: 1, cli: [2] }, start_cwd: root },
+        },
+        worktrees: {},
+      };
+    });
+    const made = world();
+    made.session = 'running';
+    const run = await runUpCmd([], made, {
+      agents: () => [{ name: 'lead', agent: 'claude', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: null }],
+    });
+    expect(run.code).toBe(0);
+    expect(run.out).toContain('lead: ready\n');
+    expect(run.err).not.toContain('moves it into the lobby');
+    expect(made.closed).toEqual([]);
+    expect(readState(dir).sessions['acme']?.seats.lead?.start_cwd).toBe(root);
+    expect(readState(dir).sessions['acme']?.seats.lead?.pane).toBe('w0:p1');
+  });
+
+  test('a lead waiting at trust in the project or the lobby is not told the folder is wrong', async () => {
+    const yaml = migratedTeamYaml().replace(
+      '    name: lead\n    label: lead\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n',
+      '    name: lead\n    label: lead\n    cli: cursor\n    vendor: cursor\n    model: Composer\n    version: "2.5"\n    launch: cursor-agent\n',
+    );
+    approveYaml(yaml);
+    const captured = readFileSync(join(import.meta.dir, '..', 'fixtures', 'cursor', '2026.10.01', 'trust.txt'), 'utf8');
+    const screen = (folder: string) => captured.replace('<untrusted-directory>', folder);
+    const sources = {
+      version: (binary: string) => (binary === 'cursor-agent' ? '2026.10.01-14929f9' : '2.1.288'),
+      paneText: () => screen(root),
+      sessionRunning: () => true,
+      agentList: () => [{ name: 'lead', agent: 'cursor-agent', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: null }],
+    };
+    updateState(dir, (st) => {
+      st.sessions['acme'] = {
+        seats: { lead: { stage: 'launched', pane: 'w0:p1', workspace: 'w0', waiting: { state: 'waiting-owner', classification: 'trust' } } },
+        worktrees: {},
+      };
+    });
+    const atRoot = await runDoctorCmd([], sources);
+    expect(atRoot.out).not.toContain('the pane is not the trust dialog');
+    expect(atRoot.out).not.toContain('lead: waiting at trust; the folder is not the lobby');
+    updateState(dir, (st) => {
+      st.sessions['acme'] = {
+        seats: { lead: { stage: 'launched', pane: 'w0:p1', workspace: 'w0', waiting: { state: 'waiting-owner', classification: 'trust' } } },
+        worktrees: {},
+      };
+    });
+    const atLobby = await runDoctorCmd([], { ...sources, paneText: () => screen(lobby) });
+    expect(atLobby.out).not.toContain('lead: waiting at trust; the folder is not the lobby');
+  });
+
+  test('dry run starts the lead in the project and every other seat in the machine lobby', async () => {
     approveYaml(migratedTeamYaml());
     const dry = await runUpCmd(['--dry-run'], world());
     expect(dry.code).toBe(0);
-    expect(dry.out).toContain(`workspace create --cwd ${lobby} --label lead`);
+    expect(dry.out).toContain(`workspace create --cwd ${root} --label lead`);
     expect(dry.out).toContain(`workspace create --cwd ${lobby} --label worker`);
     expect(dry.out).toContain('<pane of lead>');
     expect(dry.out).toContain('<pane of worker>');
@@ -694,7 +785,7 @@ describe('the lobby gate', () => {
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
     expect(existsSync(lobby)).toBe(true);
-    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
     expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
     expect(readdirSync(oldLobby)).toEqual([]);
   });
@@ -981,7 +1072,7 @@ describe('the lobby gate with files declared', () => {
     const made = world();
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
     expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
@@ -1022,27 +1113,27 @@ describe('the lobby gate with files declared', () => {
     };
   }
 
-  test('the declared file swapped after the gate creates no workspace: the record and the log hold the reason in words', async () => {
+  test('the declared file swapped after the gate leaves the lead in the project and refuses the lobby seat: the record and the log hold the reason in words', async () => {
     approveYaml(migratedTeamYaml());
     makeLobby();
     mkdirSync(join(lobby, '.claude'));
     writeFileSync(lock(), '{}\n');
 
     const made = world();
-    // The gate reads the lock first, the lead seat's confirmation second — the swap lands there.
+    // The gate reads the lock first. The lead starts in the project and does not read it again;
+    // the worker's confirmation is the second read, and the swap lands there.
     const run = await runUpCmd([], made, { fs: swapLockAt(2) });
     expect(run.code).toBe(1);
-    expect(made.workspaces).toEqual([]);
-    expect(made.paneIds()).toEqual([]);
-    expect(made.runs).toEqual([]);
-    expect(made.typed).toEqual([]);
-    expect(run.out).toContain('lead: left out: the lobby: .claude/scheduled_tasks.lock is not the file the gate read\n');
+    expect(made.workspaces).toEqual([{ label: 'Claude Opus 5.5', cwd: root }]);
+    expect(made.workspaces.some((workspace) => workspace.cwd === lobby)).toBe(false);
+    expect(run.out).toContain('lead: ready\n');
+    expect(run.out).toContain('worker: left out: the lobby: .claude/scheduled_tasks.lock is not the file the gate read\n');
     expect(run.out).not.toContain(lobby);
     expect(run.err).toContain(`  the lobby ${lobby}: .claude/scheduled_tasks.lock is not the file the gate read\n`);
     const log = readFileSync(join(dir, 'team.log'), 'utf8');
-    expect(log).toContain('lead: left out: the lobby: .claude/scheduled_tasks.lock is not the file the gate read');
+    expect(log).toContain('worker: left out: the lobby: .claude/scheduled_tasks.lock is not the file the gate read');
     expect(log).not.toContain(lobby);
-    expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual([]);
+    expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual(['lead']);
   });
 });
 
@@ -1149,7 +1240,7 @@ seats:
     const upWorld = codexWorld();
     const run = await runUpCmd([], upWorld);
     expect(run.code).toBe(0);
-    expect(upWorld.workspaces).toContainEqual({ label: 'lead', cwd: lobby });
+    expect(upWorld.workspaces).toContainEqual({ label: 'lead', cwd: root });
     expect(existsSync(lock())).toBe(true);
 
     const addWorld = codexWorld();
@@ -1435,6 +1526,18 @@ seats:
       const start = seatStart(loaded.team, lead, root, home);
       expect('problem' in start && start.problem).toContain('a shared seat never works in a protected checkout');
     }
+  });
+
+  test('a migrated lead starts in the project, and every other seat stays in the lobby', () => {
+    writeFileSync(join(root, '.agents', 'team.yaml'), migratedTeamYaml());
+    const loaded = loadTeamFile(root, { home });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    const lead = loaded.team.seats.find((seat) => seat.name === 'lead');
+    const worker = loaded.team.seats.find((seat) => seat.name === 'worker');
+    if (!lead || !worker) throw new Error('fixture seats missing');
+    expect(seatStart(loaded.team, lead, root, home)).toEqual({ cwd: root });
+    expect(seatStart(loaded.team, worker, root, home)).toEqual({ cwd: lobby, lobby: true });
   });
 
   test('containment: worktrees never land in a protected checkout', () => {
@@ -1733,6 +1836,7 @@ describe('start_cwd and removal check', () => {
     expect(upRes.code).toBe(0);
 
     const state = readState(dir);
+    expect(state.sessions['acme']?.seats['lead']?.start_cwd).toBe(root);
     expect(state.sessions['acme']?.seats['worker']?.start_cwd).toBe(canonicalLanding(lobby).landing);
 
     const statusRes = await runStatusCmd(['--json']);
@@ -2644,10 +2748,11 @@ describe('a launch line that cannot run where the seat starts', () => {
     const run = await runUpCmd(['--dry-run'], world());
     expect(run.code).toBe(0);
     expect(run.out).toContain('worker: would refuse: its launch line runs `../tools/x.sh`');
-    expect(run.out).toContain(lobby);
+    expect(run.out).toContain('not found from its start folder ../worktrees/acme/.lobby');
     expect(run.out).not.toContain('<pane of worker>');
     expect(run.out).not.toContain('mkdir -p');
-    expect(run.out).toContain(`--cwd ${lobby} --label lead`);
+    expect(run.out).toContain(`--cwd ${root} --label lead`);
+    expect(run.out).not.toContain(`--cwd ${lobby}`);
   });
 
   test('the real run refuses that seat only: its workspace is never made, the others start', async () => {
@@ -2658,7 +2763,8 @@ describe('a launch line that cannot run where the seat starts', () => {
     const run = await runUpCmd([], made);
     expect(run.code).toBe(1);
     expect(run.out).toContain('worker: left out: refused: its launch line runs `../tools/x.sh`');
-    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
+    expect(made.workspaces.some((workspace) => workspace.cwd === lobby)).toBe(false);
     expect(made.workspaces.some((workspace) => workspace.label === 'worker')).toBe(false);
   });
 
@@ -2792,25 +2898,25 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     };
   }
 
-  test('a lobby swapped after the gate creates no workspace, no pane and no typed input: the record and the log hold the reason in words', async () => {
+  test('a lobby swapped after the gate leaves the lead in the project and refuses the lobby seat: the record and the log hold the reason in words', async () => {
     approveYaml(migratedTeamYaml());
     const made = world();
     // The replacement is a real folder of the same owner, mode and emptiness: no link, no mode
     // difference, the same canonical path. Only device and inode tell it from the gate's folder.
     const run = await runUpCmd([], made, { fs: swapLobbyAt(2, 'folder') });
     expect(run.code).toBe(1);
-    expect(made.workspaces).toEqual([]);
-    expect(made.paneIds()).toEqual([]);
-    expect(made.runs).toEqual([]);
+    expect(made.workspaces).toEqual([{ label: 'Claude Opus 5.5', cwd: root }]);
+    expect(made.workspaces.some((workspace) => workspace.cwd === lobby)).toBe(false);
     expect(made.typed).toEqual([]);
     // The record holds the words; the folder it names is stderr detail, for the owner alone.
-    expect(run.out).toContain('lead: left out: the lobby: it is not the folder the gate read\n');
+    expect(run.out).toContain('lead: ready\n');
+    expect(run.out).toContain('worker: left out: the lobby: it is not the folder the gate read\n');
     expect(run.out).not.toContain(lobby);
     expect(run.err).toContain(`  the lobby ${lobby}: it is not the folder the gate read\n`);
     const log = readFileSync(join(dir, 'team.log'), 'utf8');
-    expect(log).toContain('lead: left out: the lobby: it is not the folder the gate read');
+    expect(log).toContain('worker: left out: the lobby: it is not the folder the gate read');
     expect(log).not.toContain(lobby);
-    expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual([]);
+    expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual(['lead']);
   });
 
   test('add creates nothing for the same swap, and leaves the folder it names unchanged: the log holds no folder', async () => {
@@ -2840,11 +2946,11 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
   test('a swap between two seats stops the next one and leaves the first running: the stopped seat’s record and log hold no folder', async () => {
     approveYaml(migratedTeamYaml());
     const made = world();
-    // The gate reads first, the lead's confirmation second (the swap is not there yet), the
-    // worker's confirmation third — after the lead was created, before the worker is.
-    const run = await runUpCmd([], made, { fs: swapLobbyAt(3, 'folder') });
+    // The gate reads first. The lead starts in the project and does not read the lobby again;
+    // the worker's confirmation is the second read, and the swap lands there.
+    const run = await runUpCmd([], made, { fs: swapLobbyAt(2, 'folder') });
     expect(run.code).toBe(1);
-    expect(made.workspaces).toEqual([{ label: 'lead', cwd: lobby }]);
+    expect(made.workspaces).toEqual([{ label: 'lead', cwd: root }]);
     expect(run.out).toContain('lead: ready');
     expect(run.out).toContain('worker: left out: the lobby: it is not the folder the gate read\n');
     expect(run.out).not.toContain(lobby);
@@ -2852,7 +2958,7 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     const log = readFileSync(join(dir, 'team.log'), 'utf8');
     expect(log).toContain('worker: left out: the lobby: it is not the folder the gate read');
     expect(log).not.toContain(lobby);
-    // The first seat was created while the path was the verified lobby; nothing closes it.
+    // The lead was created in the project; nothing closes it.
     expect(made.closed).toEqual([]);
     expect(made.launch.agentPanes('acme')).toEqual(['w1:p1']);
   });
@@ -2930,10 +3036,10 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     const made = world();
     const run = await runUpCmd([], made, { home: homeLink });
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: canonical });
+    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
     expect(made.workspaces).toContainEqual({ label: 'worker', cwd: canonical });
     const state = readState(dir);
-    expect(state.sessions['acme']?.seats['lead']?.start_cwd).toBe(canonical);
+    expect(state.sessions['acme']?.seats['lead']?.start_cwd).toBe(root);
     expect(state.sessions['acme']?.seats['worker']?.start_cwd).toBe(canonical);
   });
 
@@ -3002,13 +3108,15 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     expect(state.sessions['acme']?.seats.worker?.start_cwd).toBe(lobby);
   });
 
-  test('every migrated seat starts in the lobby', () => {
+  test('a migrated lead starts in the project and every other seat starts in the lobby', () => {
     writeFileSync(join(root, '.agents', 'team.yaml'), migratedTeamYaml());
     const loaded = loadTeamFile(root, { home });
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
     for (const seat of loaded.team.seats) {
-      expect(seatStart(loaded.team, seat, root, home)).toEqual({ cwd: lobby, lobby: true });
+      const start = seatStart(loaded.team, seat, root, home);
+      if (seat.name === 'lead') expect(start).toEqual({ cwd: root });
+      else expect(start).toEqual({ cwd: lobby, lobby: true });
     }
   });
 

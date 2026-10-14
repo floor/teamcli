@@ -95,7 +95,8 @@ export function shellQuote(word: string): string {
  * them at launch, the rules.
  */
 export function launchCommand(profile: Profile, launch: string, rules: string): string {
-  const options = [...profile.unattended];
+  const words = new Set(launch.trim().split(/\s+/));
+  const options = profile.unattended.filter((option) => !words.has(option));
   if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
   return ['AGENT_UNATTENDED=1', launch.trim(), ...options.map(shellQuote)].join(' ');
 }

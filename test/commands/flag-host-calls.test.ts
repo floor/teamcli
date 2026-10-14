@@ -9,17 +9,19 @@
 // message's file), and `approve`, `commits`, `pr` and `release` reach no herdr.
 import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf, verifiedOf } from '../../src/approve/approval.ts';
+import { upFingerprint } from '../../src/approve/owner-token.ts';
 import type { CallerSources } from '../../src/caller.ts';
 import type { AnswerHost } from '../../src/commands/answer.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { StatusSources } from '../../src/commands/status.ts';
+import type { UpSources } from '../../src/commands/up.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { emptySession, updateState } from '../../src/state.ts';
-import { storePath, writeApproval } from '../../src/store/store.ts';
+import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { testIo } from '../helpers.ts';
 
 // A reorder that reads the flagged file before refusing it changes no bytes and prints the same
@@ -51,10 +53,12 @@ mock.module('node:fs', () => {
 let runAnswer: (typeof import('../../src/commands/answer.ts'))['runAnswer'];
 let runDoctor: (typeof import('../../src/commands/doctor.ts'))['runDoctor'];
 let runStatus: (typeof import('../../src/commands/status.ts'))['runStatus'];
+let runUp: (typeof import('../../src/commands/up.ts'))['runUp'];
 beforeAll(async () => {
   ({ runAnswer } = await import('../../src/commands/answer.ts'));
   ({ runDoctor } = await import('../../src/commands/doctor.ts'));
   ({ runStatus } = await import('../../src/commands/status.ts'));
+  ({ runUp } = await import('../../src/commands/up.ts'));
 });
 
 const NOW = new Date('2026-10-03T14:02:00Z');
@@ -312,6 +316,240 @@ describe('doctor: --session for a non-owner', () => {
     expect(io.out).toContain('session team-test is not running');
     // Doctor writes nothing beside the file it read.
     expect(existsSync(stateFile)).toBe(false);
+  });
+});
+
+const OWNER_REFUSAL = 'team up: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr)\n';
+
+/** The fingerprint of this folder's approved record: the token a matching owner authorization carries. */
+function matchingOwnerToken(): string {
+  approveFile();
+  const standing = approvalStanding(root, home);
+  if (standing.kind !== 'verified') throw new Error('fixture approval did not verify');
+  return upFingerprint(standing.record.approval.fingerprints, standing.generation);
+}
+
+function recordingUp(calls: string[]): UpSources {
+  return {
+    sessionRunning: (session) => {
+      calls.push(`sessionRunning(${session})`);
+      return true;
+    },
+    sessionState: (session) => {
+      calls.push(`sessionState(${session})`);
+      return 'running';
+    },
+    agents: (session) => {
+      calls.push(`agents(${session})`);
+      return [];
+    },
+    workspaces: () => {
+      calls.push('workspaces');
+      return [];
+    },
+    home,
+    now: () => NOW,
+    sleep: async () => {},
+    alive: () => false,
+  };
+}
+
+describe('up: --file and --session for a non-owner', () => {
+  test('a non-owner aiming --file is refused before any host call', async () => {
+    const flagged = join(base, 'flagged');
+    mkdirSync(join(flagged, '.agents'), { recursive: true });
+    const flaggedFile = join(flagged, '.agents/team.yaml');
+    writeFileSync(flaggedFile, 'format: [\n');
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    watching = flagged;
+    touched.length = 0;
+    const code = await runUp(['--file', flaggedFile], io, recordingUp(calls));
+    watching = undefined;
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(touched).toEqual([]);
+    expect(readFileSync(flaggedFile, 'utf8')).toBe('format: [\n');
+    expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
+    expect(existsSync(join(flagged, '.agents', 'team.log'))).toBe(false);
+    expect(existsSync(join(flagged, '.agents', 'team.state.json'))).toBe(false);
+  });
+
+  test('a non-owner aiming --session is refused before any host call', async () => {
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions['acme-web'] = emptySession();
+    });
+    const beforeState = readFileSync(stateFile, 'utf8');
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    const code = await runUp(['--session', 'elsewhere'], io, recordingUp(calls));
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(readFileSync(stateFile, 'utf8')).toBe(beforeState);
+    expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
+  });
+
+  test('a non-owner with an owner token and a foreign --file is still refused before any host call', async () => {
+    const flagged = join(base, 'flagged');
+    mkdirSync(join(flagged, '.agents'), { recursive: true });
+    const flaggedFile = join(flagged, '.agents/team.yaml');
+    writeFileSync(flaggedFile, 'format: [\n');
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    io.env = { TEAM_OWNER_APPROVAL: 'not-the-fingerprint' };
+    watching = flagged;
+    touched.length = 0;
+    const code = await runUp(['--file', flaggedFile], io, recordingUp(calls));
+    watching = undefined;
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(touched).toEqual([]);
+    expect(readFileSync(flaggedFile, 'utf8')).toBe('format: [\n');
+  });
+
+  test('a non-owner with a matching owner token and a foreign --file is refused before any host call', async () => {
+    const token = matchingOwnerToken();
+    const flagged = join(base, 'flagged');
+    mkdirSync(join(flagged, '.agents'), { recursive: true });
+    const flaggedFile = join(flagged, '.agents/team.yaml');
+    writeFileSync(flaggedFile, 'format: [\n');
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    io.env = { TEAM_OWNER_APPROVAL: token };
+    watching = flagged;
+    touched.length = 0;
+    const code = await runUp(['--file', flaggedFile], io, recordingUp(calls));
+    watching = undefined;
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(touched).toEqual([]);
+    expect(readFileSync(flaggedFile, 'utf8')).toBe('format: [\n');
+  });
+
+  test('a non-owner with a matching owner token and --session is refused before any host call', async () => {
+    const token = matchingOwnerToken();
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions['acme-web'] = emptySession();
+    });
+    const beforeState = readFileSync(stateFile, 'utf8');
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    io.env = { TEAM_OWNER_APPROVAL: token };
+    const code = await runUp(['--session', 'elsewhere'], io, recordingUp(calls));
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(readFileSync(stateFile, 'utf8')).toBe(beforeState);
+  });
+
+  test('a non-owner whose default file yields a delegate verdict, with a foreign --file, is refused before that file or a host is touched', async () => {
+    writeFileSync(join(root, '.agents/team.yaml'), `${fileText()}delegates:\n  - pane: main/w1:p1\n    commands: [up]\n`);
+    const flagged = join(base, 'flagged');
+    mkdirSync(join(flagged, '.agents'), { recursive: true });
+    const flaggedFile = join(flagged, '.agents/team.yaml');
+    writeFileSync(flaggedFile, 'format: [\n');
+    const calls: string[] = [];
+    let asked = 0;
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    io.env = { TEAM_OWNER_APPROVAL: 'not-the-fingerprint' };
+    watching = flagged;
+    touched.length = 0;
+    const code = await runUp(['--file', flaggedFile], io, {
+      ...recordingUp(calls),
+      delegateGate: () => {
+        asked++;
+        return { kind: 'refused', id: 'up.delegate-flag', text: "--file is the owner's; the approved delegate cannot use it" };
+      },
+    });
+    watching = undefined;
+    expect(code).toBe(1);
+    expect(asked).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe("team up: --file is the owner's; the approved delegate cannot use it\n");
+    expect(calls).toEqual([]);
+    expect(touched).toEqual([]);
+    expect(readFileSync(flaggedFile, 'utf8')).toBe('format: [\n');
+  });
+
+  test('a non-owner whose default file yields a delegate verdict, with --session, is refused before a host call', async () => {
+    writeFileSync(join(root, '.agents/team.yaml'), `${fileText()}delegates:\n  - pane: main/w1:p1\n    commands: [up]\n`);
+    const calls: string[] = [];
+    let asked = 0;
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    io.env = { TEAM_OWNER_APPROVAL: 'not-the-fingerprint' };
+    const code = await runUp(['--session', 'elsewhere'], io, {
+      ...recordingUp(calls),
+      delegateGate: () => {
+        asked++;
+        return { kind: 'refused', id: 'up.delegate-flag', text: "--session is the owner's; the approved delegate cannot use it" };
+      },
+    });
+    expect(code).toBe(1);
+    expect(asked).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe("team up: --session is the owner's; the approved delegate cannot use it\n");
+    expect(calls).toEqual([]);
+  });
+
+  test('a link to this folder\'s own team file is refused before the link is read', async () => {
+    const link = join(root, 'team-link.yaml');
+    symlinkSync(join(root, '.agents/team.yaml'), link);
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    watching = link;
+    touched.length = 0;
+    const code = await runUp(['--file', link], io, recordingUp(calls));
+    watching = undefined;
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(touched).toEqual([]);
+  });
+
+  test('a differently-cased spelling of this folder\'s own team file is refused before it is read', async () => {
+    const spelled = join(root, '.agents/Team.yaml');
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    watching = spelled;
+    touched.length = 0;
+    const code = await runUp(['--file', spelled], io, recordingUp(calls));
+    watching = undefined;
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(OWNER_REFUSAL);
+    expect(calls).toEqual([]);
+    expect(touched).toEqual([]);
+  });
+
+  test('a non-owner with no flag is refused after its session is asked', async () => {
+    approveFile();
+    const calls: string[] = [];
+    const io = testIo(root);
+    io.callerSources = underHerdr(calls);
+    const code = await runUp([], io, recordingUp(calls));
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain('team up: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs in a herdr pane without an agent)\n');
+    expect(calls.some((call) => call.startsWith('sessionState('))).toBe(true);
   });
 });
 

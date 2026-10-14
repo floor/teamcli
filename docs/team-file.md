@@ -73,7 +73,9 @@ either way. Nothing in this build writes the file or the tracker.
 
 ## `seats`
 
-Each seat names a model and how it is launched. The fields are in the README's
+Each seat names a model and how it is launched. The orchestrator and the operator start in
+the project folder. Every other seat starts in the team's lobby. A lead already running in
+either folder is left there. The fields are in the README's
 [file format](../README.md#the-files-format). The sidebar has two lines:
 
 - `label`, when the file writes one, is line 1, the workspace title. A seat expanded from

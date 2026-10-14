@@ -442,7 +442,7 @@ function quoted(values: string[]): string {
 }
 
 /** A waiting trust dialog, and a trust key already sent. A warn blocks `answer`, not the owner's `up`. */
-function trustFindings(team: TeamFile, dir: string, session: string, sources: DoctorSources): Finding[] {
+function trustFindings(team: TeamFile, root: string, dir: string, session: string, sources: DoctorSources): Finding[] {
   if (!sources.paneText) return [];
   const seats = readState(dir).sessions[session]?.seats ?? {};
   const findings: Finding[] = [];
@@ -482,10 +482,13 @@ function trustFindings(team: TeamFile, dir: string, session: string, sources: Do
       const shown = extractFolder(inRange.extract, screen);
       const landed = shown ? showLanding(shown) : null;
       const lobby = showLanding(resolveLobby(sources.home, team));
-      // The shown spelling must be the lobby itself, not something that only
-      // canonicalises to it: `answer` refuses a trailing slash, another case,
-      // `//` or `/./`, and doctor warns about what `answer` would refuse.
-      if (!landed || !lobby || landed !== lobby || shown !== lobby) {
+      const project = showLanding(root);
+      // A lead may be showing the lobby or the project: both are folders `up` leaves a running
+      // lead in. The shown spelling must be that folder itself, not something that only
+      // canonicalises to it: `answer` refuses a trailing slash, another case, `//` or `/./`.
+      const atLobby = Boolean(landed && lobby && landed === lobby && shown === lobby);
+      const atProject = isLeadSeat(team, name) && Boolean(landed && project && landed === project && shown === project);
+      if (!atLobby && !atProject) {
         findings.push({ level: 'warn', text: `${name}: waiting at trust; the folder is not the lobby` });
       }
     }
@@ -641,7 +644,7 @@ export function doctorFindings(
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
 
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
-  findings.push(...trustFindings(team, dir, session, sources));
+  findings.push(...trustFindings(team, root, dir, session, sources));
 
   const lobby = resolveLobby(sources.home, team);
   // The same closed tree the launch's gate walks: the `lobby_files` of every profile the tool
@@ -710,6 +713,8 @@ export function doctorFindings(
           const unknown: string[] = [];
           for (const [name, s] of activeSeats) {
             if (s.start_cwd) {
+              // The machine lobby and the project root are not this old folder. A lead recorded
+              // in either is not told to move.
               if (s.start_cwd === oldLanding) inOld.push(name);
               continue;
             }
