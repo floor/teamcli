@@ -1062,8 +1062,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           }
         });
         if (patch.pane) {
-          if (replaced) forgetLaunchedPane(sources.home, replaced);
-          noteLaunchedPane(sources.home, loaded.path, patch.pane);
+          if (replaced) forgetLaunchedPane(sources.home, replaced, session);
+          noteLaunchedPane(sources.home, loaded.path, patch.pane, session);
         }
       },
       running(name) {
@@ -1078,7 +1078,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           pane = seats?.[name]?.pane;
           if (seats) delete seats[name];
         });
-        if (pane) forgetLaunchedPane(sources.home, pane);
+        if (pane) forgetLaunchedPane(sources.home, pane, session);
       },
       // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
       // here with the same function the records use: no escape sequence or bidi override reaches

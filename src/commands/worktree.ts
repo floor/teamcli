@@ -35,6 +35,7 @@ export const realSources: WorktreeSources = {
 type Run = { code: number; stdout: string; stderr: string };
 
 export const USAGE = `Usage: team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]
+       team worktree list [--session <name>] [--file <path>]
        team worktree remove <task> [--session <name>] [--file <path>]
 Ignored files in the worktree are deleted with it.
 `;
@@ -51,23 +52,23 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     // exit: worktree.invocation
     return 2;
   }
-  if (sub !== 'new' && sub !== 'remove') {
+  if (sub !== 'new' && sub !== 'remove' && sub !== 'list') {
     io.stderr(`team worktree: ${sub ? `unknown subcommand "${sub}"` : 'a subcommand is required'}\n${USAGE}`);
     // exit: worktree.subcommand
     return 2;
   }
-  if (!task) {
+  if (sub !== 'list' && !task) {
     io.stderr(`team worktree: a task name is required\n${USAGE}`);
     // exit: worktree.task-required
     return 2;
   }
-  if (args.rest.length > 2) {
-    io.stderr(`team worktree: unexpected "${args.rest[2]}"\n${USAGE}`);
+  if (sub === 'list' ? args.rest.length > 1 : args.rest.length > 2) {
+    io.stderr(`team worktree: unexpected "${sub === 'list' ? args.rest[1] : args.rest[2]}"\n${USAGE}`);
     // exit: worktree.extra
     return 2;
   }
-  if (sub === 'remove' && (args.values.kind || args.values.seat)) {
-    io.stderr(`team worktree: remove takes no --kind or --seat\n${USAGE}`);
+  if ((sub === 'remove' || sub === 'list') && (args.values.kind || args.values.seat)) {
+    io.stderr(`team worktree: ${sub} takes no --kind or --seat\n${USAGE}`);
     // exit: worktree.remove-flags
     return 2;
   }
@@ -75,8 +76,8 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   // The `--file` check is the walk's, and it runs before that file is read: a non-owner aiming
   // `--file` must not make this command read and validate another project's team file, nor ask
   // the host about that file's session — the one place every command whose `--file` is the owner's decides
-  // it is `fileOwnerRefusal` (caller.ts). Both subcommands (`worktree new`, `worktree remove`)
-  // run this same gate before the load below.
+  // it is `fileOwnerRefusal` (caller.ts). `list`, `new` and `remove` run this same gate before the
+  // load below.
   const fileRefusal = fileOwnerRefusal(io, args.values.file);
   if (fileRefusal !== undefined) {
     io.stderr(`team worktree: ${fileRefusal}\n`);
@@ -119,7 +120,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     return 2;
   }
   const { team, root } = loaded;
-  // One verified snapshot for the whole command, read once: every value the two subcommands read
+  // One verified snapshot for the whole command, read once: every value the subcommands read
   // from the file is the approved copy's, including when the fingerprints match. The caller's
   // gate below is judged on those values too — a seat the file added to `orchestrator` is not one
   // until the owner approves it. With nothing verified the file's own values are read, exactly
@@ -174,8 +175,21 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   }
 
   const who = describeCaller(caller);
-  if (sub === 'new') return create(io, sources, reading, team, root, dir, session, task, args.values.kind, args.values.seat, who);
-  return removeWorktree(io, sources, reading, root, dir, session, task, who);
+  if (sub === 'list') return listWorktrees(io, reading, root, dir);
+  // `list` is the only subcommand that arrives without a task; the gate above already returned.
+  const named = task ?? '';
+  if (sub === 'new') return create(io, sources, reading, team, root, dir, session, named, args.values.kind, args.values.seat, who);
+  return removeWorktree(io, sources, reading, root, dir, session, named, who);
+}
+
+// The counted entries, and nothing else: no lock, no state write, no log line. The same rows
+// the limit refusal names. A missing folder stays a row until `team worktree remove` drops it.
+function listWorktrees(io: Io, team: TeamFile, root: string, dir: string): number {
+  const rows = worktreeRows(readState(dir), root);
+  const lines = [`${rows.length} open, limit ${team.workspace.limit} (workspace.limit)`, ...rows.map(worktreeRow)];
+  io.stdout(`${lines.join('\n')}\n`);
+  // exit: worktree.listed
+  return 0;
 }
 
 // `team` is the approved copy for a verified standing, or the live file when nothing is verified;
@@ -266,7 +280,7 @@ function create(
   let refused: string | null = null;
   const outcome = withLock(dir, () => {
     const state = readState(dir);
-    refused = openRefusal(state, team.workspace.limit, task, session);
+    refused = openRefusal(state, team.workspace.limit, task, session, root);
     if (refused) return null;
     if (existsSync(absolute)) {
       refused = `${folder} already exists`;
@@ -422,18 +436,44 @@ export function removeWorktree(
   return 0;
 }
 
-function openRefusal(state: State, limit: number, task: string, session: string): string | null {
-  let open = 0;
+function openRefusal(state: State, limit: number, task: string, session: string, root: string): string | null {
   for (const [name, recorded] of Object.entries(state.sessions)) {
-    open += Object.keys(recorded.worktrees).length;
     if (recorded.worktrees[task]) {
       return name === session
         ? `${JSON.stringify(task)} is already recorded`
         : `${JSON.stringify(task)} is already recorded in session ${name}`;
     }
   }
-  if (open >= limit) return `the worktree limit is ${limit}, and ${open} are open`;
+  const rows = worktreeRows(state, root);
+  if (rows.length >= limit) {
+    return `the worktree limit is ${limit}, and ${rows.length} are open (workspace.limit in the team file)\n${rows.map(worktreeRow).join('\n')}`;
+  }
   return null;
+}
+
+// One row per counted key, every session of this state file. Sorted so the list and the
+// refusal name the same entries in the same order.
+function worktreeRows(state: State, root: string): { task: string; session: string; seat?: string; path: string; exists: boolean }[] {
+  const rows: { task: string; session: string; seat?: string; path: string; exists: boolean }[] = [];
+  for (const [session, recorded] of Object.entries(state.sessions)) {
+    for (const [task, work] of Object.entries(recorded.worktrees)) {
+      rows.push({
+        task,
+        session,
+        seat: work.seat,
+        path: work.path,
+        exists: existsSync(resolve(root, work.path)),
+      });
+    }
+  }
+  rows.sort((a, b) => a.session.localeCompare(b.session) || a.task.localeCompare(b.task));
+  return rows;
+}
+
+function worktreeRow(row: { task: string; session: string; seat?: string; path: string; exists: boolean }): string {
+  const seat = row.seat ? ` seat ${row.seat}` : '';
+  const folder = row.exists ? 'folder exists' : `folder gone; team worktree remove ${row.task}`;
+  return `${row.task} session ${row.session}${seat} ${row.path} ${folder}`;
 }
 
 // The record in the session this call is for. A record that lives only in another session is
