@@ -30,6 +30,12 @@ export type SeatState = {
    * recorded, and on one herdr could not tell about: both keep today's behaviour.
    */
   launched?: LaunchedIdentity;
+  /**
+   * The agent session herdr reported for this seat when its idle prompt appeared, beside the
+   * process ids. A later pane whose pids differ and whose live session equals this one is the
+   * seat (`replacedSeat`). Absent when the launch's reading had none.
+   */
+  agent_session?: string;
   // `own_commits` is the home for a temporary seat whose end is `merged:` and that has no worktree.
   // A seat in a worktree keeps that record on the worktree instead.
   temporary?: { like: string; until: string; task?: string; own_commits?: boolean };

@@ -146,26 +146,38 @@ file a flagless watch in the project folder would not read, `up` still starts th
 command it runs carries no `--file`. The resolved path is recorded for the watchdog pane. That
 pane may read it. Any other non-owner is refused. The command line and the plan do not print the path.
 
-A seat is its pane only while the process `team` launched is still in it. A seat the state records
-whose pane no longer holds that process is not "already ready": its workspace is closed without a
-key and without input — its pane runs no CLI, or one team did not launch, and nothing in it is the
-seat — and the seat is launched fresh with its rules. Its record is `<seat>: ready`, and the detail
-under it says both: `  its pane held no CLI; closed without input and launched again` when the pane
-was back at its shell, `  its pane held a process team did not launch; closed without input and
-launched again` when another process held it.
+A seat is its pane while the process `team` launched is still in it, or while herdr names that
+seat on the recorded pane and the agent session there is the one stored beside the launch. A seat
+the state records whose pane is back at its shell is not "already ready": its workspace is closed
+without a key and without input, and the seat is launched fresh with its rules. The seat's name
+still being listed does not keep that pane. Its record is `<seat>: ready`, and the detail under it
+says `  its pane held no CLI; closed without input and launched again`.
+
+A pane that holds a program, and whose agent session is the one stored at launch, is the seat.
+Nothing is closed and nothing is typed. The record stays `<seat>: ready`, the detail says
+`  restored; left as it is`, and the stored process ids become the ones the pane holds now. A
+model on that screen that differs from the file is named on the same detail (`its model drifted;
+left as it is`) and is not closed.
+
+A pane that holds a program the record cannot tie to the launch — no stored agent session, a
+different one, or an agent list that could not be read — is left as it is. Nothing is closed. A
+ready seat's record stays `<seat>: ready` and the detail says `  its pane holds a process this
+record cannot tie to the launch`. A seat that had not reached ready is left out with that reason.
+The stored process ids are not rewritten.
 
 The reading that decides the repair is taken while the plan is built, and the close can be minutes
 later, after every seat before this one was created, waited for and delivered to. `up` reads herdr
 again immediately before it, with nothing between those reads and the close, and closes only a pane
-that is provably still the seat's stale one: the agent list must name this seat on the recorded
+that is provably still the seat's stale shell: the agent list must name this seat on the recorded
 pane, that pane's workspace as herdr reports it now must be the recorded workspace, that workspace
-must hold no other panes (named or not), the process reading must still say the pane runs no CLI or
-another process, and a pane held by another process must not read `working` or `unsent` — a process
-that is working or holds unsent text is never closed by `up`, whoever started it. A close for a
-drifted model asks one thing more of that re-read: the process must still be the one `team`
-launched, the screen must still name a different model, and the seat must still be idle or done
-with no running turn on its screen. A model that now matches the file closes nothing and is not
-an error.
+must hold no other panes (named or not), and the process reading must still say the pane runs no
+CLI. A program in front is not closed: when its agent session is the stored one, the seat is
+recorded ready under the pids the pane holds now; otherwise the seat is left out and the record
+says the process cannot be tied to the launch. A pane held by another process that reads `working`
+or `unsent` is never closed by `up`, whoever started it. A close for a drifted model asks one
+thing more of that re-read: the process must still be the one `team` launched, the screen must
+still name a different model, and the seat must still be idle or done with no running turn on its
+screen. A model that now matches the file closes nothing and is not an error.
 When any of that does not hold, nothing is closed, nothing is launched for that seat, its state is
 left as it is, the seat is out of the run, and `up` exits 1 with one record:
 
@@ -181,6 +193,8 @@ left as it is, the seat is out of the run, and `up` exits 1 with one record:
 | `<seat>: left out: its workspace holds other panes; nothing closed (close its pane there, then run team up)` | herdr's pane listing for the recorded workspace holds more than the seat's recorded pane |
 | `<seat>: left out: the process in its pane is working; nothing closed (stop it there, or run team remove <seat>)` | a process team did not launch holds the pane and its screen reads `working` |
 | `<seat>: left out: the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove <seat>)` | a process team did not launch holds the pane and its screen reads `unsent` |
+| `<seat>: left out: its pane holds a process this record cannot tie to the launch` | between the plan and the close a program is in front, and its agent session is not the one stored at launch. Nothing is closed. Not an error |
+| `<seat>: ready`, detail `  restored; left as it is` | between the plan and the close the pane's agent session is the one stored at launch. The stored process ids become the ones the pane holds now. Not an error |
 | `<seat>: left out: its pane could not be read; nothing closed` | herdr can't give the workspace's panes, the pane's processes, or its screen reads as nothing this version knows |
 
 This comparison is wrong in the safe direction, but it is wrong: a CLI that replaces its own
