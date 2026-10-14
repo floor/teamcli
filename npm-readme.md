@@ -38,7 +38,7 @@ the file stays private to your clone (it goes in `.git/info/exclude`, never `.gi
 ## What it needs
 
 - Node 22 or later, and [herdr](https://herdr.dev), the terminal multiplexer the team runs in.
-- Each seat's CLI, installed and signed in: Claude Code, Codex, Cursor or Antigravity. `team doctor`
+- Each seat's CLI, installed and signed in: Claude Code, Codex, Cursor, Antigravity or Grok. `team doctor`
   says what is missing; `team doctor --login` checks the sign-ins read-only.
 - The owner's terminal, outside herdr, for `approve` and `up`: both read the processes above the
   call and refuse a seat — or an agent-run CLI — that makes it. That guards against a mistaken

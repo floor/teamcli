@@ -161,8 +161,10 @@ export function readState(dir: string): State {
     // the log line a waiting seat writes, the status row and its `difference:` line, the prompt a
     // resumed wait draws — takes the reading from here, so a hand-edited or corrupted record can
     // never print whatever it holds.
+    const seenIds = new Set<string>();
     for (const seat of Object.values(session.seats)) {
-      if (seat.id !== undefined && !isSeatId(seat.id)) delete seat.id;
+      if (seat.id !== undefined && (!isSeatId(seat.id) || seenIds.has(seat.id))) delete seat.id;
+      else if (seat.id !== undefined) seenIds.add(seat.id);
       if (seat.model !== undefined && typeof seat.model !== 'string') delete seat.model;
       if (seat.version !== undefined && typeof seat.version !== 'string') delete seat.version;
       if (seat.effort !== undefined && typeof seat.effort !== 'string') delete seat.effort;
@@ -174,10 +176,11 @@ export function readState(dir: string): State {
     }
     if (session.retained_seats && typeof session.retained_seats === 'object') {
       for (const [name, retained] of Object.entries(session.retained_seats)) {
-        if (!retained || typeof retained !== 'object' || !isSeatId(retained.id)) {
+        if (!retained || typeof retained !== 'object' || !isSeatId(retained.id) || seenIds.has(retained.id)) {
           delete session.retained_seats[name];
           continue;
         }
+        seenIds.add(retained.id);
         if (retained.last_active !== undefined && typeof retained.last_active !== 'string') {
           delete retained.last_active;
         }

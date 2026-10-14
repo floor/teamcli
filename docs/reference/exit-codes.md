@@ -95,6 +95,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `approve.delegate-flag` | `approve` | 1 | a flag of the owner's was passed to the approved delegate | `team approve --file <path>` |
 | `approve.delegate-not-ordinary` | `approve` | 1 | the change moves an owner section a delegate may not: it needs the owner | `team approve` |
 | `approve.delegate-placement` | `approve` | 1 | the approved delegate must be an external non-seat pane | `team approve` |
+| `approve.grant-another-pane` | `approve` | 1 | the granted seat is not on its recorded pane | `team approve` |
+| `approve.grant-approval` | `approve` | 1 | a grant needs a verified approval | `team approve` |
+| `approve.grant-approved-copy` | `approve` | 1 | a grant needs a readable approved copy | `team approve` |
+| `approve.grant-caller` | `approve` | 1 | only the seat the grant names runs this | `team approve` |
+| `approve.grant-flag` | `approve` | 1 | a granted seat cannot aim --file | `team approve --file other` |
+| `approve.grant-no-pane` | `approve` | 1 | no pane is recorded for the granted seat | `team approve` |
+| `approve.grant-not-ordinary` | `approve` | 1 | this change needs the owner | `team approve` |
+| `approve.grant-scope` | `approve` | 1 | the grant does not list approve | `team approve` |
 | `approve.input-unreadable` | `approve` | 1 | the terminal could not be read to check for input waiting | `team approve` |
 | `approve.input-waiting` | `approve` | 1 | input was waiting on the terminal | `team approve` |
 | `approve.key` | `approve` | 1 | the signing key can't be read | `team approve` |
@@ -190,6 +198,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.herdr` | `down` | 2 | herdr doesn't answer | `team down` |
 | `down.invocation` | `down` | 2 | the invocation can't be read | `team down extra` |
 | `down.not-a-repo` | `down` | 2 | not inside a git repository | `team down` |
+| `feed.ok` | `feed` | 0 | the message feed was printed | `team feed` |
+| `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
+| `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
+| `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |
 | `init.restored` | `init` | 0 | the approved copy was restored | `team init --restore` |
 | `init.wrote` | `init` | 0 | a skeleton was written | `team init` |
 | `init.exists` | `init` | 1 | the team file already exists | `team init` |

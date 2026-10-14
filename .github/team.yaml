@@ -144,7 +144,7 @@ seats:
     launch: cursor-agent
 
   - role: builder
-    name: gemini-builder
+    name: builder-argon
     cli: antigravity
     vendor: google
     model: Gemini Argon
