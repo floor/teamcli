@@ -32,6 +32,7 @@ import { runPlan } from '../../src/commands/plan.ts';
 import { runUsage } from '../../src/commands/usage.ts';
 import { runLock } from '../../src/commands/lock.ts';
 import { runUnlock } from '../../src/commands/unlock.ts';
+import { runTempo } from '../../src/commands/tempo.ts';
 import { runWatch } from '../../src/commands/watch.ts';
 import { runWorktree } from '../../src/commands/worktree.ts';
 import type { Caller } from '../../src/caller.ts';
@@ -251,6 +252,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
         // after one look — the same refusal, and the lock is not broken.
         sleep: () => {},
       });
+    case 'tempo':
+      return runTempo(rest, io, { home: fixture.home });
     case 'unlock':
       return runUnlock(rest, io, { home: fixture.home });
     case 'usage':

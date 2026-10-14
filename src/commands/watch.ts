@@ -273,7 +273,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       }
 
       // The values in force, from the pass's own snapshot: until the owner approves an edit to
-      // `watch`, the watch keeps running with what was approved, or with the defaults.
+      // `watch` or `tempo`, the watch keeps the waits that were approved, or the defaults.
       const inForce = watchInForceOf(standing, team);
       // The budget values in force, from the same snapshot: an unapproved edit to the marks, the
       // accounts or the cadence silences nothing here until the owner approves it.

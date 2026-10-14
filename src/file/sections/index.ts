@@ -22,6 +22,7 @@ import { releases } from './releases.ts';
 import { delegates } from './delegate.ts';
 import { grant } from './grant.ts';
 import { tasks } from './tasks.ts';
+import { tempo } from './tempo.ts';
 import type { Section } from './section.ts';
 
 /**
@@ -59,6 +60,8 @@ export const SECTIONS: readonly Section[] = [
   releases,
   // The sections before `tasks` keep the relative order records were written with.
   tasks,
+  // Immediately before `grant`, so the sections already in the digest keep their order.
+  tempo,
   // Immediately before `delegates`, so `delegates` stays the last owner section.
   grant,
   // Last, after every owner section there was: the owner-section list is filtered from this one,
