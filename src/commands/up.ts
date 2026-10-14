@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
-import { callerLabel, callerOf, describeCaller, mayLaunchSeats, walkCaller } from '../caller.ts';
+import { callerLabel, callerOf, describeCaller, detachedRefusal, mayLaunchSeats, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { grantGate, logGranted } from '../grant.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
@@ -575,7 +575,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // is the resolved spelling: a link, or a differently-cased spelling of this folder's own team
   // file, is not that file, and is refused here before it is opened.
   const walked = walkCaller(io);
-  const defaultLoad = mayLaunchSeats(walked) ? null : loadTeamFile(io.cwd, { home: sources.home });
+  // A run with no terminal is not the owner, and it is not asked of the delegate gate, the grant,
+  // or the token. The refusal is one sentence, on the dry run and the real run.
+  const detached = detachedRefusal(walked);
+  const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : loadTeamFile(io.cwd, { home: sources.home });
   const delegateTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
   const verdict = delegateTeam
     ? (sources.delegateGate ?? delegateGate)({
@@ -615,6 +618,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // file, with no `--session`, continues below.
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const aimed = otherFile || args.values.session !== undefined;
+  if (detached !== undefined && aimed) {
+    out.stderr(`team up: ${detached}\n`);
+    // exit: up.detached
+    return 1;
+  }
   if (!mayLaunchSeats(walked) && aimed && grantedSeat !== null) {
     const flag = args.values.session !== undefined ? 'session' : 'file';
     out.stderr(`team up: --${flag} is the owner's; the granted seat cannot use it\n`);
@@ -682,6 +690,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const upFp =
     standing.kind === 'verified' ? upFingerprint(standing.record.approval.fingerprints, standing.generation) : undefined;
   const ownerToken =
+    detached === undefined &&
     !mayLaunchSeats(caller) &&
     verdict === null &&
     grantedSeat === null &&
@@ -691,7 +700,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
-  if (!mayLaunchSeats(caller) && !ownerToken && grantedSeat === null) {
+  if (detached !== undefined) {
+    refusals.push(detached);
+  } else if (!mayLaunchSeats(caller) && !ownerToken && grantedSeat === null) {
     if (grantRefusal !== null) {
       refusals.push(grantRefusal);
     } else if (verdict === null) {

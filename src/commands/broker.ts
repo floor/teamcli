@@ -10,7 +10,7 @@
 // serialized. The broker runs as the same OS user as the seats: that is an integrity boundary,
 // not an authenticity one, and the page says so. Nothing starts or restarts the broker.
 import { readArgs } from '../args.ts';
-import { callerOf, describeCaller, isOwner } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { findRoot, loadTeamFile, NOT_A_REPO } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { realFetch, type Fetch } from '../release/http.ts';
@@ -57,11 +57,17 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
     return 2;
   }
   // The start is the owner's, and this gate comes before every other prerequisite: a call placed
-  // as a seat, in a pane or under herdr at all is refused here, before the credential is read and
-  // before the socket is bound. The owner's own run without a terminal is not that caller — it
-  // goes on, and the Keychain's own refusal (`the run is not interactive`) is what stops it.
+  // as a seat, in a pane, under herdr, or with no terminal is refused here, before the credential
+  // is read and before the socket is bound. A run with no terminal gets the one sentence; the
+  // Keychain is not asked.
   const caller = callerOf(io);
-  if (!isOwner(caller) && caller.kind !== 'owner-no-tty') {
+  const detached = detachedRefusal(caller);
+  if (detached !== undefined) {
+    io.stderr(`team broker: ${detached}\n`);
+    // exit: broker.detached
+    return 1;
+  }
+  if (!isOwner(caller)) {
     io.stderr(`team broker: only the owner runs \`broker\`, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
     // exit: broker.not-owner
     return 1;

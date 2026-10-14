@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, callerVerdict, describeCaller, judgeCallerIn, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
@@ -114,6 +114,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const seatName = args.rest[0];
   const report: Report = { json: args.flags.has('json'), seat: seatName ?? null, sent: null };
   if (args.error) return usage(io, args.error, report);
+  const detached = detachedRefusal(callerOf(io));
+  if (detached !== undefined) {
+    io.stderr(`team send: ${detached}\n`);
+    // exit: send.detached
+    return 1;
+  }
   if (args.flags.has('list')) return listSeats(io, host, report);
 
   const words = args.rest.slice(1);

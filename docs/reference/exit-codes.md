@@ -28,6 +28,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.delegate-evidence` | `add` | 1 | the delegate's placement or seats can't be verified | `team add worker` |
 | `add.delegate-flag` | `add` | 1 | the delegate may not use this flag | `team add worker --temporary` |
 | `add.delegate-placement` | `add` | 1 | the approved delegate must be an external non-seat pane | `team add worker` |
+| `add.detached` | `add` | 1 | a run with no terminal | `team add worker` |
 | `add.differs` | `add` | 1 | the file differs from its approval | `team add worker` |
 | `add.doctor` | `add` | 1 | doctor refuses the launch | `team add worker` |
 | `add.file-owner` | `add` | 1 | --file is the owner's | `team add worker --file .agents/team.yaml` |
@@ -43,6 +44,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.no-seat` | `add` | 1 | the approved file has no such seat | `team add missing` |
 | `add.not-ready` | `add` | 1 | the launch finished without a ready seat | `team add worker` |
 | `add.not-restored` | `add` | 1 | the seat can't be put back from the approved copy | `team add worker` |
+| `add.override-owner` | `add` | 1 | --model and --effort on a declared seat are the owner's | `team add worker --model claude-sonnet-5-5` |
 | `add.placed` | `add` | 1 | the seat would be placed outside the project | `team add worker` |
 | `add.result-absolute` | `add` | 1 | a result path is absolute | `team add --temporary --like lead --until result:/tmp/out.md` |
 | `add.result-exists` | `add` | 1 | the result path already exists | `team add --temporary --like lead --until result:README.md` |
@@ -55,10 +57,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.until` | `add` | 1 | --until is not a result path or a merged branch | `team add --temporary --like lead --until nope` |
 | `add.worktree-failed` | `add` | 1 | the worktree setup failed | `team add --temporary --like lead --until result:out.md --worktree task` |
 | `add.worktree-missing` | `add` | 1 | no worktree with that name is recorded | `team add --temporary --like lead --until result:out.md --worktree missing` |
+| `add.effort` | `add` | 2 | the --effort override is not allowed for the seat's CLI or vendor | `team add worker --effort unknown` |
 | `add.file` | `add` | 2 | the team file can't be read | `team add worker --file missing.yaml` |
 | `add.file-invalid` | `add` | 2 | the team file can't be parsed | `team add worker --file team.yaml` |
 | `add.invocation` | `add` | 2 | the invocation can't be read | `team add --nope` |
 | `add.locked` | `add` | 2 | the locked edit does not validate | `team add worker` |
+| `add.model` | `add` | 2 | the --model override is not known for the seat's CLI | `team add worker --model unknown` |
 | `add.not-a-repo` | `add` | 2 | not inside a git repository | `team add worker` |
 | `add.prepared` | `add` | 2 | the prepared edit does not validate | `team add worker` |
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
@@ -69,6 +73,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.ambiguous` | `answer` | 1 | herdr lists more than one agent of this name | `team answer lead trust` |
 | `answer.another-pane` | `answer` | 1 | the state records another pane for the caller's seat | `team answer lead trust` |
 | `answer.caller` | `answer` | 1 | the caller may not answer a trust dialog | `team answer lead trust` |
+| `answer.detached` | `answer` | 1 | a run with no terminal | `team answer lead trust` |
 | `answer.file-owner` | `answer` | 1 | --file is the owner's | `team answer lead trust --file .agents/team.yaml` |
 | `answer.folder` | `answer` | 1 | the dialog's folder is not the lobby's exact trust entry | `team answer lead trust` |
 | `answer.label` | `answer` | 1 | the trust choice is not the recorded one | `team answer lead trust` |
@@ -95,6 +100,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `approve.delegate-flag` | `approve` | 1 | a flag of the owner's was passed to the approved delegate | `team approve --file <path>` |
 | `approve.delegate-not-ordinary` | `approve` | 1 | the change moves an owner section a delegate may not: it needs the owner | `team approve` |
 | `approve.delegate-placement` | `approve` | 1 | the approved delegate must be an external non-seat pane | `team approve` |
+| `approve.detached` | `approve` | 1 | a run with no terminal | `team approve` |
 | `approve.grant-another-pane` | `approve` | 1 | the granted seat is not on its recorded pane | `team approve` |
 | `approve.grant-approval` | `approve` | 1 | a grant needs a verified approval | `team approve` |
 | `approve.grant-approved-copy` | `approve` | 1 | a grant needs a readable approved copy | `team approve` |
@@ -123,6 +129,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `broker.stopped` | `broker` | 0 | the broker served until it was stopped | `team broker` |
 | `broker.bind` | `broker` | 1 | the socket could not be bound | `team broker` |
 | `broker.busy` | `broker` | 1 | a broker is already answering on this clone's socket | `team broker` |
+| `broker.detached` | `broker` | 1 | a run with no terminal | `team broker` |
 | `broker.file` | `broker` | 1 | the team file can't be read or parsed | `team broker` |
 | `broker.keychain` | `broker` | 1 | the Keychain credential was refused | `team broker` |
 | `broker.locked` | `broker` | 1 | another start is binding this clone's socket | `team broker` |
@@ -179,6 +186,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.delegate-evidence` | `down` | 1 | delegation cannot verify its placement or seats | `team down, when herdr or the state can't be read for the gate` |
 | `down.delegate-flag` | `down` | 1 | a prohibited flag is the owner's | `team down --abandon, from the approved delegate` |
 | `down.delegate-placement` | `down` | 1 | the approved delegate must be an external non-seat pane | `team down, with a delegate entry naming a seat's pane` |
+| `down.detached` | `down` | 1 | a run with no terminal | `team down` |
 | `down.file-owner` | `down` | 1 | --file is the owner's | `team down --file .agents/team.yaml` |
 | `down.grant-approval` | `down` | 1 | a grant needs a verified approval | `team down` |
 | `down.grant-approved-copy` | `down` | 1 | a grant needs a readable approved copy | `team down` |
@@ -204,6 +212,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |
 | `init.restored` | `init` | 0 | the approved copy was restored | `team init --restore` |
 | `init.wrote` | `init` | 0 | a skeleton was written | `team init` |
+| `init.detached` | `init` | 1 | a run with no terminal | `team init` |
 | `init.exists` | `init` | 1 | the team file already exists | `team init` |
 | `init.git-silent` | `init` | 1 | git doesn't answer for this folder | `team init` |
 | `init.legacy` | `init` | 1 | the record predates signed records | `team init --restore` |
@@ -304,6 +313,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.delegate-evidence` | `remove` | 1 | the delegate's placement or seats can't be verified | `team remove worker` |
 | `remove.delegate-flag` | `remove` | 1 | the delegate may not use this flag | `team remove worker --keep` |
 | `remove.delegate-placement` | `remove` | 1 | the approved delegate must be an external non-seat pane | `team remove worker` |
+| `remove.detached` | `remove` | 1 | a run with no terminal | `team remove worker` |
 | `remove.file-owner` | `remove` | 1 | --file is the owner's | `team remove worker --file .agents/team.yaml` |
 | `remove.herdr` | `remove` | 1 | herdr doesn't answer | `team remove worker` |
 | `remove.keep-temporary` | `remove` | 1 | a temporary seat is not kept in the file | `team remove worker --keep` |
@@ -335,6 +345,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.delivered` | `send` | 0 | the seat's channel took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
+| `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
 | `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
@@ -375,6 +386,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.delegate-evidence` | `up` | 1 | the delegate gate can't verify its placement or seats | `team up` |
 | `up.delegate-flag` | `up` | 1 | --session or --file is the owner's on a delegated run | `team up --session other` |
 | `up.delegate-placement` | `up` | 1 | the approved delegate must be an external non-seat pane | `team up` |
+| `up.detached` | `up` | 1 | a run with no terminal | `team up --session elsewhere` |
 | `up.differs` | `up` | 1 | the file differs from its approval | `team up` |
 | `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
 | `up.grant-another-pane` | `up` | 1 | the granted seat is not on its recorded pane | `team up` |
@@ -407,6 +419,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `usage.store` | `usage` | 2 | the store folder can't be read | `team usage` |
 | `watch.stopped` | `watch` | 0 | the watch ran and stopped | `team watch` |
 | `watch.already` | `watch` | 1 | a watch already runs | `team watch` |
+| `watch.caller` | `watch` | 1 | a run with no terminal | `team watch` |
 | `watch.file-owner` | `watch` | 1 | --file is the owner's | `team watch --file .agents/team.yaml` |
 | `watch.no-notify` | `watch` | 1 | a seat passed --no-notify | `team watch --no-notify` |
 | `watch.no-nudge` | `watch` | 1 | a seat passed --no-nudge | `team watch --no-nudge` |
@@ -428,6 +441,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.config` | `worktree` | 1 | workspace.path and workspace.base are required | `team worktree new task` |
 | `worktree.create-failed` | `worktree` | 1 | the worktree was not created | `team worktree new task --kind fix` |
 | `worktree.default-session` | `worktree` | 1 | the session can't be "default" | `team worktree new task --session default` |
+| `worktree.detached` | `worktree` | 1 | a run with no terminal | `team worktree list` |
 | `worktree.dirty` | `worktree` | 1 | the worktree has uncommitted files | `team worktree remove task` |
 | `worktree.elsewhere` | `worktree` | 1 | the worktree is recorded in another session | `team worktree remove task` |
 | `worktree.exists` | `worktree` | 1 | the worktree folder already exists | `team worktree new task --kind fix` |
