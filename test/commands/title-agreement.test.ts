@@ -170,7 +170,7 @@ describe('up titles the two lines', () => {
     const run = await up(made);
     expect(run.code).toBe(0);
     expect(run.labels).toEqual(['command deck', 'worker · implementer', 'watchdog']);
-    expect(run.reported).toEqual(['Claude Opus 5.5 · high', 'Grok Four Seven 4.7']);
+    expect(run.reported).toEqual(['Claude Opus 5.5 high', 'Grok Four Seven 4.7 default']);
   });
 
   test('a seat with no written label falls back to its name and role, never the model', async () => {
@@ -181,9 +181,10 @@ describe('up titles the two lines', () => {
       expect(label).not.toContain('Grok Four Seven');
       expect(label).not.toContain('Claude Opus');
     }
-    // The display strings are line 2, and only there.
-    expect(run.reported).toContain('Grok Four Seven 4.7');
-    expect(run.reported).toContain('Claude Opus 5.5 · high');
+    // The display strings are line 2, and only there: the display, a space, and the effort or
+    // `default` when the file sets none.
+    expect(run.reported).toContain('Grok Four Seven 4.7 default');
+    expect(run.reported).toContain('Claude Opus 5.5 high');
   });
 
   test('a report that fails is one line and leaves no seat out', async () => {
