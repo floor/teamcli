@@ -630,10 +630,12 @@ export interface DownSeat {
   exitInBox?: boolean;
   /** The pane already shows this CLI's framed exit question. This run did not ask it. */
   atExitQuestion?: boolean;
-  /** Herdr has not named this pane. The state records it for this seat: close it, type nothing. */
+  /** Herdr has not named this pane. The state records it for this seat: close it, type nothing,
+   *  unless `keep` names the seat. */
   unnamed?: boolean;
   /** Herdr's name for this pane, when it is not the seat's name. The state records the pane
-   *  and the workspace for this seat: close it, type nothing. The name is not the match. */
+   *  and the workspace for this seat: close it, type nothing, unless `keep` names the seat.
+   *  The name is not the match. */
   title?: string;
 }
 
@@ -673,6 +675,15 @@ export function downPlan(input: DownInput): Step[] {
   let left = input.extra;
 
   for (const seat of input.seats) {
+    // Before every close: a kept seat stays, whatever herdr calls its pane.
+    if (input.keep.includes(seat.name)) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: left running; only the owner stops the orchestrator's or the operator's seat`,
+      });
+      left++;
+      continue;
+    }
     if (seat.unnamed || seat.title) {
       const said = seat.title
         ? `titled ${seat.title}, not its seat name; the state records its pane and workspace, so its workspace was closed`
@@ -690,14 +701,6 @@ export function downPlan(input: DownInput): Step[] {
           said,
         },
       });
-      continue;
-    }
-    if (input.keep.includes(seat.name)) {
-      steps.push({
-        kind: 'skip',
-        text: `${seat.name}: left running; only the owner stops the orchestrator's or the operator's seat`,
-      });
-      left++;
       continue;
     }
     const profile = profileFor(seat.cli);
