@@ -1291,6 +1291,34 @@
     },
     {
       "code": 0,
+      "command": "feed",
+      "id": "feed.ok",
+      "meaning": "the message feed was printed",
+      "trigger": "team feed"
+    },
+    {
+      "code": 1,
+      "command": "feed",
+      "id": "feed.unreadable",
+      "meaning": "the history log cannot be read",
+      "trigger": "team feed"
+    },
+    {
+      "code": 2,
+      "command": "feed",
+      "id": "feed.configuration",
+      "meaning": "the team file can't be read",
+      "trigger": "team feed"
+    },
+    {
+      "code": 2,
+      "command": "feed",
+      "id": "feed.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team feed extra"
+    },
+    {
+      "code": 0,
       "command": "init",
       "id": "init.restored",
       "meaning": "the approved copy was restored",
