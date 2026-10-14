@@ -22,7 +22,8 @@ as it is. A line that already says that word is not rewritten.
 | Caller | May |
 | --- | --- |
 | the owner, from a terminal outside herdr | set the word |
-| a seat, an agent-run CLI, or a command without a terminal | nothing: `team tempo: only the owner runs tempo, from a terminal outside herdr; this call is <caller>` |
+| a run with no terminal | nothing: `team tempo: only the owner runs this, from a terminal outside herdr` |
+| a seat, or an agent-run CLI | nothing: `team tempo: only the owner runs tempo, from a terminal outside herdr; this call is <caller>` |
 
 ## Output and exit codes
 

@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
-import { callerOf, describeCaller, isOwner } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { TEMPOS, type Tempo } from '../file/sections/tempo.ts';
 import { writeTeamFile } from '../file/write.ts';
@@ -34,6 +34,12 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
     return 2;
   }
   const caller = callerOf(io);
+  const detached = detachedRefusal(caller);
+  if (detached !== undefined) {
+    io.stderr(`team tempo: ${detached}\n`);
+    // exit: tempo.detached
+    return 1;
+  }
   if (!isOwner(caller)) {
     io.stderr(`team tempo: only the owner runs tempo, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
     // exit: tempo.not-owner

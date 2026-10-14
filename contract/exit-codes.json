@@ -2461,6 +2461,13 @@
     {
       "code": 1,
       "command": "tempo",
+      "id": "tempo.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 1,
+      "command": "tempo",
       "id": "tempo.not-owner",
       "meaning": "not the owner",
       "trigger": "team tempo urgent"

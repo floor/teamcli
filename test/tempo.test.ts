@@ -165,4 +165,13 @@ describe('team tempo', () => {
     expect(await runTempo(['faster'], bad, { home: where.home })).toBe(2);
     expect(bad.err).toContain('must be relaxed, normal or urgent');
   });
+
+  test('a run with no terminal is refused before the file is read', async () => {
+    const where = place();
+    const io = testIo(where.root, { kind: 'owner-no-tty' });
+    const before = readFileSync(where.file, 'utf8');
+    expect(await runTempo(['urgent'], io, { home: where.home })).toBe(1);
+    expect(io.err).toBe('team tempo: only the owner runs this, from a terminal outside herdr\n');
+    expect(readFileSync(where.file, 'utf8')).toBe(before);
+  });
 });

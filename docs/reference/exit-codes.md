@@ -357,6 +357,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
 | `tempo.set` | `tempo` | 0 | the tempo was written | `team tempo urgent` |
 | `tempo.unchanged` | `tempo` | 0 | the tempo was already that word | `team tempo urgent` |
+| `tempo.detached` | `tempo` | 1 | a run with no terminal | `team tempo urgent` |
 | `tempo.not-owner` | `tempo` | 1 | not the owner | `team tempo urgent` |
 | `tempo.file` | `tempo` | 2 | the team file can't be read | `team tempo urgent` |
 | `tempo.invocation` | `tempo` | 2 | the invocation can't be read | `team tempo` |
