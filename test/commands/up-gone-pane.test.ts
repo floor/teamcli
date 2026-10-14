@@ -189,13 +189,13 @@ describe('team up, a pane that is gone or unknown', () => {
       const code = await runUp(FILE, io, sources({
         sessionState: () => 'running',
         alive: () => true,
-        workspaces: () => [{ id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
+        workspaces: () => [{ id: 'w2', label: 'deepseek-acme · implementer' }, { id: 'w3', label: 'deepseek-acme-2 · implementer' }],
         agents: listed,
       }, made));
       expect(code).toBe(0);
       // The seat is launched again the ordinary way: a fresh workspace, the recorded pane and
       // stage replaced by the new run's own — and none of the waiting heal's words.
-      expect(made.creates).toEqual(['Claude Opus 5.5']);
+      expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
       expect(made.closes).toEqual([]);
       expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1']);
       expect(`${io.out}${io.err}`).not.toContain('was gone and was replaced');
@@ -244,9 +244,9 @@ describe('team up, a pane that is gone or unknown', () => {
       sessionState: () => 'running',
       alive: () => true,
       workspaces: () => [
-        { id: 'w9', label: 'Claude Opus 5.5' },
-        { id: 'w2', label: 'DeepSeek V4.1 Flash' },
-        { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w9', label: 'claude-coordinator-acme · project coordinator' },
+        { id: 'w2', label: 'deepseek-acme · implementer' },
+        { id: 'w3', label: 'deepseek-acme-2 · implementer' },
       ],
       agents: listed,
     }, made));
@@ -298,9 +298,9 @@ describe('team up, a pane that is gone or unknown', () => {
       sessionState: () => 'running',
       alive: () => true,
       workspaces: () => [
-        { id: 'w9', label: 'Claude Opus 5.5' },
-        { id: 'w2', label: 'DeepSeek V4.1 Flash' },
-        { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w9', label: 'claude-coordinator-acme · project coordinator' },
+        { id: 'w2', label: 'deepseek-acme · implementer' },
+        { id: 'w3', label: 'deepseek-acme-2 · implementer' },
       ],
       agents: listed,
     }, made));
@@ -353,8 +353,8 @@ describe('team up, a pane that is gone or unknown', () => {
       sessionState: () => 'running',
       alive: () => true,
       workspaces: () => [
-        { id: 'w7', label: 'DeepSeek V4.1 Flash' },
-        { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w7', label: 'deepseek-acme · implementer' },
+        { id: 'w3', label: 'deepseek-acme-2 · implementer' },
       ],
       agents: listed,
     }, made));
@@ -362,7 +362,7 @@ describe('team up, a pane that is gone or unknown', () => {
     expect(code).toBe(1);
     expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced\n');
     expect(io.out).toContain('deepseek-acme: left out: its waiting pane holds another process\n');
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
     expect(made.closes).toEqual([]);
     const lead = stateOf().sessions['acme-web']?.seats['claude-coordinator-acme'];
     expect(lead?.pane).toBe('w1:p1');
@@ -381,7 +381,7 @@ describe('team up, two runs and the watchdog', () => {
     const first = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, first, sources({}, made));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5', 'DeepSeek V4.1 Flash', 'DeepSeek V4.1 Flash', 'watchdog']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'watchdog']);
     expect(first.err).toContain('watch: started\n');
     // `up` starts the watchdog; the watch process records its own pid. This run plays it.
     const after = stateOf();
@@ -403,7 +403,7 @@ describe('team up, two runs and the watchdog', () => {
       agents: named,
     }, made));
     expect(code2).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5', 'DeepSeek V4.1 Flash', 'DeepSeek V4.1 Flash', 'watchdog']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'watchdog']);
     expect(made.runs.filter((run) => run.command.includes('watch'))).toHaveLength(1);
     expect(second.err).not.toContain('watch: started');
     expect(`${second.out}${second.err}`).not.toContain('was gone and was replaced');
@@ -423,7 +423,7 @@ describe('team up, two runs and the watchdog', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5', 'DeepSeek V4.1 Flash', 'DeepSeek V4.1 Flash', 'watchdog']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'watchdog']);
     expect(stateOf().sessions['acme-web']?.watchdog).toEqual({
       file: join(root, '.agents/team.yaml'),
       pane: 'w4:p1',

@@ -320,6 +320,23 @@ export function paneRun(pane: string, command: string, session?: string): boolea
   return body === null || body.type !== 'error';
 }
 
+// The id team reports a pane's display_agent under. Herdr 0.7.1 requires `--source`; nothing
+// else in this tree is a source id (`pane read --source visible` is the screen, not this).
+export const DISPLAY_AGENT_SOURCE = 'team';
+
+// Sets the pane's display_agent (sidebar line 2). Herdr 0.7.1, scratch session title-help-b1:
+// `pane report-metadata --help` exits 2 with `missing required --source`. The flags used here
+// are the ones `herdr pane --help` names for this call: `--source` and `--display-agent`.
+export function reportDisplayAgent(pane: string, text: string, session?: string): boolean {
+  const out = capture(
+    ['pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', text],
+    session,
+  );
+  if (out === null) return false;
+  const body = parsed(out);
+  return body === null || body.type !== 'error';
+}
+
 // Not proof an agent is there: herdr answers with agent_info for a pane that has none.
 export function agentRename(pane: string, name: string, session?: string): boolean {
   const out = capture(['agent', 'rename', pane, name], session);

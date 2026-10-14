@@ -76,17 +76,21 @@ either way. Nothing in this build writes the file or the tracker.
 Each seat names a model and how it is launched. The orchestrator and the operator start in
 the project folder. Every other seat starts in the team's lobby. A lead already running in
 either folder is left there. The fields are in the README's
-[file format](../README.md#the-files-format). Two of them decide the herdr workspace title, and
-one no longer does:
+[file format](../README.md#the-files-format). The sidebar has two lines:
 
+- `label`, when the file writes one, is line 1, the workspace title. A seat expanded from
+  `count` keeps that label on the first instance; each later instance appends `-<n>`, the same
+  suffix the seat's name gets, so the lines differ (`desk`, `desk-2`).
+- A seat with no written label is titled `<name> · <role>`. Count instances already have
+  distinct names (`maker`, `maker-2`), so their lines differ too. The model is never line 1.
+- Left out, the stored `label` stays the model and version in lowercase, which is what an
+  approval of a file written that way already sealed. That stored field stays in the seat's digest.
 - `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
-  as a token of its own when the file writes it.
-- `up` and `add` title the workspace `<display> · <effort>` when the seat sets `effort`,
-  and `<display>` when it does not. The title has no seat name and no role. Seats expanded from
-  `count` share it: herdr shows the seat's name on its own line.
-- `label`, written or left out, is still a field the file may carry. A written one is accepted.
-  It does not title the workspace. Left out, the stored title stays the model and version in
-  lowercase, which is what an approval of a file written that way already sealed.
+  as a token of its own when the file writes it. After launch, `up` and `add` set the pane's
+  display_agent to `<display> <effort>` when the seat sets `effort`, and to `<display> default`
+  when it does not. The display stays the proper-case name, including a multi-word model
+  (`DeepSeek V4.1 Flash`, `Gemini 3.8 Flash`). Herdr draws line 2 as its status word, then
+  ` · `, then that text (`done · Grok 4.7 high`, `idle · Opus 5.5 default`). That is line 2.
 
 `effort` is optional. It is a known field: a file may set it, and a file that leaves it out
 loads as before. The words a lab allows are [`src/profiles/efforts.json`](../src/profiles/efforts.json),

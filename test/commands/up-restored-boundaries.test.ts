@@ -264,7 +264,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(code).toBe(0);
     expect(made.closes).toEqual([]);
     expect(keys).toEqual([]);
-    expect(made.creates).not.toContain('DeepSeek V4.1 Flash');
+    expect(made.creates).not.toContain('deepseek-acme · implementer');
     expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
     // Not adopted: the record still names the pane it was launched on, with its original pids
     // and session; the stray pane's pids never reach it.
@@ -327,7 +327,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(code).toBe(0);
     // Closed before its fresh launch — the matching name and session did not save a dead shell.
     expect(made.closes).toEqual(['w93']);
-    expect(made.creates).toContain('DeepSeek V4.1 Flash');
+    expect(made.creates).toContain('deepseek-acme · implementer');
     expect(io.err).toContain('  its pane held no CLI; closed without input and launched again\n');
     expect(io.out).toContain('deepseek-acme: ready\n');
     // The fresh pane's identity replaces the record; it is not the old one.
@@ -364,7 +364,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(code).toBe(0);
     expect(made.closes).toEqual([]);
     expect(keys).toEqual([]);
-    expect(made.creates).not.toContain('DeepSeek V4.1 Flash');
+    expect(made.creates).not.toContain('deepseek-acme · implementer');
     expect(io.err).toContain('  restored; left as it is\n');
     expect(seatsOf()['deepseek-acme']).toMatchObject({
       stage: 'ready',

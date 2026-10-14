@@ -151,12 +151,15 @@ budgets:                      # the owner's: reserve or floor per account, marks
 ### Naming seats
 
 The herdr session carries the project, so a seat's name is its role: `coordinator`, `implementer`,
-`reviewer`. When a role is used twice, the model is added: `implementer-deepseek`. herdr already
-shows that name, so the workspace title does not repeat it. `up` and `add` title the workspace
-with the seat's `display` (itself defaulting to the model and version, `Claude Opus 5.5`), and
-` · ` plus `effort` when the seat sets one (`Grok 4.7 · high`). Seats expanded from `count` share
-that title: the seat's name is the only key. A `label` written in the file is still read, and it
-does not title the workspace; left out, the stored title is the model and version in lowercase.
+`reviewer`. When a role is used twice, the model is added: `implementer-deepseek`. `up` and `add`
+title the workspace with the seat's written `label` when the file has one. A seat with no written
+label is titled `<name> · <role>`. Seats expanded from `count` each get a distinct title: a written
+label is kept on the first instance and later instances append `-<n>` (the same suffix as the name),
+and a seat with no written label already has a distinct name (`implementer-deepseek`,
+`implementer-deepseek-2`). The model is not the title. `display` (itself defaulting to the model
+and version, `Claude Opus 5.5`), and ` · ` plus `effort` when the seat sets one (`Grok 4.7 · high`),
+is the pane's second line, set after launch. Left out, the stored `label` stays the model and
+version in lowercase.
 `team doctor` warns, and does not refuse the file, when a name or a stored label repeats the
 project or the session.
 

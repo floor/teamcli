@@ -42,6 +42,8 @@ export type Host = {
   confirmLobby?(): LobbyRefusal | null;
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
+  /** Sets the pane's display_agent. False is reported in one line and does not leave the seat out. */
+  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** The live exit typing; see `ExitTyping`. May wait: the pane draws typed text late, and the
    *  reading that decides the Enter or the clearing key waits for it. */
   typeLine(session: string, pane: string, text: string): ExitTyping | Promise<ExitTyping>;
@@ -895,6 +897,11 @@ export async function executePlan(steps: readonly Step[], session: string, host:
             ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
           });
           finishReady(op.seat);
+        }
+        // Line 2, after the name. Absent on a host that does not launch seats. A call that
+        // fails is one line; the seat stays named, and nothing here reads the owner's terminal.
+        if (op.displayAgent && host.reportDisplayAgent && !host.reportDisplayAgent(session, here.pane, op.displayAgent)) {
+          host.say(`${op.seat}: its display was not reported\n`);
         }
         break;
       }

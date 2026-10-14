@@ -156,6 +156,7 @@ describe('up --dry-run', () => {
     launch: 'claude --model claude-opus-5-5',
     cwd: '.',
     label: name,
+    displayAgent: 'Claude Opus 5.5 default',
     repairLine: `\`team remove ${name} --keep\` then \`team add ${name}\``,
     stopped: false,
     rules: 'Rules.',
@@ -189,16 +190,19 @@ describe('up --dry-run', () => {
         "+ herdr --session acme-web pane run <pane of claude-coordinator-acme> 'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt Rules.'",
         '  wait until claude-coordinator-acme shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of claude-coordinator-acme> claude-coordinator-acme',
+        "+ herdr --session acme-web pane report-metadata <pane of claude-coordinator-acme> --source team --display-agent 'Claude Opus 5.5 default'",
         '+ herdr --session acme-web workspace create --cwd /work/acme-web --label grok-acme --no-focus',
         "+ herdr --session acme-web pane run <pane of grok-acme> 'AGENT_UNATTENDED=1 grok --always-approve --rules Rules.'",
         '  wait until grok-acme shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of grok-acme> grok-acme',
+        "+ herdr --session acme-web pane report-metadata <pane of grok-acme> --source team --display-agent 'Claude Opus 5.5 default'",
         '  skip constructor-acme: no launch profile for `constructor` in this version; left out',
         '  skip grok-acme: stopped in the file; start it with `team add grok-acme`',
         '+ herdr --session acme-web workspace create --cwd /work/acme-web/docs --label docs --no-focus',
         "+ herdr --session acme-web pane run <pane of claude-docs> 'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt Rules.'",
         '  wait until claude-docs shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of claude-docs> claude-docs',
+        "+ herdr --session acme-web pane report-metadata <pane of claude-docs> --source team --display-agent 'Claude Opus 5.5 default'",
         '+ herdr --session acme-web workspace create --cwd /work/acme-web --label watchdog --no-focus',
         "+ herdr --session acme-web pane run <pane of watchdog> 'team watch --session acme-web'",
         '    (a desktop notification follows when the watch exits)',
@@ -218,10 +222,13 @@ describe('up --dry-run', () => {
 
   test('never holds a command that answers, closes or deletes', () => {
     const plan = upPlan({ root: '/work/a', session: 'a', sessionRunning: false, seats: [seat('one'), seat('two')] });
-    const verbs = plan.flatMap((step) =>
-      step.kind === 'run' && step.argv[0] === 'herdr' ? [step.argv.slice(3, 5).join(' ')] : [],
-    );
-    expect(new Set(verbs)).toEqual(new Set(['workspace create', 'pane run', 'agent rename']));
+    const verbs = plan.flatMap((step) => {
+      if (step.kind !== 'run') return [];
+      return [step.argv, ...(step.also ? [step.also] : [])]
+        .filter((argv) => argv[0] === 'herdr')
+        .map((argv) => argv.slice(3, 5).join(' '));
+    });
+    expect(new Set(verbs)).toEqual(new Set(['workspace create', 'pane run', 'pane report-metadata', 'agent rename']));
   });
 });
 

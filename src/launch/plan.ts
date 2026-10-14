@@ -1,4 +1,5 @@
 import { isAbsolute, join, resolve } from 'node:path';
+import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { profileFor } from '../profiles/index.ts';
 import { launchCommand, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
@@ -59,7 +60,16 @@ export type Op =
       /** A waiting seat herdr does not name exactly once: left out, nothing launched. */
       resumeGap?: 'none' | 'many';
     }
-  | { do: 'rename'; seat: string; label: string; seconds: number; rules: 'option' | 'message'; pane?: string }
+  | {
+      do: 'rename';
+      seat: string;
+      label: string;
+      seconds: number;
+      rules: 'option' | 'message';
+      pane?: string;
+      /** Sidebar line 2, reported once this rename has named the seat. A failure is one line. */
+      displayAgent?: string;
+    }
   | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string }
   | { do: 'ready'; seat: string; rules: 'option' | 'message'; notice?: string }
   | {
@@ -108,8 +118,9 @@ export type Op =
 
 /** One thing `up` or `down` does, in order. */
 export type Step =
-  /** A command that is run. */
-  | { kind: 'run'; argv: string[]; note?: string; do?: Op }
+  /** A command that is run. `also` is a second command printed with it; the live run performs
+   *  that work inside this step's `do`, so it adds no step and no wait of its own. */
+  | { kind: 'run'; argv: string[]; also?: string[]; note?: string; do?: Op }
   /** A wait, with its time limit. */
   | { kind: 'wait'; text: string; note?: string; do?: Op }
   /** A seat that is left out, and why. */
@@ -122,6 +133,8 @@ export interface UpSeat {
   /** Relative to the root. */
   cwd: string;
   label: string;
+  /** Sidebar line 2, set on the pane after launch. Absent: the plan does not report one. */
+  displayAgent?: string;
   /** The team file's repair for this seat (`relaunchRepair`'s markdown text): every line this
    *  run prints that names a repair prints this one, never a `remove --keep` a lead seat's file
    *  would refuse. */
@@ -528,7 +541,20 @@ export function upPlan(input: UpInput): Step[] {
       steps.push({
         kind: 'run',
         argv: herdr(session, 'agent', 'rename', pane, seat.name),
-        do: { do: 'rename', seat: seat.name, label: seat.label, seconds: profile.idleTimeout, rules, pane: seat.pane },
+        // Line 2 is printed with the rename. The live run reports it after the name lands,
+        // so the idle wait and anything it asks the owner stay as they were.
+        ...(seat.displayAgent
+          ? { also: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent) }
+          : {}),
+        do: {
+          do: 'rename',
+          seat: seat.name,
+          label: seat.label,
+          seconds: profile.idleTimeout,
+          rules,
+          pane: seat.pane,
+          ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
+        },
       });
     }
     if (profile.rulesOption === null) {
@@ -806,10 +832,12 @@ export function downPlan(input: DownInput): Step[] {
 export function formatPlan(steps: readonly Step[]): string {
   const lines = steps.map((step) => {
     if (step.kind === 'run') {
-      const command = step.argv
+      const show = (argv: readonly string[]) => argv
         .map((word) => (/^<pane of .+>$|^[A-Z_]+=\$[A-Z_]+$/.test(word) ? word : shellQuote(word)))
         .join(' ');
-      return `+ ${command}${step.note ? `\n    (${step.note})` : ''}`;
+      const note = step.note ? `\n    (${step.note})` : '';
+      const extra = step.also ? `\n+ ${show(step.also)}` : '';
+      return `+ ${show(step.argv)}${note}${extra}`;
     }
     if (step.kind === 'wait') return `  wait ${step.text}${step.note ? `\n    (${step.note})` : ''}`;
     return `  skip ${step.text}${step.note ? `\n    (${step.note})` : ''}`;
