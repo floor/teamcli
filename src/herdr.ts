@@ -296,6 +296,15 @@ export function startServer(session: string): boolean {
   }
 }
 
+// Sets a workspace's label, which herdr draws as sidebar line 1. `herdr workspace rename --help`
+// names the two arguments and no flags. False when herdr doesn't answer or reports an error.
+export function workspaceRename(workspace: string, label: string, session?: string): boolean {
+  const out = capture(['workspace', 'rename', workspace, label], session);
+  if (out === null) return false;
+  const body = parsed(out);
+  return body === null || body.type !== 'error';
+}
+
 export function workspaceCreate(
   cwd: string,
   label: string,

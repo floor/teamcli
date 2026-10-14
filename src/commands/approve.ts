@@ -8,11 +8,12 @@ import { formatDiff } from '../approve/diff.ts';
 import { compare, describe, fingerprints } from '../approve/fingerprint.ts';
 import { approveFingerprint, ownerAuthorized } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
-import { callerOf, describeCaller, isOwner, type Caller } from '../caller.ts';
+import { callerOf, describeCaller, isOwner, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources } from '../delegate.ts';
-import { loadTeamFile, placedProblems } from '../file/load.ts';
+import { TEAM_FILE, loadTeamFile, placedProblems } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
+import { grantGate, logGranted } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { OVERRIDE_CHANGED, overrideFile } from '../profiles/overrides.ts';
@@ -37,6 +38,8 @@ export type ApproveSources = {
   // the real one; `delegate` carries a test's reads into it.
   gate?: typeof delegateGate;
   delegate?: DelegateSources;
+  /** The grant read. Left out, the real one. */
+  grantGate?: typeof grantGate;
 };
 
 const NONBLOCKING = constants.O_RDONLY | constants.O_NONBLOCK;
@@ -186,7 +189,14 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
     return 2;
   }
 
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: sources.home });
+  // A non-owner's `--file` is not opened. `--show` is the exception: anyone may read the file
+  // it names, and that path returns before the caller gate. The owner token is matched against
+  // this folder's own file, so a foreign path is not what a token signs.
+  const walked = walkCaller(io);
+  const foreignFile =
+    args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
+  const loadFile = !foreignFile || args.flags.has('show') || isOwner(walked) ? args.values.file : undefined;
+  const loaded = loadTeamFile(io.cwd, { ...(loadFile ? { file: loadFile } : {}), home: sources.home });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       io.stderr(`team approve: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
@@ -315,15 +325,16 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   // exit: approve.show
   if (args.flags.has('show')) return 0;
 
-  // The one write both approved callers perform: the signed record, the line that attributes
-  // it — the owner's own, or the delegate's audit line naming the pane and what the approval
-  // sealed — and the sentence. `pane` is the approved delegate's when this is a delegated
-  // approval, and absent for the owner's.
+  // The one write the approved callers perform: the signed record, the line that attributes
+  // it — the owner's own, the delegate's audit line naming the pane, or the granted seat's
+  // line naming the seat — and the sentence. `pane` is the approved delegate's when this is a
+  // delegated approval. `grantSeat` is the granted orchestrator when this is that seat's
+  // ordinary approval. Both are absent for the owner's.
   // Set once the caller is placed below: true when a non-owner was admitted by a matching
   // out-of-band owner token. The write and the signing are the owner's either way; this only
   // adds the provenance to the log line.
   let tokenAuthorized = false;
-  const writeApproved = (caller: Caller, pane?: string, changed?: string): number => {
+  const writeApproved = (caller: Caller, pane?: string, changed?: string, grantSeat?: string): number => {
     const now = sources.now();
     writeApproval(
       store,
@@ -332,7 +343,9 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
       sources.home,
       now,
     );
-    if (pane === undefined) {
+    if (grantSeat !== undefined) {
+      logGranted(dirname(path), grantSeat, 'approve', now, changed);
+    } else if (pane === undefined) {
       logLine(
         dirname(path),
         'approve',
@@ -353,51 +366,83 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   // fingerprint it carries must equal the one just recomputed from the live file. When it does,
   // the delegate gate is skipped and the run rejoins the owner's path — the same key, the same
   // write — with the provenance on the log line. A token for any other change never matches.
-  tokenAuthorized = !isOwner(caller) && ownerAuthorized(io.env, approveFp);
+  // A foreign `--file` was not loaded, so the token is the default file's only. A token for
+  // some other file does not sign this one, and does not open the path the seat named.
+  tokenAuthorized = !isOwner(caller) && !foreignFile && ownerAuthorized(io.env, approveFp);
   // The approved delegate's pane, when this is a delegated approval: the gate passed it, and
   // the run goes on through the same key guards and the same write the owner's run uses.
-  // Absent, this is the owner's run.
+  // Absent, this is the owner's run, or the granted seat's.
   let delegatedPane: string | undefined;
+  let grantedSeat: string | undefined;
   if (!isOwner(caller) && !tokenAuthorized) {
-    if (!team.delegates) {
-      io.stderr(
-        `team approve: only the owner approves a team file, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`,
-      );
-      // exit: approve.not-owner
-      return 1;
+    // The delegate branch, tried only when the file names a delegate at all. The gate verifies
+    // the approval, the approved copy, the ordinary-change guard — a roster or `rules`
+    // difference passes there; every other owner section is refused with "this change needs
+    // the owner" — the placement, the entry, `approve` in its commands, and the flags:
+    // `--file` is refused there (a delegate approves the default placed file only). A passed
+    // run rejoins the owner's path below and skips only the question's guards.
+    const verdict = team.delegates
+      ? (sources.gate ?? delegateGate)({
+          command: 'approve',
+          team,
+          root,
+          dir: dirname(path),
+          flags: [...args.flags, ...Object.keys(args.values)],
+          io,
+          home: sources.home,
+          ...(sources.delegate ? { sources: sources.delegate } : {}),
+        })
+      : null;
+    if (verdict?.kind === 'passed') {
+      delegatedPane = verdict.pane;
+    } else {
+      // The grant is asked where a delegate did not take the run. A delegate refusal that
+      // already named a listed pane keeps that sentence. `approve.delegate` is the caller who
+      // is not a listed pane, and that caller may be the granted seat. A file that omits
+      // `grant` does not ask, and today's not-owner sentence stands.
+      const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'approve.delegate');
+      let grantRefusal: string | undefined;
+      if (delegateMissed && team.grant) {
+        const said = (sources.grantGate ?? grantGate)({ act: 'approve', io, home: sources.home });
+        if (said.kind === 'passed') grantedSeat = said.grant.seat;
+        else grantRefusal = said.text;
+      }
+      if (grantedSeat !== undefined && foreignFile) {
+        io.stderr(`team approve: --file is the owner's; the granted seat cannot use it\n`);
+        // exit: approve.grant-flag
+        return 1;
+      }
+      if (grantRefusal !== undefined) {
+        io.stderr(`team approve: ${grantRefusal}\n`);
+        // exit: approve.grant-another-pane
+        // exit: approve.grant-approval
+        // exit: approve.grant-approved-copy
+        // exit: approve.grant-caller
+        // exit: approve.grant-no-pane
+        // exit: approve.grant-not-ordinary
+        // exit: approve.grant-scope
+        return 1;
+      }
+      if (verdict?.kind === 'refused') {
+        io.stderr(`team approve: ${verdict.text}\n`);
+        // exit: approve.delegate
+        // exit: approve.delegate-approval
+        // exit: approve.delegate-approved-copy
+        // exit: approve.delegate-command
+        // exit: approve.delegate-evidence
+        // exit: approve.delegate-flag
+        // exit: approve.delegate-placement
+        // exit: approve.delegate-not-ordinary
+        return 1;
+      }
+      if (grantedSeat === undefined) {
+        io.stderr(
+          `team approve: only the owner approves a team file, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`,
+        );
+        // exit: approve.not-owner
+        return 1;
+      }
     }
-    // The delegate branch, tried only when the file names a delegate at all: with no
-    // `delegates` section the refusal above stays exactly today's, and the gate is never
-    // asked. The gate verifies the approval, the approved copy, the ordinary-change guard —
-    // a roster or `rules` difference passes there; every other owner section is refused with
-    // "this change needs the owner" — the placement, the entry, `approve` in its commands,
-    // and the flags: `--file` is refused there (a delegate approves the default placed file
-    // only). A passed run rejoins the owner's path below and skips only the question's
-    // guards: `--confirm` is inert for a delegate, nothing is asked on any terminal, and the
-    // audit line is the record of what this approval sealed.
-    const verdict = (sources.gate ?? delegateGate)({
-      command: 'approve',
-      team,
-      root,
-      dir: dirname(path),
-      flags: [...args.flags, ...Object.keys(args.values)],
-      io,
-      home: sources.home,
-      ...(sources.delegate ? { sources: sources.delegate } : {}),
-    });
-    if (verdict.kind === 'refused') {
-      io.stderr(`team approve: ${verdict.text}\n`);
-      // exit: approve.delegate
-      // exit: approve.delegate-approval
-      // exit: approve.delegate-approved-copy
-      // exit: approve.delegate-command
-      // exit: approve.delegate-evidence
-      // exit: approve.delegate-flag
-      // exit: approve.delegate-placement
-      // exit: approve.delegate-not-ordinary
-      return 1;
-    }
-    delegatedPane = verdict.pane;
   }
 
   // A key that already exists and cannot be read refuses here, before the terminal is read and
@@ -424,7 +469,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   // not an answer — is its record.
   // A token-authorized run skips the question's guards like a delegated one: the question is the
   // owner's terminal act, and the owner already authorized this exact change out of band.
-  if (delegatedPane === undefined && !tokenAuthorized) {
+  if (delegatedPane === undefined && grantedSeat === undefined && !tokenAuthorized) {
     if (args.flags.has('confirm')) {
       const answer = await sources.ask(
         `\nType the number of seats (${seats}) to approve this file, and its commands and rules, to run: `,
@@ -467,8 +512,10 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
 
   // What a delegated approval seals, for its audit line: the ordinary differences the guard
   // admitted. The owner's line has never named the differences and does not start now.
-  const changed = delegatedPane === undefined || previous === null
-    ? undefined
-    : compare(approvedFingerprints(previous), fingerprints(team)).map(describe).join('; ');
+  const changed =
+    (delegatedPane === undefined && grantedSeat === undefined) || previous === null
+      ? undefined
+      : compare(approvedFingerprints(previous), fingerprints(team)).map(describe).join('; ');
+  if (grantedSeat !== undefined) return writeApproved(caller, undefined, changed, grantedSeat);
   return delegatedPane === undefined ? writeApproved(caller) : writeApproved(caller, delegatedPane, changed);
 }
