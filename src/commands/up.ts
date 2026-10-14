@@ -5,14 +5,15 @@ import { fileURLToPath } from 'node:url';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
-import { callerLabel, callerOf, describeCaller, mayLaunchSeats } from '../caller.ts';
+import { callerLabel, callerOf, describeCaller, mayLaunchSeats, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { grantGate, logGranted } from '../grant.ts';
+import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { declaredModel } from '../file/model.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
-import { workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import {
   agentList,
@@ -23,6 +24,8 @@ import {
   paneProcesses,
   paneRead,
   paneRun,
+  reportDisplayAgent,
+  workspaceRename,
   paneShellBack,
   sessionDelete,
   sessionStop,
@@ -43,7 +46,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { launchedIdentity, paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
+import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
@@ -59,7 +62,7 @@ import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts'
 import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
 import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
-import { profileFor, shippedLobbyFiles } from '../profiles/index.ts';
+import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -104,6 +107,10 @@ export type UpSources = {
   // Absent: the real gate. The audit line of a delegated run, overridable the same way.
   delegateGate?: typeof delegateGate;
   logDelegated?: typeof logDelegated;
+  // The grant gate, overridable the same way. Absent: the real gate. The audit line of a
+  // granted run, overridable the same way.
+  grantGate?: typeof grantGate;
+  logGranted?: typeof logGranted;
   // Present on the shipped command. A dry run never calls it.
   launch?: Launch;
 };
@@ -114,6 +121,10 @@ export type Launch = {
   sessionUp(session: string): boolean | null;
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
+  /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
+  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
+  renameWorkspace?(session: string, workspace: string, label: string): boolean;
   renameAgent(session: string, pane: string, name: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
   agentPanes(session: string): string[] | null;
@@ -177,6 +188,8 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
+  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
+  renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
@@ -293,6 +306,26 @@ function modelDrift(
 /** A record with no process identity whose pane is a bare shell or another model. `up` does not
  *  close it: without an identity there is no proof the pane is the seat's. Null when the record
  *  has an identity, or when the pane cannot be told apart from the seat the file describes. */
+/** The refusal a replaced pane already had when its screen is working or unsent.
+ *  Null when the screen is free or was not read: that seat is left with the cannot-tie line. */
+function replacedScreenRefusal(
+  seat: Seat,
+  pane: string,
+  screenOf: (pane: string) => string | null,
+  status: string | undefined,
+): string | null {
+  const text = screenOf(pane);
+  if (text == null || text === '') return null;
+  const kind = readScreen(seat.cli, text).kind;
+  if (status === 'working' || kind === 'working') {
+    return `the process in its pane is working; nothing closed (stop it there, or run team remove ${seat.name})`;
+  }
+  if (kind === 'unsent') {
+    return `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${seat.name})`;
+  }
+  return null;
+}
+
 function unidentifiedHold(
   team: TeamFile,
   seat: Seat,
@@ -325,7 +358,7 @@ function seatPlan(
   team: TeamFile,
   seat: Seat,
   recorded: SeatState | undefined,
-  agents: readonly HerdrAgent[],
+  agents: readonly HerdrAgent[] | null,
   workspaces: HerdrWorkspace[] | null,
   resume: boolean,
   root: string,
@@ -340,6 +373,7 @@ function seatPlan(
     launch: seat.launch,
     cwd: seat.cwd,
     label: workspaceLabel(seat),
+    displayAgent: displayAgent(seat),
     model: seat.model,
     version: seat.version,
     // The team file's own repair for this seat — a lead seat is told only the whole-team
@@ -351,15 +385,30 @@ function seatPlan(
     rules: rulesOf(team, seat, root),
     ...seatDeliveryOf(standing, team, seat, root, home),
   };
+  const known = agents ?? [];
+  const asked = agents !== null;
   if (!resume || !recorded || seat.stopped) return planned;
   // §5: a seat recorded waiting takes precedence over everything below. Its recorded pane and
-  // workspace are reused — never launched again — whatever the process verdict says: the pause
-  // reads the pane fresh and verifies it before doing anything, and a pane that is gone is a
-  // fail-closed refusal there, not a reason to create another workspace.
+  // workspace are reused — never launched again — while the host still lists that pane: the
+  // pause reads it fresh and verifies it before doing anything. A pane the host no longer
+  // lists is not that refusal: a fresh workspace is made and the seat launches. A recorded
+  // workspace the host still lists is named on that line and left. A pane the host still
+  // lists, including one whose process this run cannot account for, is never closed or
+  // recreated.
   if (recorded.waiting) {
-    // The pane is herdr's one agent of this seat's name. The pane the state records selects
-    // nothing: a waiting seat with no such agent, or with two, is left out and not launched.
-    const named = agents.filter((agent) => agent.name === seat.name);
+    const named = known.filter((agent) => agent.name === seat.name);
+    const paneListed = recorded.pane !== undefined && known.some((agent) => agent.pane === recorded.pane);
+    if (named.length === 0 && recorded.pane && !paneListed) {
+      // The old workspace stays when the host still lists it. A listed workspace still holds
+      // a pane — herdr closes a workspace with its last pane — so it is named, not closed.
+      const leftWorkspace = recorded.workspace !== undefined
+        && workspaces?.some((item) => item.id === recorded.workspace)
+        ? recorded.workspace
+        : undefined;
+      return { ...planned, replacedPane: recorded.pane, ...(leftWorkspace ? { leftWorkspace } : {}) };
+    }
+    // The pane is herdr's one agent of this seat's name. No such agent, or two, is left out
+    // and not launched: the recorded pane is still listed, or the name is ambiguous.
     const live = named.length === 1 ? named[0] : undefined;
     return {
       ...planned,
@@ -381,17 +430,54 @@ function seatPlan(
   // itself reads herdr again, immediately before it (`execute.ts`), so this reading only
   // decides that the seat needs repair, never that its recorded workspace is still its own.
   const verdict = seatProcessVerdict(recorded.launched, processes[seat.name] ?? null);
-  if ((verdict === 'gone' || verdict === 'replaced') && recorded.workspace && recorded.pane && recorded.launched) {
+  const onRecordedPane = recorded.pane
+    ? known.find((agent) => agent.name === seat.name && agent.pane === recorded.pane)
+    : undefined;
+  const continuity = replacedSeat(verdict, {
+    asked,
+    namedOnPane: Boolean(onRecordedPane),
+    recordedSession: recorded.agent_session,
+    liveSession: onRecordedPane?.session,
+  });
+  // A program is in front and its agent session is the one stored at launch. The pids changed;
+  // the seat did not. Nothing is closed, and the record takes the pids the pane holds now.
+  if (continuity === 'restored' && recorded.agent_session && recorded.pane && recorded.workspace && recorded.launched) {
+    const next = launchedIdentity(processes[seat.name] ?? null);
+    if (next) {
+      return {
+        ...planned,
+        stage: 'ready',
+        restored: {
+          launched: next,
+          session: recorded.agent_session,
+          detail: restoredDetail(seat, recorded, screenOf),
+        },
+      };
+    }
+  }
+  // A program is in front and the session cannot be shown. Leave the record. Do not close.
+  // A working or unsent screen keeps the refusal the close used to give.
+  if (continuity === 'doubt' && recorded.workspace && recorded.pane && recorded.launched) {
+    const refusal = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
+    return {
+      ...planned,
+      stage: recorded.stage,
+      sessionDoubt: refusal ?? 'its pane holds a process this record cannot tie to the launch',
+      ...(refusal ? { doubtHeld: true } : {}),
+    };
+  }
+  // The shell is in front. The seat's name surviving on the pane does not make it the CLI.
+  if (verdict === 'gone' && recorded.workspace && recorded.pane && recorded.launched) {
     return {
       ...planned,
       repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli },
     };
   }
-  const named = agents.find((agent) => agent.name === seat.name);
-  const onPane = recorded.pane ? agents.some((agent) => agent.pane === recorded.pane) : false;
+  const named = known.find((agent) => agent.name === seat.name);
+  const onPane = recorded.pane ? known.some((agent) => agent.pane === recorded.pane) : false;
   if (recorded.stage === 'ready') {
     if (named || onPane) {
-      const drift = modelDrift(team, seat, recorded, agents, processes, screenOf, owner);
+      const drift = modelDrift(team, seat, recorded, known, processes, screenOf, owner);
       if (drift.kind === 'cycle' && recorded.pane && recorded.workspace && recorded.launched) {
         return {
           ...planned,
@@ -405,7 +491,13 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
-      return { ...planned, stage: 'ready', ...restartNote(team, seat.name, recorded, home) };
+      const listed = named ?? known.find((agent) => agent.pane === recorded.pane);
+      return {
+        ...planned,
+        stage: 'ready',
+        ...(listed ? { pane: listed.pane, workspace: listed.workspace } : {}),
+        ...restartNote(team, seat.name, recorded, home, root),
+      };
     }
     return planned;
   }
@@ -426,15 +518,34 @@ function seatPlan(
 // never recorded (a launch from before identities were), or a start outside the machine lobby
 // (an old release's start). The skip line says what does repair it; both repairs relaunch the
 // seat — one seat at a time, or the whole team (for an orchestrator or operator, only the whole team).
+/** The restored seat's detail. A model that differs from the file is reported and is not closed. */
+function restoredDetail(
+  seat: Seat,
+  recorded: SeatState,
+  screenOf: (pane: string) => string | null,
+): string {
+  const kept = 'restored; left as it is';
+  if (!recorded.pane || !seat.version || !canShowModel(seat)) return kept;
+  const text = screenOf(recorded.pane);
+  if (text == null || text === '') return kept;
+  const running = seatModel(seat, text);
+  if (!running || !modelDiffers(running, { model: seat.model, version: seat.version })) return kept;
+  return `${kept}; its model drifted; left as it is`;
+}
+
 function restartNote(
   team: Pick<TeamFile, 'orchestrator' | 'operator' | 'entity' | 'lobby'>,
   name: string,
   recorded: SeatState,
   home: string,
+  root: string,
 ): { restartNote: string } | Record<string, never> {
   const fix = relaunchRepair(team, name, 'plain');
   if (!recorded.launched) return { restartNote: `a relaunch records its process: ${fix}` };
+  // A running lead is at home in the lobby or in the project. Either recording is left as it
+  // is. Every other seat still outside the lobby is told how to move.
   if (recorded.start_cwd && recorded.start_cwd !== resolveLobby(home, team)) {
+    if (isLeadSeat(team, name) && recorded.start_cwd === root) return {};
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
   return {};
@@ -455,12 +566,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // DEFAULT live file of this cwd, read with no flag — before any `--file` or `--session` is
   // honoured. Both are the owner's alone: the gate refuses them for a delegated run, and a
   // delegate's eligibility never comes from a file the caller names. A gate refusal replaces the
-  // ordinary caller refusal below and the flagged target is never read; a passed verdict makes
+  // ordinary caller refusal, and the flagged target is never read; a passed verdict makes
   // the run the delegate's, on that same default file. The owner's runs never come here, and
-  // with no `delegates` section — or no readable default file — nothing changes: today's order,
-  // today's texts.
-  const caller = callerOf(io);
-  const defaultLoad = mayLaunchSeats(caller) ? null : loadTeamFile(io.cwd, { home: sources.home });
+  // with no `delegates` section, a non-owner's `--session`, or a `--file` other than this
+  // folder's own team file, is the ordinary refusal and returns before that file or session is
+  // read. A delegate verdict that already refused the same aim returns here too, in the gate's
+  // own words. This folder's own file, with no `--session`, continues below. The path comparison
+  // is the resolved spelling: a link, or a differently-cased spelling of this folder's own team
+  // file, is not that file, and is refused here before it is opened.
+  const walked = walkCaller(io);
+  const defaultLoad = mayLaunchSeats(walked) ? null : loadTeamFile(io.cwd, { home: sources.home });
   const delegateTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
   const verdict = delegateTeam
     ? (sources.delegateGate ?? delegateGate)({
@@ -477,15 +592,59 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // refused, the default file's `delegates` section named a pane, and the gate passed it.
   let delegated: string | null = null;
   if (verdict?.kind === 'passed') delegated = verdict.pane;
+  // The grant is asked where the ordinary rule refused and a delegate did not take the run.
+  // A delegate refusal that already named a listed pane — a flag, a drift, an approval — keeps
+  // that sentence. `up.delegate` is the caller who is not a listed pane, and that caller may be
+  // the granted seat. A file that omits `grant` does not ask.
+  const grantTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.grant !== null ? defaultLoad : null;
+  const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
+  let grantedSeat: string | null = null;
+  let grantRefusal: string | null = null;
+  if (!mayLaunchSeats(walked) && delegated === null && delegateMissed && grantTeam) {
+    const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home });
+    if (said.kind === 'passed') grantedSeat = said.grant.seat;
+    else grantRefusal = said.text;
+  }
+  // A non-owner passing `--session`, or a `--file` other than this folder's own team file, is
+  // refused here, before that file is read, before a session is asked, and before an out-of-band
+  // owner token is matched. The walk reads no session. The token is a yes for the launch this
+  // folder's own file would make, so it is matched only on the path below, which never opens a
+  // flagged file and never asks a named session. A delegate verdict that already refused this aim
+  // returns in the gate's words, before the caller is placed. A granted seat that aims either
+  // flag is refused in its own words, and the flagged path is not opened. This folder's own
+  // file, with no `--session`, continues below.
+  const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
+  const aimed = otherFile || args.values.session !== undefined;
+  if (!mayLaunchSeats(walked) && aimed && grantedSeat !== null) {
+    const flag = args.values.session !== undefined ? 'session' : 'file';
+    out.stderr(`team up: --${flag} is the owner's; the granted seat cannot use it\n`);
+    // exit: up.grant-flag
+    return 1;
+  }
+  if (!mayLaunchSeats(walked) && aimed && verdict === null && grantRefusal === null) {
+    out.stderr(
+      `team up: only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(walked)}\n`,
+    );
+    // exit: up.not-owner
+    return 1;
+  }
+  if (!mayLaunchSeats(walked) && aimed && verdict?.kind === 'refused' && grantRefusal === null) {
+    out.stderr(`team up: ${verdict.text}\n`);
+    // exit: up.delegate-flag
+    return 1;
+  }
+  const caller = callerOf(io);
   // The file this run is whole on: the default one whenever the gate decided on it — a refused
   // run stops on the gate's words without reading a flagged target, a delegated one runs the
   // file its delegation was read from — and otherwise today's load, `--file` honoured exactly
   // as before.
   const loaded =
-    delegateTeam ??
-    (defaultLoad !== null && !args.values.file
-      ? defaultLoad
-      : loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: sources.home }));
+    aimed && grantRefusal !== null && grantTeam !== null
+      ? grantTeam
+      : delegateTeam ??
+        (defaultLoad !== null && !args.values.file
+          ? defaultLoad
+          : loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: sources.home }));
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       out.stderr(`team up: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
@@ -502,7 +661,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const teamLobby = resolveLobby(sources.home, team);
   // Owner-only targets are honoured only when no gate decided: a delegated run is the default
   // file's own session, and a refused one never adopts the session its caller tried to name.
-  const session = verdict === null ? (args.values.session ?? team.session) : team.session;
+  const session = verdict !== null || (aimed && grantRefusal !== null) ? team.session : (args.values.session ?? team.session);
   const dir = dirname(loaded.path);
   let state = resolveState(sources, session);
   // A stopped session this team's state records is cleared under the run lock, then started.
@@ -523,12 +682,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const upFp =
     standing.kind === 'verified' ? upFingerprint(standing.record.approval.fingerprints, standing.generation) : undefined;
   const ownerToken =
-    !mayLaunchSeats(caller) && verdict === null && upFp !== undefined && ownerAuthorized(io.env, upFp);
+    !mayLaunchSeats(caller) &&
+    verdict === null &&
+    grantedSeat === null &&
+    grantRefusal === null &&
+    upFp !== undefined &&
+    ownerAuthorized(io.env, upFp);
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
-  if (!mayLaunchSeats(caller) && !ownerToken) {
-    if (verdict === null) {
+  if (!mayLaunchSeats(caller) && !ownerToken && grantedSeat === null) {
+    if (grantRefusal !== null) {
+      refusals.push(grantRefusal);
+    } else if (verdict === null) {
       refusals.push(
         `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
       );
@@ -547,9 +713,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // unblocks nothing, not even the seat a dry run would plan.
   const budgets = budgetsInForceOf(standing, team);
 
+  // A file a CLI reads at start refuses only a launch into the lobby. `doctor` reports it
+  // as a miss, and that miss is applied once `launchingIntoLobby` is known, below.
+  const startupReadRefusals: string[] = [];
   if (sources.doctor) {
     const findings = doctorFindings(team, root, dir, session, sources.doctor, loaded.warnings, standing);
-    for (const finding of findings) if (blocksLaunch(finding)) refusals.push(finding.text);
+    for (const finding of findings) {
+      if (!blocksLaunch(finding)) continue;
+      if (finding.text.includes(' is read at start by ')) startupReadRefusals.push(finding.text);
+      else refusals.push(finding.text);
+    }
   }
   const samples: SwapSample[] = [];
   const readAt = () => (sources.now?.() ?? new Date()).getTime();
@@ -563,7 +736,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // decision. Written only when this call is one that may run `up` — the refusals above
       // accumulate rather than return, so a caller the caller gate refused must leave every
       // file as it was — and not on a dry run, which decides nothing.
-      if (!dry && (mayLaunchSeats(caller) || delegated !== null || ownerToken)) {
+      if (!dry && (mayLaunchSeats(caller) || delegated !== null || grantedSeat !== null || ownerToken)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
       refusals.push(problem);
@@ -673,7 +846,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       team,
       seat,
       recorded?.seats[seat.name],
-      agents ?? [],
+      agents,
       workspaces,
       state === 'running',
       root,
@@ -684,9 +857,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // reading: anyone but a seat.
       delegated === null && caller.kind !== 'seat',
     );
+    // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
+    // that seat's plan, including a repair the owner's `up` would have performed.
+    if (grantedSeat !== null && seat.name === grantedSeat) {
+      seats.push({
+        ...planned,
+        grantKeep: 'left as it is; a granted up does not relaunch or close the orchestrator\'s seat',
+      });
+      continue;
+    }
     // A stopped seat, one without a profile, and one already ready are left out of the budget.
     // A seat resumed into a live workspace starts nowhere new, but its reading is still said.
-    if (planned.unidentifiedHold || planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
+    if (planned.unidentifiedHold || planned.sessionDoubt || planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
       seats.push(planned);
       continue;
     }
@@ -757,33 +939,40 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   let verifiedLobby: string | null = null;
   let lobbySeen: LobbySeen | null = null;
   let createLobby = false;
-  // What the lobby may hold beside the seats: the `lobby_files` of every profile the tool
-  // ships. The lobby is one folder per machine, shared by every team on it, so what it may
-  // hold cannot depend on which seats this run starts nor on this team's file: a seat already
-  // ready is planned without the lobby mark, and another team's CLI may hold the folder too
-  // (`profiles/*.yaml`, the capture behind each entry).
-  const declaredLobbyFiles = shippedLobbyFiles();
+  // Paths a shipped CLI reads at start. The set does not depend on which seats this run
+  // starts: another team's CLI may read a file this team does not launch.
+  const startupReads = shippedStartupReads();
   if (isMigratedTrust(team.trust)) {
-    const launching = seats.some((seat) => {
-      if (seat.unidentifiedHold || seat.stopped || seat.launchProblem) return false;
+    // Only a fresh seat whose start is the lobby. A lead starts in the project and does not
+    // open this folder; a seat already ready is not launched again.
+    const launchingIntoLobby = seats.some((seat) => {
+      if (!seat.lobby || seat.unidentifiedHold || seat.stopped || seat.launchProblem) return false;
       if (!profileFor(seat.cli)) return false;
       const fresh = seat.stage === undefined || !seat.pane || (seat.stage === 'launched' && !seat.agentLive);
       if (!fresh) return false;
       return seat.budget?.kind !== 'refuse';
     });
+    if (launchingIntoLobby) {
+      for (const text of startupReadRefusals) refusals.push(text);
+    }
+    // Every migrated run checks links and ownership. A file a CLI reads at start is refused
+    // only when a seat is about to start in the lobby.
     // Read-only: a refusal stops the run before anything is made, and the run lock below is
     // held before the first write. A lobby that is simply absent is not a refusal here — the
     // creating pass runs under the lock (`createLobby`). Making it here, as this once did, is
     // the run's first filesystem effect outside the lock, and two fresh runs can both see the
     // lobby absent: the loser's mkdir meets the winner's component and `verifyLobby` turns the
     // EEXIST into a refusal the losing run never earned (`lobby/gate.ts`, the create branch).
-    const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby: teamLobby });
+    const gate = verifyLobby(sources.home, {
+      create: false, getuid: sources.getuid, fs: sources.fs,
+      reads: launchingIntoLobby ? startupReads : [], lobby: teamLobby,
+    });
     if (!gate.ok) refusals.push(gate.text);
     else if ('path' in gate) {
       verifiedLobby = gate.path;
       lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
       for (const seat of seats) if (seat.lobby) seat.cwd = gate.path;
-    } else createLobby = !dry && launching;
+    } else if (launchingIntoLobby) createLobby = !dry;
   }
   const watch = recorded?.watch;
   const watchAlive = Boolean(watch && sources.alive?.(watch.pid));
@@ -813,7 +1002,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   }
   if (refusals.length) {
     if (!dry) for (const refusal of [...new Set(refusals)]) out.stderr(`team up: ${plainText(refusal)}\n`);
-    // exit: up.not-owner
     // exit: up.delegate
     // exit: up.delegate-approval
     // exit: up.delegate-approved-copy
@@ -821,7 +1009,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.delegate-evidence
     // exit: up.delegate-placement
     // exit: up.delegate-command
-    // exit: up.delegate-flag
+    // exit: up.grant-another-pane
+    // exit: up.grant-approval
+    // exit: up.grant-approved-copy
+    // exit: up.grant-caller
+    // exit: up.grant-drift
+    // exit: up.grant-no-pane
+    // exit: up.grant-scope
     // exit: up.never-approved
     // exit: up.differs
     // exit: up.doctor
@@ -862,6 +1056,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // so the delegation is on the record before the first workspace is made. A dry run returned
     // above and writes nothing; a run that refused never got here.
     if (delegated !== null) (sources.logDelegated ?? logDelegated)(dir, delegated, 'up', sources.now?.());
+    // The granted seat's line, at the same moment: the gate passed and this run is about to
+    // have effects, before the first workspace is made.
+    if (grantedSeat !== null) (sources.logGranted ?? logGranted)(dir, grantedSeat, 'up', sources.now?.());
     // Provenance for an owner-token launch: the caller that ran it, and that the owner authorized
     // it out of band for this approved record.
     if (ownerToken) logLine(dir, 'up', callerLabel(caller), 'owner-token-authorized', sources.now?.() ?? new Date());
@@ -870,7 +1067,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // The run's first write, under the lock: the lobby the read-only pass above found absent.
       // Serialised here, no competing mkdir can turn into this run's refusal, and this run's own
       // make cannot land on another run's — which is what the read-only pass exists for.
-      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby: teamLobby });
+      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby });
       if (!gate.ok) {
         out.stderr(`team up: ${plainText(gate.text)}\n`);
         // exit: up.lobby
@@ -921,9 +1118,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // it allowed still the file it read. The declared files travel with it, so the recheck
       // walks the same closed tree the gate did.
       confirmLobby() {
-        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby: teamLobby }) : null;
+        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
+      ...(launch.reportDisplayAgent
+        ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
+        : {}),
+      ...(launch.renameWorkspace
+        ? { renameWorkspace: (session: string, workspace: string, label: string) => launch.renameWorkspace!(session, workspace, label) }
+        : {}),
       typeLine: () => false,
       deliverRules: async (session, pane, cli, file, seconds) => {
         // The rules go to the file first; nothing is typed until it holds them. The writer
@@ -993,7 +1196,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           // The CLI the seat was launched with: `down` needs it when the file no longer names the seat.
           const cli = team.seats.find((seat) => seat.name === name)?.cli;
           let start_cwd = prior.start_cwd;
-          if (!start_cwd && patch.createdWorkspace && verifiedLobby) start_cwd = verifiedLobby;
+          if (!start_cwd && patch.createdWorkspace) {
+            const planned = seats.find((item) => item.name === name);
+            if (planned?.lobby) {
+              if (verifiedLobby) start_cwd = verifiedLobby;
+            } else if (planned?.cwd) {
+              start_cwd = planned.cwd;
+            }
+          }
           // `waiting: null` removes the field alone; anything else written replaces it.
           const { waiting: written, ...rest } = patch;
           const seat: SeatState = { ...prior, ...rest, ...(cli ? { cli } : {}), ...(start_cwd ? { start_cwd } : {}) };
@@ -1006,8 +1216,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           }
         });
         if (patch.pane) {
-          if (replaced) forgetLaunchedPane(sources.home, replaced);
-          noteLaunchedPane(sources.home, loaded.path, patch.pane);
+          if (replaced) forgetLaunchedPane(sources.home, replaced, session);
+          noteLaunchedPane(sources.home, loaded.path, patch.pane, session);
         }
       },
       running(name) {
@@ -1022,7 +1232,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           pane = seats?.[name]?.pane;
           if (seats) delete seats[name];
         });
-        if (pane) forgetLaunchedPane(sources.home, pane);
+        if (pane) forgetLaunchedPane(sources.home, pane, session);
       },
       // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
       // here with the same function the records use: no escape sequence or bidi override reaches

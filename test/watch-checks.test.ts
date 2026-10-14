@@ -384,3 +384,16 @@ describe('a seat stopped on a provider error or a rate limit', () => {
     expect(run(memory, 12 * 60_000, limit)).toContain('deepseek-acme is at a rate limit: usage limit, resets at 11:00');
   });
 });
+
+describe('a label change is not a check', () => {
+  test('a screen that would change the label still produces only the model-drift report', () => {
+    const screen = readFileSync(new URL('./fixtures/codex/0.157.0/working.txt', import.meta.url), 'utf8');
+    const scene = live({ 'codex-acme': { status: 'working', screen } });
+    const result = pass({ team: teamFile(), watch: teamFile().watch, state: emptySession(), live: scene, machine: fine, now: 0, memory: newMemory() });
+    expect(result.reports.map((report) => report.text)).toEqual([
+      'codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol: it signs with the wrong model',
+    ]);
+    expect(result.labels.find((label) => label.name === 'codex-acme')?.displayAgent).toBe('GPT Terra 5.6 medium');
+    expect(result.reports.some((report) => report.text.includes('display'))).toBe(false);
+  });
+});

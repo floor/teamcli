@@ -43,6 +43,12 @@ trust_answer:
       after: 'directory?'
       before: '[a] Trust this workspace'
       box: true
+startup_reads:
+  - CLAUDE.md
+  - CLAUDE.local.md
+  - AGENTS.md
+  - .cursorrules
+  - .cursor/rules/
 models:
   option:
     - --model

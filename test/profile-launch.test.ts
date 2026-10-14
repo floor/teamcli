@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { TOOL_LOBBY_FILES, profileFor, shippedLobbyFiles } from '../src/profiles/index.ts';
-import { exitClearKey, launchCommand, lobbyFilesList } from '../src/profiles/profile.ts';
+import { TOOL_LOBBY_FILES, profileFor, shippedLobbyFiles, shippedStartupReads } from '../src/profiles/index.ts';
+import { exitClearKey, launchCommand, lobbyFilesList, startupReadsList } from '../src/profiles/profile.ts';
 import { runningModel } from '../src/status/statusline.ts';
 
 // Main's launch readers, copied here. The production files no longer have this code.
@@ -275,25 +275,39 @@ describe('the lobby_files a profile may name', () => {
     expect(shippedLobbyFiles()).toContain('reach-roster.json');
   });
 
-  test('no declared lobby file is one a shipped profile names as a configuration or instruction file', () => {
-    // Where such files are named: every file-like path a profile's YAML spells outside its own
-    // `lobby_files` stanza (today the capture names alone — no shipped profile names a settings
-    // or instruction file its CLI reads at start: claude-code's rules travel as the
-    // `--append-system-prompt` launch option, the others' as a first message), and the rules
-    // files the tool itself writes for a seat to read, `<state>/rules/<seat>.md`
-    // (`launch/rules-file.ts`). A declaration matching either fails here: the lobby is shared,
-    // so no file a CLI might obey at start may sit in it.
-    const shipped = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok'];
-    const named = new Set<string>();
-    for (const name of shipped) {
-      const yaml = readFileSync(new URL(`../src/profiles/${name}.yaml`, import.meta.url), 'utf8');
-      const outsideDeclaration = yaml.replace(/^lobby_files:\n(?:  .*\n)+/m, '');
-      for (const path of outsideDeclaration.match(/[\w.@+-]+(?:\/[\w.@+-]+)*\.(?:md|json|toml|yaml|lock|txt)/gu) ?? []) named.add(path);
+  test('a path a CLI writes is not also a path a shipped CLI reads at start', () => {
+    const reads = new Set(shippedStartupReads().map((read) => read.path));
+    for (const path of shippedLobbyFiles()) expect(reads.has(path)).toBe(false);
+  });
+});
+
+describe('the startup_reads a profile may name', () => {
+  test('a trailing slash names a directory, and an absent key is the empty list', () => {
+    expect(startupReadsList('exit: /exit')).toEqual([]);
+    expect(startupReadsList('exit: /exit\nstartup_reads:\n  - CLAUDE.md\n  - .claude/rules/')).toEqual([
+      { path: 'CLAUDE.md', directory: false },
+      { path: '.claude/rules', directory: true },
+    ]);
+  });
+
+  test('an absolute path, a parent, and a pattern are refused', () => {
+    for (const bad of ['startup_reads:\n  - /abs.md', 'startup_reads:\n  - ..', 'startup_reads:\n  - a/../b.md', 'startup_reads:\n  - "*.md"']) {
+      expect(() => startupReadsList(`exit: /exit\n${bad}`)).toThrow(/"startup_reads"/);
     }
-    const rulesShape = /^rules\/[\w.@+-]+\.md$/;
-    for (const path of shippedLobbyFiles()) {
-      expect(named.has(path)).toBe(false);
-      expect(rulesShape.test(path)).toBe(false);
-    }
+  });
+
+  test('the shipped profiles name the files a working-folder run showed each CLI reading at start', () => {
+    expect(shippedStartupReads()).toEqual([
+      { path: 'CLAUDE.md', directory: false, clis: ['claude-code', 'cursor', 'grok'] },
+      { path: 'CLAUDE.local.md', directory: false, clis: ['claude-code', 'cursor', 'grok'] },
+      { path: '.claude/CLAUDE.md', directory: false, clis: ['claude-code', 'grok'] },
+      { path: '.claude/rules', directory: true, clis: ['claude-code', 'grok'] },
+      { path: '.claude/settings.json', directory: false, clis: ['claude-code'] },
+      { path: 'AGENTS.md', directory: false, clis: ['codex', 'cursor', 'antigravity', 'grok'] },
+      { path: '.codex/config.toml', directory: false, clis: ['codex'] },
+      { path: '.cursorrules', directory: false, clis: ['cursor'] },
+      { path: '.cursor/rules', directory: true, clis: ['cursor'] },
+      { path: 'GEMINI.md', directory: false, clis: ['antigravity'] },
+    ]);
   });
 });

@@ -8,8 +8,10 @@ flags, the caller table and the exit codes stay on the page.
 ## What the run does: who is asked, who is left running
 
 Stops the team: asks every running seat the approved copy names to exit, closes its workspace, and
-stops the herdr session. The stop list is that copy. A name it does not carry is left running, and
-this run does not stop the watch: its pid is only in the state. A seat is only asked when it is
+stops the herdr session. A pane herdr names with something that copy does not carry is closed when
+the state records that pane and that workspace for one seat, and left running when no seat record
+accounts for it. A pane with no name is closed on that same record. This run does not stop the
+watch: its pid is only in the state. A seat is only asked when it is
 free — idle, with an empty input box — so a working, blocked or half-typed seat is left running
 and named. A pane whose CLI has exited — its own shell back in front of it, and no CLI process in
 its foreground list — is not asked: it is closed, and its line says the CLI had exited. A seat
@@ -30,9 +32,11 @@ whether the session is running, its agents, each pane's screen and status, and e
 foreground processes. Writes `.agents/team.state.json` (the seats it stopped are dropped),
 `.agents/team.log`, and, through herdr: the exit in each pane, the workspaces it closes, the
 session it stops and the stopped session it clears — its own, just stopped. A name the copy does
-not carry is left running, rules file included; the owner removes it with `team remove <name>
---abandon`. A team file that no longer validates is replaced by the last copy that did, with a
-notice printed first, and an idle session still says there is nothing to stop.
+not carry, whose pane and workspace match no seat record, is left running, rules file included;
+the owner removes it with `team remove <name> --abandon`. A pane those ids do match is closed and
+the seat is dropped, whatever name herdr gave it. A team file that no longer validates is replaced
+by the last copy that did, with a notice printed first, and an idle session still says there is
+nothing to stop.
 
 ## Who may run it
 
@@ -96,7 +100,13 @@ gate asked and answered, the refusal standing unless the gate placed the caller.
 A seat it stops prints `<seat>: stopped`. A seat whose CLI has already exited prints `<seat>: its
 CLI had exited; its workspace was closed` — closed with nothing typed, and the session stop
 follows as for any stopped seat; a dry run shows the close under the note `its CLI had exited;
-closed without typing`. A watch the state records, and whose pid is alive, prints
+closed without typing`. A pane with no name that one seat records is closed the same way, and the
+line says it was created for that seat and never named. A pane herdr named with something other
+than the seat's name is closed the same way when one seat records that pane and that workspace,
+and the line names the title. Neither close happens for the orchestrator's or the operator's
+seat when a seat calls: that seat is left running, whatever herdr calls its pane, and the skip
+line is the one in the table below. A name no seat record accounts for is left running. A watch the
+state records, and whose pid is alive, prints
 `watch: its pid is only in the state; left running` — this run does not kill it. The session prints
 `session <session>: stopped and cleared` — herdr keeps a stopped session listed until it is
 deleted, so `down` clears the one it has itself just stopped, retrying while herdr still reports
@@ -126,10 +136,12 @@ clearing key runs first — and a dry run says so in a note under its typing ste
 | `<seat>: holds this CLI's exit text (<exit>) unsent in its input box; left running (the owner sends it or clears it in its pane)` | the box holds an earlier run's unconfirmed exit text, and the CLI has no key that empties a box |
 | `<seat>: shows a screen the profile does not recognise; left running` | nothing is typed into a screen it can't read; this line stands while the CLI is still the pane's foreground — a pane whose CLI has exited is closed instead (above) |
 | `<seat>: the state doesn't say which CLI it runs, so it can't be asked to exit; left running (`team down --abandon` closes it without typing)` | the state predates the CLI record and the file no longer names the seat: nothing links its pane to a profile, so its owner closes it |
-| `<seat>: left running; only the owner stops the orchestrator's or the operator's seat` | a seat's own call, and this is the orchestrator or the operator |
+| `<seat>: left running; only the owner stops the orchestrator's or the operator's seat` | a seat's own call, and this is the orchestrator or the operator, whatever herdr calls its pane |
 | `session default: herdr's default session is never stopped` | the default session is herdr's own |
-| `<name>: its record is not an approved seat; left running (the owner cleans it: team remove <name> --abandon)` | herdr lists a name the approved copy does not carry |
+| `<name>: its record is not an approved seat; left running (the owner cleans it: team remove <name> --abandon)` | herdr lists a name the approved copy does not carry, and that pane and workspace match no seat record |
 | `<name>: herdr lists more than one agent of this name; left as it is` | more than one live agent of an approved name |
+| `pane <pane>: not recorded for a seat of this team; left as it is` | an unnamed pane whose pane and workspace match no seat record |
+| `<seat>: pane <pane> is not the process this team launched; left as it is` | the state records that pane and workspace, and a launched process that is no longer in the pane |
 | `watch: its pid is only in the state; left running` | the state records a watch pid that is alive; this run does not kill it |
 
 It prints `session <session> is not running: nothing to stop` and exits 0 when there is nothing to

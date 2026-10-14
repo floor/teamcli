@@ -33,14 +33,18 @@ exit_confirm: enter
 # stayed empty through the start, the trust dialog, an answered prompt and five idle
 # minutes; one scheduler call (CronCreate) made the folder ".claude" and, inside it, the
 # regular file below — the scheduler's one lock — and at /exit the CLI deleted the lock
-# and left the empty folder. The lobby may hold exactly these paths for this CLI.
-# Why no shipped CLI reads the file as configuration or instructions when started in the
-# lobby: it is the scheduler's lock alone — written by one call, deleted at exit, never
-# read back — and no shipped profile names a file its CLI reads at start in its working
-# folder. This CLI's instructions travel as the `--append-system-prompt` launch option
-# and the others' as a first message, so a seat of any CLI obeys nothing it finds there.
+# and left the empty folder. The lock is written by that call and deleted at exit.
+# A later run of each shipped CLI in a fresh working folder showed that claude-code,
+# codex, cursor, antigravity and grok read instruction or settings files there at start.
+# Those paths are `startup_reads` on each profile. This list is only what the CLI writes.
 lobby_files:
   - .claude/scheduled_tasks.lock
+startup_reads:
+  - CLAUDE.md
+  - CLAUDE.local.md
+  - .claude/CLAUDE.md
+  - .claude/rules/
+  - .claude/settings.json
 timeouts:
   idle: 90s
   exit: 30s

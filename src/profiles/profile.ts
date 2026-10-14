@@ -36,10 +36,12 @@ export interface Profile {
    *  key is established for this CLI: a seat that asks the question is one that could not be
    *  stopped by asking. */
   exitConfirm: string | null;
-  /** The exact relative paths of regular files this CLI may leave in its working folder, which
-   *  a shared lobby may therefore hold beside the seats. Empty when no capture has established
-   *  a path for this CLI: the lobby then holds nothing but the seats, as it always has. */
+  /** The exact relative paths of regular files this CLI may leave in its working folder.
+   *  Empty when no capture has established a path for this CLI. */
   lobbyFiles: readonly string[];
+  /** Paths this CLI reads at start in its working folder. A `directory` entry is every file
+   *  under that directory. Empty when a run showed this CLI reads none. */
+  startupReads: readonly { path: string; directory: boolean }[];
   /** Seconds to wait for the idle prompt after a launch. */
   idleTimeout: number;
   /** Seconds to wait for the pane's shell after the exit command. */
@@ -98,7 +100,8 @@ export function shellQuote(word: string): string {
  * them at launch, the rules.
  */
 export function launchCommand(profile: Profile, launch: string, rules: string): string {
-  const options = [...profile.unattended];
+  const words = new Set(launch.trim().split(/\s+/));
+  const options = profile.unattended.filter((option) => !words.has(option));
   if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
   return ['AGENT_UNATTENDED=1', launch.trim(), ...options.map(shellQuote)].join(' ');
 }
@@ -125,7 +128,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok'] as const
 // without the first belongs to a CLI whose screen doesn't show its model; the second says the
 // CLI starts on its last-used model when a launch names none, and no shipped profile sets it.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'exit', 'timeouts', 'models'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['status_model', 'last_used_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'model_form'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['status_model', 'last_used_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads', 'model_form'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -193,6 +196,37 @@ function lobbyFilesOf(entry: YamlEntry): readonly string[] {
   return paths;
 }
 
+/**
+ * The value of `startup_reads`: paths this CLI reads at start. The grammar is `lobby_files`,
+ * plus a trailing `/` that names a directory and every file under it. A path the grammar
+ * refuses throws.
+ */
+function startupReadsOf(entry: YamlEntry): readonly { path: string; directory: boolean }[] {
+  if (entry.value.kind !== 'seq' || entry.value.items.length === 0) {
+    fail(entry.line, '"startup_reads" must be a non-empty list');
+  }
+  return entry.value.items.map((item) => {
+    const raw = stringOf(item);
+    if (!raw) fail(item.line, '"startup_reads" entries must be non-empty strings');
+    const directory = raw.endsWith('/');
+    const value = directory ? raw.slice(0, -1) : raw;
+    const parts = value.split('/');
+    if (!value || value.startsWith('/') || parts.some((part) => part === '' || part === '.' || part === '..')) {
+      fail(item.line, `"startup_reads" holds "${raw}": not a relative path inside the lobby`);
+    }
+    if (parts.some((part) => /[*?\[]/.test(part))) {
+      fail(item.line, `"startup_reads" holds "${raw}": a path is one exact name, not a pattern`);
+    }
+    return { path: value, directory };
+  });
+}
+
+/** The `startup_reads` a profile snippet names, by the loader's own rule: for tests. */
+export function startupReadsList(text: string): readonly { path: string; directory: boolean }[] {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'startup_reads');
+  return entry === undefined ? [] : startupReadsOf(entry);
+}
+
 /** The `lobby_files` a profile snippet names, by the loader's own rule: for tests. A path the
  *  grammar refuses throws; an absent key reads as the empty list, as an absent optional key
  *  reads as its default. */
@@ -213,12 +247,26 @@ export function profileFor(cli: string): Profile | null {
  *  whatever team runs; absent from the lobby, they cost nothing. */
 export const TOOL_LOBBY_FILES: readonly string[] = [REACH_ROSTER_FILE, REACH_ROSTER_TEMP];
 
-/** What a lobby may hold beside the seats: the `lobby_files` of every profile the tool ships,
- *  plus the tool's own files. The lobby is one folder per machine, shared by every team on it,
- *  so the set cannot depend on which seats a run starts nor on a team's file — a file another
- *  team's CLI left must not block a team with no seat of that CLI. Only a shipped profile can
- *  declare the key — the loader reads no profile from outside the tool — and `TOOL_LOBBY_FILES`
- *  is a constant, so nothing a user writes widens the set. */
+/** Paths a shipped CLI reads at start, one entry per path, `clis` in ship order. The lobby
+ *  gate refuses these at any depth. Only a shipped profile can declare the key. */
+export function shippedStartupReads(): readonly { path: string; directory: boolean; clis: readonly string[] }[] {
+  const byKey = new Map<string, { path: string; directory: boolean; clis: string[] }>();
+  for (const name of NAMES) {
+    const profile = SHIPPED[name]?.profile;
+    if (!profile) continue;
+    for (const read of profile.startupReads) {
+      const key = `${read.directory ? 'd' : 'f'}:${read.path}`;
+      const found = byKey.get(key) ?? { path: read.path, directory: read.directory, clis: [] };
+      if (!found.clis.includes(profile.cli)) found.clis.push(profile.cli);
+      byKey.set(key, found);
+    }
+  }
+  return [...byKey.values()];
+}
+
+/** What a CLI may write in the lobby: the `lobby_files` of every profile the tool ships,
+ *  plus the tool's own files. The set cannot depend on which seats a run starts. Only a
+ *  shipped profile can declare the key, and `TOOL_LOBBY_FILES` is a constant. */
 export function shippedLobbyFiles(): readonly string[] {
   const paths = new Set<string>();
   for (const shipped of Object.values(SHIPPED)) for (const path of shipped.profile.lobbyFiles) paths.add(path);
@@ -317,6 +365,7 @@ function launchOf(root: YamlNode): Shipped {
   const exitConfirmEntry = optional(entries, 'exit_confirm');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
   const modelFormEntry = optional(entries, 'model_form');
+  const startupReadsEntry = optional(entries, 'startup_reads');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
   const login = loginOf(required(entries, 'login', root.line).value);
   const timeouts = required(entries, 'timeouts', root.line).value;
@@ -335,6 +384,7 @@ function launchOf(root: YamlNode): Shipped {
       exitClear: exitClearEntry ? clearKeyOf(exitClearEntry) : null,
       exitConfirm: exitConfirmEntry ? confirmKeyOf(exitConfirmEntry) : null,
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
+      startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
       idleTimeout: seconds(timeouts, 'idle'),
       exitTimeout: seconds(timeouts, 'exit'),
       lastUsedModel: lastUsedEntry ? boolOf(lastUsedEntry.value, 'last_used_model') : false,

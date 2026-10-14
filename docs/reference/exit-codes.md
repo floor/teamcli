@@ -48,6 +48,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.result-exists` | `add` | 1 | the result path already exists | `team add --temporary --like lead --until result:README.md` |
 | `add.run-lock` | `add` | 1 | another session-mutating run is holding the session | `team add worker` |
 | `add.server` | `add` | 1 | the session's server did not start | `team add worker` |
+| `add.session-doubt` | `add` | 1 | the pane holds a process the record cannot tie to the launch | `team add worker` |
 | `add.session-owner` | `add` | 1 | --session is the owner's | `team add worker --session other` |
 | `add.start` | `add` | 1 | the seat has nowhere to start | `team add worker` |
 | `add.stopped` | `add` | 1 | the session is stopped | `team add worker` |
@@ -94,6 +95,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `approve.delegate-flag` | `approve` | 1 | a flag of the owner's was passed to the approved delegate | `team approve --file <path>` |
 | `approve.delegate-not-ordinary` | `approve` | 1 | the change moves an owner section a delegate may not: it needs the owner | `team approve` |
 | `approve.delegate-placement` | `approve` | 1 | the approved delegate must be an external non-seat pane | `team approve` |
+| `approve.grant-another-pane` | `approve` | 1 | the granted seat is not on its recorded pane | `team approve` |
+| `approve.grant-approval` | `approve` | 1 | a grant needs a verified approval | `team approve` |
+| `approve.grant-approved-copy` | `approve` | 1 | a grant needs a readable approved copy | `team approve` |
+| `approve.grant-caller` | `approve` | 1 | only the seat the grant names runs this | `team approve` |
+| `approve.grant-flag` | `approve` | 1 | a granted seat cannot aim --file | `team approve --file other` |
+| `approve.grant-no-pane` | `approve` | 1 | no pane is recorded for the granted seat | `team approve` |
+| `approve.grant-not-ordinary` | `approve` | 1 | this change needs the owner | `team approve` |
+| `approve.grant-scope` | `approve` | 1 | the grant does not list approve | `team approve` |
 | `approve.input-unreadable` | `approve` | 1 | the terminal could not be read to check for input waiting | `team approve` |
 | `approve.input-waiting` | `approve` | 1 | input was waiting on the terminal | `team approve` |
 | `approve.key` | `approve` | 1 | the signing key can't be read | `team approve` |
@@ -171,6 +180,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.delegate-flag` | `down` | 1 | a prohibited flag is the owner's | `team down --abandon, from the approved delegate` |
 | `down.delegate-placement` | `down` | 1 | the approved delegate must be an external non-seat pane | `team down, with a delegate entry naming a seat's pane` |
 | `down.file-owner` | `down` | 1 | --file is the owner's | `team down --file .agents/team.yaml` |
+| `down.grant-approval` | `down` | 1 | a grant needs a verified approval | `team down` |
+| `down.grant-approved-copy` | `down` | 1 | a grant needs a readable approved copy | `team down` |
+| `down.grant-drift` | `down` | 1 | a grant needs the approved file | `team down` |
+| `down.grant-scope` | `down` | 1 | the grant does not list down | `team down` |
 | `down.held` | `down` | 1 | a step was held | `team down` |
 | `down.legacy` | `down` | 1 | a legacy approval record stops nobody | `team down` |
 | `down.never-approved` | `down` | 1 | a file that was never approved stops nobody | `team down` |
@@ -310,8 +323,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
-| `send.timeout` | `send` | 1 | delivered, but the seat's reply did not arrive in the window | `team send worker hello --wait --timeout 10` |
-| `send.unreachable` | `send` | 1 | the seat's channel is not open | `team send worker hello` |
+| `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
+| `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
 | `send.configuration` | `send` | 2 | the team file can't be read | `team send worker hello --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
@@ -351,6 +364,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.delegate-placement` | `up` | 1 | the approved delegate must be an external non-seat pane | `team up` |
 | `up.differs` | `up` | 1 | the file differs from its approval | `team up` |
 | `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
+| `up.grant-another-pane` | `up` | 1 | the granted seat is not on its recorded pane | `team up` |
+| `up.grant-approval` | `up` | 1 | a grant needs a verified approval | `team up` |
+| `up.grant-approved-copy` | `up` | 1 | a grant needs a readable approved copy | `team up` |
+| `up.grant-caller` | `up` | 1 | only the seat the grant names runs this | `team up` |
+| `up.grant-drift` | `up` | 1 | a grant needs the approved file | `team up` |
+| `up.grant-flag` | `up` | 1 | a granted seat cannot aim --session or --file | `team up --file other` |
+| `up.grant-no-pane` | `up` | 1 | no pane is recorded for the granted seat | `team up` |
+| `up.grant-scope` | `up` | 1 | the grant does not list up | `team up` |
 | `up.herdr` | `up` | 1 | herdr doesn't answer | `team up` |
 | `up.lobby` | `up` | 1 | the lobby could not be created for the launch | `team up` |
 | `up.machine` | `up` | 1 | the machine is over a launch limit | `team up` |
@@ -382,6 +403,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |
 | `watch.not-a-repo` | `watch` | 2 | not inside a git repository | `team watch` |
 | `worktree.created` | `worktree` | 0 | the worktree was created | `team worktree new task --kind fix` |
+| `worktree.listed` | `worktree` | 0 | the recorded worktrees were listed | `team worktree list` |
 | `worktree.record-gone` | `worktree` | 0 | the record was removed after the folder was already gone | `team worktree remove task` |
 | `worktree.removed` | `worktree` | 0 | the worktree was removed | `team worktree remove task` |
 | `worktree.another-pane` | `worktree` | 1 | the state records another pane for the caller's seat | `team worktree new task` |

@@ -1,9 +1,13 @@
 # team down
 
 Stops the team: asks every running seat the approved copy names to exit, closes its workspace, and
-stops the herdr session. The stop list is that copy — a name it does not carry is left running. A
-seat is only asked when it is free, so a working, blocked or half-typed seat is left running and
-named. `--dry-run` prints the plan and runs nothing.
+stops the herdr session. A pane herdr names with something that copy does not carry is closed when
+the state records that pane and that workspace for one seat, and left running when no seat record
+accounts for it: the name is not what decides. A pane with no name is closed on that same record.
+When the record also holds the process `up` launched, the pane is closed only while that process
+is still in the pane. Any other such pane is left as it is and named. A seat is only asked when it
+is free, so a working, blocked or half-typed seat is left running and named. `--dry-run` prints the
+plan and runs nothing.
 
 ## Synopsis
 
@@ -25,7 +29,8 @@ named. `--dry-run` prints the plan and runs nothing.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--abandon`, `--session` and `--file` are the owner's own |
-| the orchestrator's seat, the operator's seat | stop the team; never the orchestrator's or the operator's own seat |
+| the orchestrator's seat | stop the other seats, and leave its own seat and the operator's seat running. When the file has a `grant`, this needs `down` in that grant. `--abandon`, `--session` and `--file` stay the owner's |
+| the operator's seat | stop the team; never the orchestrator's or the operator's own seat |
 | the approved delegate, when the file's `delegates` section names it | stop the whole team, the orchestrator's and the operator's seats included; never `--abandon`, `--session` or `--file` |
 
 ## Output and exit codes

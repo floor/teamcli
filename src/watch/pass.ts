@@ -5,16 +5,18 @@
 import { seatNamed } from '../approve/fingerprint.ts';
 import { observe, observeCheck, type Seen } from '../budgets/readings.ts';
 import type { CheckOutcome } from '../budgets/run.ts';
-import type { TeamFile } from '../file/types.ts';
+import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
-import { seatProcessVerdict } from '../launch/identity.ts';
+import { replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
 import type { SessionState } from '../state.ts';
 import type { Live } from '../status/compare.ts';
+import { workspaceLabel } from '../file/sections/seats.ts';
 import { seatModel } from '../status/statusline.ts';
+import { liveDisplayAgent } from './seat-label.ts';
 import {
   ALWAYS_ON,
   type Attention,
@@ -66,10 +68,18 @@ export type Memory = {
   // same id. A restarted watch has none, so an old unacked record is said again; a receipt
   // takes the record off the list.
   mailboxTold: Set<string>;
+  // Sidebar lines this process has pushed, and the last effort word a screen showed. `title`
+  // and `line` are written only after herdr accepts the call. `effort` is the word last seen,
+  // which a screen that shows none does not clear. A restarted watch has none, so the first
+  // cycle paints every running seat again.
+  seatLabels: Record<string, { title?: string; line?: string; effort?: string }>;
 };
 
 export function newMemory(): Memory {
-  return { history: {}, slots: {}, active: new Set(), pending: [], pendingSince: null, ownNudge: null, mailboxTold: new Set() };
+  return {
+    history: {}, slots: {}, active: new Set(), pending: [], pendingSince: null, ownNudge: null, mailboxTold: new Set(),
+    seatLabels: {},
+  };
 }
 
 /** Whether a box, already read as unsent, holds this watch's own line: this process recorded
@@ -115,6 +125,10 @@ export type PassResult = {
   mailboxNote: string | null;
   // The readings that count, to be saved: the project's, with this pass's figures folded in (§ 4.4).
   readings: Seen[];
+  // Sidebar lines to push for running file seats. The pass does not call herdr: the command
+  // does, and records `title` and `line` only after the call returns true. A seat with neither
+  // half changed is absent.
+  labels: { name: string; pane: string; workspace: string; title?: string; displayAgent?: string }[];
 };
 
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
@@ -235,6 +249,7 @@ export function pass({
   const known = new Set<string>();
   const workers: { idle: boolean }[] = [];
   const observations: SeatObservation[] = [];
+  const labels: PassResult['labels'] = [];
 
   // A stopped seat is kept in the file and not started; should its owner start one by hand, herdr
   // shows it running, and the watch gives it a parked seat's treatment: attention (permission,
@@ -270,6 +285,7 @@ export function pass({
     const lead = name === team.orchestrator || name === team.operator;
     if (!agent) {
       delete memory.history[name];
+      delete memory.seatLabels[name];
       observations.push({
         name,
         seat,
@@ -281,6 +297,7 @@ export function pass({
         account,
         quota: [],
         identity: 'unknown',
+        continuity: 'other',
         running: false,
         recorded: state.seats[name]?.stage,
         quiet: false,
@@ -315,6 +332,7 @@ export function pass({
       history.idleSince ??= now;
     }
 
+    const verdict = seatProcessVerdict(state.seats[name]?.launched, processes?.[agent.pane] ?? null);
     observations.push({
       name,
       seat,
@@ -325,7 +343,13 @@ export function pass({
       vendor,
       account,
       quota: quotaOf(cli, screen, pane, reportedLiveAgent(foreground?.[agent.pane] ?? null, profileFor(cli)?.processNames ?? []), patternsOf(cli)),
-      identity: seatProcessVerdict(state.seats[name]?.launched, processes?.[agent.pane] ?? null),
+      identity: verdict,
+      continuity: replacedSeat(verdict, {
+        asked: true,
+        namedOnPane: state.seats[name]?.pane === agent.pane,
+        recordedSession: state.seats[name]?.agent_session,
+        liveSession: agent.session,
+      }),
       running: true,
       recorded: state.seats[name]?.stage,
       quiet,
@@ -338,6 +362,7 @@ export function pass({
       model: seat ? seatModel(seat, live.screens[agent.pane]) : null,
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
     });
+    if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory));
   }
 
   // The figures this pass saw, folded into the readings the project keeps (§ 4.3, § 4.4). Only an
@@ -486,5 +511,26 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  return { reports, nudge, fallback, ring, mailboxNote, readings };
+  return { reports, nudge, fallback, ring, mailboxNote, readings, labels };
+}
+
+/** The sidebar lines a running file seat needs this pass. The first cycle paints both lines
+ *  from the file, with a live model or effort in place of the file's when the screen shows
+ *  one. A later cycle paints only a line that changed. A temporary seat has no file seat and
+ *  is not passed here. */
+function labelOf(
+  seat: Seat,
+  pane: string,
+  workspace: string,
+  screen: string | undefined,
+  memory: Memory,
+): PassResult['labels'] {
+  const prior = memory.seatLabels[seat.name];
+  const live = liveDisplayAgent(seat, screen, prior?.effort);
+  if (live.effort) (memory.seatLabels[seat.name] ??= {}).effort = live.effort;
+  const title = workspaceLabel(seat);
+  const push: PassResult['labels'][number] = { name: seat.name, pane, workspace };
+  if (prior?.title !== title) push.title = title;
+  if (prior?.line !== live.line) push.displayAgent = live.line;
+  return push.title || push.displayAgent ? [push] : [];
 }

@@ -1,7 +1,11 @@
 # team up
 
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
-declares and this machine can run, and the watchdog pane. Seats already ready are left as they are.
+declares and this machine can run, and the watchdog pane. A fresh launch of the orchestrator or the
+operator starts in the project folder. Every other seat starts in the team's lobby. A lead already
+running, in the lobby or in the project folder, is left as it is: its pane is not closed and not
+moved. Every other seat already ready is left as it is. Either way, that seat's sidebar is
+rewritten from the file: the workspace title, and the display line. Nothing is typed into the pane.
 
 ## Synopsis
 
@@ -22,7 +26,8 @@ declares and this machine can run, and the watchdog pane. Seats already ready ar
 | --- | --- |
 | the owner | run it, from any terminal or none — without a terminal it never prompts, and leaves every dialog to the owner |
 | anyone | run `--dry-run`, which reaches nothing and changes nothing |
-| a seat, or a pane of another session | run `--dry-run` only; a real run is refused, unless the approved file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
+| the orchestrator's seat, when the approved `grant` lists `up` | run it on this folder's own team file. The run does not relaunch or close that seat. `--session` and `--file` are refused before either is read |
+| a seat, or a pane of another session | run `--dry-run` only; a real run is refused, unless the approved `grant` admits the orchestrator's seat or the approved file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
 
 ## Output and exit codes
 
@@ -90,7 +95,11 @@ state:
 
 ```console
 $ team up --dry-run ; echo "exit $?"
++ herdr --session beacon workspace rename w1 coordinator
++ herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
++ herdr --session beacon workspace rename w2 implementer
++ herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 + herdr --session beacon workspace create --cwd . --label watchdog --no-focus

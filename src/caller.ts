@@ -218,8 +218,8 @@ export function anotherPaneRefusal(name: string, recordedPane: string): string {
  * that file is read, so every state of the flagged path — no file at all, an unparsable file, a
  * valid team file, a folder, an unreadable file — answers with these same bytes and the same
  * exit, and nothing of the flagged project and no session is read. `undefined` when the flag is
- * absent or the walk places the owner. Every command whose `--file` writes or launches (add,
- * remove, worktree new / remove, answer, down, watch) asks this before it reads anything; it
+ * absent or the walk places the owner. Every command whose `--file` is the owner's (add,
+ * remove, worktree list / new / remove, answer, down, watch) asks this before it reads anything; it
  * lives here, beside `walkCaller`, so an eighth command cannot forget it. (The gate grew command
  * by command: `add`, `remove` and `worktree` once read the flagged file and asked the host for its
  * session before their own `--file` check; `watch` opened the flagged file and wrote its
@@ -245,9 +245,11 @@ export function sessionOwnerRefusal(walked: Caller): string {
   return `--session is the owner's, from a terminal outside herdr; this call is ${describeCaller(walked)}`;
 }
 
-// The owner, or the orchestrator's or the operator's seat: who may change a running team. The
-// no-pane and another-pane verdicts name the seat, so a command's refusal can say which seat the
-// state lost, or which pane it holds that the caller is not on.
+// The owner, or the orchestrator's or the operator's seat: who may change a running team.
+// Those are the names the file resolved (`coordinator:` or `leads: true`, and `operator:`),
+// not the seat's role, so a lead written `role: coordinator` is admitted when its name is
+// that lead. The no-pane and another-pane verdicts name the seat, so a command's refusal
+// can say which seat the state lost, or which pane it holds that the caller is not on.
 export function mayChangeTeamVerdict(caller: Caller, team: Pick<TeamFile, 'orchestrator' | 'operator'>, at?: SeatStanding): CallerVerdict {
   if (caller.kind === 'owner') return { kind: 'ok' };
   const asOrchestrator = callerVerdict(caller, team.orchestrator, at);

@@ -7,7 +7,7 @@ import { currentTeam, rememberCurrent } from '../file/current.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { homedir } from 'node:os';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, pressEnter, reportDisplayAgent, typeText, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState } from '../state.ts';
@@ -67,11 +67,15 @@ export type WatchSources = {
   /** This process's pane, `'gone'` when herdr answered and none has it, null when herdr can't say. */
   ownPane?(session: string, pid: number): { pane: string; workspace: string } | 'gone' | null;
   /** How an end is read. The real watch uses git and the filesystem. */
-  readEnd?(root: string, until: string, base: string | null, ownBefore: boolean): EndView;
+  readEnd?(root: string, until: string, base: string | null, ownBefore: boolean, seat?: string): EndView;
   /** Stops one free seat. The real watch uses the same steps as `remove`. */
   stopSeat?(session: string, seat: DownSeat): Promise<boolean>;
   /** Removes one merged worktree. The real watch calls `worktree remove`. */
   removeWorktree?(task: string): number;
+  /** Sidebar line 1. False is one line and the next pass tries the same title again. */
+  renameWorkspace?(session: string, workspace: string, label: string): boolean;
+  /** Sidebar line 2. False is one line and the next pass tries the same text again. */
+  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** The home whose store holds the override file. Absent in a test that does not set one. */
   home?: string;
 };
@@ -105,6 +109,8 @@ export const realWatchSources: WatchSources = {
   pid: process.pid,
   ownPane: ownWatchPane,
   home: homedir(),
+  renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, session === 'default' ? undefined : session),
+  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, session === 'default' ? undefined : session),
 };
 
 export const watch: Command = (argv, io) => runWatch(argv, io, realWatchSources);
@@ -345,6 +351,17 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             return { readings: folded.readings, value: folded };
           });
         for (const report of result.reports) tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
+        for (const label of result.labels) {
+          const slot = (memory.seatLabels[label.name] ??= {});
+          if (label.title && sources.renameWorkspace) {
+            if (sources.renameWorkspace(session, label.workspace, label.title)) slot.title = label.title;
+            else say(`${label.name}: its title was not reported`, false);
+          }
+          if (label.displayAgent && sources.reportDisplayAgent) {
+            if (sources.reportDisplayAgent(session, label.pane, label.displayAgent)) slot.line = label.displayAgent;
+            else say(`${label.name}: its display was not reported`, false);
+          }
+        }
         if (result.nudge) {
           if (args.flags.has('no-nudge')) say(`nudge not typed (--no-nudge): ${result.nudge.text}`, false);
           else await deliver(result.nudge, team, session, sources, memory, say, tell, told);
@@ -592,7 +609,7 @@ async function closeEnded(input: {
     const task = temporary.task;
     const work = task ? state.worktrees[task] : undefined;
     const ownBefore = work ? work.own_commits === true : temporary.own_commits === true;
-    const end = endOf(root, temporary.until, team.workspace.base, ownBefore);
+    const end = endOf(root, temporary.until, team.workspace.base, ownBefore, name);
     const agent = live.agents.find((item) => item.name === name);
     const cli = team.seats.find((seat) => seat.name === temporary.like)?.cli ?? '';
     const free = agent

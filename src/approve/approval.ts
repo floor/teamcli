@@ -71,6 +71,13 @@ export function approvedFingerprints(record: ApprovalRecord): Fingerprints {
     const omitted = fingerprints({ ...checked.team, tasks: null }).sections.tasks;
     if (omitted !== undefined) sections = { ...sections, tasks: omitted };
   }
+  // A record written before `grant` has no fingerprint for it. The omitted section is null, so
+  // the arrival baseline is that null: a file that still omits `grant` matches, and a file that
+  // adds the section differs. Filling from the live file would hide the add.
+  if (checked.ok && stored.sections.grant === undefined) {
+    const omitted = fingerprints({ ...checked.team, grant: null }).sections.grant;
+    if (omitted !== undefined) sections = { ...sections, grant: omitted };
+  }
   if (checked.ok && checked.team.watch.idleRepeat === undefined) {
     const legacy = legacyWatchDigest(checked.team);
     if (legacy && stored.sections['watch'] === legacy) {
@@ -219,7 +226,7 @@ export function budgetsInForceOf(standing: Standing, team: TeamFile): TeamFile['
  * it prints — so a name only the live file writes is never taken for an approved one. `project`
  * is part of that rule: it is not an owner section, so a rename leaves the approval verified, and
  * a reader that shows the name the owner agreed to must take it from this object, never from the
- * live file (the second lab's route, closed in `projectUsage`). The two worktree subcommands are
+ * live file (the second lab's route, closed in `projectUsage`). The worktree subcommands are
  * the one exception, and say so themselves (`worktreeTeamInForceOf` below).
  */
 export function teamInForceOf(standing: Standing, team: TeamFile): TeamFile | null {
@@ -229,7 +236,7 @@ export function teamInForceOf(standing: Standing, team: TeamFile): TeamFile | nu
 }
 
 /**
- * The team file the two worktree subcommands read, and whether the live file has drifted from it.
+ * The team file the worktree subcommands read, and whether the live file has drifted from it.
  * Every owner section is the copy in force's; `project` is the live file's — that field is not an
  * owner section, so a rename is not drift, and `{repo}` stays the name the file has now (the merge
  * lives here, not in `teamInForceOf`: only these subcommands read a name the owner has not

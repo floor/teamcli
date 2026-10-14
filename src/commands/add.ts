@@ -13,32 +13,33 @@ import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts'
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
+import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, hasSeat, restoreSeat, seatIsStopped } from '../file/lines.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
-import { workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
 import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
 import {
-  agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, sessionRunning,
+  agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, reportDisplayAgent, sessionRunning,
   sessionState, startServer, typeText, workspaceClose, workspaceCreate, workspaceList, workspacePanes,
   type HerdrAgent, type PaneProcesses,
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { launchedIdentity, seatProcessVerdict } from '../launch/identity.ts';
+import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
-import { profileFor, shippedLobbyFiles } from '../profiles/index.ts';
+import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { emptySession, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
@@ -74,6 +75,7 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
+  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
@@ -331,11 +333,37 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // reads herdr again, immediately before it (`execute.ts`), so this reading only decides that
   // the seat needs repair, never that its recorded workspace is still its own.
   const held = recorded.seats[built.name];
-  const verdict = seatProcessVerdict(
-    held?.launched,
-    held?.launched && held.pane && sources.launch.processInfo ? sources.launch.processInfo(session, held.pane) : null,
-  );
-  const repair = (verdict === 'gone' || verdict === 'replaced') && held?.workspace && held.pane && held.launched
+  const proc = held?.launched && held.pane && sources.launch.processInfo ? sources.launch.processInfo(session, held.pane) : null;
+  const verdict = seatProcessVerdict(held?.launched, proc);
+  const listed = held?.pane ? agents.find((agent) => agent.name === built.name && agent.pane === held.pane) : undefined;
+  const continuity = replacedSeat(verdict, {
+    asked: true,
+    namedOnPane: Boolean(listed),
+    recordedSession: held?.agent_session,
+    liveSession: listed?.session,
+  });
+  // The session matches: write the pids the pane holds now, then the already-running refusal.
+  // Refusing first would skip that write.
+  if (continuity === 'restored' && held?.agent_session && proc) {
+    const next = launchedIdentity(proc);
+    if (next) {
+      const sessionId = held.agent_session;
+      updateState(dir, (file) => {
+        const seat = file.sessions[session]?.seats[built.name];
+        if (!seat) return;
+        seat.launched = next;
+        seat.agent_session = sessionId;
+      });
+    }
+  }
+  // A program the record cannot tie to the launch is not closed and not launched again.
+  if (continuity === 'doubt' && held?.workspace && held.pane && held.launched) {
+    out.stderr(`team add: ${plainText(`${built.name}: its pane holds a process this record cannot tie to the launch`)}\n`);
+    // exit: add.session-doubt
+    return 1;
+  }
+  // The shell is in front. The seat is not already running: close and launch fresh.
+  const repair = verdict === 'gone' && held?.workspace && held.pane && held.launched
     ? { pane: held.pane, workspace: held.workspace, launched: held.launched, cli: built.seat.cli }
     : undefined;
   const runningNow = !repair ? agents.find((agent) => agent.name === built.name) : undefined;
@@ -375,20 +403,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   let startProblem: string | null = null;
   let verifiedLobby: string | null = null;
   let lobbySeen: LobbySeen | null = null;
-  // What the lobby may hold beside the seats: the `lobby_files` of every profile the tool
-  // ships — the same set `up`'s gate and `doctor`'s finding read, so the three cannot disagree
-  // about a declared file. The lobby is one folder per machine, shared by every team on it:
-  // another team's CLI may hold the folder whatever this file's seats are.
-  const declaredLobbyFiles = shippedLobbyFiles();
+  // Paths a shipped CLI reads at start. The lobby is checked only when this seat is about
+  // to launch there, after `wouldLaunch` is known, so a dry run refuses in the same words.
+  const startupReads = shippedStartupReads();
   if (!prepared.team.trust || prepared.team.trust.length === 0 || isLegacyTrust(prepared.team.trust)) {
     startProblem = `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(prepared.team, root, sources.home)}`;
-  } else {
-    const gate = verifyLobby(sources.home, { create: false, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby });
-    if (!gate.ok) startProblem = gate.text;
-    else if ('path' in gate) {
-      verifiedLobby = gate.path;
-      lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
-    }
   }
   // Where the seat waits: the lobby the gate verified, or a refusal — before the file is edited.
   const start: SeatStart = startProblem
@@ -464,6 +483,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       : []),
   ]) {
     if (blocksLaunch(finding)) {
+      // A file a CLI reads at start is said here and refused later, only when this seat is
+      // about to start in the lobby. Other misses still stop the run here.
+      if (finding.text.includes(' is read at start by ')) {
+        const warning = `team add: warning: ${plainText(finding.text)}\n`;
+        if (dry) out.stdout(warning);
+        else out.stderr(warning);
+        continue;
+      }
       const launchText = launchProblem ? `${built.name}: ${launchProblemDetail ?? launchProblem}` : '';
       if (dry && launchProblem && !stray && finding.text === launchText) {
         const starting = seatPlan(standing, prepared.team, built.seat, start, root, sources.home);
@@ -544,6 +571,21 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.budget
     return 1;
   }
+  // Links and ownership are checked on every migrated run. A file a CLI reads at start is
+  // refused only when this seat is about to start in the lobby. A lead starts in the project.
+  const migrated = isMigratedTrust(prepared.team.trust);
+  const intoLobby = migrated && wouldLaunch && start.lobby === true;
+  if (migrated) {
+    const gate = verifyLobby(sources.home, {
+      create: false, getuid: sources.getuid, fs: sources.fs,
+      reads: intoLobby ? startupReads : [], lobby,
+    });
+    if (!gate.ok) return refuseLobby(out, built.name, gate.text, dry);
+    if ('path' in gate) {
+      verifiedLobby = gate.path;
+      lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
+    }
+  }
   if (dry) {
     if (decision.kind === 'unknown') out.stdout(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
     const preview = upPlan({
@@ -568,13 +610,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
   try {
-    if (isMigratedTrust(prepared.team.trust) && wouldLaunch) {
-      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby });
-      if (!gate.ok) {
-        out.stderr(`team add: ${plainText(gate.text)}\n`);
-        // exit: add.lobby
-        return 1;
-      }
+    if (intoLobby) {
+      const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby });
+      if (!gate.ok) return refuseLobby(out, built.name, gate.text, false);
       if ('path' in gate) {
         verifiedLobby = gate.path;
         lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
@@ -618,14 +656,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
       caller: who, owner: caller.kind === 'owner', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
-      verifiedLobby, records, teamFile: path,
+      verifiedLobby, startCwd: planSeat.cwd, inLobby: planSeat.lobby === true, records, teamFile: path,
       doctor: sources.doctor,
       // The lobby is read again directly before the workspace this run makes in it, with nothing
       // in between (`execute.ts`). Null when it is still the folder the gate read and every file
       // it allowed still the file it read. The declared files travel with it, so the recheck
       // walks the same closed tree the gate did.
       confirmLobby() {
-        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, files: declaredLobbyFiles, lobby }) : null;
+        return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby }) : null;
       },
     });
     const report = await executePlan(plan, session, host);
@@ -666,11 +704,14 @@ function temporarySeat(
   if (!until) return { error: '--until is result:<path> or merged:<branch>' };
   let own: boolean | undefined;
   if (until.kind === 'result') {
-    if (until.path.startsWith('/') || until.path.startsWith('~')) return { error: 'a result path is relative to the project' };
+    const problem = resultPathProblem(root, until.path);
+    if (problem) return { error: problem };
     if (existsSync(resolve(root, until.path))) return { error: `${until.path} already exists` };
   } else if (!base) {
     return { error: 'workspace.base is required to read a merged end' };
   } else {
+    const name = branchProblem(root, until.branch);
+    if (name) return { error: name };
     const read = readMerge(root, until.branch, base, false);
     const here = branchPresent(root, until.branch);
     if (read.detail.includes('the branch is gone') || here === false) return { error: `branch ${until.branch} doesn't exist` };
@@ -722,6 +763,7 @@ function seatPlan(
     launch: seat.launch,
     cwd: start.cwd,
     label: workspaceLabel(seat),
+    displayAgent: displayAgent(seat),
     model: seat.model,
     version: seat.version,
     // The team file's own repair for this seat — a lead seat is told only the whole-team
@@ -801,6 +843,9 @@ function hostOf(input: {
   standing: Standing;
   teamFile: string;
   verifiedLobby: string | null;
+  /** The folder this seat's workspace is created in. A lead's is the project; a lobby seat's is the verified lobby. */
+  startCwd: string;
+  inLobby: boolean;
   /** The run's writer, made by the caller before the launch-line note is said. */
   records: Progress;
   doctor: DoctorSources;
@@ -818,6 +863,9 @@ function hostOf(input: {
     createWorkspace: launch.createWorkspace,
     confirmLobby: input.confirmLobby,
     paneRun: launch.paneRun,
+    ...(launch.reportDisplayAgent
+      ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
+      : {}),
     typeLine: () => false,
     deliverRules: async (session, pane, cli, file, seconds) => {
       // The rules go to the file first; nothing is typed until it holds them. The writer
@@ -898,7 +946,13 @@ function hostOf(input: {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: patch.stage };
         let start_cwd = prior.start_cwd;
-        if (!start_cwd && patch.createdWorkspace && input.verifiedLobby) start_cwd = input.verifiedLobby;
+        if (!start_cwd && patch.createdWorkspace) {
+          if (input.inLobby) {
+            if (input.verifiedLobby) start_cwd = input.verifiedLobby;
+          } else {
+            start_cwd = input.startCwd;
+          }
+        }
         // `waiting: null` removes the field alone; anything else written replaces it.
         const { waiting: written, ...rest } = patch;
         const seatState: SeatState = { ...prior, ...rest, ...(temporary && name === seat.name ? { temporary } : {}), ...(start_cwd ? { start_cwd } : {}) };
@@ -911,8 +965,8 @@ function hostOf(input: {
         }
       });
       if (patch.pane) {
-        if (replaced) forgetLaunchedPane(input.home, replaced);
-        noteLaunchedPane(input.home, input.teamFile, patch.pane);
+        if (replaced) forgetLaunchedPane(input.home, replaced, session);
+        noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
       }
     },
     running(name) {
@@ -928,7 +982,7 @@ function hostOf(input: {
         pane = seats?.[name]?.pane;
         if (seats) delete seats[name];
       });
-      if (pane) forgetLaunchedPane(input.home, pane);
+      if (pane) forgetLaunchedPane(input.home, pane, session);
     },
     // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
     // here with the same function the records use: no escape sequence or bidi override reaches
@@ -958,4 +1012,11 @@ function hostOf(input: {
     },
     log: (who, what) => logLine(dir, 'add', input.caller, `${who}: ${what}`, input.now()),
   };
+}
+
+function refuseLobby(out: Io, name: string, text: string, dry: boolean): number {
+  if (dry) out.stdout(`${plainLine(name)}: would refuse: ${plainText(text)}\ndry run: nothing was run\n`);
+  else out.stderr(`team add: ${plainText(text)}\n`);
+  // exit: add.lobby
+  return 1;
 }

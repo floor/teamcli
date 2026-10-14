@@ -117,7 +117,9 @@ with no launch profile prints the `left out` record above, on stdout. `watch: st
 too.
 
 A seat already ready is left as it is, and the words it was left with are the detail under its
-record. A ready seat the state records without its process identity, or with a start outside the
+record. Before that skip, when the seat has a pane and a workspace, the plan renames the workspace
+to the file's title and reports the file's display line. A dry run prints both; a real run does
+them and still does not type into the pane or launch the seat again. A ready seat the state records without its process identity, or with a start outside the
 machine lobby, is left as it is too — only a relaunch repairs either — and its detail says so:
 `  already ready; left as it is; a relaunch records its process: team remove <seat> --keep, then
 team add <seat> (or team down, then team up, for the whole team)`, or the same words saying `a
@@ -146,26 +148,38 @@ file a flagless watch in the project folder would not read, `up` still starts th
 command it runs carries no `--file`. The resolved path is recorded for the watchdog pane. That
 pane may read it. Any other non-owner is refused. The command line and the plan do not print the path.
 
-A seat is its pane only while the process `team` launched is still in it. A seat the state records
-whose pane no longer holds that process is not "already ready": its workspace is closed without a
-key and without input — its pane runs no CLI, or one team did not launch, and nothing in it is the
-seat — and the seat is launched fresh with its rules. Its record is `<seat>: ready`, and the detail
-under it says both: `  its pane held no CLI; closed without input and launched again` when the pane
-was back at its shell, `  its pane held a process team did not launch; closed without input and
-launched again` when another process held it.
+A seat is its pane while the process `team` launched is still in it, or while herdr names that
+seat on the recorded pane and the agent session there is the one stored beside the launch. A seat
+the state records whose pane is back at its shell is not "already ready": its workspace is closed
+without a key and without input, and the seat is launched fresh with its rules. The seat's name
+still being listed does not keep that pane. Its record is `<seat>: ready`, and the detail under it
+says `  its pane held no CLI; closed without input and launched again`.
+
+A pane that holds a program, and whose agent session is the one stored at launch, is the seat.
+Nothing is closed and nothing is typed. The record stays `<seat>: ready`, the detail says
+`  restored; left as it is`, and the stored process ids become the ones the pane holds now. A
+model on that screen that differs from the file is named on the same detail (`its model drifted;
+left as it is`) and is not closed.
+
+A pane that holds a program the record cannot tie to the launch — no stored agent session, a
+different one, or an agent list that could not be read — is left as it is. Nothing is closed. A
+ready seat's record stays `<seat>: ready` and the detail says `  its pane holds a process this
+record cannot tie to the launch`. A seat that had not reached ready is left out with that reason.
+The stored process ids are not rewritten.
 
 The reading that decides the repair is taken while the plan is built, and the close can be minutes
 later, after every seat before this one was created, waited for and delivered to. `up` reads herdr
 again immediately before it, with nothing between those reads and the close, and closes only a pane
-that is provably still the seat's stale one: the agent list must name this seat on the recorded
+that is provably still the seat's stale shell: the agent list must name this seat on the recorded
 pane, that pane's workspace as herdr reports it now must be the recorded workspace, that workspace
-must hold no other panes (named or not), the process reading must still say the pane runs no CLI or
-another process, and a pane held by another process must not read `working` or `unsent` — a process
-that is working or holds unsent text is never closed by `up`, whoever started it. A close for a
-drifted model asks one thing more of that re-read: the process must still be the one `team`
-launched, the screen must still name a different model, and the seat must still be idle or done
-with no running turn on its screen. A model that now matches the file closes nothing and is not
-an error.
+must hold no other panes (named or not), and the process reading must still say the pane runs no
+CLI. A program in front is not closed: when its agent session is the stored one, the seat is
+recorded ready under the pids the pane holds now; otherwise the seat is left out and the record
+says the process cannot be tied to the launch. A pane held by another process that reads `working`
+or `unsent` is never closed by `up`, whoever started it. A close for a drifted model asks one
+thing more of that re-read: the process must still be the one `team` launched, the screen must
+still name a different model, and the seat must still be idle or done with no running turn on its
+screen. A model that now matches the file closes nothing and is not an error.
 When any of that does not hold, nothing is closed, nothing is launched for that seat, its state is
 left as it is, the seat is out of the run, and `up` exits 1 with one record:
 
@@ -181,6 +195,8 @@ left as it is, the seat is out of the run, and `up` exits 1 with one record:
 | `<seat>: left out: its workspace holds other panes; nothing closed (close its pane there, then run team up)` | herdr's pane listing for the recorded workspace holds more than the seat's recorded pane |
 | `<seat>: left out: the process in its pane is working; nothing closed (stop it there, or run team remove <seat>)` | a process team did not launch holds the pane and its screen reads `working` |
 | `<seat>: left out: the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove <seat>)` | a process team did not launch holds the pane and its screen reads `unsent` |
+| `<seat>: left out: its pane holds a process this record cannot tie to the launch` | between the plan and the close a program is in front, and its agent session is not the one stored at launch. Nothing is closed. Not an error |
+| `<seat>: ready`, detail `  restored; left as it is` | between the plan and the close the pane's agent session is the one stored at launch. The stored process ids become the ones the pane holds now. Not an error |
 | `<seat>: left out: its pane could not be read; nothing closed` | herdr can't give the workspace's panes, the pane's processes, or its screen reads as nothing this version knows |
 
 This comparison is wrong in the safe direction, but it is wrong: a CLI that replaces its own
@@ -294,9 +310,14 @@ and every later configured, non-stopped seat with no final record get, in file o
 
 A later `up` on a seat the state records waiting reuses herdr's one agent of that seat's name —
 its pane and workspace, nothing created for it — verifies the current screen with a fresh read,
-and enters the same pause, **before** the ordinary unnamed or wrong-name handling. The pane the
-state records selects nothing. No agent of that name, or more than one, is not a reason to launch
-again: nothing is created, the record kept, and the final record is
+and enters the same pause, **before** the ordinary unnamed or wrong-name handling, while the host
+still lists the recorded pane. A recorded pane the host no longer lists is replaced: a fresh
+workspace is made, the seat launches, and one line says `<seat>: its recorded pane <pane> was gone
+and was replaced`. When the host still lists the recorded workspace, that same line names it
+(`; its workspace <workspace> was left`). The workspace is not closed. A pane the host still
+lists is never closed or recreated. No agent of that name while the pane is still listed, or
+more than one, is not a reason to launch again: nothing
+is created, the record kept, and the final record is
 `<seat>: left out: its waiting pane is gone` or
 `<seat>: left out: herdr lists more than one agent of this name; left as it is`, with the team file's own repair under it on stderr —
 `team down` then `team up` (to restart the whole team) for a seat the file names as its
@@ -425,7 +446,8 @@ record it belongs to, as its meaning says.
 | `<seat>: waiting for owner (<classification>)` | the provisional record drawn while the seat's owner is asked, at a terminal (the pause, above); it is rewritten in place when the classification changes, and is not the seat's final record |
 | `<seat>: left out: skipped by owner` | the owner pressed `[s]`: the seat's workspace was closed without input and its launch state cleared, the `waiting` record with it |
 | `<seat>: left out: stopped cleanly` | the owner pressed `[q]` (or Ctrl-C) at this or an earlier seat, and this seat had no final record: a workspace this invocation created for it — not already ready or closed — was closed without input and its state cleared |
-| `<seat>: left out: its waiting pane is gone` / `<seat>: left out: its waiting pane holds another process` | a later `up` found the seat recorded waiting and its recorded pane no longer exists, or no longer holds the recorded process: nothing was created, nothing closed, the record kept; the repair under the record on stderr is the team file's own for this seat — `team down` then `team up` (to restart the whole team) for an orchestrator or operator, `team remove <seat> --keep` then `team add <seat>` (or the whole team) for any other — and the owner answers or closes by hand first when the seat sits at a dialog, or its pane holds an agent `team` cannot name (above) |
+| `<seat>: its recorded pane <pane> was gone and was replaced` / `<seat>: its recorded pane <pane> was gone and was replaced; its workspace <workspace> was left` | a later `up` found the seat recorded waiting and the host no longer lists that pane: a fresh workspace was made and the seat launched. The second line is that same line when the host still lists the recorded workspace: the workspace is named and not closed. A pane the host still lists is never this line |
+| `<seat>: left out: its waiting pane is gone` / `<seat>: left out: its waiting pane holds another process` | a later `up` found the seat recorded waiting and the host still lists that pane but no agent of the seat's name, or the pane no longer holds the recorded process: nothing was created, nothing closed, the record kept; the repair under the record on stderr is the team file's own for this seat — `team down` then `team up` (to restart the whole team) for an orchestrator or operator, `team remove <seat> --keep` then `team add <seat>` (or the whole team) for any other — and the owner answers or closes by hand first when the seat sits at a dialog, or its pane holds an agent `team` cannot name (above) |
 | `<seat>: left out: <reading>; its workspace did not close; left as it is` | the close of that workspace failed, with `<reading>` one of `trust`, `permission`, `question` or `vendor notice` — a run without a terminal closing it, or the pause's own close at the prompt: nothing claims it was closed, and the seat is left exactly as it was, its state kept — a later `up` resumes it |
 | `<seat>: left out: runs <model> <version>; the file says <model> <version>; left at launched, not named. Add <flag> <id> to its launch, or correct the file's model and version and run team approve` | the idle screen shows a different model than the file. The seat is not renamed and gets no rules; its pane stays open. The flag is that CLI's model flag, and the id is the one the profile maps to the file's model. When the profile knows no id, the line says `<id>`. When the profile records how that CLI is told its model, the line says that form as well; a profile with no such record adds nothing |
 | `<seat>: left out: its pane has been back at its shell for <n> s and shows no CLI prompt; left at launched` | herdr's process info says the pane's foreground program is back at its shell through three full polls on end, four readings, the screen matches no CLI shape, and the launch line's own echo is visible on the screen. A pane read before the line arrived, one whose echo scrolled away, one whose program is slow to draw, or a herdr that can't say (no shell process info), is waited out to the deadline — the end is never inferred from the screen's text, and a single reading can never reach the three polls. The workspace is kept, and the pane's last lines follow on stderr, under the record |
@@ -515,7 +537,7 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | `session <session> is stopped and did not clear` — herdr lists it stopped, this team's state records it, and the clear did not happen |
 | ``session beacon has 2 agents this file's state doesn't record: `up` never touches a running team`` — an agent on a pane no record names, or on a pane this state records for a seat at another stage: a seat at `named` or `ready` whose pane now holds a foreign agent is refused here, with the whole team. An agent on the pane this state records for a seat left at `launched` — the run stopped after its pane was made and before its rename — is not refused: it is the run's own half-finished seat, and this run finishes it, the idle wait and the rename like any launched seat |
 | ``the file is legacy: migrate trust to absolute paths including the lobby ~/.config/team/lobby: ...`` — followed by the whole `trust:` block to paste: every entry the next `up` requires, one line saying which key of the file each entry comes from, and, for an entry a rule of `trust` refuses, one line naming the key that forces it |
-| ``the lobby ~/.config/team/lobby: <check>`` — gate check failed (symbolic link, permissions, mode, not empty, inside git repo) |
+| ``the lobby ~/.config/team/lobby: <check>`` — gate check failed (symbolic link, permissions, mode, a file a shipped CLI reads at start, inside git repo) |
 | ``the lobby <path>: failed to create <component>: <code>`` — the run had to make an absent lobby, and the make itself failed at `<component>`: a component that cannot be written, or one another process took first. The read-only check above found the lobby missing and made nothing; the make runs under the run lock, after a delegated run's audit line and before any seat's own effect, and the run stops here (exit 1) |
 | ``seat beacon-qa would start in live, inside the protected checkout live; a seat that isn't `mode: shared` never starts in one`` — the folder the file gives it, or its lobby, is a protected checkout |
 | ``another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share: this run stopped before its first step, and a delegated run gets the same line. The line names no command, because the lock is shared and its token records only a pid. `--dry-run` takes no lock and never shows it |
@@ -595,7 +617,11 @@ the watchdog pane this session has never had:
 
 ```console
 $ team up --dry-run ; echo "exit $?"
++ herdr --session beacon workspace rename w1 coordinator
++ herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
++ herdr --session beacon workspace rename w2 implementer
++ herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 + herdr --session beacon workspace create --cwd . --label watchdog --no-focus
@@ -691,7 +717,11 @@ seats:
 $ team up --dry-run ; echo "exit $?"
 ! up would refuse: the file is not the approved one (`limits` changed): run `team approve`
 ! up would refuse: run `team approve`: `limits` changed
++ herdr --session beacon workspace rename w1 coordinator
++ herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
++ herdr --session beacon workspace rename w2 implementer
++ herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 dry run: nothing was run
