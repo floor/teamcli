@@ -594,20 +594,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // below, once the lobby exists.
   if (intoLobby && wouldLaunch && !trustSeat.launchProblem) {
     const line = lobbyPretrustLine(trustSeat, sources.home, { write: false, now: sources.now() });
-    if (line) {
-      if (!dry) return refusePretrust(out, built.name, line, false, '');
-      const preview = upPlan({
-        root,
-        session,
-        sessionRunning: live === 'running',
-        seats: [{ ...trustSeat, launchProblem: line }],
-        watchAlive: true,
-      });
-      const shown = decision.kind === 'unknown'
-        ? `${plainLine(built.name)}: ${plainText(decision.text)}\n${plainText(formatPlan(preview))}`
-        : plainText(formatPlan(preview));
-      return refusePretrust(out, built.name, line, true, shown);
-    }
+    if (line) return refusePretrust(out, built.name, line, dry);
   }
   if (dry) {
     if (decision.kind === 'unknown') out.stdout(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
@@ -649,7 +636,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         sources.home,
         { write: true, now: sources.now() },
       );
-      if (line) return refusePretrust(out, built.name, line, false, '');
+      if (line) return refusePretrust(out, built.name, line, false);
     }
     if (decision.kind === 'unknown') out.stderr(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
     // The audit line, exactly at the effects boundary: a delegated run that reaches here is
@@ -1047,9 +1034,9 @@ function hostOf(input: {
   };
 }
 
-function refusePretrust(out: Io, name: string, line: string, dry: boolean, preview: string): number {
-  if (dry) out.stdout(preview);
-  else out.stderr(`team add: ${plainLine(name)}: ${plainText(line)}\n`);
+function refusePretrust(out: Io, name: string, line: string, dry: boolean): number {
+  if (dry) out.stdout(`${plainLine(name)}: would refuse: ${plainText(line)}\ndry run: nothing was run\n`);
+  else out.stderr(`team add: refused: ${plainText(line)}\n`);
   // exit: add.pretrust
   return 1;
 }

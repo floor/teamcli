@@ -659,6 +659,20 @@ scene('add.placed', async (place) => {
     },
   })), "names the project's parent");
 });
+scene('add.pretrust', async (place) => {
+  const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: antigravity
+    vendor: google
+    model: Gemini Flash
+    version: "3.8"
+    launch: agy
+    stopped: true
+`;
+  approve(place, TWO.replace(WORKER, worker));
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place)), 'not trusted for agy');
+});
 scene('add.lobby', async (place) => {
   approve(place, TWO);
   const fs = {
