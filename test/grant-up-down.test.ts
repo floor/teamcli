@@ -201,8 +201,8 @@ describe('the granted orchestrator', () => {
       closed: [],
     });
     expect(io.err).toContain("skip lead: left as it is; a granted up does not relaunch or close the orchestrator's seat\n");
-    expect(workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: workerAt });
-    expect(workspaces).not.toContainEqual({ label: 'Claude Opus 5.5', cwd: root });
+    expect(workspaces).toContainEqual({ label: 'worker', cwd: workerAt });
+    expect(workspaces).not.toContainEqual({ label: 'worker', cwd: root });
     expect(workspaces.length).toBeGreaterThan(0);
   });
 
