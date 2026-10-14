@@ -117,7 +117,9 @@ with no launch profile prints the `left out` record above, on stdout. `watch: st
 too.
 
 A seat already ready is left as it is, and the words it was left with are the detail under its
-record. A ready seat the state records without its process identity, or with a start outside the
+record. Before that skip, when the seat has a pane and a workspace, the plan renames the workspace
+to the file's title and reports the file's display line. A dry run prints both; a real run does
+them and still does not type into the pane or launch the seat again. A ready seat the state records without its process identity, or with a start outside the
 machine lobby, is left as it is too — only a relaunch repairs either — and its detail says so:
 `  already ready; left as it is; a relaunch records its process: team remove <seat> --keep, then
 team add <seat> (or team down, then team up, for the whole team)`, or the same words saying `a
@@ -615,7 +617,11 @@ the watchdog pane this session has never had:
 
 ```console
 $ team up --dry-run ; echo "exit $?"
++ herdr --session beacon workspace rename w1 coordinator
++ herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
++ herdr --session beacon workspace rename w2 implementer
++ herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 + herdr --session beacon workspace create --cwd . --label watchdog --no-focus
@@ -711,7 +717,11 @@ seats:
 $ team up --dry-run ; echo "exit $?"
 ! up would refuse: the file is not the approved one (`limits` changed): run `team approve`
 ! up would refuse: run `team approve`: `limits` changed
++ herdr --session beacon workspace rename w1 coordinator
++ herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
++ herdr --session beacon workspace rename w2 implementer
++ herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 dry run: nothing was run
