@@ -20,7 +20,7 @@ export type Live = {
   processes?: Record<string, PaneProcesses | null>;
 };
 
-export type Row = { name: string; state: string; model: string; pane: string; stored?: string; start_cwd?: string };
+export type Row = { name: string; id?: string; state: string; model: string; pane: string; stored?: string; start_cwd?: string };
 
 /** The repair of the one precondition `status` knows: the file is not the approved one. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
@@ -120,6 +120,8 @@ export function compare(
   for (const seat of team.seats) {
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
     const recorded = state.seats[seat.name];
+    const seatId = recorded?.id ?? state.retained_seats?.[seat.name]?.id;
+    const idField = seatId ? { id: seatId } : {};
     if (agent) {
       claimed.add(agent.pane);
       // The pane is the seat only while the process team launched is still in it. A pane that
@@ -137,7 +139,7 @@ export function compare(
         const found = verdict === 'gone'
           ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
           : cannotTie(seat, agent.pane, live.screens[agent.pane]);
-        rows.push(found.row);
+        rows.push({ ...found.row, ...idField });
         differences.push(found.difference);
         if (found.note) notes.push(found.note);
         continue;
@@ -155,6 +157,7 @@ export function compare(
       if (held) {
         rows.push({
           name: seat.name,
+          ...idField,
           state: held.state,
           stored: held.stored,
           model,
@@ -175,7 +178,7 @@ export function compare(
       // was reported above; `up` resumes that into the pause, which has its own refusal.
       if (shell) {
         const found = unidentifiedShell(seat, agent.pane, team);
-        rows.push({ ...found.row, ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
+        rows.push({ ...found.row, ...idField, ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
         differences.push(found.difference);
         continue;
       }
@@ -193,6 +196,7 @@ export function compare(
       const stateText = `${agent.status}${mark}${seat.parked ? ', parked' : ''}`;
       rows.push({
         name: seat.name,
+        ...idField,
         state: stateText,
         model,
         pane: agent.pane,
@@ -243,6 +247,7 @@ export function compare(
     if (seat.stopped) {
       rows.push({
         name: seat.name,
+        ...idField,
         state: 'stopped',
         model: seat.display,
         pane: '-',
@@ -260,7 +265,7 @@ export function compare(
     if (held && verdict === 'gone') {
       claimed.add(held);
       const { row, difference, note } = notLaunched(seat, held, verdict, live.screens[held]);
-      rows.push(row);
+      rows.push({ ...row, ...idField });
       differences.push(difference);
       if (note) notes.push(note);
       continue;
@@ -268,7 +273,7 @@ export function compare(
     if (held && verdict === 'replaced') {
       claimed.add(held);
       const found = cannotTie(seat, held, live.screens[held]);
-      rows.push(found.row);
+      rows.push({ ...found.row, ...idField });
       differences.push(found.difference);
       if (found.note) notes.push(found.note);
       continue;
@@ -276,7 +281,7 @@ export function compare(
     if (held && recorded && !recorded.launched && paneHoldsShell(paneProc)) {
       claimed.add(held);
       const found = unidentifiedShell(seat, held, team);
-      rows.push({ ...found.row, ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
+      rows.push({ ...found.row, ...idField, ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
       differences.push(found.difference);
       continue;
     }
@@ -287,6 +292,7 @@ export function compare(
     if (waiting && recorded?.pane) {
       rows.push({
         name: seat.name,
+        ...idField,
         state: waiting.state,
         stored: waiting.stored,
         model: seat.display,
@@ -306,6 +312,7 @@ export function compare(
       claimed.add(stray.pane);
       rows.push({
         name: seat.name,
+        ...idField,
         state: 'wrong name',
         model: unverifiedModel(seat, live.screens[stray.pane]),
         pane: stray.pane,
@@ -319,10 +326,11 @@ export function compare(
     }
     rows.push({
       name: seat.name,
+      ...idField,
       state: 'missing',
       model: seat.display,
       pane: '-',
-      ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
+      ...(recorded?.start_cwd ? { start_cwd: recorded?.start_cwd } : {}),
     });
     differences.push({
       what: `${seat.name} is in the file and is not running`,
@@ -334,6 +342,7 @@ export function compare(
 
   for (const [name, recorded] of Object.entries(state.seats)) {
     if (!recorded.temporary) continue;
+    const idField = recorded.id ? { id: recorded.id } : {};
     const agent = live.agents.find((candidate) => candidate.name === name);
     if (agent) {
       claimed.add(agent.pane);
@@ -341,6 +350,7 @@ export function compare(
       if (held) {
         rows.push({
           name,
+          ...idField,
           state: held.state,
           stored: held.stored,
           model: `like ${recorded.temporary.like}`,
@@ -360,6 +370,7 @@ export function compare(
       const unread = quiet && readScreen(likeCli, live.screens[agent.pane]).kind === 'unknown';
       rows.push({
         name,
+        ...idField,
         state: `${agent.status}${unread ? ' (screen not recognised)' : ''}, temporary`,
         model: `like ${recorded.temporary.like}`,
         pane: agent.pane,

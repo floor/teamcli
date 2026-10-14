@@ -109,6 +109,7 @@ export interface StatusJson {
   session: string;
   rows: Array<{
     name: string;
+    id?: string;
     state: string;
     model: string;
     pane: string;
@@ -218,6 +219,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       session,
       rows: comparison.rows.map((row) => ({
         name: row.name,
+        ...(row.id ? { id: row.id } : {}),
         state: row.stored ?? row.state,
         model: row.model,
         pane: row.pane,

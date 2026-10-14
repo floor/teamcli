@@ -932,9 +932,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       drop(name) {
         let pane: string | undefined;
         updateState(dir, (file) => {
-          const seatsOf = (file.sessions[session] ??= emptySession()).seats;
-          pane = seatsOf[name]?.pane;
-          delete seatsOf[name];
+          const current = (file.sessions[session] ??= emptySession());
+          const prior = current.seats[name];
+          pane = prior?.pane;
+          if (prior?.id && !prior.temporary) {
+            (current.retained_seats ??= {})[name] = {
+              id: prior.id,
+              ...(prior.last_active ? { last_active: prior.last_active } : {}),
+            };
+          }
+          delete current.seats[name];
         });
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
       },
