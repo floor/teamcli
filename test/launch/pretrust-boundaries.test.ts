@@ -135,7 +135,7 @@ describe('the record names only the lobby', () => {
 });
 
 describe('a config path that is a link is refused, never written through', () => {
-  test.failing('grok: trusted_folders.toml itself a link to a file outside the home', () => {
+  test('grok: trusted_folders.toml itself a link to a file outside the home', () => {
     const { base, home, lobby } = place();
     const outside = join(base, 'outside');
     mkdirSync(outside);
@@ -150,7 +150,7 @@ describe('a config path that is a link is refused, never written through', () =>
     expect(readFileSync(target, 'utf8')).toBe(seed);
   });
 
-  test.failing('claude: .claude.json a dangling link, its target outside the home', () => {
+  test('claude: .claude.json a dangling link, its target outside the home', () => {
     const { base, home, lobby } = place();
     const outside = join(base, 'outside');
     mkdirSync(outside);
@@ -162,7 +162,7 @@ describe('a config path that is a link is refused, never written through', () =>
     expect(existsSync(target)).toBe(false);
   });
 
-  test.failing('cursor: the workspace-trusted marker a dangling link, its target outside the home', () => {
+  test('cursor: the workspace-trusted marker a dangling link, its target outside the home', () => {
     const { base, home, lobby } = place();
     const outside = join(base, 'outside');
     mkdirSync(outside);
@@ -176,7 +176,7 @@ describe('a config path that is a link is refused, never written through', () =>
     expect(existsSync(target)).toBe(false);
   });
 
-  test.failing('codex: config.toml itself a link to a file outside the home', () => {
+  test('codex: config.toml itself a link to a file outside the home', () => {
     const { base, home, lobby } = place();
     const outside = join(base, 'outside');
     mkdirSync(outside);
@@ -191,7 +191,7 @@ describe('a config path that is a link is refused, never written through', () =>
     expect(readFileSync(target, 'utf8')).toBe(seed);
   });
 
-  test.failing('grok: the .grok directory itself a link to a directory outside the home', () => {
+  test('grok: the .grok directory itself a link to a directory outside the home', () => {
     const { base, home, lobby } = place();
     const elsewhere = join(base, 'elsewhere');
     mkdirSync(elsewhere);
