@@ -934,6 +934,36 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     });
   });
 
+  test('a startup-read file swapped in after the gate is refused when the new file reuses an inode', () => {
+    makeLobby();
+    mkdirSync(join(lobby, '.claude'));
+    writeFileSync(lock(), '{}\n');
+    const gate = verifyLobby(home, { reads: shippedStartupReads() });
+    if (!gate.ok || !('files' in gate)) throw new Error('gate must succeed with a path');
+    const seen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
+    const plant = join(lobby, 'CLAUDE.md');
+    writeFileSync(plant, 'one\n');
+    rmSync(plant);
+    writeFileSync(plant, 'two\n');
+    const reused = lstatSync(lock());
+    const swapped: FsReader = {
+      ...defaultFs,
+      lstat(p) {
+        const real = defaultFs.lstat(p);
+        if (p !== plant) return real;
+        const copy = Object.create(real);
+        copy.dev = reused.dev;
+        copy.ino = reused.ino;
+        return copy;
+      },
+    };
+    const sentence = `CLAUDE.md${readBy}claude-code, cursor and grok`;
+    expect(recheckLobby(home, seen, { reads: shippedStartupReads(), fs: swapped })).toEqual({
+      reason: `the lobby: ${sentence}`,
+      detail: `the lobby ${lobby}: ${sentence}`,
+    });
+  });
+
   test('doctor names a lock a CLI writes, and misses a file a CLI reads at start', async () => {
     approveYaml(migratedTeamYaml());
     makeLobby();
@@ -1043,6 +1073,137 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     expect(log).toContain(`worker: left out: ${sentence}`);
     expect(log).not.toContain(lobby);
     expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual(['lead']);
+  });
+
+  // Each shipped startup-read path, and the CLIs whose field matches it at any depth, in ship order.
+  const plants: readonly [string, string][] = [
+    ['CLAUDE.md', 'claude-code, cursor and grok'],
+    ['CLAUDE.local.md', 'claude-code, cursor and grok'],
+    ['.claude/CLAUDE.md', 'claude-code, cursor and grok'],
+    ['.claude/rules/plant.md', 'claude-code and grok'],
+    ['.claude/settings.json', 'claude-code'],
+    ['AGENTS.md', 'codex, cursor, antigravity and grok'],
+    ['.codex/config.toml', 'codex'],
+    ['.cursorrules', 'cursor'],
+    ['.cursor/rules/plant.mdc', 'cursor'],
+    ['GEMINI.md', 'antigravity'],
+  ];
+
+  async function refusesPlant(rel: string, by: string): Promise<void> {
+    approveYaml(migratedTeamYaml());
+    makeLobby();
+    const full = join(lobby, rel);
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(full, 'plant\n');
+    const sentence = `${rel}${readBy}${by}`;
+    const doc = await runDoctorCmd();
+    expect(doc.code).toBe(1);
+    expect(doc.out).toContain(`the lobby ${lobby}: ${sentence}\n`);
+    const made = world();
+    const run = await runUpCmd([], made);
+    expect(run.code).toBe(1);
+    expect(run.err).toContain(`team up: the lobby ${lobby}: ${sentence}\n`);
+    expect(made.workspaces).toEqual([]);
+    const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], world());
+    expect(addRun.code).toBe(1);
+    expect(addRun.err).toContain(`team add: warning: the lobby ${lobby}: ${sentence}\n`);
+    expect(addRun.err).toContain(`team add: the lobby ${lobby}: ${sentence}\n`);
+  }
+
+  for (const [rel, by] of plants) {
+    test(`up, add and doctor refuse a planted ${rel}`, async () => {
+      await refusesPlant(rel, by);
+    });
+    test(`up, add and doctor refuse ${rel} one folder down`, async () => {
+      await refusesPlant(`nested/${rel}`, by);
+    });
+  }
+
+  test('a symbolic link at each startup-read path is refused', () => {
+    const links = [
+      'CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md', '.claude/rules', '.claude/settings.json',
+      'AGENTS.md', '.codex/config.toml', '.cursorrules', '.cursor/rules', 'GEMINI.md',
+    ];
+    for (const rel of links) {
+      rmSync(lobby, { recursive: true, force: true });
+      makeLobby();
+      const full = join(lobby, rel);
+      mkdirSync(join(full, '..'), { recursive: true });
+      symlinkSync(lobby, full);
+      const gate = verifyLobby(home, { reads: shippedStartupReads() });
+      expect(gate.ok).toBe(false);
+      if (!gate.ok) {
+        expect(gate.problem).toBe('symlink');
+        expect(gate.words).toBe(`the lobby: ${rel} is a symbolic link`);
+      }
+    }
+  });
+
+  test('up and add refuse a symbolic link at a startup-read path', async () => {
+    approveYaml(migratedTeamYaml());
+    makeLobby();
+    symlinkSync(lobby, join(lobby, 'CLAUDE.md'));
+    const made = world();
+    const run = await runUpCmd([], made);
+    expect(run.code).toBe(1);
+    expect(run.err).toContain(`team up: the lobby ${lobby}: ${join(lobby, 'CLAUDE.md')} is a symbolic link\n`);
+    expect(made.workspaces).toEqual([]);
+    const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], world());
+    expect(addRun.code).toBe(1);
+    expect(addRun.err).toContain(`team add: the lobby ${lobby}: ${join(lobby, 'CLAUDE.md')} is a symbolic link\n`);
+  });
+
+  test('up and add refuse a startup-read file owned by someone else', async () => {
+    approveYaml(migratedTeamYaml());
+    makeLobby();
+    const plant = join(lobby, 'AGENTS.md');
+    writeFileSync(plant, 'plant\n');
+    const myUid = process.getuid ? process.getuid() : 1000;
+    const foreign: FsReader = {
+      ...defaultFs,
+      lstat(p) {
+        const real = defaultFs.lstat(p);
+        if (p !== plant) return real;
+        const copy = Object.create(real);
+        copy.uid = myUid + 1;
+        return copy;
+      },
+    };
+    const made = world();
+    const run = await runUpCmd([], made, { fs: foreign, getuid: () => myUid });
+    expect(run.code).toBe(1);
+    expect(run.err).toContain(`team up: the lobby ${lobby}: ${plant} is not owned by you\n`);
+    expect(made.workspaces).toEqual([]);
+    const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], world(), { fs: foreign, getuid: () => myUid });
+    expect(addRun.code).toBe(1);
+    expect(addRun.err).toContain(`team add: the lobby ${lobby}: ${plant} is not owned by you\n`);
+  });
+
+  test('a readme, a notes folder, the lock, the roster and a plain folder pass up, add and doctor', async () => {
+    approveYaml(migratedTeamYaml());
+    makeLobby();
+    mkdirSync(join(lobby, '.claude'));
+    writeFileSync(lock(), '{}\n');
+    writeFileSync(join(lobby, 'README.md'), 'readme\n');
+    mkdirSync(join(lobby, 'notes'));
+    writeFileSync(join(lobby, 'notes', 'scratch.txt'), 'scratch\n');
+    writeFileSync(join(lobby, 'reach-roster.json'), '{}\n');
+    mkdirSync(join(lobby, 'scratch'));
+
+    const doc = await runDoctorCmd();
+    expect(doc.code).toBe(0);
+    expect(doc.out).toContain(`the lobby ${lobby}: verified\n`);
+    expect(doc.out).toContain(`ok    the lobby ${lobby}: .claude/scheduled_tasks.lock is claude-code's\n`);
+
+    const made = world();
+    const run = await runUpCmd([], made);
+    expect(run.code).toBe(0);
+    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+
+    const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
+    expect(addRun.code).toBe(0);
+    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
   });
 });
 
