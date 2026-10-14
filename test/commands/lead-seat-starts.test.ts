@@ -326,7 +326,7 @@ describe('add records the project root for a lead it launches', () => {
     made.launch.processInfo = () => ({ shell: 900, foreground: [901] });
     const run = await runAddCmd(['lead', '--file', '.agents/team.yaml'], made);
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: root });
+    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
     expect(readState(dir).sessions['alpha']?.seats.lead?.start_cwd).toBe(root);
   });
 });
@@ -364,8 +364,8 @@ ${seat('worker2', 'implementer')}
     const worldA = world(1);
     const runA = await runUpCmd(['--file', fileA], worldA);
     expect(runA.code).toBe(0);
-    expect(worldA.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: root });
-    expect(worldA.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+    expect(worldA.workspaces).toContainEqual({ label: 'lead', cwd: root });
+    expect(worldA.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
     expect(readState(dir).sessions['alpha']?.seats.lead?.start_cwd).toBe(root);
     expect(readState(dir).sessions['alpha']?.seats.worker?.start_cwd).toBe(canonicalLanding(lobby).landing);
 
@@ -373,8 +373,8 @@ ${seat('worker2', 'implementer')}
     const worldB = world(10);
     const runB = await runUpCmd(['--file', fileB], worldB);
     expect(runB.code).toBe(0);
-    expect(worldB.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: root });
-    expect(worldB.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobbyZeta });
+    expect(worldB.workspaces).toContainEqual({ label: 'lead2', cwd: root });
+    expect(worldB.workspaces).toContainEqual({ label: 'worker2', cwd: lobbyZeta });
     expect(readState(dir).sessions['beta']?.seats.lead2?.start_cwd).toBe(root);
     expect(readState(dir).sessions['beta']?.seats.worker2?.start_cwd).toBe(canonicalLanding(lobbyZeta).landing);
 
