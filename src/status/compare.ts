@@ -425,6 +425,9 @@ function cannotTie(
 ): { row: Row; difference: Difference; note?: string } {
   const running = seatModel(seat, screen);
   const launcher = usesLauncher(seat);
+  const shown = running
+    ? `${seat.name}: its pane runs ${running.model} ${running.version}; that process is not the one team launched`
+    : undefined;
   const differs = running !== null && modelDiffers(running, seat);
   const row: Row = {
     name: seat.name,
@@ -451,9 +454,7 @@ function cannotTie(
       what: `${seat.name}: its pane holds a process this record cannot tie to the launch`,
       repair: 'look at the pane',
     },
-    ...(running
-      ? { note: `${seat.name}: its pane runs ${running.model} ${running.version}; that process is not the one team launched` }
-      : {}),
+    ...(shown ? { note: shown } : {}),
   };
 }
 
