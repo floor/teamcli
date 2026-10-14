@@ -185,7 +185,7 @@ describe('the seat registry read boundary', () => {
     expect(readState(dir).sessions.alpha?.seats.worker?.id).toBeUndefined();
   });
 
-  test.failing('two seats recorded under one handle are not both shown as that handle', async () => {
+  test('two seats recorded under one handle are not both shown as that handle', async () => {
     updateState(dir, (state) => {
       state.sessions.alpha!.seats.worker = { id: LEAD_ID, stage: 'ready', pane: 'worker-pane', workspace: 'worker-ws' };
     });

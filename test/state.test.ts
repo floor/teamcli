@@ -132,6 +132,7 @@ describe('the state file', () => {
   test('mints seat_<12 lowercase hex> handles and validates seat registry fields at readState', () => {
     const first = mintSeatId();
     const second = mintSeatId();
+    const third = mintSeatId();
     expect(SEAT_ID_PATTERN.test(first)).toBe(true);
     expect(isSeatId(first)).toBe(true);
     expect(first).not.toBe(second);
@@ -168,7 +169,7 @@ describe('the state file', () => {
             retained_seats: {
               kept: { id: second, last_active: '2026-10-14T11:00:00.000Z' },
               badId: { id: 'bad', last_active: '2026-10-14T11:00:00.000Z' },
-              badTime: { id: first, last_active: 12345 },
+              badTime: { id: third, last_active: 12345 },
             },
             worktrees: {},
           },
@@ -188,7 +189,7 @@ describe('the state file', () => {
     expect(loaded?.seats.corrupt).toEqual({ stage: 'ready' });
     expect(loaded?.retained_seats).toEqual({
       kept: { id: second, last_active: '2026-10-14T11:00:00.000Z' },
-      badTime: { id: first },
+      badTime: { id: third },
     });
   });
 

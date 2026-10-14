@@ -538,6 +538,12 @@
         },
         {
           "hidden": false,
+          "name": "--seats",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--watch",
           "repeatable": false,
           "takesValue": false
@@ -554,7 +560,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team list [--all] [--watch] [--json]"
+        "team list [--all] [--seats] [--watch] [--json]"
       ]
     },
     {

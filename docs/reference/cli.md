@@ -334,7 +334,7 @@ Hidden: no
 
 Usage:
 
-    team list [--all] [--watch] [--json]
+    team list [--all] [--seats] [--watch] [--json]
 
 ### Flags
 
@@ -343,6 +343,7 @@ Usage:
 | `--all` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--seats` | no | no | no |
 | `--watch` | no | no | no |
 | `-h` | no | no | yes |
 

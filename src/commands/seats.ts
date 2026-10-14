@@ -6,7 +6,7 @@ import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { mayReadTeam } from '../read-gate.ts';
-import { emptySession, readState, type SessionState } from '../state.ts';
+import { emptySession, isSeatId, readState, type SessionState } from '../state.ts';
 import { compare, type Comparison, type Live } from '../status/compare.ts';
 import { waitOrStop } from '../wait.ts';
 import { realSources as realStatusSources, type StatusSources } from './status.ts';
@@ -86,6 +86,7 @@ export function seatRegistryRows(
   all: boolean,
 ): SeatRegistryRow[] {
   const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
+  const seenIds = new Set<string>();
   const rows: SeatRegistryRow[] = [];
   for (const row of comparison.rows) {
     if (!all && row.state === 'stopped') continue;
@@ -93,7 +94,9 @@ export function seatRegistryRows(
     const recorded = state.seats[row.name];
     const retained = state.retained_seats?.[row.name];
     const likeSeat = recorded?.temporary ? byName.get(recorded.temporary.like) : undefined;
-    const id = row.id ?? recorded?.id ?? retained?.id ?? null;
+    const candidateId = row.id ?? recorded?.id ?? retained?.id ?? null;
+    const id = candidateId && isSeatId(candidateId) && !seenIds.has(candidateId) ? candidateId : null;
+    if (id) seenIds.add(id);
     const role = declared?.role ?? likeSeat?.role ?? 'temporary';
     const cli = recorded?.cli ?? declared?.cli ?? likeSeat?.cli ?? '-';
     const effort = recorded?.effort ?? declared?.effort ?? likeSeat?.effort ?? null;
