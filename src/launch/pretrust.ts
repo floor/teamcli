@@ -2,7 +2,7 @@
 // asked to trust. `up` and `add` write the record that CLI already reads, under the
 // seat's home, before the workspace is created. The approved launch line is left as
 // it is. A dry run writes nothing. Antigravity's record was not captured, so that
-// seat is left out with one repair line rather than a guessed file.
+// seat still starts: a guessed file is not written, and a refusal could not be cleared.
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { profileFor } from '../profiles/index.ts';
