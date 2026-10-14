@@ -9,9 +9,12 @@ import type { Key } from './terminal.ts';
 //
 // The pause is the whole of the interaction: it records the seat as waiting for its owner —
 // with the process identity read at that moment, in the same write — draws the record, and asks
-// with one exact line. `o` focuses the pane and never sends a key or a text into it: from there
-// the owner works in her own pane, and this loop polls the screen until it reaches its prompt,
-// stops at something else, or runs out the profile's idle timeout — then asks again. `s` closes
+// with one exact line, and waits at most the profile's idle timeout for that line. A trust or
+// permission prompt that nobody answers cannot hold the run: the budget ends, the seat is left
+// as it is, and the caller goes on. `o` focuses the pane and never sends a key or a text into
+// it: from there the owner works in her own pane, and this loop polls the screen until it
+// reaches its prompt, stops at something else, or runs out the profile's idle timeout — then
+// asks again, with a new budget. `s` closes
 // the seat's workspace without input and clears its state. `q` and Ctrl-C stop cleanly: the
 // caller (execute) closes what this invocation created and writes the stopped records.
 //
@@ -351,15 +354,21 @@ export async function runPause(input: PauseInput, host: PauseHost): Promise<Paus
   }
   host.entering(input.classification);
   host.record(display(view));
+  // One unattended ask, bounded by the profile's idle timeout. A polled prompt spends that
+  // same budget across its ticks.
+  let askedUntil = host.now() + host.idleTimeout * 1000;
 
   try {
     for (;;) {
+      const remaining = askedUntil - host.now();
+      if (remaining <= 0) return unanswered(host.idleTimeout);
       // Bytes typed before this prompt was drawn were typed for something else — a keystroke
       // held down, a paste, a line the owner forgot — and are read and discarded, never
       // answered: the prompt that follows asks about the pane as it is now.
       host.drain();
       host.prompt(promptLine(input.seat, display(view)));
-      const key = await host.key(host.polled ? IDLE_POLL_MS : Number.POSITIVE_INFINITY);
+      const slice = host.polled ? Math.min(IDLE_POLL_MS, remaining) : remaining;
+      const key = await host.key(slice);
       if (key === 'q') {
         // Ctrl-C reads as `q` in raw mode: the owner's own decision to stop cleanly.
         return { kind: 'stopped' };
@@ -376,6 +385,8 @@ export async function runPause(input: PauseInput, host: PauseHost): Promise<Paus
           view = outcome.view;
           host.record(display(view));
         }
+        // The owner took the pane. The poll had its own deadline; the ask that follows starts again.
+        askedUntil = host.now() + host.idleTimeout * 1000;
         continue;
       }
       if (key === 's') {
@@ -384,6 +395,9 @@ export async function runPause(input: PauseInput, host: PauseHost): Promise<Paus
         continue;
       }
       if (key === 'timeout') {
+        // The read used the time it was given. A poll that still has budget left looks again;
+        // the last slice, or a clock already past the ask, ends it.
+        if (host.now() >= askedUntil || slice >= remaining) return unanswered(host.idleTimeout);
         const outcome = await refresh(input, host, view);
         if (outcome.kind === 'done') return outcome.result;
         if (outcome.kind === 'view') {
@@ -505,6 +519,12 @@ async function refresh(input: PauseInput, host: PauseHost, view: View): Promise<
   } finally {
     lock.release();
   }
+}
+
+/** The ask ran out its idle timeout with no key. The seat stays as it is: nothing focused,
+ *  nothing closed, the waiting record kept, and the run goes on to the next seat. */
+function unanswered(seconds: number): PauseResult {
+  return { kind: 'left out', reason: `timed out after ${seconds} s waiting for its owner; left as it is`, detail: '' };
 }
 
 /** The seat was made ready under this run's feet, by the orchestrator's `team answer`. */

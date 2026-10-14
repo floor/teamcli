@@ -1,0 +1,23 @@
+  letter to the permanence of a printed archive. For
+  all its humbleness, paper remains one of the most
+  quietly transformative inventions in human history.
+
+✻ Brewed for 9s · done 5:25 PM
+
+❯ Use your question tool to ask me to choose between
+  the names alpha and beta, then wait. Do not read or
+  write any file.
+──────────────────────────────────────────────────────
+ ☐ Name
+
+Which name would you like to use?
+
+❯ 1. alpha
+     Use the name alpha.
+  2. beta
+     Use the name beta.
+  3. Type something.
+──────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

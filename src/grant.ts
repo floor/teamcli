@@ -11,7 +11,7 @@ import { logLine } from './log.ts';
 import { approvalStanding, approvedCopy, type Standing } from './store/store.ts';
 
 /**
- * What `up` and `down` ask the grant, decided and not yet done. `passed` is the grant the
+ * What `up`, `down` and `approve` ask the grant, decided and not yet done. `passed` is the grant the
  * approval in force names. `refused` is the sentence, with no newline; `id` is the exit id
  * a command records when it refuses on this verdict.
  */
@@ -34,15 +34,16 @@ export type GrantSources = {
 /**
  * The audit line of a granted run, in the same shape as a delegated run's line. `up` and
  * `down` call it when the gate has passed and the run is about to have effects, and not
- * before: a dry run and a refusal write nothing.
+ * before: a dry run and a refusal write nothing. `approve` calls it in the same function as
+ * the store write, after that write, and `detail` is the differences that approval sealed.
  */
-export function logGranted(dir: string, seat: string, act: GrantScope, now?: Date): void {
-  logLine(dir, 'grant', 'grant', `${seat} ${act}`, now);
+export function logGranted(dir: string, seat: string, act: GrantScope, now?: Date, detail?: string): void {
+  logLine(dir, 'grant', 'grant', `${seat} ${act}${detail ? `: ${detail}` : ''}`, now);
 }
 
 /**
  * Whether this caller may perform `act` under the grant the approval in force names.
- * `up` and `down` call this. It reads the live default file and the approval again on this
+ * `up`, `down` and `approve` call this. It reads the live default file and the approval again on this
  * call: no remembered copy, no `--file`, and no walk of other sessions the state holds.
  * It decides and stops. It does not print, write, or launch.
  *

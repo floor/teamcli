@@ -648,6 +648,62 @@
     {
       "code": 1,
       "command": "approve",
+      "id": "approve.grant-another-pane",
+      "meaning": "the granted seat is not on its recorded pane",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-approval",
+      "meaning": "a grant needs a verified approval",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-approved-copy",
+      "meaning": "a grant needs a readable approved copy",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-caller",
+      "meaning": "only the seat the grant names runs this",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-flag",
+      "meaning": "a granted seat cannot aim --file",
+      "trigger": "team approve --file other"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-no-pane",
+      "meaning": "no pane is recorded for the granted seat",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-not-ordinary",
+      "meaning": "this change needs the owner",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-scope",
+      "meaning": "the grant does not list approve",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
       "id": "approve.input-unreadable",
       "meaning": "the terminal could not be read to check for input waiting",
       "trigger": "team approve"
@@ -1309,6 +1365,34 @@
       "id": "down.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team down"
+    },
+    {
+      "code": 0,
+      "command": "feed",
+      "id": "feed.ok",
+      "meaning": "the message feed was printed",
+      "trigger": "team feed"
+    },
+    {
+      "code": 1,
+      "command": "feed",
+      "id": "feed.unreadable",
+      "meaning": "the history log cannot be read",
+      "trigger": "team feed"
+    },
+    {
+      "code": 2,
+      "command": "feed",
+      "id": "feed.configuration",
+      "meaning": "the team file can't be read",
+      "trigger": "team feed"
+    },
+    {
+      "code": 2,
+      "command": "feed",
+      "id": "feed.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team feed extra"
     },
     {
       "code": 0,

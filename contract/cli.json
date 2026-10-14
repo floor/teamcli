@@ -467,6 +467,53 @@
       ]
     },
     {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--follow",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--limit",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "feed",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team feed [--seat <name>] [--limit <n>] [--follow] [--json]"
+      ]
+    },
+    {
       "flags": [],
       "hidden": true,
       "name": "help",

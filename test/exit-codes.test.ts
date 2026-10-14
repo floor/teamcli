@@ -21,8 +21,10 @@ import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { commits } from '../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
+import { runFeed } from '../src/commands/feed.ts';
 import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
+import { historyPath } from '../src/send/history.ts';
 import { plantMessage, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
@@ -905,6 +907,59 @@ scene('approve.delegate-flag', async (place) => {
 scene('approve.delegate-approval', async (place) => {
   write(place, DELEGATED_APPROVE);
   return show(await approved(place, [], other, approveSources(place, null)), 'delegation needs a verified approval');
+});
+
+// The grant's refusals of `approve`. The gate is the real one, asked when the file lists `grant`
+// and the ordinary rule has refused. A file that omits `grant` is not these scenes.
+const GRANT_APPROVE = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - approve\n`;
+const GRANT_UP_ONLY = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - up\n`;
+
+function grantApprove(place: Place, over: GrantSources = {}): Partial<ApproveSources> {
+  return { grantGate: (input) => grantGate({ ...input, sources: over }) };
+}
+
+scene('approve.grant-approval', async (place) => {
+  write(place, GRANT_APPROVE);
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'a grant needs a verified approval');
+});
+scene('approve.grant-approved-copy', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  return show(await approved(place, [], leadSeat, approveSources(place, null, place.home, 'empty', grantApprove(place, { approvedCopy: () => null }))), 'a grant needs a readable approved copy');
+});
+scene('approve.grant-not-ordinary', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  const side = join(place.base, 'side');
+  mkdirSync(side);
+  write(place, readFileSync(place.file, 'utf8').replace(`  - ${place.root}`, `  - ${place.root}\n  - ${side}`));
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'this change needs the owner');
+});
+scene('approve.grant-caller', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  return show(await approved(place, [], other, approveSources(place, null)), 'only the seat the grant names');
+});
+scene('approve.grant-no-pane', async (place) => {
+  approve(place, GRANT_APPROVE);
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'no pane is recorded for seat lead');
+});
+scene('approve.grant-another-pane', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w2:p1');
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'the state records pane w2:p1 for seat lead');
+});
+scene('approve.grant-scope', async (place) => {
+  approve(place, GRANT_UP_ONLY);
+  recordLead(place, 'w1:p1');
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'the grant does not list `approve`');
+});
+scene('approve.grant-flag', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  const foreign = join(place.base, 'other.yaml');
+  writeFileSync(foreign, 'format: [\n');
+  return show(await approved(place, ['--file', foreign], leadSeat, approveSources(place, null)), "--file is the owner's; the granted seat cannot use it");
 });
 
 async function checked(place: Place, argv: string[], caller: Caller, sources: CheckSources): Promise<Ran> {
@@ -3113,6 +3168,26 @@ scene('send.listed', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['--list'], owner, sendHost(place)), 'lead  claude-code');
 });
+
+async function fed(place: Place, argv: string[]): Promise<Ran> {
+  const io = testIo(place.root);
+  const code = await runFeed(argv, io, { home: place.home, poll: async () => false });
+  return { code, out: io.out, err: io.err };
+}
+
+scene('feed.ok', async (place) => {
+  write(place, TEAM);
+  return show(await fed(place, []), '(no messages)');
+});
+scene('feed.unreadable', async (place) => {
+  write(place, TEAM);
+  const log = historyPath('acme', place.root, place.home);
+  mkdirSync(dirname(log), { recursive: true, mode: 0o700 });
+  symlinkSync('/etc/passwd', log);
+  return show(await fed(place, []), 'the history log cannot be read: a symbolic link was found and not followed');
+});
+scene('feed.configuration', async (place) => show(await fed(place, []), 'no team file'));
+scene('feed.usage', async (place) => show(await fed(place, ['extra']), 'unexpected "extra"'));
 
 // --- team mcp: a synthetic helper, bridge and front, under the scene's own temp base. The tree
 // is real (modes, sizes and the config's bytes are read as the command reads them), while the

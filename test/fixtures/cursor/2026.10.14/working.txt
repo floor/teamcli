@@ -1,0 +1,18 @@
+
+  I'll run sleep 12 now, then reply with only
+  SLEEP_DONE.
+
+  $ sleep 12 11s
+    ctrl+b twice to send to background
+
+ ⠘⠤ Running  44 tokens
+    Tip: Use subagents to parallelize work and
+  preserve context.
+
+
+  → Add a follow-up                   ctrl+c to stop
+
+
+  1 task
+  Grok 4.7 256K High                  Run Everything
+  <workspace> · main
