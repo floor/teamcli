@@ -261,9 +261,11 @@ function live(over: Partial<Record<string, { status?: string; screen?: string }>
 
 describe('a pass of the watch', () => {
   test('a working team reports nothing', () => {
-    expect(pass({
+    const { labels, ...rest } = pass({
       team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(),
-    })).toEqual({ reports: [], nudge: null, fallback: null, ring: null, mailboxNote: null, readings: [] });
+    });
+    expect(rest).toEqual({ reports: [], nudge: null, fallback: null, ring: null, mailboxNote: null, readings: [] });
+    expect(labels.length).toBe(5);
   });
 
   test('an idle seat is reported after idle_first, and again every idle_repeat', () => {
@@ -1878,5 +1880,100 @@ describe('team watch', () => {
     writeFileSync(file, 'format: 9\n');
     expect(await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1))).toBe(2);
     expect(await runWatch(['--loud'], testIo(dir), sources(1))).toBe(2);
+  });
+});
+
+describe('the sidebar of a running seat', () => {
+  function paint(screen: string, name: string, memory = newMemory()) {
+    const scene = live({ [name]: { status: 'idle', screen } });
+    return pass({ team: team(), watch: team().watch, state: emptySession(), live: scene, machine: fine, now: 0, memory });
+  }
+
+  function line(result: ReturnType<typeof pass>, name: string): string | undefined {
+    return result.labels.find((label) => label.name === name)?.displayAgent;
+  }
+
+  test('the first cycle paints the file, and the next cycle with the same screen paints nothing', () => {
+    const memory = newMemory();
+    const screen = '  main · Opus 5.5\n';
+    const first = paint(screen, 'claude-coordinator-acme', memory);
+    const label = first.labels.find((item) => item.name === 'claude-coordinator-acme');
+    expect(label?.displayAgent).toBe('Claude Opus 5.5 default');
+    expect(label?.title).toBe('claude-coordinator-acme · project coordinator');
+    expect(label?.displayAgent?.includes('claude-code')).toBe(false);
+    const slot = (memory.seatLabels['claude-coordinator-acme'] ??= {});
+    slot.line = label?.displayAgent;
+    slot.title = label?.title;
+    const second = paint(screen, 'claude-coordinator-acme', memory);
+    expect(second.labels.find((item) => item.name === 'claude-coordinator-acme')).toBeUndefined();
+  });
+
+  test('a different yielded model is pushed once, and a failed push is tried again', () => {
+    const memory = newMemory();
+    const screen = '  main · Sonnet 4.5\n';
+    const first = paint(screen, 'claude-coordinator-acme', memory);
+    expect(line(first, 'claude-coordinator-acme')).toBe('Claude Sonnet 4.5 default');
+    const again = paint(screen, 'claude-coordinator-acme', memory);
+    expect(line(again, 'claude-coordinator-acme')).toBe('Claude Sonnet 4.5 default');
+    const slot = (memory.seatLabels['claude-coordinator-acme'] ??= {});
+    const pushed = again.labels.find((item) => item.name === 'claude-coordinator-acme');
+    slot.line = pushed?.displayAgent;
+    slot.title = pushed?.title;
+    expect(line(paint(screen, 'claude-coordinator-acme', memory), 'claude-coordinator-acme')).toBeUndefined();
+  });
+
+  test('an effort change is pushed once, and a Claude viewport with no effort phrase keeps the word', () => {
+    const memory = newMemory();
+    const banner = 'Opus 4.8 with high effort\na\nb\nc\nd\ne\n  main · Opus 5.5\n';
+    const first = paint(banner, 'claude-coordinator-acme', memory);
+    expect(line(first, 'claude-coordinator-acme')).toBe('Claude Opus 5.5 high');
+    const slot = (memory.seatLabels['claude-coordinator-acme'] ??= {});
+    const pushed = first.labels.find((item) => item.name === 'claude-coordinator-acme');
+    slot.line = pushed?.displayAgent;
+    slot.title = pushed?.title;
+    expect(line(paint('  main · Opus 5.5\n', 'claude-coordinator-acme', memory), 'claude-coordinator-acme')).toBeUndefined();
+    expect(memory.seatLabels['claude-coordinator-acme']?.effort).toBe('high');
+  });
+
+  test('a codex row, a cursor row, an antigravity footer and a grok footer supply the effort', () => {
+    const memory = newMemory();
+    const codex = paint('  GPT-6-Astra xhigh · Context 100% left\n', 'codex-acme', memory);
+    expect(line(codex, 'codex-acme')).toBe('GPT Astra 6 xhigh');
+
+    const file = team();
+    const cursorSeat = file.seats.find((seat) => seat.name === 'claude-operator-acme');
+    if (!cursorSeat) throw new Error('no operator');
+    cursorSeat.cli = 'cursor';
+    cursorSeat.model = 'Grok';
+    cursorSeat.version = '4.7';
+    cursorSeat.display = 'Grok 4.7';
+    const cursorScene = live({ 'claude-operator-acme': { status: 'idle', screen: '  Grok 4.7 256K High\n' } });
+    const cursor = pass({ team: file, watch: file.watch, state: emptySession(), live: cursorScene, machine: fine, now: 0, memory: newMemory() });
+    expect(line(cursor, 'claude-operator-acme')).toBe('Grok 4.7 high');
+
+    const agySeat = file.seats.find((seat) => seat.name === 'grok-acme');
+    if (!agySeat) throw new Error('no grok seat');
+    agySeat.cli = 'antigravity';
+    agySeat.model = 'Gemini Flash';
+    agySeat.version = '3.8';
+    agySeat.display = 'Gemini 3.8 Flash';
+    agySeat.stopped = false;
+    const agyScene = live();
+    agyScene.agents.push(agent('grok-acme', 'w9', 'idle', 'antigravity'));
+    agyScene.screens['w9:p1'] = 'Gemini 4 Argon · medium\n';
+    agyScene.workspaces.push({ id: 'w9', label: 'old' });
+    const agy = pass({ team: file, watch: file.watch, state: emptySession(), live: agyScene, machine: fine, now: 0, memory: newMemory() });
+    expect(line(agy, 'grok-acme')).toBe('Gemini 3.8 Flash medium');
+
+    const grokFile = team();
+    const grokScene = live();
+    grokScene.agents.push(agent('grok-acme', 'w8', 'idle', 'grok'));
+    grokScene.screens['w8:p1'] = 'Grok 4.6 (xhigh) · always-approve\n';
+    grokScene.workspaces.push({ id: 'w8', label: 'old' });
+    const grok = pass({ team: grokFile, watch: grokFile.watch, state: emptySession(), live: grokScene, machine: fine, now: 0, memory: newMemory() });
+    const grokLine = line(grok, 'grok-acme');
+    expect(grokLine).toBe('Grok 4.7 xhigh');
+    expect(grokLine?.startsWith('grok ')).toBe(false);
+    expect(grok.labels.find((item) => item.name === 'grok-acme')?.title).toBe('grok-acme · reviewer');
   });
 });
