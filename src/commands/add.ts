@@ -619,7 +619,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
       caller: who, owner: caller.kind === 'owner', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
-      verifiedLobby, records, teamFile: path,
+      verifiedLobby, startCwd: planSeat.cwd, inLobby: planSeat.lobby === true, records, teamFile: path,
       doctor: sources.doctor,
       // The lobby is read again directly before the workspace this run makes in it, with nothing
       // in between (`execute.ts`). Null when it is still the folder the gate read and every file
@@ -805,6 +805,9 @@ function hostOf(input: {
   standing: Standing;
   teamFile: string;
   verifiedLobby: string | null;
+  /** The folder this seat's workspace is created in. A lead's is the project; a lobby seat's is the verified lobby. */
+  startCwd: string;
+  inLobby: boolean;
   /** The run's writer, made by the caller before the launch-line note is said. */
   records: Progress;
   doctor: DoctorSources;
@@ -902,7 +905,13 @@ function hostOf(input: {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: patch.stage };
         let start_cwd = prior.start_cwd;
-        if (!start_cwd && patch.createdWorkspace && input.verifiedLobby) start_cwd = input.verifiedLobby;
+        if (!start_cwd && patch.createdWorkspace) {
+          if (input.inLobby) {
+            if (input.verifiedLobby) start_cwd = input.verifiedLobby;
+          } else {
+            start_cwd = input.startCwd;
+          }
+        }
         // `waiting: null` removes the field alone; anything else written replaces it.
         const { waiting: written, ...rest } = patch;
         const seatState: SeatState = { ...prior, ...rest, ...(temporary && name === seat.name ? { temporary } : {}), ...(start_cwd ? { start_cwd } : {}) };

@@ -418,7 +418,7 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
-      return { ...planned, stage: 'ready', ...restartNote(team, seat.name, recorded, home) };
+      return { ...planned, stage: 'ready', ...restartNote(team, seat.name, recorded, home, root) };
     }
     return planned;
   }
@@ -444,10 +444,14 @@ function restartNote(
   name: string,
   recorded: SeatState,
   home: string,
+  root: string,
 ): { restartNote: string } | Record<string, never> {
   const fix = relaunchRepair(team, name, 'plain');
   if (!recorded.launched) return { restartNote: `a relaunch records its process: ${fix}` };
+  // A running lead is at home in the lobby or in the project. Either recording is left as it
+  // is. Every other seat still outside the lobby is told how to move.
   if (recorded.start_cwd && recorded.start_cwd !== resolveLobby(home, team)) {
+    if (isLeadSeat(team, name) && recorded.start_cwd === root) return {};
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
   return {};
@@ -1030,7 +1034,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           // The CLI the seat was launched with: `down` needs it when the file no longer names the seat.
           const cli = team.seats.find((seat) => seat.name === name)?.cli;
           let start_cwd = prior.start_cwd;
-          if (!start_cwd && patch.createdWorkspace && verifiedLobby) start_cwd = verifiedLobby;
+          if (!start_cwd && patch.createdWorkspace) {
+            const planned = seats.find((item) => item.name === name);
+            if (planned?.lobby) {
+              if (verifiedLobby) start_cwd = verifiedLobby;
+            } else if (planned?.cwd) {
+              start_cwd = planned.cwd;
+            }
+          }
           // `waiting: null` removes the field alone; anything else written replaces it.
           const { waiting: written, ...rest } = patch;
           const seat: SeatState = { ...prior, ...rest, ...(cli ? { cli } : {}), ...(start_cwd ? { start_cwd } : {}) };
