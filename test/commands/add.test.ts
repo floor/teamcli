@@ -219,7 +219,7 @@ describe('team add', () => {
     const made = world();
     const io = testIo(project, owner);
     expect(await runAdd(['worker'], io, sources(made))).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
     expect(made.renames).toEqual(['worker']);
     const text = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
     expect(text).not.toMatch(/# the seat stays in this order\n    stopped: true/);
@@ -407,7 +407,7 @@ describe('team add', () => {
     expect(code).toBe(0);
     expect(io.err.split('  note worker: its launch line was not checked').length).toBe(2);
     expect(io.out).not.toContain('note worker');
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
     // the added seat is unstopped; the fixture's other stopped seat keeps its flag
     expect(readFileSync(join(project, '.agents/team.yaml'), 'utf8')).not.toMatch(/# the seat stays in this order\n    stopped: true/);
   });
@@ -601,6 +601,31 @@ describe('team add', () => {
     expect(gone.err).toContain("doesn't exist");
   });
 
+  test('refuses a result path that is absolute or contains ..', async () => {
+    const absolute = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:/tmp/out.md'], absolute, sources(world()))).toBe(1);
+    expect(absolute.err).toContain('relative to the project');
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+
+    // `../outside.md` is outside this project (home/acme). `notes/../../outside.md` contains
+    // `..` and lands in the same place. Neither may be stored, and no seat is recorded.
+    const escaped = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:../outside.md'], escaped, sources(world()))).toBe(1);
+    expect(escaped.err).toContain('relative to the project');
+    expect(existsSync(join(home, 'outside.md'))).toBe(false);
+    const nested = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/../../outside.md'], nested, sources(world()))).toBe(1);
+    expect(nested.err).toContain('relative to the project');
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+  });
+
+  test('refuses a merged branch that starts with a dash', async () => {
+    const io = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'merged:-not-a-branch'], io, sources(world()))).toBe(1);
+    expect(io.err).toContain('is not a branch name');
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+  });
+
   test('each start limit refuses with its figure before the file is edited', async () => {
     const cases: { machine: Machine; text: string }[] = [
       { machine: { ...fine, loadPerCore: 9 }, text: 'the load is 9.0 per core, above 3' },
@@ -672,7 +697,7 @@ describe('team add', () => {
     const made = world();
     const io = testIo(project, owner);
     expect(await runAdd(['worker'], io, sources(made, { machine: () => fine }))).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
   });
 
   test('names an unnamed agent already in the seat\'s workspace instead of launching another', async () => {
@@ -771,10 +796,9 @@ describe('team add', () => {
     expect(seat?.launched).toEqual({ shell: 200, cli: [201] });
   });
 
-  test('a replaced seat is closed without input and launched fresh, not refused as running', async () => {
-    // The recorded pane holds a CLI, and it is not the one team launched: the seat's name in
-    // herdr's list is not the seat. `add` does what `up` does — closes that workspace without a
-    // key or a text, clears the record, and launches fresh with the rules.
+  test('a replaced seat with no stored session is left, not closed and not launched', async () => {
+    // The recorded pane holds a CLI, and the record has no agent session to tie it to the launch.
+    // `add` does not close it and does not start another.
     updateState(join(project, '.agents'), (state) => {
       const session = state.sessions.acme ?? emptySession();
       session.seats.worker = { stage: 'launched', workspace: 'w9', pane: 'w9:p1', launched: { shell: 400, cli: [401] } };
@@ -799,20 +823,73 @@ describe('team add', () => {
       agents: () => [listed],
       workspaces: () => [{ id: 'w9' }],
     }));
-    expect(code).toBe(0);
-    expect(io.err).not.toContain('already running');
-    // The wrong process was typed into with nothing, and the workspace it sat in was closed; the
-    // seat was launched in a fresh one, its rules carried by the launch line.
+    expect(code).toBe(1);
+    expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
     expect(keys).toEqual([]);
-    expect(closes).toEqual(['w9']);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
-    expect(io.err).toContain('  its pane held a process team did not launch; closed without input and launched again\n');
+    expect(closes).toEqual([]);
+    expect(made.creates).toEqual([]);
     const seats = readState(join(project, '.agents')).sessions.acme?.seats ?? {};
-    expect(seats.worker?.stage).toBe('ready');
-    expect(seats.worker?.pane).toBe('w1:p1');
+    expect(seats.worker).toMatchObject({ stage: 'launched', pane: 'w9:p1', launched: { shell: 400, cli: [401] } });
   });
 
-  describe('add exits 1 when its repair is refused with a stale record that says ready', () => {
+  test('a matching agent session is rebased and not closed', async () => {
+    updateState(join(project, '.agents'), (state) => {
+      const session = state.sessions.acme ?? emptySession();
+      session.seats.worker = { stage: 'ready', workspace: 'w9', pane: 'w9:p1', launched: { shell: 400, cli: [401] }, agent_session: 'kept' };
+      state.sessions.acme = session;
+    });
+    const made = world();
+    const closes: string[] = [];
+    made.launch.closeWorkspace = (_session, workspace) => { closes.push(workspace); return true; };
+    made.launch.processInfo = () => ({ shell: 900, foreground: [901] });
+    const listed: HerdrAgent = { name: 'worker', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null, session: 'kept' };
+    made.launch.agents = () => [listed];
+    const io = testIo(project, owner);
+    const code = await runAdd(['worker'], io, sources(made, {
+      sessionState: () => 'running',
+      agents: () => [listed],
+      workspaces: () => [{ id: 'w9' }],
+    }));
+    expect(code).toBe(1);
+    expect(io.err).toContain('already running');
+    expect(closes).toEqual([]);
+    expect(made.creates).toEqual([]);
+    const seats = readState(join(project, '.agents')).sessions.acme?.seats ?? {};
+    expect(seats.worker).toMatchObject({ pane: 'w9:p1', launched: { shell: 900, cli: [901] }, agent_session: 'kept' });
+  });
+
+  test('a shell in front is still closed without input and launched fresh', async () => {
+    updateState(join(project, '.agents'), (state) => {
+      const session = state.sessions.acme ?? emptySession();
+      session.seats.worker = { stage: 'launched', workspace: 'w9', pane: 'w9:p1', launched: { shell: 400, cli: [401] }, agent_session: 'kept' };
+      state.sessions.acme = session;
+    });
+    const made = world();
+    const closes: string[] = [];
+    const keys: string[] = [];
+    made.launch.closeWorkspace = (_session, workspace) => { closes.push(workspace); return true; };
+    made.launch.processInfo = (_session, pane) => pane === 'w9:p1'
+      ? { shell: 400, foreground: [400] }
+      : { shell: 700, foreground: [700, 701] };
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const listed: HerdrAgent = { name: 'worker', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null, session: 'kept' };
+    made.launch.agents = () => [listed];
+    const text = made.launch.paneText;
+    made.launch.paneText = (session, pane) => (pane === 'w9:p1' ? IDLE : text(session, pane));
+    const io = testIo(project, owner);
+    const code = await runAdd(['worker'], io, sources(made, {
+      sessionState: () => 'running',
+      agents: () => [listed],
+      workspaces: () => [{ id: 'w9' }],
+    }));
+    expect(code).toBe(0);
+    expect(keys).toEqual([]);
+    expect(closes).toEqual(['w9']);
+    expect(io.err).toContain('  its pane held no CLI; closed without input and launched again\n');
+  });
+
+  describe('a replaced seat with no stored session is left before any close', () => {
     function setupReadySeat() {
       approve(WORKTREE_FILE);
       updateState(join(project, '.agents'), (state) => {
@@ -841,7 +918,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: herdr no longer shows this seat on its recorded pane; nothing closed; run team status\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -858,7 +935,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: its workspace holds other panes; nothing closed (close its pane there, then run team up)\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -875,7 +952,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: its pane could not be read; nothing closed\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -895,7 +972,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: its pane could not be read; nothing closed\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -912,7 +989,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: the process in its pane is working; nothing closed (stop it there, or run team remove worker)\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -930,7 +1007,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove worker)\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -1162,7 +1239,7 @@ describe('team add delegated', () => {
     const io = testIo(project, pilot);
     const code = await runAdd(['lead'], io, sources(made, { delegateGate: () => passed }));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['lead']);
     expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toBe(before);
     expect(readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8')).toBe(record);
     // The audit line is the log's first line: the run is attributed before its effects.
@@ -1200,7 +1277,7 @@ describe('team add delegated', () => {
     const io = testIo(project, { kind: 'seat', name: 'lead', pane: 'w0:p1', session: 'acme' });
     const code = await runAdd(['worker'], io, sources(made, { delegateGate: THROWING_GATE }));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
     expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).not.toMatch(/# the seat stays in this order\n    stopped: true/);
     // The role path re-signed the seat digest, exactly as today, and no audit line was written:
     // the log holds the run's own records and no delegate attribution.
@@ -1218,7 +1295,7 @@ describe('team add delegated', () => {
     const before = readFileSync(join(store, 'approval.json'), 'utf8');
     const code = await runAdd(['worker'], testIo(project, owner), sources(made, { delegateGate: THROWING_GATE }));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
     expect(readFileSync(join(store, 'approval.json'), 'utf8')).not.toBe(before);
     expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).not.toContain('delegate [delegate]');
   });
@@ -1322,7 +1399,7 @@ describe('team add delegated', () => {
     const io = testIo(project, pilot);
     const code = await runAdd(['lead'], io, sources(made, { delegateGate: gateReading(false) }));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['lead']);
   });
 
   test('a delegated add with herdr not answering is the gate\'s refusal, and nothing is started', async () => {
@@ -1393,7 +1470,7 @@ describe('team add, the session mutator lock', () => {
     const made = world();
     const io = testIo(project, owner);
     expect(await runAdd(['worker'], io, sources(made))).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
     expect(existsSync(lockFile())).toBe(false);
   });
 

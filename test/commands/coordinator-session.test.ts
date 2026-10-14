@@ -366,6 +366,17 @@ const COMMANDS: Case[] = [
     owner: '',
   },
   {
+    name: 'worktree list',
+    run: (caller, argv = [], options) =>
+      call((io) => runWorktree(['list', ...argv], io, worktreeSources()), caller, options),
+    refusal: (who) => `team worktree: only the owner, the orchestrator or the operator runs it; this call is ${who}\n`,
+    noPane: (name) => `team worktree: ${NO_PANE(name)}\n`,
+    anotherPane: (name, pane) => `team worktree: ${ANOTHER_PANE(name, pane)}\n`,
+    sessionOwner: (who) => `team worktree: ${OWNER_ONLY(who)}\n`,
+    fileOwner: (who) => `team worktree: --file is the owner's, from a terminal outside herdr; this call is ${who}\n`,
+    owner: `team worktree: ${NEVER_APPROVED}\n`,
+  },
+  {
     name: 'worktree new',
     run: (caller, argv = [], options) =>
       call((io) => runWorktree(['new', 'probe-task', ...argv], io, worktreeSources()), caller, options),
@@ -590,7 +601,7 @@ for (const command of COMMANDS) {
 }
 
 // `--file` is the owner's, and the walk alone decides it, for every command that takes the flag:
-// the five commands, `worktree`'s two subcommands, and the dry runs. A non-owner's flag is
+// the five commands, `worktree list`, `worktree new`, `worktree remove`, and the dry runs. A non-owner's flag is
 // refused before that file is read, so the refusal depends on nothing stored at the flagged path
 // — not its bytes, not its problems, not the session it names. The flagged project below is
 // another one entirely: a run that read its file would report the file's own problem, ask the

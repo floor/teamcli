@@ -53,6 +53,9 @@ trust_answer:
 # codex-cli 0.161.0 started as `codex -m gpt-6.1-sol` shows a blank model line at 0.5 s
 # and at 1.0 s, then GPT-6.1-Sol at 1.5 s, and no other model. The form is that flag.
 model_form: '-m <model id>'
+startup_reads:
+  - AGENTS.md
+  - .codex/config.toml
 models:
   option:
     - -m

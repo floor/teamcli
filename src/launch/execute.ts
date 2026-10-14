@@ -2,7 +2,7 @@ import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, versionVerdict } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, seatModel, type Running } from '../status/statusline.ts';
-import { launchedIdentity, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
+import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { IDLE_POLL_MS, type Step } from './plan.ts';
 import {
   closeTarget,
@@ -42,6 +42,10 @@ export type Host = {
   confirmLobby?(): LobbyRefusal | null;
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
+  /** Sets the pane's display_agent. False is reported in one line and does not leave the seat out. */
+  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  /** Sets the workspace title. False is reported in one line and does not leave the seat out. */
+  renameWorkspace?(session: string, workspace: string, label: string): boolean;
   /** The live exit typing; see `ExitTyping`. May wait: the pane draws typed text late, and the
    *  reading that decides the Enter or the clearing key waits for it. */
   typeLine(session: string, pane: string, text: string): ExitTyping | Promise<ExitTyping>;
@@ -97,6 +101,8 @@ export type Host = {
       rules?: 'option' | 'message';
       createdWorkspace?: boolean;
       launched?: LaunchedIdentity;
+      /** The agent session read with the process, stored beside `launched`. */
+      agent_session?: string;
       /** A waiting record to write, or null to remove the seat's waiting field. */
       waiting?: WaitingRecord | null;
     },
@@ -505,6 +511,14 @@ export async function executePlan(steps: readonly Step[], session: string, host:
 
     if (step.kind === 'skip') {
       if (op?.do === 'record' && op.seat) {
+        if (op.held) held = true;
+        if (op.launched) {
+          host.record(op.seat, {
+            stage: 'ready',
+            launched: op.launched,
+            ...(op.agentSession ? { agent_session: op.agentSession } : {}),
+          });
+        }
         final(op.seat, op.record, op.detail ?? '');
       } else if (op?.do === 'ready' && op.seat) {
         if (op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
@@ -661,11 +675,13 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
           if (identity) {
             identities.set(op.seat, identity);
+            const sessionId = host.agentList?.(session)?.find((agent) => agent.pane === here.pane)?.session;
             host.record(op.seat, {
               stage: 'launched',
               pane: here.pane,
               launched: identity,
               ...(here.workspace ? { workspace: here.workspace } : {}),
+              ...(sessionId ? { agent_session: sessionId } : {}),
             });
           }
           // After the idle wait, before the rename and the rules: the same "differs" the watch uses.
@@ -884,6 +900,21 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           });
           finishReady(op.seat);
         }
+        // Line 2, after the name. Absent on a host that does not launch seats. A call that
+        // fails is one line; the seat stays named, and nothing here reads the owner's terminal.
+        if (op.displayAgent && host.reportDisplayAgent && !host.reportDisplayAgent(session, here.pane, op.displayAgent)) {
+          host.say(`${op.seat}: its display was not reported\n`);
+        }
+        break;
+      }
+      case 'relabel': {
+        // The seat stays. Neither call types into the pane or launches it again.
+        if (host.renameWorkspace && !host.renameWorkspace(session, op.workspace, op.title)) {
+          host.say(`${op.seat}: its title was not reported\n`);
+        }
+        if (host.reportDisplayAgent && !host.reportDisplayAgent(session, op.pane, op.displayAgent)) {
+          host.say(`${op.seat}: its display was not reported\n`);
+        }
         break;
       }
       case 'deliver': {
@@ -1082,6 +1113,33 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           final(op.seat, { kind: 'left out', reason: 'its pane could not be read; nothing closed' });
           break;
         } else if (verdict === 'replaced') {
+          // A program is in front. It is closed only when this plan still believes the pane is
+          // a shell; a program is either the stored session or a process the record cannot tie
+          // to the launch, and neither is closed.
+          const agents = host.agentList ? host.agentList(session) : null;
+          const listed = agents?.find((agent) => agent.name === op.seat && agent.pane === op.pane);
+          const stored = host.seatStates?.(session)?.[op.seat];
+          const continuity = replacedSeat(verdict, {
+            asked: agents !== null,
+            namedOnPane: Boolean(listed),
+            recordedSession: stored?.agent_session,
+            liveSession: listed?.session,
+          });
+          if (continuity === 'restored' && stored?.agent_session) {
+            const identity = launchedIdentity(host.processInfo?.(session, op.pane) ?? null);
+            if (identity) {
+              host.record(op.seat, {
+                stage: 'ready',
+                pane: op.pane,
+                workspace: op.workspace,
+                launched: identity,
+                agent_session: stored.agent_session,
+              });
+            }
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'ready' }, '  restored; left as it is\n');
+            break;
+          }
           const kind = host.classify(session, op.pane, op.cli);
           if (kind === 'unknown') {
             held = true;
@@ -1101,6 +1159,9 @@ export async function executePlan(steps: readonly Step[], session: string, host:
             final(op.seat, { kind: 'left out', reason: `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${op.seat})` });
             break;
           }
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its pane holds a process this record cannot tie to the launch' });
+          break;
         }
         if (!host.closeWorkspace(session, op.workspace)) {
           held = true;
@@ -1215,6 +1276,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         host.record(seat, { stage: 'ready', rules: op.rules });
         finishReady(seat);
       } else if (step.kind === 'skip' && op?.do === 'record') {
+        if (op.held) held = true;
         final(seat, op.record, op.detail ?? '');
       } else {
         dropped.add(seat);

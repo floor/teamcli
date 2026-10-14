@@ -28,7 +28,7 @@ Node 22 or later runs the built command.
 
 ```sh
 npm install -g team       # or run it without installing: npx team
-team --version            # 0.4.0
+team --version            # 0.4.7
 ```
 
 ## The file is private to each clone
@@ -151,12 +151,15 @@ budgets:                      # the owner's: reserve or floor per account, marks
 ### Naming seats
 
 The herdr session carries the project, so a seat's name is its role: `coordinator`, `implementer`,
-`reviewer`. When a role is used twice, the model is added: `implementer-deepseek`. herdr already
-shows that name, so the workspace title does not repeat it. `up` and `add` title the workspace
-with the seat's `display` (itself defaulting to the model and version, `Claude Opus 5.5`), and
-` · ` plus `effort` when the seat sets one (`Grok 4.7 · high`). Seats expanded from `count` share
-that title: the seat's name is the only key. A `label` written in the file is still read, and it
-does not title the workspace; left out, the stored title is the model and version in lowercase.
+`reviewer`. When a role is used twice, the model is added: `implementer-deepseek`. `up` and `add`
+title the workspace with the seat's written `label` when the file has one. A seat with no written
+label is titled `<name> · <role>`. Seats expanded from `count` each get a distinct title: a written
+label is kept on the first instance and later instances append `-<n>` (the same suffix as the name),
+and a seat with no written label already has a distinct name (`implementer-deepseek`,
+`implementer-deepseek-2`). The model is not the title. `display` (itself defaulting to the model
+and version, `Claude Opus 5.5`), and ` · ` plus `effort` when the seat sets one (`Grok 4.7 · high`),
+is the pane's second line, set after launch. Left out, the stored `label` stays the model and
+version in lowercase.
 `team doctor` warns, and does not refuse the file, when a name or a stored label repeats the
 project or the session.
 
@@ -271,7 +274,7 @@ check, and this build acts on what the commands below read.
 | `team answer <seat> trust` | presses the one recorded key of a seat's folder-trust dialog, when the file's `dialogs` policy allows it; every check passes on two fresh reads of the pane, and anything else sends nothing | the owner, or the coordinator from its own seat |
 | `team release check <package@version>` | checks one release's public npm and GitHub records: the version and its checksums, the tag, the release, the changelog entry | anyone; read only |
 | `team remove <name>` | stops one seat, then takes it out of the file; `--keep` leaves it stopped; `--abandon` is the owner's, and types nothing | the owner, the coordinator or the operator; only the owner removes the coordinator or the operator |
-| `team worktree new <task>` / `team worktree remove <task>` | creates a task worktree from an up-to-date base, or removes its folder; a failed setup is kept and recorded; the branch is never deleted; ignored files in the worktree are deleted with it | the owner, the coordinator or the operator |
+| `team worktree list` / `team worktree new <task>` / `team worktree remove <task>` | lists the recorded worktrees, creates one from an up-to-date base, or removes its folder; a failed setup is kept and recorded; the branch is never deleted; ignored files in the worktree are deleted with it; `list` writes nothing | the owner, the coordinator or the operator |
 
 Each command has its own page in [docs/commands](https://github.com/floor/teamcli/tree/main/docs/commands): the synopsis, what it reads and
 writes, who may run it, every flag, the refusals with their exact text, the exit codes, and examples
@@ -305,11 +308,11 @@ can never approve a widening of its own grant. `team approve` prints the section
 `project`, `session`, `rows` (`name`, `state`, `model`, `pane`), `notes`, `differences` (`what`, `repair`), and `notice`.
 
 `team doctor --login` checks read-only that each CLI in the file is signed in, using each profile's
-existing login check command (`cursor-agent status`, `agy models`, `codex login status`, `claude auth status`).
+existing login check command (`cursor-agent status`, `agy models`, `codex login status`, `claude auth status`, `grok models`).
 It never answers prompts and performs no sign-in action.
 
 `team up`, `team down`, `team add`, `team remove`, `team worktree new` and `team worktree remove`
-run live. `up`, `down` and `add` take `--dry-run` to print every command they would run, and every
+run live. `team worktree list` prints the recorded worktrees and writes nothing. `up`, `down` and `add` take `--dry-run` to print every command they would run, and every
 refusal, and change nothing.
 
 ## Approvals are signed
@@ -364,7 +367,7 @@ cd team
 bun install
 bun run build
 npm install -g .          # puts `team` on the PATH
-team --version            # 0.4.0
+team --version            # 0.4.7
 ```
 
 Bun builds and tests the sources:

@@ -3,7 +3,7 @@ import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
-import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
+import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -126,11 +126,20 @@ export function compare(
       // runs no CLI, or one whose process is not the recorded one, is not this seat: it is
       // never shown idle, working or ready, and never under its model as if it were running.
       const verdict = seatProcessVerdict(recorded?.launched, live.processes?.[agent.pane] ?? null);
-      if (verdict === 'gone' || verdict === 'replaced') {
-        const { row, difference, note } = notLaunched(seat, agent.pane, verdict, live.screens[agent.pane]);
-        rows.push(row);
-        differences.push(difference);
-        if (note) notes.push(note);
+      const continuity = replacedSeat(verdict, {
+        asked: true,
+        namedOnPane: recorded?.pane === agent.pane,
+        recordedSession: recorded?.agent_session,
+        liveSession: agent.session,
+      });
+      // The stored session is on this pane: the seat is running, whatever its pids are now.
+      if (continuity !== 'restored' && (verdict === 'gone' || verdict === 'replaced')) {
+        const found = verdict === 'gone'
+          ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
+          : cannotTie(seat, agent.pane, live.screens[agent.pane]);
+        rows.push(found.row);
+        differences.push(found.difference);
+        if (found.note) notes.push(found.note);
         continue;
       }
       // A ready seat with no identity is not relaunched by `up` when its model differs. A seat
@@ -248,12 +257,20 @@ export function compare(
     const held = recorded?.pane;
     const paneProc = held ? live.processes?.[held] ?? null : null;
     const verdict = seatProcessVerdict(recorded?.launched, paneProc);
-    if (held && (verdict === 'gone' || verdict === 'replaced')) {
+    if (held && verdict === 'gone') {
       claimed.add(held);
       const { row, difference, note } = notLaunched(seat, held, verdict, live.screens[held]);
       rows.push(row);
       differences.push(difference);
       if (note) notes.push(note);
+      continue;
+    }
+    if (held && verdict === 'replaced') {
+      claimed.add(held);
+      const found = cannotTie(seat, held, live.screens[held]);
+      rows.push(found.row);
+      differences.push(found.difference);
+      if (found.note) notes.push(found.note);
       continue;
     }
     if (held && recorded && !recorded.launched && paneHoldsShell(paneProc)) {
@@ -387,6 +404,31 @@ export function compare(
 // A pane that no longer holds the process team launched: no CLI at all, or a foreground CLI that
 // is not the recorded one. The row and the difference read the same wherever the pane is found —
 // a pane herdr still lists an agent in, and one the agent went with its CLI.
+/** A program is in front and the stored session does not tie it to the launch. The repair is to
+ *  look. `up` does not close this pane. */
+function cannotTie(
+  seat: Seat,
+  pane: string,
+  screen: string | undefined,
+): { row: Row; difference: Difference; note?: string } {
+  const running = seatModel(seat, screen);
+  return {
+    row: {
+      name: seat.name,
+      state: 'restored, not launched by team',
+      model: '-',
+      pane,
+    },
+    difference: {
+      what: `${seat.name}: its pane holds a process this record cannot tie to the launch`,
+      repair: 'look at the pane',
+    },
+    ...(running
+      ? { note: `${seat.name}: its pane runs ${running.model} ${running.version}; that process is not the one team launched` }
+      : {}),
+  };
+}
+
 function notLaunched(
   seat: Seat,
   pane: string,

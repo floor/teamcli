@@ -1,7 +1,7 @@
 // Per-entity lobby resolution: a team that sets `entity` or `lobby` operates on its own lobby,
 // while a team that sets neither keeps the machine-global `~/.config/team/lobby` exactly as before
 // — so a second team on the machine no longer waits behind the first team's lobby.
-import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -10,6 +10,7 @@ import { placedProblems } from '../../src/file/load.ts';
 import { migrationTrust } from '../../src/file/migrate.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { lobbyDir, lobbyTrustEntry, resolveLobby, verifyLobby } from '../../src/lobby/gate.ts';
+import { shippedStartupReads } from '../../src/profiles/index.ts';
 import { seatStart } from '../../src/worktree/place.ts';
 
 let base: string;
@@ -85,13 +86,16 @@ describe('the gate verifies and creates the resolved lobby', () => {
     expect(gate.ok).toBe(true);
   });
 
-  test('the not-empty check still fires on the resolved lobby itself', () => {
+  test('a stray directory on the entity lobby passes, and a file a CLI reads at start is refused', () => {
     const entityLobby = resolveLobby(home, { entity: 'floor' });
     mkdirSync(entityLobby, { recursive: true, mode: 0o700 });
     mkdirSync(join(entityLobby, 'stray'));
-    const gate = verifyLobby(home, { create: false, lobby: entityLobby });
+    const stray = verifyLobby(home, { create: false, reads: shippedStartupReads(), lobby: entityLobby });
+    expect(stray.ok).toBe(true);
+    writeFileSync(join(entityLobby, 'CLAUDE.md'), 'plant\n');
+    const gate = verifyLobby(home, { create: false, reads: shippedStartupReads(), lobby: entityLobby });
     expect(gate.ok).toBe(false);
-    if (!gate.ok) expect(gate.text).toContain('is not empty');
+    if (!gate.ok) expect(gate.text).toContain('CLAUDE.md is read at start by claude-code, cursor and grok');
   });
 });
 
@@ -245,11 +249,13 @@ describe('the lobby field validator rejects a cwd-dependent or traversing value'
 });
 
 describe('seatStart waits in the resolved lobby', () => {
-  test('a worktree seat on an entity team starts in the per-entity lobby', () => {
+  test('a worktree seat that is not a lead starts in the per-entity lobby, and the lead starts in the project', () => {
     const team = validateTeamFile(teamYaml({ entity: 'floor', lobbyTrust: '~/.config/team/lobbies/floor' }));
     if (!team.ok) throw new Error('fixture did not validate');
-    const seat = { ...team.team.seats[0]!, mode: 'worktree' as const, cwd: '.' };
-    const start = seatStart(team.team, seat, root, home);
+    const lead = team.team.seats[0]!;
+    const worker = { ...lead, name: 'worker', mode: 'worktree' as const, cwd: '.' };
+    expect(seatStart(team.team, lead, root, home)).toEqual({ cwd: root });
+    const start = seatStart(team.team, worker, root, home);
     expect('cwd' in start && start.cwd).toBe(resolveLobby(home, { entity: 'floor' }));
   });
 });

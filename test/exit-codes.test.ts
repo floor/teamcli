@@ -42,6 +42,7 @@ import { main, reportFailure, version } from '../src/cli.ts';
 import { delegateGate, type DelegateSources } from '../src/delegate.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { findRoot, loadTeamFile } from '../src/file/load.ts';
+import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
@@ -630,6 +631,21 @@ scene('add.already-running', async (place) => {
     sessionState: () => 'running', agents: () => [agent('worker')], workspaces: () => [{ id: 'w1' }],
   })), 'already running');
 });
+scene('add.session-doubt', async (place) => {
+  approve(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.worker = { stage: 'ready', workspace: 'w1', pane: 'w1:p1', launched: { shell: 400, cli: [401] } };
+  });
+  const launch = launching(IDLE);
+  launch.processInfo = () => ({ shell: 400, foreground: [500] });
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, {
+    sessionState: () => 'running',
+    agents: () => [agent('worker')],
+    workspaces: () => [{ id: 'w1' }],
+    launch,
+  })), 'cannot tie to the launch');
+});
 scene('add.placed', async (place) => {
   const side = join(place.base, 'side');
   mkdirSync(side);
@@ -874,6 +890,59 @@ scene('approve.delegate-flag', async (place) => {
 scene('approve.delegate-approval', async (place) => {
   write(place, DELEGATED_APPROVE);
   return show(await approved(place, [], other, approveSources(place, null)), 'delegation needs a verified approval');
+});
+
+// The grant's refusals of `approve`. The gate is the real one, asked when the file lists `grant`
+// and the ordinary rule has refused. A file that omits `grant` is not these scenes.
+const GRANT_APPROVE = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - approve\n`;
+const GRANT_UP_ONLY = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - up\n`;
+
+function grantApprove(place: Place, over: GrantSources = {}): Partial<ApproveSources> {
+  return { grantGate: (input) => grantGate({ ...input, sources: over }) };
+}
+
+scene('approve.grant-approval', async (place) => {
+  write(place, GRANT_APPROVE);
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'a grant needs a verified approval');
+});
+scene('approve.grant-approved-copy', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  return show(await approved(place, [], leadSeat, approveSources(place, null, place.home, 'empty', grantApprove(place, { approvedCopy: () => null }))), 'a grant needs a readable approved copy');
+});
+scene('approve.grant-not-ordinary', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  const side = join(place.base, 'side');
+  mkdirSync(side);
+  write(place, readFileSync(place.file, 'utf8').replace(`  - ${place.root}`, `  - ${place.root}\n  - ${side}`));
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'this change needs the owner');
+});
+scene('approve.grant-caller', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  return show(await approved(place, [], other, approveSources(place, null)), 'only the seat the grant names');
+});
+scene('approve.grant-no-pane', async (place) => {
+  approve(place, GRANT_APPROVE);
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'no pane is recorded for seat lead');
+});
+scene('approve.grant-another-pane', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w2:p1');
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'the state records pane w2:p1 for seat lead');
+});
+scene('approve.grant-scope', async (place) => {
+  approve(place, GRANT_UP_ONLY);
+  recordLead(place, 'w1:p1');
+  return show(await approved(place, [], leadSeat, approveSources(place, null)), 'the grant does not list `approve`');
+});
+scene('approve.grant-flag', async (place) => {
+  approve(place, GRANT_APPROVE);
+  recordLead(place, 'w1:p1');
+  const foreign = join(place.base, 'other.yaml');
+  writeFileSync(foreign, 'format: [\n');
+  return show(await approved(place, ['--file', foreign], leadSeat, approveSources(place, null)), "--file is the owner's; the granted seat cannot use it");
 });
 
 async function checked(place: Place, argv: string[], caller: Caller, sources: CheckSources): Promise<Ran> {
@@ -1130,7 +1199,7 @@ scene('doctor.missing', async (place) => {
 
 async function down(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
   const io = testIo(place.root, caller);
-  return runCompared(place, argv, (args) => runDown(args, io, sources), io);
+  return runCompared(place, argv, (args) => runDown(args, io, { ...sources, home: sources.home ?? place.home }), io);
 }
 
 scene('down.invocation', async (place) => show(await down(place, ['extra'], owner, downSources()), 'unexpected'));
@@ -1166,7 +1235,7 @@ scene('down.file-owner', async (place) => {
 });
 scene('down.no-pane', async (place) => {
   write(place, TEAM);
-  return show(await down(place, [], leadSeat, downSources({ sessionRunning: () => true, agents: () => [] })), 'no pane is recorded for seat lead');
+  return show(await down(place, [], leadSeat, downSources({ sessionRunning: () => true, agents: () => [], home: place.home })), 'no pane is recorded for seat lead');
 });
 scene('down.session-owner', async (place) => {
   write(place, TEAM);
@@ -1177,7 +1246,7 @@ scene('down.another-pane', async (place) => {
   updateState(join(place.root, '.agents'), (state) => {
     (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w2:p1' };
   });
-  return show(await down(place, [], leadSeat, downSources({ sessionRunning: () => true, agents: () => [] })), 'the state records pane w2:p1 for seat lead');
+  return show(await down(place, [], leadSeat, downSources({ sessionRunning: () => true, agents: () => [], home: place.home })), 'the state records pane w2:p1 for seat lead');
 });
 scene('down.abandon', async (place) => {
   write(place, TEAM);
@@ -1232,6 +1301,37 @@ scene('down.delegate-flag', async (place) => {
 scene('down.delegate-placement', async (place) => {
   write(place, DELEGATED);
   return show(await down(place, [], other, delegated('down.delegate-placement', 'the approved delegate must be an external non-seat pane')), 'external non-seat pane');
+});
+
+// The grant's refusals of `down`, asked only once the ordinary rule has accepted the
+// orchestrator. A file with no grant is not these scenes.
+function grantDown(place: Place, over: GrantSources = {}): RemoveSources {
+  return downSources({
+    home: place.home,
+    grantGate: (input) => grantGate({ ...input, sources: over }),
+  });
+}
+
+scene('down.grant-approval', async (place) => {
+  write(place, GRANTED);
+  recordLead(place, 'w1:p1');
+  return show(await down(place, [], leadSeat, grantDown(place)), 'a grant needs a verified approval');
+});
+scene('down.grant-approved-copy', async (place) => {
+  approve(place, GRANTED);
+  recordLead(place, 'w1:p1');
+  return show(await down(place, [], leadSeat, grantDown(place, { approvedCopy: () => null })), 'a grant needs a readable approved copy');
+});
+scene('down.grant-drift', async (place) => {
+  approve(place, GRANTED);
+  write(place, readFileSync(place.file, 'utf8').replace('label: lead', 'label: renamed'));
+  recordLead(place, 'w1:p1');
+  return show(await down(place, [], leadSeat, grantDown(place)), 'a grant needs the approved file');
+});
+scene('down.grant-scope', async (place) => {
+  approve(place, GRANT_UP);
+  recordLead(place, 'w1:p1');
+  return show(await down(place, [], leadSeat, grantDown(place)), 'the grant does not list `down`');
 });
 scene('down.no-launch', async (place) => {
   approve(place, TEAM);
@@ -1385,7 +1485,7 @@ PATH=${JSON.stringify(saved)} exec git "$@"
 
 async function removed(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
   const io = testIo(place.root, caller);
-  return { code: await runRemove(argv, io, sources), out: io.out, err: io.err };
+  return { code: await runRemove(argv, io, { ...sources, home: sources.home ?? place.home }), out: io.out, err: io.err };
 }
 
 scene('remove.invocation', async (place) => show(await removed(place, [], owner, downSources()), 'a seat name is required'));
@@ -1776,9 +1876,9 @@ scene('up.run-lock', async (place) => {
   return show(await up(place, ['--file', place.file], owner, upSources(place, { launch: launching(IDLE) })), 'another session-mutating run is holding');
 });
 scene('up.lobby', async (place) => {
-  approve(place, TEAM);
-  // A fresh home holds no lobby: the read-only pass leaves it to the make under the run lock,
-  // and that make is the one made to fail. `mkdir` is the only call stood in.
+  // The lead starts in the project. The worker is the seat that starts in the lobby, so the
+  // make under the run lock is the one made to fail. `mkdir` is the only call stood in.
+  approve(place, TWO.replace('    stopped: true\n', ''));
   const fs = {
     ...defaultFs,
     mkdir() {
@@ -1868,6 +1968,54 @@ scene('up.delegate-command', async (place) => {
 scene('up.delegate-flag', async (place) => {
   approve(place, `${TEAM}${DELEGATES}`);
   return show(await up(place, ['--session', 'elsewhere'], delegateCaller, upSources(place, gateAt(place, { agents: () => [] }))), "--session is the owner's");
+});
+
+// The grant's refusals of `up`. The gate is the real one. A file that lists `grant` and a caller
+// the ordinary rule refuses is judged by it; the approved copy is this harness's store.
+const GRANTED = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - up\n    - down\n`;
+const GRANT_UP = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - up\n`;
+const GRANT_DOWN = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - down\n`;
+
+function grantRead(over: GrantSources = {}): Partial<UpSources> {
+  return { grantGate: (input) => grantGate({ ...input, sources: over }) };
+}
+
+scene('up.grant-approval', async (place) => {
+  write(place, GRANTED);
+  return show(await up(place, [], leadSeat, upSources(place)), 'a grant needs a verified approval');
+});
+scene('up.grant-approved-copy', async (place) => {
+  approve(place, GRANTED);
+  return show(await up(place, [], leadSeat, upSources(place, grantRead({ approvedCopy: () => null }))), 'a grant needs a readable approved copy');
+});
+scene('up.grant-drift', async (place) => {
+  approve(place, GRANTED);
+  write(place, readFileSync(place.file, 'utf8').replace('label: lead', 'label: renamed'));
+  return show(await up(place, [], leadSeat, upSources(place)), 'a grant needs the approved file');
+});
+scene('up.grant-caller', async (place) => {
+  approve(place, GRANTED);
+  recordLead(place, 'w1:p1');
+  return show(await up(place, [], other, upSources(place)), 'only the seat the grant names');
+});
+scene('up.grant-no-pane', async (place) => {
+  approve(place, GRANTED);
+  return show(await up(place, [], leadSeat, upSources(place)), 'no pane is recorded for seat lead');
+});
+scene('up.grant-another-pane', async (place) => {
+  approve(place, GRANTED);
+  recordLead(place, 'w2:p1');
+  return show(await up(place, [], leadSeat, upSources(place)), 'the state records pane w2:p1 for seat lead');
+});
+scene('up.grant-scope', async (place) => {
+  approve(place, GRANT_DOWN);
+  recordLead(place, 'w1:p1');
+  return show(await up(place, [], leadSeat, upSources(place)), 'the grant does not list `up`');
+});
+scene('up.grant-flag', async (place) => {
+  approve(place, GRANTED);
+  recordLead(place, 'w1:p1');
+  return show(await up(place, ['--session', 'elsewhere'], leadSeat, upSources(place)), "--session is the owner's; the granted seat cannot use it");
 });
 
 async function watched(place: Place, argv: string[], caller: Caller, sources: WatchSources = watchSources()): Promise<Ran> {
@@ -2159,6 +2307,10 @@ scene('worktree.created', async (place) => {
   publish(place);
   approve(place, worktreeText());
   return show(await worktree(place, ['new', 'task', '--kind', 'fix']), '../worktrees/acme/task');
+});
+scene('worktree.listed', async (place) => {
+  approve(place, worktreeText());
+  return show(await worktree(place, ['list']), '0 open, limit');
 });
 scene('worktree.remove-task', async (place) => {
   approve(place, worktreeText());
@@ -2911,9 +3063,9 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
       return { ok: true };
     },
     native: {
-      typeText: () => false,
-      pressEnter: () => false,
-      status: () => null,
+      typeText: () => true,
+      pressEnter: () => true,
+      status: () => 'working',
       wait: async () => {},
     },
     now: () => NOW,
@@ -2985,7 +3137,7 @@ scene('send.delivered', async (place) => {
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the cross-session socket; nothing was sent');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written');
 });
 scene('send.answered', async (place) => {
   write(place, TEAM);
@@ -2993,7 +3145,7 @@ scene('send.answered', async (place) => {
 });
 scene('send.timeout', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--wait', '--timeout', '1'], owner, sendHost(place)), 'timeout: delivered, but no reply within 1s');
+  return show(await sent(place, ['lead', 'hello', '--wait', '--timeout', '1'], owner, sendHost(place)), 'timeout: sent, no reply within 1s');
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);

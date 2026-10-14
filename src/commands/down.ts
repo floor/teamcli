@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
+import { grantGate, logGranted } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -23,7 +24,9 @@ import {
   sessionStop,
   typeText,
   workspaceClose,
+  paneProcesses,
   type HerdrAgent,
+  type PaneProcesses,
 } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import type { ExitTyping, Host } from '../launch/execute.ts';
@@ -35,7 +38,8 @@ import { boxHoldsOther, boxHoldsText, DRAW_WAIT_MS, settleScreen } from '../laun
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { profileFor } from '../profiles/index.ts';
 import { logLine } from '../log.ts';
-import { emptySession, readState, updateState } from '../state.ts';
+import { seatProcessVerdict } from '../launch/identity.ts';
+import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
 
@@ -58,6 +62,9 @@ export type DownSources = {
   shellBack?(session: string, pane: string): boolean | null;
   /** Foreground live working directory, or null when the pane can't be read. */
   foregroundCwd?(session: string, pane: string): string | null;
+  /** Pids in the pane, for a seat whose record holds the process `up` launched. Absent: a
+   *  record with no process is matched on pane and workspace alone. */
+  processes?(session: string, pane: string): PaneProcesses | null;
   now(): Date;
   sleep?(ms: number): Promise<void>;
   /** Approval store home. The real command uses the owner's home. */
@@ -72,6 +79,10 @@ export type DownSources = {
   delegate?: DelegateSources;
   /** The audit line a delegated run leaves. Tests record it; the shipped command writes it. */
   audit?: typeof logDelegated;
+  /** The grant gate. Tests hand in a verdict; the shipped command asks the real one. */
+  grantGate?: typeof grantGate;
+  /** The audit line a granted run leaves. Tests record it; the shipped command writes it. */
+  grantAudit?: typeof logGranted;
 };
 
 export type DownLaunch = {
@@ -139,6 +150,7 @@ export const realSources: DownSources = {
   foreground: (session, pane) => paneForeground(pane, aim(session)),
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
   foregroundCwd: (session, pane) => paneForegroundCwd(pane, aim(session)),
+  processes: (session, pane) => paneProcesses(pane, aim(session)),
   now: () => new Date(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   home: homedir(),
@@ -367,6 +379,29 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
   return { left: `its exit was not confirmed; the clearing key (${key}) left the screen reading ${after}; left running` };
 }
 
+/** This seat's pane when the state records that pane and that workspace for exactly one seat.
+ *  Herdr's name is not read: a title is not the seat's name, and a missing name is not a
+ *  different pane. A record that also holds the launched process is this pane's only while
+ *  that process is still there, or the pane is back at the shell this team recorded. */
+function claimRecorded(
+  seats: Record<string, SeatState>,
+  agent: HerdrAgent,
+  processes: PaneProcesses | null,
+): { name: string; close: boolean } | null {
+  const matches = Object.entries(seats).filter(([, seat]) => seat.pane === agent.pane && seat.workspace === agent.workspace);
+  if (matches.length !== 1) return null;
+  const [name, seat] = matches[0] as [string, SeatState];
+  if (!seat.launched) return { name, close: true };
+  const verdict = seatProcessVerdict(seat.launched, processes);
+  return { name, close: verdict === 'same' || verdict === 'gone' };
+}
+
+function leftNote(claim: { name: string; close: boolean } | null, pane: string): string {
+  return claim
+    ? `${claim.name}: pane ${pane} is not the process this team launched; left as it is`
+    : `pane ${pane}: not recorded for a seat of this team; left as it is`;
+}
+
 export async function runDown(argv: string[], io: Io, sources: DownSources): Promise<number> {
   const args = readArgs(argv, ['session', 'file'], ['dry-run', 'wait', 'abandon']);
   if (args.error || args.rest.length) {
@@ -531,7 +566,18 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // agent list unreadable), and a run that takes the lock remembers once that lock is held,
   // before anything the stop itself can fail at. A delegated run has no loaded path and still
   // remembers nothing.
-  const callerRefused = rule.kind !== 'ok' && !branching();
+  // A grant, when the file has one, is what admits the orchestrator's own `down`. The operator
+  // and the owner stay on the rule above. A passed grant keeps this run a seat's run: both lead
+  // seats stay in `keep`. A file that omits `grant` does not ask, and today's `down` stands.
+  let grantSeat: string | undefined;
+  let grantRefusal: string | undefined;
+  if (!branching() && rule.kind === 'ok' && caller.kind === 'seat' && caller.name === team.orchestrator && team.grant) {
+    const said = (sources.grantGate ?? grantGate)({ act: 'down', io, home: sources.home });
+    if (said.kind === 'passed') grantSeat = said.grant.seat;
+    else grantRefusal = said.text;
+  }
+
+  const callerRefused = (rule.kind !== 'ok' && !branching()) || grantRefusal !== undefined;
   const abandonRefused = args.flags.has('abandon') && granted === undefined && !callerOwns(caller) && verdict === undefined;
   const mayRemember = !callerRefused && !abandonRefused && !dry && current.path !== undefined;
   const remember = (): void => {
@@ -545,13 +591,13 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.herdr
     return 2;
   }
-  if (!running) {
+  if (!running && grantRefusal === undefined) {
     io.stdout(`session ${session} is not running: nothing to stop${dry ? '\ndry run: nothing was run' : ''}\n`);
     remember();
     // exit: down.idle
     return 0;
   }
-  let agents = sources.agents(session);
+  let agents = running ? sources.agents(session) : [];
   if (agents === null) {
     io.stderr(`team down: the agents of session ${session} can't be read\n`);
     remember();
@@ -559,6 +605,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     return 2;
   }
 
+  if (grantRefusal !== undefined) refusals.push(grantRefusal);
   if (rule.kind !== 'ok' && !branching()) {
     // The ordinary rule has refused, and only now is the gate asked. With no delegate in the live
     // file nothing changes. A refusal takes the ordinary refusal's place, in the same place and at
@@ -608,7 +655,10 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     }
     acting = approved.team;
   }
-  // The stop list is the copy in force. The state contributes no name and no CLI. A caller
+  // The stop list is the copy in force. A name that copy carries, listed once, is that seat.
+  // Any other agent — no name, or a name the copy does not carry — is this team's only when
+  // one seat records that pane and that workspace, and, when the record holds a launched
+  // process, that process is still the one in the pane. The name is not that match. A caller
   // already refused keeps the live file's names, so the dry-run plan is that refusal's.
   const known = new Set(acting.seats.map((seat) => seat.name));
   const cliOf = new Map(acting.seats.map((seat) => [seat.name, seat.cli]));
@@ -647,7 +697,20 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const named = new Map<string, HerdrAgent[]>();
   for (const agent of agents) {
     if (!agent.name) {
-      extra++;
+      const claim = claimRecorded(state?.seats ?? {}, agent, sources.processes?.(session, agent.pane) ?? null);
+      if (claim?.close) {
+        seats.push({
+          name: claim.name,
+          cli: cliFor(claim.name),
+          pane: agent.pane,
+          workspace: agent.workspace,
+          state: 'free',
+          unnamed: true,
+        });
+      } else {
+        extra++;
+        if (refusals.length === 0) notes.push(leftNote(claim, agent.pane));
+      }
       continue;
     }
     const listed = named.get(agent.name) ?? [];
@@ -655,15 +718,37 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     named.set(agent.name, listed);
   }
   for (const [name, listed] of named) {
-    if (!known.has(name) || listed.length !== 1) {
-      extra += listed.length;
-      if (refusals.length === 0) {
-        notes.push(
-          known.has(name)
-            ? `${name}: herdr lists more than one agent of this name; left as it is`
-            : `${name}: its record is not an approved seat; left running (the owner cleans it: team remove ${name} --abandon)`,
-        );
+    if (!known.has(name)) {
+      const foreign: HerdrAgent[] = [];
+      for (const agent of listed) {
+        const claim = claimRecorded(state?.seats ?? {}, agent, sources.processes?.(session, agent.pane) ?? null);
+        if (claim?.close) {
+          seats.push({
+            name: claim.name,
+            cli: cliFor(claim.name),
+            pane: agent.pane,
+            workspace: agent.workspace,
+            state: 'free',
+            title: name,
+          });
+        } else if (claim) {
+          extra++;
+          if (refusals.length === 0) notes.push(leftNote(claim, agent.pane));
+        } else {
+          foreign.push(agent);
+        }
       }
+      if (foreign.length > 0) {
+        extra += foreign.length;
+        if (refusals.length === 0) {
+          notes.push(`${name}: its record is not an approved seat; left running (the owner cleans it: team remove ${name} --abandon)`);
+        }
+      }
+      continue;
+    }
+    if (listed.length !== 1) {
+      extra += listed.length;
+      if (refusals.length === 0) notes.push(`${name}: herdr lists more than one agent of this name; left as it is`);
       continue;
     }
     const agent = listed[0] as HerdrAgent;
@@ -674,7 +759,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // The process reading decides "its CLI exited" before the screen is consulted: a bare shell
     // draws nothing the profiles recognise, so the screen alone can never tell it from a live
     // CLI whose screen this profile can't read.
-    const state = stateOfPane(agent.status, shown, {
+    const reading = stateOfPane(agent.status, shown, {
       foreground: sources.foreground(session, agent.pane),
       shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,
       processNames: profile?.processNames ?? [],
@@ -683,14 +768,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // never confirmed it — is named as such either way: the profile's one clearing key decides
     // whether this run empties it and asks again (the plan's run step) or the owner does (its
     // skip line). Anything else unsent keeps the ordinary unsent line.
-    const exitInBox = state === 'unsent' && profile !== null
+    const exitInBox = reading === 'unsent' && profile !== null
       && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
     seats.push({
       name,
       cli,
       pane: agent.pane,
       workspace: agent.workspace,
-      state,
+      state: reading,
       ...(exitInBox ? { exitInBox: true } : {}),
       ...(shown.kind === 'exit question' ? { atExitQuestion: true } : {}),
     });
@@ -735,6 +820,10 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.delegate-placement
     // exit: down.delegate-command
     // exit: down.delegate-flag
+    // exit: down.grant-approval
+    // exit: down.grant-approved-copy
+    // exit: down.grant-drift
+    // exit: down.grant-scope
     return 1;
   }
   if (dry) {
@@ -765,6 +854,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // returns at its own check, before any caller rule), never when a refusal held the run, and
     // never when herdr is out of reach.
     if (granted !== undefined) (sources.audit ?? logDelegated)(dir, granted, 'down', sources.now());
+    // The granted seat's line, at the same moment, before the first close.
+    if (grantSeat !== undefined) (sources.grantAudit ?? logGranted)(dir, grantSeat, 'down', sources.now());
 
     const now = () => sources.now();
     const host: Host = {
@@ -845,7 +936,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           pane = seatsOf[name]?.pane;
           delete seatsOf[name];
         });
-        if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane);
+        if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
       },
       say: (line) => io.stdout(line),
       log: (who, what) => logLine(dir, 'down', describeCaller(caller), `${who}: ${what}`, now()),

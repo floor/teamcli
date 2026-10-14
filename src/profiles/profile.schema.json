@@ -54,7 +54,12 @@
     "lobby_files": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "description": "optional: the exact relative paths of regular files a capture showed this CLI writing in its working folder, which a shared lobby may therefore hold beside the seats; absent, no path is tolerated for this CLI"
+      "description": "optional: the exact relative paths of regular files a capture showed this CLI writing in its working folder; absent, this CLI is not recorded as writing a file there"
+    },
+    "startup_reads": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "optional: paths this CLI reads at start in its working folder; a trailing slash names a directory and every file under it, and the lobby gate refuses each of these at any depth"
     },
     "timeouts": {
       "type": "object",

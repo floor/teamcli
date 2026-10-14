@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { branchProblem } from './until.ts';
 
 // Whether a temporary seat's `merged:` end holds. "Merged" is provable only when the branch had
 // commits of its own on an earlier pass and, after a fetch that succeeded, it no longer does.
@@ -66,6 +67,10 @@ export type MergeRead = MergeVerdict & { ownNow: number };
  * or a missing branch does not say the work is merged.
  */
 export function readMerge(root: string, branch: string, base: string, ownBefore: boolean): MergeRead {
+  // A name stored before this check existed is refused here, and git is not run with it.
+  if (branchProblem(root, branch)) {
+    return { verdict: 'unproven', ownNow: 0, detail: 'the branch is not a name git accepts; nothing is removed' };
+  }
   const upstream = git(root, ['rev-parse', '--abbrev-ref', `${base}@{upstream}`]);
   if (upstream.code !== 0) {
     return {
@@ -82,13 +87,14 @@ export function readMerge(root: string, branch: string, base: string, ownBefore:
   const present = branchPresent(root, branch);
   if (present === null) return { verdict: 'unproven', ownNow: 0, detail: 'the branch could not be read; nothing is removed' };
   if (!present) return { ...judgeMerge({ fetch: 'ok', branch: 'gone', ownNow: [], ownBefore }), ownNow: 0 };
-  const listed = git(root, ['rev-list', '--oneline', branch, '--not', remote]);
+  // `--end-of-options` keeps `branch` a revision. A bare `--` would make it a path.
+  const listed = git(root, ['rev-list', '--oneline', '--end-of-options', branch, `^${remote}`]);
   if (listed.code !== 0) return { verdict: 'unproven', ownNow: 0, detail: 'the branch could not be read; nothing is removed' };
   const ownNow = listed.stdout.split('\n').filter((line) => line !== '');
   // A squash leaves the branch's commits in place while its tree matches the base. That is not a
   // merge this version can prove, and it is not treated as one. A branch whose tree still differs
   // is ordinary open work and stays quiet.
-  if (ownNow.length > 0 && git(root, ['diff', '--quiet', remote, branch]).code === 0) {
+  if (ownNow.length > 0 && git(root, ['diff', '--quiet', '--end-of-options', remote, branch]).code === 0) {
     return { verdict: 'open', ownNow: ownNow.length, detail: 'merged? not provable' };
   }
   return { ...judgeMerge({ fetch: 'ok', branch: 'present', ownNow, ownBefore }), ownNow: ownNow.length };
