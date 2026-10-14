@@ -29,7 +29,10 @@ line in `.agents/team.log`. The record is signed, and signing moves this project
 The owner, from a terminal outside herdr, approves anything. A run with no terminal is refused before the token is read: `team approve: only the owner runs this, from a terminal outside herdr`. The approved delegate may approve
 too: the pane a `delegates` entry names, with `approve` among its commands, placed exactly where
 the approved file puts it — the gate reads the pane, never the name a seat is given, and every
-other caller is refused with `only the owner or the approved delegate approves a team file`.
+other caller is refused: by the `grant` gate's own line when the file carries a `grant`, by the
+delegate list's `only the owner or the approved delegate approves a team file; this call is
+<caller>` when it names delegates and no `grant`, and by the not-owner sentence when it names
+neither (Refusals, below).
 
 A delegate's approval is for ordinary changes: the roster — seats and the launch lines that place
 them — and `rules`. The guard is an allowlist, and it is fail-closed: `rules` is the only owner
