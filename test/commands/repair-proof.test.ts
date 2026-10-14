@@ -395,10 +395,11 @@ function exitOf(code: number, want: number, io: { out: string; err: string }, wh
 }
 
 /** The whole proof for one kind of seat and one state of its pane, in the order the brief names:
- *  the refusal by a run, the printed line's sequence run without its first step (still failing,
- *  as the reviewer saw) and then in its order with it (the record gone, the next `up` through).
- *  A seat that is both of the file's leads needs its own file; every other cell uses the
- *  two-lead shape. */
+ *  the refusal by a run, then the printed line's sequence. A dialog is left by `down` until the
+ *  owner answers it. A pane with no name that the state records for the seat is closed by
+ *  `down` itself. Then the sequence in its order, first step included (the record gone, the
+ *  next `up` through). A seat that is both of the file's leads needs its own file; every other
+ *  cell uses the two-lead shape. */
 async function prove(seat: string, pane: 'unnamed' | 'dialog', both = false): Promise<void> {
   if (both) setup(true);
   seed(seat);
@@ -423,26 +424,33 @@ async function prove(seat: string, pane: 'unnamed' | 'dialog', both = false): Pr
   );
   if (LEAD.has(seat)) expect(first.err).not.toContain('remove');
 
-  // 2. The same sequence without its first step: the words alone leave everything as it is,
-  //    because `down` and `remove` never answer a prompt and never touch an agent they cannot
-  //    name — so the record stays, and the next `up` fails again the way the reviewer saw.
+  // 2. The sequence without its first step. A dialog stays: `down` never answers a prompt, so
+  //    the record stays and the next `up` fails again. A pane with no name is closed when this
+  //    seat records that pane and that workspace, and the record goes with the close.
   if (LEAD.has(seat)) {
     const down = testIo(root, { kind: 'owner' });
     exitOf(await runDown(FILE, down, made.down()), 0, down, 'the down without its first step');
     if (pane === 'dialog') {
       expect(down.out).toContain(`  skip ${seat}: is blocked at a prompt, which \`team\` never answers; left running\n`);
+      expect(made.stopped).toEqual([]);
+      const stuck = testIo(root, { kind: 'owner-no-tty' });
+      exitOf(await runUp(FILE, stuck, made.up()), 1, stuck, 'the up without its first step');
+      expect(stuck.out).toContain(`${seat}: left out: its waiting record has no process identity\n`);
+      expect(stateOf(seat)?.waiting).toEqual({ state: 'waiting-owner', classification: 'trust' });
     } else {
-      expect(down.out).toContain(`session ${SESSION}: not stopped, 1 agent left in it\n`);
+      // Down closes a pane with no name when this seat records that pane and workspace, and
+      // the next up brings the seat back. The old guarantee was that down left the pane, so
+      // the owner closed it by hand before down and up.
+      expect(down.out).toContain(`${seat}: created for this seat and never named; its workspace was closed\n`);
+      expect(down.out).toContain(`session ${SESSION}: stopped and cleared\n`);
+      expect(stateOf(seat)).toBeUndefined();
+      const cleared = testIo(root, { kind: 'owner' });
+      exitOf(await runUp(FILE, cleared, made.up()), 0, cleared, 'the up after down closed the unnamed pane');
+      expect(cleared.out + cleared.err).not.toContain(`${seat}: left out`);
+      expect(stateOf(seat)?.waiting).toBeUndefined();
+      expect(stateOf(seat)?.pane).not.toBe('w1:p1');
+      return;
     }
-    expect(made.stopped).toEqual([]);
-    const stuck = testIo(root, { kind: 'owner-no-tty' });
-    exitOf(await runUp(FILE, stuck, made.up()), 1, stuck, 'the up without its first step');
-    expect(stuck.out).toContain(
-      pane === 'unnamed'
-        ? `${seat}: left out: its waiting pane is gone\n`
-        : `${seat}: left out: its waiting record has no process identity\n`,
-    );
-    expect(stateOf(seat)?.waiting).toEqual({ state: 'waiting-owner', classification: 'trust' });
   } else {
     const remove = testIo(root, { kind: 'owner' });
     const code = await runRemove([seat, '--keep', ...FILE], remove, made.remove());
@@ -498,7 +506,8 @@ async function prove(seat: string, pane: 'unnamed' | 'dialog', both = false): Pr
 }
 
 describe('every named repair, proved by a run of the fake host', () => {
-  test('the coordinator that is also the operator, whose pane is unnamed: down then up, once the pane is closed by hand', async () => {
+  // The old guarantee was that down left this unnamed pane, so the owner closed it by hand before down and up.
+  test('the coordinator that is also the operator, whose pane is unnamed: down closes it and up brings it back', async () => {
     await prove('both-acme', 'unnamed', true);
   });
 
@@ -506,7 +515,8 @@ describe('every named repair, proved by a run of the fake host', () => {
     await prove('both-acme', 'dialog', true);
   });
 
-  test('the coordinator, whose pane is unnamed: down then up, once the pane is closed by hand', async () => {
+  // The old guarantee was that down left this unnamed pane, so the owner closed it by hand before down and up.
+  test('the coordinator, whose pane is unnamed: down closes it and up brings it back', async () => {
     await prove('coord-acme', 'unnamed');
   });
 
@@ -514,7 +524,8 @@ describe('every named repair, proved by a run of the fake host', () => {
     await prove('coord-acme', 'dialog');
   });
 
-  test('the operator, whose pane is unnamed: down then up, once the pane is closed by hand', async () => {
+  // The old guarantee was that down left this unnamed pane, so the owner closed it by hand before down and up.
+  test('the operator, whose pane is unnamed: down closes it and up brings it back', async () => {
     await prove('ops-acme', 'unnamed');
   });
 
@@ -528,5 +539,25 @@ describe('every named repair, proved by a run of the fake host', () => {
 
   test('an ordinary seat, whose pane carries its name at a dialog: answered by hand, then remove --keep then add', async () => {
     await prove('dev-acme', 'dialog');
+  });
+
+  test('an unnamed pane that matches no record is left, and the hand close is still the repair', async () => {
+    seed('coord-acme');
+    const made = table();
+    made.start();
+    made.plant('w9:p1', 'w9', 'stray', IDLE, null);
+    const down = testIo(root, { kind: 'owner' });
+    exitOf(await runDown(FILE, down, made.down()), 0, down, 'the down of a pane no record accounts for');
+    expect(down.out).toContain('pane w9:p1: not recorded for a seat of this team; left as it is\n');
+    expect(down.out).toContain(`session ${SESSION}: not stopped, 1 agent left in it\n`);
+    expect(made.stopped).toEqual([]);
+    expect(stateOf('coord-acme')?.pane).toBe('w1:p1');
+    made.closeByHand('w9:p1');
+    const again = testIo(root, { kind: 'owner' });
+    exitOf(await runDown(FILE, again, made.down()), 0, again, 'the down after the hand close');
+    expect(again.out).toContain(`session ${SESSION}: stopped and cleared\n`);
+    const up = testIo(root, { kind: 'owner' });
+    exitOf(await runUp(FILE, up, made.up()), 0, up, 'the up after the hand close');
+    expect(up.out + up.err).not.toContain('coord-acme: left out');
   });
 });
