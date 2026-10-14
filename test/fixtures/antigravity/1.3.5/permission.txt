@@ -1,0 +1,23 @@
+
+───────────────────────────────────────────────────
+> Run the command ls and wait for approval. Do not
+  write any file.
+
+● Ran (ls) (ctrl+o to expand)
+
+Command
+──────────────────────────────────────────────────────
+
+Requesting permission for:
+   ls
+
+Run this command?
+> 1. Yes, run command
+  2. Yes, and always allow in this conversation for
+commands that start with 'ls'
+  3. Yes, and always allow for commands that start
+with 'ls' (Persist to settings.json)
+  4. No, cancel
+
+  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand comman
+esc to cancel                  Gemini 4 Argon · medium

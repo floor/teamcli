@@ -1364,6 +1364,48 @@
       "classify": "working",
       "composer": "idle",
       "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/exit.txt",
+      "cli": "antigravity",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/idle.txt",
+      "cli": "antigravity",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/permission.txt",
+      "cli": "antigravity",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/question.txt",
+      "cli": "antigravity",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/trust.txt",
+      "cli": "antigravity",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/working.txt",
+      "cli": "antigravity",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
     }
   ],
   "yaml": [
