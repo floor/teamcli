@@ -663,6 +663,11 @@ scene('add.placed', async (place) => {
     },
   })), "names the project's parent");
 });
+scene('add.pretrust', async (place) => {
+  approve(place, TWO);
+  writeFileSync(join(place.home, '.claude.json'), 'not json\n');
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place)), 'not trusted for claude');
+});
 scene('add.lobby', async (place) => {
   approve(place, TWO);
   const fs = {

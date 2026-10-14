@@ -34,6 +34,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
+import { lobbyPretrustLine } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
@@ -592,6 +593,15 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
     }
   }
+  const trustCwd = verifiedLobby && seatForPlan.lobby ? verifiedLobby : seatForPlan.cwd;
+  const trustSeat = { ...seatForPlan, cwd: trustCwd };
+  // A CLI with no captured trust record is refused before the file is edited. A dry
+  // run writes nothing and still shows that line. A CLI with a record is written
+  // below, once the lobby exists.
+  if (intoLobby && wouldLaunch && !trustSeat.launchProblem) {
+    const line = lobbyPretrustLine(trustSeat, sources.home, { write: false, now: sources.now() });
+    if (line) return refusePretrust(out, built.name, line, dry);
+  }
   if (dry) {
     if (decision.kind === 'unknown') out.stdout(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
     const preview = upPlan({
@@ -623,6 +633,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         verifiedLobby = gate.path;
         lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
       }
+    }
+    // Before the file edit: a record that cannot be written leaves the seat out of the file.
+    {
+      const trustPath = verifiedLobby && seatForPlan.lobby ? verifiedLobby : seatForPlan.cwd;
+      const line = lobbyPretrustLine(
+        { ...seatForPlan, cwd: trustPath },
+        sources.home,
+        { write: true, now: sources.now() },
+      );
+      if (line) return refusePretrust(out, built.name, line, false);
     }
     if (decision.kind === 'unknown') out.stderr(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
     // The audit line, exactly at the effects boundary: a delegated run that reaches here is
@@ -1054,6 +1074,13 @@ function hostOf(input: {
     },
     log: (who, what) => logLine(dir, 'add', input.caller, `${who}: ${what}`, input.now()),
   };
+}
+
+function refusePretrust(out: Io, name: string, line: string, dry: boolean): number {
+  if (dry) out.stdout(`${plainLine(name)}: would refuse: ${plainText(line)}\ndry run: nothing was run\n`);
+  else out.stderr(`team add: refused: ${plainText(line)}\n`);
+  // exit: add.pretrust
+  return 1;
 }
 
 function refuseLobby(out: Io, name: string, text: string, dry: boolean): number {

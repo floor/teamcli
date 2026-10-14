@@ -45,6 +45,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.not-ready` | `add` | 1 | the launch finished without a ready seat | `team add worker` |
 | `add.not-restored` | `add` | 1 | the seat can't be put back from the approved copy | `team add worker` |
 | `add.placed` | `add` | 1 | the seat would be placed outside the project | `team add worker` |
+| `add.pretrust` | `add` | 1 | the lobby is not trusted for this seat's CLI | `team add worker` |
 | `add.result-absolute` | `add` | 1 | a result path is absolute | `team add --temporary --like lead --until result:/tmp/out.md` |
 | `add.result-exists` | `add` | 1 | the result path already exists | `team add --temporary --like lead --until result:README.md` |
 | `add.run-lock` | `add` | 1 | another session-mutating run is holding the session | `team add worker` |
