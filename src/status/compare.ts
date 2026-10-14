@@ -1,6 +1,7 @@
 import { trustPolicy } from '../file/dialogs.ts';
 import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
+import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
@@ -117,9 +118,19 @@ export function compare(
   const labels = new Map(live.workspaces.map((workspace) => [workspace.id, workspace.label]));
   const anyRunning = team.seats.some((seat) => live.agents.some((agent) => agent.name === seat.name));
 
-  for (const seat of team.seats) {
-    const agent = live.agents.find((candidate) => candidate.name === seat.name);
-    const recorded = state.seats[seat.name];
+  for (const declared of team.seats) {
+    const agent = live.agents.find((candidate) => candidate.name === declared.name);
+    const recorded = state.seats[declared.name];
+    const seat: Seat = recorded?.model && recorded?.version && recorded?.launch_line && recorded.launch_line !== declared.launch
+      ? {
+          ...declared,
+          model: recorded.model,
+          version: recorded.version,
+          display: defaultLabel(recorded.model, recorded.version),
+          ...(recorded.effort ? { effort: recorded.effort } : {}),
+          launch: recorded.launch_line,
+        }
+      : declared;
     const seatId = recorded?.id ?? state.retained_seats?.[seat.name]?.id;
     const idField = seatId ? { id: seatId } : {};
     if (agent) {
@@ -343,6 +354,11 @@ export function compare(
   for (const [name, recorded] of Object.entries(state.seats)) {
     if (!recorded.temporary) continue;
     const idField = recorded.id ? { id: recorded.id } : {};
+    const like = recorded.temporary.like;
+    const likeSeat = team.seats.find((seat) => seat.name === like);
+    const tempModel = recorded.model && recorded.version && (!likeSeat || recorded.model !== likeSeat.model || recorded.version !== likeSeat.version)
+      ? `${defaultLabel(recorded.model, recorded.version)} (like ${like})`
+      : `like ${like}`;
     const agent = live.agents.find((candidate) => candidate.name === name);
     if (agent) {
       claimed.add(agent.pane);
@@ -353,7 +369,7 @@ export function compare(
           ...idField,
           state: held.state,
           stored: held.stored,
-          model: `like ${recorded.temporary.like}`,
+          model: tempModel,
           pane: agent.pane,
           ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
         });
@@ -364,15 +380,14 @@ export function compare(
       // A quiet temporary seat on a screen no profile reads: this row must not show a bare done
       // either. The cli comes from the like-seat, as the model string does; a like-seat gone reads
       // nothing, and the suffix is true then too.
-      const like = recorded.temporary.like;
-      const likeCli = team.seats.find((seat) => seat.name === like)?.cli ?? '';
+      const likeCli = likeSeat?.cli ?? '';
       const quiet = agent.status === 'idle' || agent.status === 'done';
       const unread = quiet && readScreen(likeCli, live.screens[agent.pane]).kind === 'unknown';
       rows.push({
         name,
         ...idField,
         state: `${agent.status}${unread ? ' (screen not recognised)' : ''}, temporary`,
-        model: `like ${recorded.temporary.like}`,
+        model: tempModel,
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
       });

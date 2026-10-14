@@ -12,9 +12,9 @@ the same folders `up` refuses, before it writes anything.
 
 ## Synopsis
 
-    team add <name> [--dry-run] [--session <name>] [--file <path>]
+    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>]
-             [--dry-run] [--session <name>] [--file <path>]
+             [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
 
 ## What it reads and writes
 
@@ -63,6 +63,8 @@ that proceeds is attributed in the log before its effects, as
 
 | Flag | Meaning |
 | --- | --- |
+| `--model <model>` | override the seat's model for this launch (CLI model id or `<model> <version>`) |
+| `--effort <effort>` | override the seat's reasoning effort for this launch |
 | `--temporary` | start a seat the file does not declare, beside the team |
 | `--like <seat>` | the approved seat a temporary seat is a copy of: its CLI, model and launch |
 | `--until <end>` | what the temporary seat works for: `result:<path>` or `merged:<branch>`, as below |
@@ -315,7 +317,7 @@ team add: --like, --until and --worktree are for --temporary
 exit 2
 $ team add ; echo "exit $?"
 team add: a seat name is required
-Usage: team add <name> [--dry-run] [--session <name>] [--file <path>]
-       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--dry-run] [--session <name>] [--file <path>]
+Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
 exit 2
 ```

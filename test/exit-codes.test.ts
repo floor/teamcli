@@ -709,6 +709,21 @@ scene('add.dry-run', async (place) => {
   approve(place, TWO);
   return show(await added(place, ['worker', '--dry-run', '--file', place.file], owner, addSources(place)), 'dry run: nothing was run');
 });
+scene('add.override-owner', async (place) => {
+  approve(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead' };
+  });
+  return show(await added(place, ['worker', '--model', 'claude-sonnet-5-5'], { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' }, addSources(place)), "--model and --effort on a declared seat are the owner's");
+});
+scene('add.model', async (place) => {
+  approve(place, TWO);
+  return show(await added(place, ['worker', '--model', 'unknown', '--file', place.file], owner, addSources(place)), 'unknown model "unknown"');
+});
+scene('add.effort', async (place) => {
+  approve(place, TWO);
+  return show(await added(place, ['worker', '--effort', 'unknown', '--file', place.file], owner, addSources(place)), 'effort "unknown" is not one of anthropic\'s');
+});
 scene('add.budget', async (place) => {
   approve(place, BUDGET);
   saveReadings(join(place.root, '.agents'), [spendReading()], NOW.getTime());

@@ -31,17 +31,19 @@ Hidden: no
 
 Usage:
 
-    team add <name> [--dry-run] [--session <name>] [--file <path>]
-    team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--dry-run] [--session <name>] [--file <path>]
+    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+    team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--effort` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--like` | yes | no | no |
+| `--model` | yes | no | no |
 | `--session` | yes | no | no |
 | `--temporary` | no | no | no |
 | `--until` | yes | no | no |

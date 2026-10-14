@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
+import { shippedEfforts } from './efforts.ts';
 import { WINDOWS, type QuotaPattern, type WindowName } from './quota.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
 import { trustAnswers, type TrustRecord } from './trust-answer.ts';
@@ -101,6 +102,149 @@ export function launchCommand(profile: Profile, launch: string, rules: string): 
   const options = profile.unattended.filter((option) => !words.has(option));
   if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
   return ['AGENT_UNATTENDED=1', launch.trim(), ...options.map(shellQuote)].join(' ');
+}
+
+/** True when the CLI accepts an effort override flag on its launch line. */
+export function supportsEffortLaunch(cli: string): boolean {
+  return cli === 'claude-code' || cli === 'antigravity' || cli === 'grok' || cli === 'codex';
+}
+
+/**
+ * Resolves a `--model` value against a CLI profile. Accepts either a CLI model id
+ * (`claude-sonnet-5-5`, `gpt-6-sol`, `gemini-3.1-pro`, `grok-4.7`, `composer-2.5`)
+ * or a display string (`Claude Sonnet 5.5`, `GPT Sol 6`, `Gemini Pro 3.1`, `Grok 4.7`).
+ */
+export function resolveModelOverride(
+  profile: Profile,
+  rawModel: string,
+  defaultVersion?: string,
+): { id: string; model: string; version: string } | null {
+  const trimmed = rawModel.trim();
+  if (!trimmed) return null;
+  const option = profile.modelFlag('', '').option;
+  if (!/\s/.test(trimmed)) {
+    const direct = profile.modelOf(`${option} ${trimmed}`);
+    if (direct) return { id: trimmed, model: direct.model, version: direct.version };
+    if (profile.cli === 'claude-code' && /^(opus|sonnet|haiku|fable)$/i.test(trimmed) && defaultVersion) {
+      const candidate = `claude-${trimmed.toLowerCase()}-${defaultVersion.replaceAll('.', '-')}`;
+      const hit = profile.modelOf(`${option} ${candidate}`);
+      if (hit) return { id: candidate, model: hit.model, version: hit.version };
+    }
+    return null;
+  }
+  const fastGrok = /^Grok\s+(\S+)\s+Fast$/i.exec(trimmed);
+  let modelName: string;
+  let version: string;
+  if (fastGrok && fastGrok[1]) {
+    version = fastGrok[1];
+    modelName = `Grok ${version} Fast`;
+  } else {
+    const at = trimmed.lastIndexOf(' ');
+    if (at <= 0) return null;
+    modelName = trimmed.slice(0, at).trim();
+    version = trimmed.slice(at + 1).trim();
+  }
+  const flagged = profile.modelFlag(modelName, version).id;
+  if (flagged) {
+    const hit = profile.modelOf(`${option} ${flagged}`);
+    if (hit) return { id: flagged, model: hit.model, version: hit.version };
+  }
+  const candidate = synthesizeModelId(profile.cli, modelName, version);
+  if (!candidate) return null;
+  const hit = profile.modelOf(`${option} ${candidate}`);
+  return hit ? { id: candidate, model: hit.model, version: hit.version } : null;
+}
+
+function synthesizeModelId(cli: string, modelName: string, version: string): string | null {
+  if (cli === 'claude-code') {
+    const match = /^Claude\s+(\S+)$/i.exec(modelName);
+    return match?.[1] ? `claude-${match[1].toLowerCase()}-${version.replaceAll('.', '-')}` : null;
+  }
+  if (cli === 'codex') {
+    const match = /^GPT\s+(\S+)$/i.exec(modelName);
+    return match?.[1] ? `gpt-${version}-${match[1].toLowerCase()}` : null;
+  }
+  if (cli === 'antigravity') {
+    const match = /^Gemini\s+(\S+)$/i.exec(modelName);
+    return match?.[1] ? `gemini-${version}-${match[1].toLowerCase()}` : null;
+  }
+  if (cli === 'grok') {
+    if (/Fast$/i.test(modelName)) return `grok-${version}-build-fast`;
+    if (/^Grok(?:\s+\S+)?$/i.test(modelName)) return `grok-${version}`;
+    return null;
+  }
+  if (cli === 'cursor') {
+    if (/^Grok$/i.test(modelName)) return `grok-${version}`;
+    if (/^GPT\s+Sol$/i.test(modelName)) return `gpt-${version}-sol`;
+    if (/^Gemini\s+Flash$/i.test(modelName)) return `gemini-${version}-flash`;
+    if (/^Composer$/i.test(modelName)) return `composer-${version}`;
+  }
+  return null;
+}
+
+/**
+ * Validates a `--effort` value against the seat's CLI and vendor vocabulary.
+ */
+export function resolveEffortOverride(
+  cli: string,
+  vendor: string,
+  rawEffort: string,
+): { effort: string } | { error: string } {
+  const trimmed = rawEffort.trim();
+  if (!trimmed || /\s/.test(trimmed)) {
+    return { error: 'effort must be a single word' };
+  }
+  if (!supportsEffortLaunch(cli)) {
+    return { error: `${cli} does not take an --effort flag on launch` };
+  }
+  const vocab = shippedEfforts();
+  if (vocab.ok) {
+    const allowed = vocab.labs[vendor];
+    if (allowed && allowed.length > 0 && !allowed.includes(trimmed)) {
+      return { error: `effort ${JSON.stringify(trimmed)} is not one of ${vendor}'s: ${allowed.join(', ')}` };
+    }
+  }
+  return { effort: trimmed };
+}
+
+/**
+ * Rewrites or appends the CLI's model and effort flags on a seat's launch line.
+ */
+export function withLaunchOverrides(
+  profile: Profile,
+  launch: string,
+  overrides: { modelId?: string; effort?: string },
+): string {
+  let next = launch.trim();
+  if (overrides.modelId) {
+    const option = profile.modelFlag('', '').option;
+    const modelPattern = profile.cli === 'codex' || profile.cli === 'grok'
+      ? /(^|\s)(--model|-m)(=|\s+)(\S+)/
+      : /(^|\s)(--model)(=|\s+)(\S+)/;
+    if (modelPattern.test(next)) {
+      next = next.replace(modelPattern, `$1$2$3${overrides.modelId}`);
+    } else {
+      next = `${next} ${option} ${overrides.modelId}`;
+    }
+  }
+  if (overrides.effort) {
+    if (profile.cli === 'codex') {
+      const codexEffort = /(^|\s)(-c|--config)(=|\s+)(['"]?model_reasoning_effort=[^'"\s]+['"]?)/;
+      if (codexEffort.test(next)) {
+        next = next.replace(codexEffort, `$1$2$3model_reasoning_effort=${overrides.effort}`);
+      } else {
+        next = `${next} -c model_reasoning_effort=${overrides.effort}`;
+      }
+    } else if (supportsEffortLaunch(profile.cli)) {
+      const effortPattern = /(^|\s)(--effort|--reasoning-effort)(=|\s+)(\S+)/;
+      if (effortPattern.test(next)) {
+        next = next.replace(effortPattern, `$1$2$3${overrides.effort}`);
+      } else {
+        next = `${next} --effort ${overrides.effort}`;
+      }
+    }
+  }
+  return next;
 }
 
 /**
