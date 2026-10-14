@@ -965,12 +965,12 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     const made = world();
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: root });
-    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
   });
 
   test('up and add pass a lobby whose .claude holds only the lock, plus a readme and a notes folder', async () => {
