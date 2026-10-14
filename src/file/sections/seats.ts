@@ -190,9 +190,21 @@ export function workspaceLabel(seat: { name: string; role: string; label: string
   return `${seat.name} · ${seat.role}`;
 }
 
-/** Line 2's display_agent: the display, a space, then the effort, or `default` when the file sets none. Herdr writes the status word and ` · ` in front of this text. */
-export function displayAgent(seat: { display: string; effort?: string }): string {
-  return `${seat.display} ${seat.effort || 'default'}`;
+/**
+ * Line 2's display_agent. Herdr writes the status word and ` · ` in front of this text.
+ * A model of one word keeps its display (`Grok 4.7`). A model of several words keeps its
+ * first word and the version, lowercase, joined by a hyphen (`gemini-3.8`, `gpt-5.6`).
+ * A space and the effort follow, or `default` when the file sets none.
+ */
+export function displayAgent(seat: { model?: string; version?: string; display: string; effort?: string }): string {
+  return `${modelText(seat)} ${seat.effort || 'default'}`;
+}
+
+function modelText(seat: { model?: string; version?: string; display: string }): string {
+  const words = seat.model?.trim().split(/\s+/).filter((word) => word.length > 0) ?? [];
+  const first = words[0];
+  if (words.length > 1 && first && seat.version) return `${first.toLowerCase()}-${seat.version.toLowerCase()}`;
+  return seat.display;
 }
 
 function readEffort(
