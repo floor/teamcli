@@ -1,6 +1,6 @@
 // Line 1 of a seat's workspace is its written label, or `<name> · <role>` when the file
 // writes none. The model stays off that line. Line 2 is the pane's display_agent: the
-// display, and a space plus the effort when the file sets one.
+// display, a space, then the effort, or `default` when the file sets none.
 import { describe, expect, test } from 'bun:test';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -96,11 +96,12 @@ seats:
 });
 
 describe('the pane display', () => {
-  test('display_agent is the display, and the effort when the file sets one', () => {
-    expect(displayAgent(seatNamed('lead', minimal))).toBe('Claude Opus 5.5');
+  test('display_agent is the display, a space, and the effort or default', () => {
+    expect(displayAgent(seatNamed('lead', minimal))).toBe('Claude Opus 5.5 default');
     const effort = minimal.replace('    launch:', '    effort: high\n    launch:');
     expect(displayAgent(seatNamed('lead', effort))).toBe('Claude Opus 5.5 high');
-    expect(displayAgent({ display: 'Grok 4.7' })).toBe('Grok 4.7');
+    expect(displayAgent({ display: 'Grok 4.7' })).toBe('Grok 4.7 default');
+    expect(displayAgent({ display: 'Opus 5.5' })).toBe('Opus 5.5 default');
   });
 
   test('the plan reports display_agent after the seat is named', () => {
