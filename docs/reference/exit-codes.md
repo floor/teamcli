@@ -48,6 +48,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.result-exists` | `add` | 1 | the result path already exists | `team add --temporary --like lead --until result:README.md` |
 | `add.run-lock` | `add` | 1 | another session-mutating run is holding the session | `team add worker` |
 | `add.server` | `add` | 1 | the session's server did not start | `team add worker` |
+| `add.session-doubt` | `add` | 1 | the pane holds a process the record cannot tie to the launch | `team add worker` |
 | `add.session-owner` | `add` | 1 | --session is the owner's | `team add worker --session other` |
 | `add.start` | `add` | 1 | the seat has nowhere to start | `team add worker` |
 | `add.stopped` | `add` | 1 | the session is stopped | `team add worker` |
@@ -310,8 +311,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
-| `send.timeout` | `send` | 1 | delivered, but the seat's reply did not arrive in the window | `team send worker hello --wait --timeout 10` |
-| `send.unreachable` | `send` | 1 | the seat's channel is not open | `team send worker hello` |
+| `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
+| `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
 | `send.configuration` | `send` | 2 | the team file can't be read | `team send worker hello --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
@@ -382,6 +383,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |
 | `watch.not-a-repo` | `watch` | 2 | not inside a git repository | `team watch` |
 | `worktree.created` | `worktree` | 0 | the worktree was created | `team worktree new task --kind fix` |
+| `worktree.listed` | `worktree` | 0 | the recorded worktrees were listed | `team worktree list` |
 | `worktree.record-gone` | `worktree` | 0 | the record was removed after the folder was already gone | `team worktree remove task` |
 | `worktree.removed` | `worktree` | 0 | the worktree was removed | `team worktree remove task` |
 | `worktree.another-pane` | `worktree` | 1 | the state records another pane for the caller's seat | `team worktree new task` |

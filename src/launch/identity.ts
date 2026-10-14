@@ -46,3 +46,38 @@ export function launchedIdentity(pane: PaneProcesses | null | undefined): Launch
   if (cli.length === 0) return null;
   return { shell: pane.shell, cli };
 }
+
+// What a `replaced` pane is, once the pid verdict is known. The pid comparison above is unchanged.
+// - `restored`: a program is in front, herdr names this seat on the recorded pane, and the live
+//   agent session is the one stored at launch. The seat is the seat. Nothing is closed.
+// - `doubt`: a program is in front and that session cannot be shown. Nothing is closed.
+// - `other`: the verdict is not `replaced` (`same`, `gone`, `unknown`). Callers keep the pid verdict.
+export type ReplacedContinuity = 'restored' | 'doubt' | 'other';
+
+export function replacedSeat(
+  verdict: SeatProcessVerdict,
+  input: {
+    /** False when herdr's agent list could not be read. */
+    asked: boolean;
+    /** The agent list names this seat on the recorded pane. */
+    namedOnPane: boolean;
+    recordedSession: string | undefined;
+    liveSession: string | undefined;
+  },
+): ReplacedContinuity {
+  if (verdict !== 'replaced') return 'other';
+  const recorded = input.recordedSession;
+  const live = input.liveSession;
+  if (
+    input.asked &&
+    input.namedOnPane &&
+    typeof recorded === 'string' &&
+    recorded !== '' &&
+    typeof live === 'string' &&
+    live !== '' &&
+    recorded === live
+  ) {
+    return 'restored';
+  }
+  return 'doubt';
+}

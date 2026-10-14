@@ -32,7 +32,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { launchedIdentity, seatProcessVerdict } from '../launch/identity.ts';
+import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -332,11 +332,37 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // reads herdr again, immediately before it (`execute.ts`), so this reading only decides that
   // the seat needs repair, never that its recorded workspace is still its own.
   const held = recorded.seats[built.name];
-  const verdict = seatProcessVerdict(
-    held?.launched,
-    held?.launched && held.pane && sources.launch.processInfo ? sources.launch.processInfo(session, held.pane) : null,
-  );
-  const repair = (verdict === 'gone' || verdict === 'replaced') && held?.workspace && held.pane && held.launched
+  const proc = held?.launched && held.pane && sources.launch.processInfo ? sources.launch.processInfo(session, held.pane) : null;
+  const verdict = seatProcessVerdict(held?.launched, proc);
+  const listed = held?.pane ? agents.find((agent) => agent.name === built.name && agent.pane === held.pane) : undefined;
+  const continuity = replacedSeat(verdict, {
+    asked: true,
+    namedOnPane: Boolean(listed),
+    recordedSession: held?.agent_session,
+    liveSession: listed?.session,
+  });
+  // The session matches: write the pids the pane holds now, then the already-running refusal.
+  // Refusing first would skip that write.
+  if (continuity === 'restored' && held?.agent_session && proc) {
+    const next = launchedIdentity(proc);
+    if (next) {
+      const sessionId = held.agent_session;
+      updateState(dir, (file) => {
+        const seat = file.sessions[session]?.seats[built.name];
+        if (!seat) return;
+        seat.launched = next;
+        seat.agent_session = sessionId;
+      });
+    }
+  }
+  // A program the record cannot tie to the launch is not closed and not launched again.
+  if (continuity === 'doubt' && held?.workspace && held.pane && held.launched) {
+    out.stderr(`team add: ${plainText(`${built.name}: its pane holds a process this record cannot tie to the launch`)}\n`);
+    // exit: add.session-doubt
+    return 1;
+  }
+  // The shell is in front. The seat is not already running: close and launch fresh.
+  const repair = verdict === 'gone' && held?.workspace && held.pane && held.launched
     ? { pane: held.pane, workspace: held.workspace, launched: held.launched, cli: built.seat.cli }
     : undefined;
   const runningNow = !repair ? agents.find((agent) => agent.name === built.name) : undefined;
@@ -924,8 +950,8 @@ function hostOf(input: {
         }
       });
       if (patch.pane) {
-        if (replaced) forgetLaunchedPane(input.home, replaced);
-        noteLaunchedPane(input.home, input.teamFile, patch.pane);
+        if (replaced) forgetLaunchedPane(input.home, replaced, session);
+        noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
       }
     },
     running(name) {
@@ -941,7 +967,7 @@ function hostOf(input: {
         pane = seats?.[name]?.pane;
         if (seats) delete seats[name];
       });
-      if (pane) forgetLaunchedPane(input.home, pane);
+      if (pane) forgetLaunchedPane(input.home, pane, session);
     },
     // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
     // here with the same function the records use: no escape sequence or bidi override reaches

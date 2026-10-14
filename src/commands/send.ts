@@ -6,55 +6,60 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerVerdict, describeCaller, judgeCallerIn, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
-import { agentList, agentStatus, paneProcesses, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { dropMessage, submitTrigger, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../send/uds.ts';
+import { classify } from '../watch/screen.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send --list [--json]
 
-Writes one message to one seat. A Claude Code seat gets one frame on the cross-session
-message socket, never typed into its pane. A native CLI (codex, cursor, grok, antigravity)
-has no socket: the body is written whole to a drop file (mode 0600, atomic rename) and the
-pane receives one short trigger line, never the body and never several typed chunks. Only
-the owner, or the orchestrator from its own seat, may call it; a worker seat may not.
---list sends nothing: it prints the file's seats and needs no caller check. --dry-run
-resolves the seat and the channel, writes no drop file, and types nothing. It appends
-one line to the team log.
+Writes one message to one seat. A plain send writes the body whole to a drop file
+(mode 0600, atomic rename) and types one short trigger line, for every seat. The body
+is never typed and never split across several writes. delivered means herdr reported
+the seat working — or done or blocked, changed from the status read before Enter —
+after that line and Enter, and the pane is not a dialog this command already classifies
+(question, permission, trust, vendor notice, provider error, rate limit). A screen that
+is one of those is not reached: the kind and the drop path are named, and nothing
+further is pressed. Only the owner, or the orchestrator from its own seat, may call
+it; a worker seat may not. --list sends nothing: it prints the file's seats and needs
+no caller check. --dry-run resolves the seat and the channel, writes no drop file, and
+types nothing. It appends one line to the team log.
 
 The outcome is one of five, and none of them is silent:
-  delivered    the channel took it (exit 0). For a socket, the socket accepted the frame.
-               For a native CLI, herdr reported the seat working — or done or blocked,
-               changed from the status read before Enter — after one send-text and one
-               Enter. That status is the evidence, not the exit code of the typing
-               commands and not the pane's text. Cursor's working bit is the hint
-               "ctrl+c to stop", codex's is a spinner in the terminal title, and agy's
-               is the "esc to cancel" footer; a wrapped cursor pane can submit while
-               herdr stays idle, and that run is unreachable rather than a silent success
-  answered     --wait, socket only: the seat's reply came back; the reply follows on
-               stdout (exit 0)
-  timeout      --wait, socket only: delivered, but no reply within the window (exit 1)
-  unreachable  the channel did not confirm (exit 1): the session is not running, no live
-               agent carries the seat's name, no socket took the frame, or a native seat
-               did not move to working after the trigger
-  refused      nothing was sent (exit 1): not a declared seat, a native --wait (this
-               build has no reply path for it), a socket frame over the measured limit,
-               a trigger that would exceed the measured line length, a reply listener
-               that could not be opened, or a caller that may not send
+  delivered    the drop path (exit 0): herdr reported the seat working — or done or
+               blocked, changed from the status read before Enter — and the pane was
+               not one of the dialogs listed above
+  answered     --wait to a Claude Code seat: the reply came back; the reply follows
+               on stdout (exit 0)
+  timeout      --wait to a Claude Code seat: the frame was sent on the socket, and no
+               reply came within the window (exit 1). A seat which does not accept
+               messages from other sessions holds the frame until a person lets it
+               through
+  unreachable  the channel did not confirm (exit 1): the session is not running, no
+               live agent carries the seat's name, the pane is one of those dialogs,
+               no socket took a waited frame, or the seat did not move to working
+               after the trigger
+  refused      nothing was sent (exit 1): not a declared seat, --wait to a seat that
+               is not Claude Code, a socket frame over the measured limit, a trigger
+               that would exceed the measured line length, a reply listener that
+               could not be opened, or a caller that may not send
 
---wait blocks for a Claude Code seat's reply, listening at this process's own
+--wait to a Claude Code seat writes one frame on the cross-session socket, because
+the reply listener needs that frame, and blocks for the reply at this process's own
 <sockets dir>/<pid>.sock, for --timeout seconds (default 120; --timeout is only
-meaningful with --wait). A native seat has no reply path here, so --wait is refused
-and nothing is written. --json prints one result document instead of the lines:
+meaningful with --wait). A successful write says the frame was sent on the socket,
+not that it was delivered. --wait to any other seat is refused and nothing is
+written. --json prints one result document instead of the lines:
 {seat, status, exit, reply?, error?, ids}. --file reads the body from a file instead
 of the one <message> argument.
 
-Not in this build: broadcast, and a native seat's reply.
+Not in this build: broadcast, and a reply from a seat that is not Claude Code.
 `;
 
 export type SendHost = {
@@ -84,6 +89,7 @@ export const realHost: SendHost = {
     pressEnter: (session, pane) => pressEnter(pane, session),
     status: (session, pane) => agentStatus(pane, session),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    paneText: (session, pane) => paneRead(pane, 40, session),
   },
   now: () => new Date(),
   home: homedir(),
@@ -166,31 +172,54 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (body.trim() === '') return usage(io, 'the message is empty', report);
 
   const dry = args.flags.has('dry-run');
-  // A native CLI has no cross-session socket. The body is never typed: it is written whole
-  // to a 0600 drop file, and the pane gets one trigger line. --wait has no reply path here.
-  if (configured.cli !== 'claude-code') {
-    if (wait && !dry) {
-      return refuse(io, dir, who, `${seatName} runs ${configured.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`, host, report);
-    }
-    const msgId = randomUUID();
-    const dropDir = join(dir, 'send-drops', team.session, seatName);
-    const dropPath = join(dropDir, msgId);
-    const trigger = triggerLine(dropPath);
-    if (trigger === null) {
-      return refuse(io, dir, who, `${seatName}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
-    }
-    if (dry) {
-      return dryRun(io, dir, who, seatName, `${configured.cli} via a 0600 drop file and one trigger line; nothing was written`, host, report);
-    }
-    const found = findAgent(host, team.session, seatName);
-    if (!found.ok) {
-      if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
-      return unreachable(io, dir, who, seatName, found.reason, host, report);
-    }
-    report.sent = msgId;
-    return deliverNative(io, dir, who, team.session, seatName, found.pane, dropDir, msgId, body, trigger, host, report);
+  // --wait needs the socket frame, and only a Claude Code seat has that listener. Any other
+  // seat is refused before a write. A dry run of that refusal still names the drop channel,
+  // because nothing is written either way.
+  if (wait && configured.cli !== 'claude-code' && !dry) {
+    return refuse(io, dir, who, `${seatName} runs ${configured.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`, host, report);
+  }
+  if (wait && configured.cli === 'claude-code') {
+    return deliverSocket(io, dir, who, team, seatName, body, dry, timeoutS, host, report);
   }
 
+  // A plain send, every seat: the body is never typed. It is written whole to a 0600 drop
+  // file, and the pane gets one trigger line.
+  const msgId = randomUUID();
+  const dropDir = join(dir, 'send-drops', team.session, seatName);
+  const dropPath = join(dropDir, msgId);
+  const trigger = triggerLine(dropPath);
+  if (trigger === null) {
+    return refuse(io, dir, who, `${seatName}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
+  }
+  if (dry) {
+    return dryRun(io, dir, who, seatName, `${configured.cli} via a 0600 drop file and one trigger line; nothing was written`, host, report);
+  }
+  const found = findAgent(host, team.session, seatName);
+  if (!found.ok) {
+    if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
+    return unreachable(io, dir, who, seatName, found.reason, host, report);
+  }
+  report.sent = msgId;
+  return deliverNative(io, dir, who, team.session, seatName, configured.cli, found.pane, dropDir, msgId, body, trigger, host, report);
+}
+
+/**
+ * `--wait` to a Claude Code seat. The frame is what the reply listener needs. A successful
+ * write says the frame was sent on the socket: the write is not an acknowledgement that the
+ * seat read it.
+ */
+async function deliverSocket(
+  io: Io,
+  dir: string,
+  who: string,
+  team: { session: string },
+  seatName: string,
+  body: string,
+  dry: boolean,
+  timeoutS: number,
+  host: SendHost,
+  report: Report,
+): Promise<number> {
   // One JSON line, exactly the frame the probe measured: `type:"user"`, the content, and a
   // msg_id for a reader's own correlation. No `from`: this process has no session socket, so
   // any sender address it claimed would be a claim, not a fact — the listener shows the
@@ -231,15 +260,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
   }
   try {
-    if (!wait) {
-      const taken = await host.deliver(socketPath, frame);
-      if (!taken.ok) {
-        return unreachable(io, dir, who, seatName, taken.reason, host, report);
-      }
-      // The log keeps the seat and the frame's size; never the message's text.
-      logLine(dir, 'send', who, `${seatName}: delivered (${String(frame.length)} characters)`, host.now());
-      return delivered(io, seatName, report);
-    }
     // The reply listener is opened before the frame is written: a seat that answers at once
     // must find it standing. A listener that cannot be opened is a refusal — nothing sent.
     const opened = await openReplyListener(host.socketsDir, process.pid);
@@ -252,14 +272,16 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       if (!taken.ok) {
         return unreachable(io, dir, who, seatName, taken.reason, host, report);
       }
-      logLine(dir, 'send', who, `${seatName}: delivered (${String(frame.length)} characters)`, host.now());
+      // The log keeps the seat and the frame's size; never the message's text, and never
+      // the word delivered: the socket accepted the write, which is all this run knows.
+      logLine(dir, 'send', who, `${seatName}: sent on the socket (${String(frame.length)} characters)`, host.now());
       const outcome = await listener.wait(timeoutS * 1000);
       if (outcome.kind === 'answered') {
         const read = readReply(outcome.line);
         logLine(dir, 'send', who, `${seatName}: answered (reply ${String(read.reply.length)} characters)`, host.now());
         return answered(io, seatName, read, report);
       }
-      logLine(dir, 'send', who, `${seatName}: timeout (delivered, no reply within ${String(timeoutS)}s)`, host.now());
+      logLine(dir, 'send', who, `${seatName}: timeout (sent, no reply within ${String(timeoutS)}s)`, host.now());
       return timedOut(io, seatName, timeoutS, report);
     } finally {
       listener.close();
@@ -281,10 +303,21 @@ function findAgent(host: SendHost, session: string, seatName: string): Found {
   return { ok: true, pane: (named[0] as { pane: string }).pane };
 }
 
+/** Dialogs the classifier already names. A screen of one of these was not reached, and nothing further is pressed. */
+const DIALOG = new Set(['question', 'permission', 'trust', 'vendor notice', 'provider error', 'rate limit']);
+
+/** The dialog kind on this screen, or null. A missing read is not a dialog. One classification, of the last lines the classifier keeps. */
+function dialogKind(cli: string, screen: string | null): string | null {
+  if (screen === null) return null;
+  const kind = classify(cli, screen.split('\n')).kind;
+  return DIALOG.has(kind) ? kind : null;
+}
+
 /**
  * Writes the drop file under the seat lock, types the one trigger, and reports delivered only
- * when herdr's status says the seat took it. The lock is held across the typing so a second
- * send cannot append into the same composer.
+ * when herdr's status says the seat took it and the pane is not a dialog this command already
+ * classifies. The lock is held across the typing so a second send cannot append into the same
+ * composer.
  */
 async function deliverNative(
   io: Io,
@@ -292,6 +325,7 @@ async function deliverNative(
   who: string,
   session: string,
   seatName: string,
+  cli: string,
   pane: string,
   dropDir: string,
   msgId: string,
@@ -312,7 +346,21 @@ async function deliverNative(
     } catch {
       return refuse(io, dir, who, `${seatName}: the drop file could not be written; nothing was typed`, host, report);
     }
-    const outcome = await submitTrigger(host.native, session, pane, trigger);
+    // One read of the pane. It is asked before a second Enter, and again only when that
+    // second Enter was never reached, so a dialog is never given another key.
+    let looked = false;
+    let kind: string | null = null;
+    const look = (): string | null => {
+      if (looked) return kind;
+      looked = true;
+      kind = dialogKind(cli, host.native.paneText?.(session, pane) ?? null);
+      return kind;
+    };
+    const outcome = await submitTrigger(host.native, session, pane, trigger, () => look() !== null);
+    const shown = look();
+    if (shown !== null) {
+      return unreachable(io, dir, who, seatName, `not reached; the screen reads ${shown}; the drop file is at ${path}`, host, report);
+    }
     if (!outcome.ok) {
       return unreachable(io, dir, who, seatName, `${outcome.reason}; the drop file is at ${path}`, host, report);
     }
@@ -413,7 +461,7 @@ function seatList(team: TeamFile): string {
   return names.length === 0 ? '(none)' : names.join(', ');
 }
 
-/** The socket took the frame. Exit 0, always. */
+/** Herdr reported the seat took the trigger, and the pane was not a known dialog. Exit 0, always. */
 function delivered(io: Io, seat: string, report: Report): number {
   if (report.json) {
     io.stdout(document({ seat, status: 'delivered', exit: 0, ids: { sent: report.sent, reply: null } }));
@@ -433,9 +481,9 @@ function answered(io: Io, seat: string, read: { reply: string; msg_id: string | 
   return 0; // exit: send.answered
 }
 
-/** Delivered, but the window closed with no reply. Exit 1, always. */
+/** The frame was sent on the socket, and the window closed with no reply. Exit 1, always. */
 function timedOut(io: Io, seat: string, seconds: number, report: Report): number {
-  const why = `delivered, but no reply within ${String(seconds)}s`;
+  const why = `sent, no reply within ${String(seconds)}s; a seat which does not accept messages from other sessions holds the frame until a person lets it through`;
   if (report.json) {
     io.stdout(document({ seat, status: 'timeout', exit: 1, error: why, ids: { sent: report.sent, reply: null } }));
   } else {

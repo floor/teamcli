@@ -745,6 +745,7 @@ Hidden: no
 Usage:
 
     team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]
+    team worktree list [--session <name>] [--file <path>]
     team worktree remove <task> [--session <name>] [--file <path>]
 
 ### Flags
@@ -755,6 +756,27 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `list`
+
+Hidden: no
+
+Usage:
+
+    team worktree list [--session <name>] [--file <path>]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 

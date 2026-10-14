@@ -298,6 +298,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.session-doubt",
+      "meaning": "the pane holds a process the record cannot tie to the launch",
+      "trigger": "team add worker"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.session-owner",
       "meaning": "--session is the owner's",
       "trigger": "team add worker --session other"
@@ -2133,14 +2140,14 @@
       "code": 1,
       "command": "send",
       "id": "send.timeout",
-      "meaning": "delivered, but the seat's reply did not arrive in the window",
+      "meaning": "sent on the socket, but no reply within the window",
       "trigger": "team send worker hello --wait --timeout 10"
     },
     {
       "code": 1,
       "command": "send",
       "id": "send.unreachable",
-      "meaning": "the seat's channel is not open",
+      "meaning": "the seat was not reached",
       "trigger": "team send worker hello"
     },
     {
@@ -2632,6 +2639,13 @@
       "id": "worktree.created",
       "meaning": "the worktree was created",
       "trigger": "team worktree new task --kind fix"
+    },
+    {
+      "code": 0,
+      "command": "worktree",
+      "id": "worktree.listed",
+      "meaning": "the recorded worktrees were listed",
+      "trigger": "team worktree list"
     },
     {
       "code": 0,

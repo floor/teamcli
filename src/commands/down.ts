@@ -913,7 +913,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           pane = seatsOf[name]?.pane;
           delete seatsOf[name];
         });
-        if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane);
+        if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
       },
       say: (line) => io.stdout(line),
       log: (who, what) => logLine(dir, 'down', describeCaller(caller), `${who}: ${what}`, now()),

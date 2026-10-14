@@ -8,7 +8,7 @@ import type { CheckOutcome } from '../budgets/run.ts';
 import type { Seen } from '../budgets/readings.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { HerdrAgent } from '../herdr.ts';
-import type { SeatProcessVerdict } from '../launch/identity.ts';
+import type { ReplacedContinuity, SeatProcessVerdict } from '../launch/identity.ts';
 import type { QuotaFigure } from '../profiles/quota.ts';
 import type { Live } from '../status/compare.ts';
 import type { SessionState } from '../state.ts';
@@ -59,6 +59,9 @@ export type SeatObservation = {
   // one held by a process team did not launch, and `unknown` when herdr can't tell or the seat
   // was launched before the identity was recorded — treated as today everywhere.
   identity: SeatProcessVerdict;
+  // `restored` when a pid mismatch still carries the agent session stored at launch.
+  // The restored check stays quiet for it. `doubt` is a mismatch the session does not tie.
+  continuity: ReplacedContinuity;
   // Whether an agent answers for the seat. False: the seat's own checks never run.
   running: boolean;
   // The stage the session state records, when it records one. `named` and `ready` mean the
