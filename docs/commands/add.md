@@ -5,10 +5,10 @@ the others — or a temporary seat beside the team, which the file does not decl
 seat the file marks `stopped: true`, or that `team remove` took out, is put back from the approved
 copy first. It never touches the seats that are already running.
 
-The one seat starts where `up` would start it: every seat starts in the machine lobby
-`~/.config/team/lobby` outside repositories, verified by the lobby gate, unless `--worktree`
-names the worktree it works in. `add` makes the lobby when it needs it, and refuses
-the same folders `up` refuses, before it writes anything.
+The one seat starts where `up` would start it: the orchestrator's and the operator's seat starts in
+the project folder, every other seat in the team's lobby outside repositories, verified by the
+lobby gate. `--worktree` names the worktree a temporary seat works in. `add` makes the lobby when it
+needs it, and refuses the same folders `up` refuses, before it writes anything.
 
 ## Synopsis
 
@@ -63,8 +63,8 @@ that proceeds is attributed in the log before its effects, as
 
 | Flag | Meaning |
 | --- | --- |
-| `--model <model>` | override the seat's model for this launch (CLI model id or `<model> <version>`) |
-| `--effort <effort>` | override the seat's reasoning effort for this launch |
+| `--model <model>` | override the seat's model for this launch (CLI model id or `<model> <version>`); on a declared seat the owner's alone |
+| `--effort <effort>` | override the seat's reasoning effort for this launch; on a declared seat the owner's alone |
 | `--temporary` | start a seat the file does not declare, beside the team |
 | `--like <seat>` | the approved seat a temporary seat is a copy of: its CLI, model and launch |
 | `--until <end>` | what the temporary seat works for: `result:<path>` or `merged:<branch>`, as below |
@@ -129,11 +129,11 @@ not checked at all, the note saying so, and a miss found there is never refused.
 prints a refusal in the plan instead — `  skip <name>: would refuse: …` above `dry run: nothing was
 run` — and makes nothing. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch). It returns before these real-run failures, and never takes their status:
 
-- `add.run-lock`, another run holds the session (`src/commands/add.ts:555`)
-- `add.lobby`, the lobby could not be created (`src/commands/add.ts:563`)
-- `add.changed`, the file changed while add was checking (`src/commands/add.ts:584`)
-- `add.locked`, the locked edit does not validate (`src/commands/add.ts:589`)
-- `add.not-ready`, the launch finished without a ready seat; `add.server`, the server did not start (`src/commands/add.ts:620-622`)
+- `add.run-lock`, another run holds the session (`src/commands/add.ts:666`)
+- `add.lobby`, the lobby could not be created (`src/commands/add.ts:1130`)
+- `add.changed`, the file changed while add was checking (`src/commands/add.ts:701`)
+- `add.locked`, the locked edit does not validate (`src/commands/add.ts:706`)
+- `add.not-ready`, the launch finished without a ready seat; `add.server`, the server did not start (`src/commands/add.ts:743-744`)
 
 ## Refusals
 
@@ -152,6 +152,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | `team add: the approved delegate cannot change the file or the approval; the owner adds a missing or stopped seat` — an add that would restore a missing seat or clear `stopped`, also on `--dry-run` | 1 |
 | `team add: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
+| `team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat` — any caller but the owner; a temporary seat takes them from any caller | 1 |
 | ``team add: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
 | ``team add: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | ``team add: the file was never approved on this machine: run `team approve` `` | 1 |
