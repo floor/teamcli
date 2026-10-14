@@ -3,7 +3,19 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logLine } from '../src/log.ts';
-import { LOCK_FILE, LOG_FILE, STATE_FILE, emptySession, readState, updateState, withLock, writeAtomic } from '../src/state.ts';
+import {
+  LOCK_FILE,
+  LOG_FILE,
+  SEAT_ID_PATTERN,
+  STATE_FILE,
+  emptySession,
+  isSeatId,
+  mintSeatId,
+  readState,
+  updateState,
+  withLock,
+  writeAtomic,
+} from '../src/state.ts';
 
 let dir: string;
 beforeEach(() => {
@@ -115,6 +127,69 @@ describe('the state file', () => {
       const seat = `ok-${classification.replace(' ', '-')}`;
       expect([seat, state.sessions.one?.seats[seat]?.waiting?.classification]).toEqual([seat, classification]);
     }
+  });
+
+  test('mints seat_<12 lowercase hex> handles and validates seat registry fields at readState', () => {
+    const first = mintSeatId();
+    const second = mintSeatId();
+    expect(SEAT_ID_PATTERN.test(first)).toBe(true);
+    expect(isSeatId(first)).toBe(true);
+    expect(first).not.toBe(second);
+    expect(isSeatId('seat_ABCDEF123456')).toBe(false);
+    expect(isSeatId('seat_12345')).toBe(false);
+    expect(isSeatId(42)).toBe(false);
+
+    writeFileSync(
+      join(dir, STATE_FILE),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          one: {
+            seats: {
+              valid: {
+                id: first,
+                stage: 'ready',
+                model: 'opus',
+                version: '4.7',
+                effort: 'max',
+                launch_line: 'claude --model claude-opus-4-7',
+                last_active: '2026-10-14T12:00:00.000Z',
+              },
+              corrupt: {
+                id: 'not-a-seat-id',
+                stage: 'ready',
+                model: 99,
+                version: null,
+                effort: ['high'],
+                launch_line: 123,
+                last_active: false,
+              },
+            },
+            retained_seats: {
+              kept: { id: second, last_active: '2026-10-14T11:00:00.000Z' },
+              badId: { id: 'bad', last_active: '2026-10-14T11:00:00.000Z' },
+              badTime: { id: first, last_active: 12345 },
+            },
+            worktrees: {},
+          },
+        },
+      }),
+    );
+    const loaded = readState(dir).sessions.one;
+    expect(loaded?.seats.valid).toEqual({
+      id: first,
+      stage: 'ready',
+      model: 'opus',
+      version: '4.7',
+      effort: 'max',
+      launch_line: 'claude --model claude-opus-4-7',
+      last_active: '2026-10-14T12:00:00.000Z',
+    });
+    expect(loaded?.seats.corrupt).toEqual({ stage: 'ready' });
+    expect(loaded?.retained_seats).toEqual({
+      kept: { id: second, last_active: '2026-10-14T11:00:00.000Z' },
+      badTime: { id: first },
+    });
   });
 
   test('an atomic write leaves no temporary file', () => {

@@ -428,6 +428,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
           ...(exitInBox ? { exitInBox: true } : {}),
           ...(screen.kind === 'exit question' ? { atExitQuestion: true } : {}),
         },
+        keep: args.flags.has('keep'),
         abandon: copySeat ? abandon && where !== 'free' : true,
         closeUnasked: abandon,
         unasked: `team remove ${name} --abandon closes it`,
@@ -475,10 +476,21 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       // signing itself stays the owner's for a delegate whatever reached here.
       if (parsed.ok && delegatePane === null) recordSeatDigestOf(standing, parsed.team, root, name, home);
     }
-    if (recorded && (!agent || leave)) {
+    const hadRetained = Boolean(readState(dir).sessions[session]?.retained_seats?.[name]);
+    if ((recorded && (!agent || leave)) || (!args.flags.has('keep') && hadRetained)) {
       updateState(dir, (file) => {
-        const seats = file.sessions[session]?.seats;
-        if (seats) delete seats[name];
+        const current = file.sessions[session];
+        if (!current) return;
+        const prior = current.seats[name];
+        if (args.flags.has('keep') && prior?.id && !prior.temporary) {
+          (current.retained_seats ??= {})[name] = {
+            id: prior.id,
+            ...(prior.last_active ? { last_active: prior.last_active } : {}),
+          };
+        } else if (!args.flags.has('keep') && current.retained_seats) {
+          delete current.retained_seats[name];
+        }
+        delete current.seats[name];
       });
     }
     // A temporary seat's rules file goes with the seat: nothing of it is left in the state
@@ -525,6 +537,7 @@ export async function stopRunning(input: {
   dir: string;
   session: string;
   seat: DownSeat;
+  keep?: boolean;
   abandon: boolean;
   /** The owner's `--abandon`: a seat this call asked, whose exit could not be typed or confirmed, is closed. */
   closeUnasked?: boolean;
@@ -595,8 +608,17 @@ export async function stopRunning(input: {
       if (dropped !== seat.name) return;
       stopped = true;
       updateState(input.dir, (file) => {
-        const seats = (file.sessions[session] ??= emptySession()).seats;
-        delete seats[dropped];
+        const current = (file.sessions[session] ??= emptySession());
+        const prior = current.seats[dropped];
+        if (input.keep && prior?.id && !prior.temporary) {
+          (current.retained_seats ??= {})[dropped] = {
+            id: prior.id,
+            ...(prior.last_active ? { last_active: prior.last_active } : {}),
+          };
+        } else if (!input.keep && current.retained_seats) {
+          delete current.retained_seats[dropped];
+        }
+        delete current.seats[dropped];
       });
     },
     say: (line) => input.io.stdout(line),
