@@ -1545,9 +1545,9 @@ describe('team usage', () => {
     });
     const placed = walkCaller(io);
     expect(placed).toEqual({ kind: 'owner-no-tty' });
-    // It is the owner for the one gate that admits the owner without a terminal — which is what
-    // makes the witness a witness, not a caller the walk already refused.
-    expect(mayLaunchSeats(placed)).toBe(true);
+    // Launching is the owner at a terminal. This placement is refused there, and the full view
+    // is still not its to read.
+    expect(mayLaunchSeats(placed)).toBe(false);
     expect(viewFor(io, root)).toEqual({ full: false, mine: root });
 
     // And the command it runs reads the restricted view: no name, no root, no seat of another
