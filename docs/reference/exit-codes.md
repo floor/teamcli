@@ -198,6 +198,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.herdr` | `down` | 2 | herdr doesn't answer | `team down` |
 | `down.invocation` | `down` | 2 | the invocation can't be read | `team down extra` |
 | `down.not-a-repo` | `down` | 2 | not inside a git repository | `team down` |
+| `feed.ok` | `feed` | 0 | the message feed was printed | `team feed` |
+| `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
+| `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
+| `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |
 | `init.restored` | `init` | 0 | the approved copy was restored | `team init --restore` |
 | `init.wrote` | `init` | 0 | a skeleton was written | `team init` |
 | `init.exists` | `init` | 1 | the team file already exists | `team init` |
@@ -322,6 +326,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.delivered` | `send` | 0 | the seat's channel took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
+| `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
 | `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
