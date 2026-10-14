@@ -194,12 +194,12 @@
     },
     "cursor": {
       "idle": {
-        "real": 11,
+        "real": 12,
         "constructed": 0,
         "undocumented": 0
       },
       "working": {
-        "real": 4,
+        "real": 5,
         "constructed": 5,
         "undocumented": 0
       },
@@ -209,12 +209,12 @@
         "undocumented": 0
       },
       "permission": {
-        "real": 1,
+        "real": 2,
         "constructed": 0,
         "undocumented": 0
       },
       "question": {
-        "real": 1,
+        "real": 2,
         "constructed": 0,
         "undocumented": 0
       },
@@ -224,7 +224,7 @@
         "undocumented": 0
       },
       "trust": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       },
@@ -244,7 +244,7 @@
         "undocumented": 0
       },
       "unknown": {
-        "real": 3,
+        "real": 4,
         "constructed": 0,
         "undocumented": 0
       }
@@ -1205,6 +1205,42 @@
     },
     {
       "file": "cursor/2026.10.01/working.txt",
+      "cli": "cursor",
+      "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/exit.txt",
+      "cli": "cursor",
+      "kind": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/idle.txt",
+      "cli": "cursor",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/permission.txt",
+      "cli": "cursor",
+      "kind": "permission",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/question.txt",
+      "cli": "cursor",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/trust.txt",
+      "cli": "cursor",
+      "kind": "trust",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/working.txt",
       "cli": "cursor",
       "kind": "working",
       "provenance": "capture"

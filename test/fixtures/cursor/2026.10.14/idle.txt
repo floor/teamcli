@@ -1,0 +1,17 @@
+❯ AGENT_UNATTENDED=1 cursor-agent --force --sandbox di
+sabled
+
+
+  Cursor Agent
+  v2026.10.14-0f9edde
+  Tip: Use /plan to plan execution and reach the
+  right outcome faster.
+
+
+
+
+  → Plan, search, build anything
+
+
+  Grok 4.7 256K High                  Run Everything
+  <workspace> · main

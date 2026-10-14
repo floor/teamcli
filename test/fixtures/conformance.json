@@ -1406,6 +1406,48 @@
       "classify": "working",
       "composer": "idle",
       "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/exit.txt",
+      "cli": "cursor",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/idle.txt",
+      "cli": "cursor",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/permission.txt",
+      "cli": "cursor",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/question.txt",
+      "cli": "cursor",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/trust.txt",
+      "cli": "cursor",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/working.txt",
+      "cli": "cursor",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
     }
   ],
   "yaml": [
