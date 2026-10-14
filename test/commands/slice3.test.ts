@@ -500,7 +500,7 @@ describe('team doctor', () => {
       loggedIn: () => null,
     });
     expect(run.out).toContain(
-      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into\n',
+      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.299: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into\n',
     );
     expect(run.out).toContain('warn  herdr 0.6.9 is older than the tested 0.7.1\n');
     expect(run.out).toContain('--    claude-code: the login is not checked in this version\n');

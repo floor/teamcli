@@ -5,7 +5,7 @@ import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../../src/herdr.
 import { launchedIdentity } from '../../src/launch/identity.ts';
 import { IDLE_POLL_MS } from '../../src/launch/plan.ts';
 import { runPause } from '../../src/launch/pause.ts';
-import type { PauseHost, PauseInput, ScreenReading, WaitingRecord } from '../../src/launch/pause.ts';
+import type { PauseHost, PauseInput, PauseResult, ScreenReading, WaitingRecord } from '../../src/launch/pause.ts';
 import type { Key } from '../../src/launch/terminal.ts';
 import type { SeatState } from '../../src/state.ts';
 
@@ -140,9 +140,11 @@ function fake(over: Partial<Fake> = {}): Fake {
     },
     async key(ms) {
       own.calls.push(`key:${Number.isFinite(ms) ? ms : 'block'}`);
-      OWN_CLOCK.advance(0);
       const next = own.keys.shift();
       if (next === undefined) throw new Error('the test ran out of keys');
+      // A timeout is the wait elapsing, the same as the real reader: the clock moves by the
+      // slice it was given. A key the owner presses does not.
+      if (next === 'timeout') OWN_CLOCK.advance(ms);
       return next;
     },
     async sleep(ms) {
@@ -200,7 +202,7 @@ describe('the prompt', () => {
     OWN_CLOCK.reset();
     const f = fake({ keys: ['q'] });
     await runPause(input(), f.host);
-    expect(f.calls.slice(0, 6)).toEqual(['write:waiting-owner:trust', 'entering:trust', 'record:trust', 'drain', `prompt:${PROMPT}`, 'key:block']);
+    expect(f.calls.slice(0, 6)).toEqual(['write:waiting-owner:trust', 'entering:trust', 'record:trust', 'drain', `prompt:${PROMPT}`, 'key:4000']);
   });
 
   test('every prompt is preceded by a drain: type-ahead is never answered by the next prompt', async () => {
@@ -228,16 +230,67 @@ describe('the prompt', () => {
     expect(opened.calls[opened.calls.length - 1]).toBe('drain');
   });
 
-  test('without polling the key read blocks; with polling it reads one idle poll at a time', async () => {
+  test('without polling the key read waits out the idle timeout; with polling it reads one idle poll at a time', async () => {
     OWN_CLOCK.reset();
     const blocked = fake({ keys: ['q'] });
     await runPause(input(), blocked.host);
-    expect(blocked.calls).toContain('key:block');
+    expect(blocked.calls).toContain('key:4000');
 
     const polled = fake({ keys: ['q'] });
     polled.host.polled = true;
     await runPause(input(), polled.host);
     expect(polled.calls).toContain(`key:${IDLE_POLL_MS}`);
+  });
+});
+
+describe('an unanswered prompt cannot hold the run', () => {
+  const left: PauseResult = { kind: 'left out', reason: 'timed out after 4 s waiting for its owner; left as it is', detail: '' };
+
+  test('a trust prompt with no key ends after the idle timeout, the seat left as it is', async () => {
+    OWN_CLOCK.reset();
+    const f = fake({ keys: ['timeout'] });
+    const result = await runPause(input(), f.host);
+    expect(result).toEqual(left);
+    expect(f.calls).toContain('key:4000');
+    expect(f.calls).not.toContain('focus');
+    expect(f.calls.filter((call) => call.startsWith('close:')).length).toBe(0);
+    expect(f.calls).not.toContain('drop');
+    expect(f.calls).not.toContain('clear');
+    expect(f.state.current?.waiting?.state).toBe('waiting-owner');
+    expect(f.calls[f.calls.length - 1]).toBe('drain');
+  });
+
+  test('a permission prompt is capped the same way', async () => {
+    OWN_CLOCK.reset();
+    const f = fake({ keys: ['timeout'] });
+    const result = await runPause(input({ classification: 'permission' }), f.host);
+    expect(result).toEqual(left);
+    expect(f.calls).toContain('prompt:beta is waiting at permission: [o] open pane, [s] skip seat, [q] stop cleanly');
+  });
+
+  test('a polled trust prompt ends once the ticks have spent the idle timeout', async () => {
+    OWN_CLOCK.reset();
+    const f = fake({ keys: ['timeout', 'timeout', 'timeout'], readings: ['trust'] });
+    f.host.polled = true;
+    const result = await runPause(input(), f.host);
+    expect(result).toEqual(left);
+    expect(f.calls.filter((call) => call.startsWith('key:')).length).toBe(2);
+    expect(f.calls.filter((call) => call.startsWith('prompt:')).length).toBe(2);
+    expect(f.calls).not.toContain('focus');
+    expect(f.calls.filter((call) => call.startsWith('close:')).length).toBe(0);
+  });
+
+  test('opening the pane starts a new ask, so the prompt after the poll still waits', async () => {
+    OWN_CLOCK.reset();
+    const f = fake({
+      keys: ['o', 'timeout'],
+      readings: ['working'],
+      state: { current: { stage: 'launched', pane: 'w2:p1', workspace: 'w2' } },
+    });
+    const result = await runPause(input(), f.host);
+    expect(result).toEqual(left);
+    expect(f.calls).toContain('prompt:beta is waiting at timeout: [o] open pane, [s] skip seat, [q] stop cleanly');
+    expect(f.calls.filter((call) => call === 'key:4000').length).toBe(2);
   });
 });
 
@@ -276,7 +329,7 @@ describe('o, open the pane', () => {
       'entering:trust',
       'record:trust',
       'drain',
-      'key:block',
+      'key:4000',
       'lock',
       'state',
       'seats',
@@ -395,7 +448,7 @@ describe('s, skip the seat', () => {
       'entering:trust',
       'record:trust',
       'drain',
-      'key:block',
+      'key:4000',
       'lock',
       'state',
       'seats',
