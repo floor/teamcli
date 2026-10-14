@@ -1448,6 +1448,48 @@
       "classify": "working",
       "composer": "idle",
       "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/exit.txt",
+      "cli": "claude-code",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/idle.txt",
+      "cli": "claude-code",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/permission.txt",
+      "cli": "claude-code",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/question.txt",
+      "cli": "claude-code",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/trust.txt",
+      "cli": "claude-code",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/working.txt",
+      "cli": "claude-code",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
     }
   ],
   "yaml": [

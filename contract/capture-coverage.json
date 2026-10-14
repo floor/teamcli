@@ -80,12 +80,12 @@
     },
     "claude-code": {
       "idle": {
-        "real": 6,
+        "real": 7,
         "constructed": 2,
         "undocumented": 0
       },
       "working": {
-        "real": 1,
+        "real": 2,
         "constructed": 0,
         "undocumented": 0
       },
@@ -95,12 +95,12 @@
         "undocumented": 0
       },
       "permission": {
-        "real": 8,
+        "real": 9,
         "constructed": 0,
         "undocumented": 0
       },
       "question": {
-        "real": 4,
+        "real": 5,
         "constructed": 14,
         "undocumented": 0
       },
@@ -110,7 +110,7 @@
         "undocumented": 0
       },
       "trust": {
-        "real": 4,
+        "real": 5,
         "constructed": 1,
         "undocumented": 0
       },
@@ -130,7 +130,7 @@
         "undocumented": 0
       },
       "unknown": {
-        "real": 1,
+        "real": 2,
         "constructed": 11,
         "undocumented": 0
       }
@@ -605,6 +605,42 @@
     },
     {
       "file": "claude-code/2.1.289/unsent-typing-while-running-ansi.txt",
+      "cli": "claude-code",
+      "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/exit.txt",
+      "cli": "claude-code",
+      "kind": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/idle.txt",
+      "cli": "claude-code",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/permission.txt",
+      "cli": "claude-code",
+      "kind": "permission",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/question.txt",
+      "cli": "claude-code",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/trust.txt",
+      "cli": "claude-code",
+      "kind": "trust",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/working.txt",
       "cli": "claude-code",
       "kind": "working",
       "provenance": "capture"

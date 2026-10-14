@@ -1,0 +1,6 @@
+ions
+
+Resume this session with:
+claude --resume <session-id>
+<workspace> main ?1   7m 32s 17:29:18
+❯
