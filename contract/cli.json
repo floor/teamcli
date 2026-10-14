@@ -596,6 +596,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--watch",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -607,7 +613,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team list [--all] [--json]"
+        "team list [--all] [--watch] [--json]"
       ]
     },
     {
@@ -1002,6 +1008,59 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--watch",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "seats",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -1074,6 +1133,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true
@@ -1108,7 +1173,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team status [--session <name>] [--file <path>] [--json]"
+        "team status [--session <name>] [--file <path>] [--all] [--json]"
       ]
     },
     {

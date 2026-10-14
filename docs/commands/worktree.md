@@ -32,6 +32,7 @@ writes nothing.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--session` and `--file` are the owner's own |
+| a run with no terminal | nothing: `team worktree: only the owner runs this, from a terminal outside herdr` |
 | the orchestrator's seat, the operator's seat | run it, on the pane the state records for that seat |
 
 ## Output and exit codes
