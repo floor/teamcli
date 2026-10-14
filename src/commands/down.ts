@@ -412,7 +412,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const detached = detachedRefusal(walkCaller(io));
   if (detached !== undefined) {
     io.stderr(`team down: ${detached}\n`);
-    // exit: down.caller
+    // exit: down.detached
     return 1;
   }
   const dry = args.flags.has('dry-run');

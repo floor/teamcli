@@ -64,7 +64,7 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
   const detached = detachedRefusal(caller);
   if (detached !== undefined) {
     io.stderr(`team broker: ${detached}\n`);
-    // exit: broker.not-owner
+    // exit: broker.detached
     return 1;
   }
   if (!isOwner(caller)) {

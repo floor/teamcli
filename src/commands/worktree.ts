@@ -60,7 +60,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   const detached = detachedRefusal(walkCaller(io));
   if (detached !== undefined) {
     io.stderr(`team worktree: ${detached}\n`);
-    // exit: worktree.caller
+    // exit: worktree.detached
     return 1;
   }
   if (sub !== 'list' && !task) {

@@ -620,7 +620,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const aimed = otherFile || args.values.session !== undefined;
   if (detached !== undefined && aimed) {
     out.stderr(`team up: ${detached}\n`);
-    // exit: up.not-owner
+    // exit: up.detached
     return 1;
   }
   if (!mayLaunchSeats(walked) && aimed && grantedSeat !== null) {

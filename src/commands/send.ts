@@ -116,7 +116,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const detached = detachedRefusal(callerOf(io));
   if (detached !== undefined) {
     io.stderr(`team send: ${detached}\n`);
-    // exit: send.refused
+    // exit: send.detached
     return 1;
   }
   if (args.flags.has('list')) return listSeats(io, host, report);

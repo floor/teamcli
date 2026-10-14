@@ -153,7 +153,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const detached = detachedRefusal(walkCaller(io));
   if (detached !== undefined) {
     out.stderr(`team add: ${detached}\n`);
-    // exit: add.caller
+    // exit: add.detached
     return 1;
   }
   const temporary = args.flags.has('temporary');

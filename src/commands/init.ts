@@ -156,7 +156,7 @@ export async function runInit(
   const detached = detachedRefusal(caller);
   if (detached !== undefined) {
     io.stderr(`team init: ${detached}\n`);
-    // exit: init.not-owner
+    // exit: init.detached
     return 1;
   }
   if (!isOwner(caller)) {

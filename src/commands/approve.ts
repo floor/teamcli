@@ -365,7 +365,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   const detached = detachedRefusal(caller);
   if (detached !== undefined) {
     io.stderr(`team approve: ${detached}\n`);
-    // exit: approve.not-owner
+    // exit: approve.detached
     return 1;
   }
   // An out-of-band owner token admits a non-owner caller as the owner for this one change: the

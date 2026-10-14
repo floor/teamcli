@@ -126,7 +126,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const detached = detachedRefusal(walkCaller(io));
   if (detached !== undefined) {
     io.stderr(`team remove: ${detached}\n`);
-    // exit: remove.caller
+    // exit: remove.detached
     return 1;
   }
   const name = args.rest[0] ?? '';

@@ -95,7 +95,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   const detached = detachedRefusal(walkCaller(io));
   if (detached !== undefined) {
     io.stderr(`team answer: ${detached}\n`);
-    // exit: answer.caller
+    // exit: answer.detached
     return 1;
   }
 
