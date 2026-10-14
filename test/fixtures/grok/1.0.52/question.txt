@@ -1,0 +1,22 @@
+
+  main <workspace>   21K / 256K │ [Dashboard]
+
+
+     ❯ Before doing anything else, ask    5:12 PM
+       me to choose between the names
+       alpha and beta, and wait. Do not
+       read or write any file.                      █
+
+   ◆ Waiting on answers for W…   8.7s ⇣21.5k [stop]
+
+  ┃
+  ┃  Which name do you choose?
+  ┃
+  ┃
+  ┃  1 (○) alpha  Use the name alpha.             █
+  ┃  z (○) Type your answer here
+  ┃
+  ┃  ↑/↓ navigate · y copy         Enter:submit
+  ┃
+
+  Tab:next answer  │  Esc:scrollback  │  Shift+x:

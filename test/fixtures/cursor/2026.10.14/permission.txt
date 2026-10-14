@@ -1,0 +1,21 @@
+
+
+  Run sleep 15 in the shell, then reply only
+  SLEEP_DONE. Do not read or write any file.
+
+
+  I'll run sleep 15 now and reply with only
+  SLEEP_DONE when it finishes.
+
+  $ sleep 15 Waiting for approval...
+
+──────────────────────────────────────────────────────
+ $  sleep 15 in .
+
+ Run this command?
+ Not in allowlist: sleep
+  → Run (once) (y)
+    Add Shell(sleep) to allowlist? (tab)
+    Run Everything (shift+tab)
+    Skip & tell the agent what to do instead (esc or
+  n)

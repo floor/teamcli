@@ -1,0 +1,22 @@
+
+  main <workspace>   21K / 256K │ [Dashboard]
+
+
+     ❯ Before doing anything else, ask    5:12 PM
+       me to choose between the names
+       alpha and beta, and wait. Do not
+       read or write any file.
+
+
+     You declined to choose between       5:13 PM   █
+     alpha and beta, so I stopped                   █
+     there.                                         █
+                                                    █
+  ───────────────────────────────────────────────1─ █
+    ❯ /exit Quit the application                    █
+  ─────────────────────────────────────────────────
+  ╭───────────────────────────────────────────────╮
+  │ ❯ /exit                                       │
+  ╰──────────── Grok 4.7 (high) · always-approve ─╯
+
+  Enter:send  │  Shift+Enter/Opt+Enter:newline  │
