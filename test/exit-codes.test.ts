@@ -1385,7 +1385,7 @@ PATH=${JSON.stringify(saved)} exec git "$@"
 
 async function removed(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
   const io = testIo(place.root, caller);
-  return { code: await runRemove(argv, io, sources), out: io.out, err: io.err };
+  return { code: await runRemove(argv, io, { ...sources, home: sources.home ?? place.home }), out: io.out, err: io.err };
 }
 
 scene('remove.invocation', async (place) => show(await removed(place, [], owner, downSources()), 'a seat name is required'));
