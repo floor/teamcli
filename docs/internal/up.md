@@ -251,6 +251,13 @@ and asks, exactly:
 
     claude-beacon is waiting at trust: [o] open pane, [s] skip seat, [q] stop cleanly
 
+The ask waits at most the profile's idle timeout (90 s today). That bound covers a trust or
+permission prompt too, including one re-read on each tick while the lead may answer it. When it
+ends with no `o`, `s` or `q`, the seat is left exactly as it is — workspace and waiting record
+kept, nothing focused, nothing closed — with `<seat>: left out: timed out after <n> s waiting
+for its owner; left as it is`, and `up` goes on to the next seat. The next `up` asks again, with
+the same cap. Pressing `o` spends the open-pane poll's own timeout and then starts a new ask.
+
 `o`, `s` and `q` are the whole answer. One chunk is one key only when it is exactly one byte and
 that byte is `o`, `s`, `q` or Ctrl-C; anything else — several bytes that arrived together (a paste,
 a held key, an escape sequence) or any other byte — reprints the exact line and changes nothing,
