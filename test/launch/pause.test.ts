@@ -5,7 +5,7 @@ import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../../src/herdr.
 import { launchedIdentity } from '../../src/launch/identity.ts';
 import { IDLE_POLL_MS } from '../../src/launch/plan.ts';
 import { runPause } from '../../src/launch/pause.ts';
-import type { PauseHost, PauseInput, ScreenReading, WaitingRecord } from '../../src/launch/pause.ts';
+import type { PauseHost, PauseInput, PauseResult, ScreenReading, WaitingRecord } from '../../src/launch/pause.ts';
 import type { Key } from '../../src/launch/terminal.ts';
 import type { SeatState } from '../../src/state.ts';
 
@@ -244,7 +244,7 @@ describe('the prompt', () => {
 });
 
 describe('an unanswered prompt cannot hold the run', () => {
-  const left = { kind: 'left out', reason: 'timed out after 4 s waiting for its owner; left as it is', detail: '' };
+  const left: PauseResult = { kind: 'left out', reason: 'timed out after 4 s waiting for its owner; left as it is', detail: '' };
 
   test('a trust prompt with no key ends after the idle timeout, the seat left as it is', async () => {
     OWN_CLOCK.reset();
