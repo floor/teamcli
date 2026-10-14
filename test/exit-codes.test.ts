@@ -3076,6 +3076,12 @@ scene('send.refused', async (place) => {
   write(place, TWO);
   return show(await sent(place, ['missing', 'hello'], owner, sendHost(place)), 'it is not a declared seat');
 });
+scene('send.held', async (place) => {
+  write(place, TEAM);
+  const host = sendHost(place);
+  host.native.paneText = () => `${'─'.repeat(30)}\n❯ draft in box\n${'─'.repeat(30)}`;
+  return show(await sent(place, ['lead', 'hello'], owner, host), 'held');
+});
 scene('send.unreachable', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { agents: false })), 'unreachable');
