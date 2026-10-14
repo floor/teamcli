@@ -22,6 +22,7 @@ removes the socket file, and exits 0.
 | Caller | May |
 | --- | --- |
 | the owner, in a foreground terminal outside herdr, one per clone | run it |
+| a run with no terminal | nothing: `team broker: only the owner runs this, from a terminal outside herdr` |
 | a seat, a pane, or any call under herdr at all | nothing: `team broker: only the owner runs broker, from a terminal outside herdr; this call is <caller>` |
 
 ## Output and exit codes

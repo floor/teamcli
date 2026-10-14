@@ -34,6 +34,7 @@ import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
@@ -64,6 +65,7 @@ import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const owner = { kind: 'owner' } as const;
+const detachedCaller = { kind: 'owner-no-tty' } as const;
 const other = { kind: 'seat', name: 'other', pane: 'w9:p1' } as const;
 const leadSeat = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' } as const;
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
@@ -661,6 +663,11 @@ scene('add.placed', async (place) => {
     },
   })), "names the project's parent");
 });
+scene('add.pretrust', async (place) => {
+  approve(place, TWO);
+  writeFileSync(join(place.home, '.claude.json'), 'not json\n');
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place)), 'not trusted for claude');
+});
 scene('add.lobby', async (place) => {
   approve(place, TWO);
   const fs = {
@@ -701,6 +708,21 @@ scene('add.ceiling', async (place) => {
 scene('add.dry-run', async (place) => {
   approve(place, TWO);
   return show(await added(place, ['worker', '--dry-run', '--file', place.file], owner, addSources(place)), 'dry run: nothing was run');
+});
+scene('add.override-owner', async (place) => {
+  approve(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead' };
+  });
+  return show(await added(place, ['worker', '--model', 'claude-sonnet-5-5'], { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' }, addSources(place)), "--model and --effort on a declared seat are the owner's");
+});
+scene('add.model', async (place) => {
+  approve(place, TWO);
+  return show(await added(place, ['worker', '--model', 'unknown', '--file', place.file], owner, addSources(place)), 'unknown model "unknown"');
+});
+scene('add.effort', async (place) => {
+  approve(place, TWO);
+  return show(await added(place, ['worker', '--effort', 'unknown', '--file', place.file], owner, addSources(place)), 'effort "unknown" is not one of anthropic\'s');
 });
 scene('add.budget', async (place) => {
   approve(place, BUDGET);
@@ -1801,6 +1823,35 @@ scene('status.not-yours', async (place) => {
   // the one fixed sentence, byte for byte, on stderr, and nothing else anywhere.
   const ran = await status(place, [], { ...statusSources(quiet), home: place.home, gate: { standing: () => ({ kind: 'none' }) } }, other);
   expect(ran.err).toBe('team status: this team is not yours to read\n');
+  expect(ran.out).toBe('');
+  return ran;
+});
+
+async function seats(place: Place, argv: string[], sources: SeatsSources, caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runSeats(argv, io, sources), out: io.out, err: io.err };
+}
+
+scene('seats.invocation', async (place) => show(await seats(place, ['extra'], statusSources(quiet)), 'unexpected'));
+scene('seats.not-a-repo', async (place) => show(await seats(place, [], statusSources(quiet)), 'not inside a git repository'), false);
+scene('seats.file', async (place) => show(await seats(place, ['--file', 'missing.yaml'], statusSources(quiet)), 'no team file'));
+scene('seats.file-invalid', async (place) => {
+  invalid(place);
+  return show(await seats(place, ['--file', 'team.yaml'], statusSources(quiet)), 'line');
+});
+scene('seats.herdr', async (place) => {
+  write(place, TEAM);
+  return show(await seats(place, [], statusSources(null)), "doesn't answer");
+});
+scene('seats.shown', async (place) => {
+  write(place, TEAM);
+  return show(await seats(place, [], statusSources(quiet)), 'SEAT');
+});
+scene('seats.file-owner', async (place) => show(await seats(place, ['--file', '.agents/team.yaml'], statusSources(quiet), other), "--file is the owner's"));
+scene('seats.session-owner', async (place) => show(await seats(place, ['--session', 'team'], statusSources(quiet), other), "--session is the owner's"));
+scene('seats.not-yours', async (place) => {
+  const ran = await seats(place, [], { ...statusSources(quiet), home: place.home, gate: { standing: () => ({ kind: 'none' }) } }, other);
+  expect(ran.err).toBe('team seats: this team is not yours to read\n');
   expect(ran.out).toBe('');
   return ran;
 });
@@ -3253,6 +3304,22 @@ scene('mcp.invocation', async (place) => show(await mcpRan(place, []), 'a subcom
 // CLIs this version knows, and every one of them now has a launch profile, so no team file can
 // reach the refusals — they stand, rows and exit sites whole, for a CLI listed before its profile
 // ships, which is the state grok itself was in until now.
+const SENTENCE = 'only the owner runs this, from a terminal outside herdr';
+scene('add.detached', async (place) => show(await added(place, ['worker'], detachedCaller, addSources(place)), SENTENCE));
+scene('answer.detached', async (place) => show(await answered(place, ['lead', 'trust'], detachedCaller, answerHost(place, '')), SENTENCE));
+scene('approve.detached', async (place) => {
+  write(place, TEAM);
+  return show(await approved(place, [], detachedCaller, approveSources(place, '1')), SENTENCE);
+});
+scene('broker.detached', async (place) => show(await brokered(place, [], { keyReader: okKey }, detachedCaller), SENTENCE));
+scene('down.detached', async (place) => show(await down(place, [], detachedCaller, downSources()), SENTENCE));
+scene('init.detached', async (place) => show(await initial(place, [], detachedCaller), SENTENCE));
+scene('remove.detached', async (place) => show(await removed(place, ['worker'], detachedCaller, downSources()), SENTENCE));
+scene('send.detached', async (place) => show(await sent(place, ['--list'], detachedCaller, sendHost(place)), SENTENCE));
+scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), SENTENCE));
+scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), SENTENCE));
+scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), SENTENCE));
+
 const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'approve.revalidate', 'approve.placed', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
 
 const contract = loadContract();

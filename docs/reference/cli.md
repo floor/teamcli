@@ -31,17 +31,19 @@ Hidden: no
 
 Usage:
 
-    team add <name> [--dry-run] [--session <name>] [--file <path>]
-    team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--dry-run] [--session <name>] [--file <path>]
+    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+    team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--effort` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--like` | yes | no | no |
+| `--model` | yes | no | no |
 | `--session` | yes | no | no |
 | `--temporary` | no | no | no |
 | `--until` | yes | no | no |
@@ -357,7 +359,7 @@ Hidden: no
 
 Usage:
 
-    team list [--all] [--json]
+    team list [--all] [--watch] [--json]
 
 ### Flags
 
@@ -366,6 +368,7 @@ Usage:
 | `--all` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -623,6 +626,30 @@ Usage:
 | --- | --- | --- |
 | `name` | no | no |
 
+## `seats`
+
+Hidden: no
+
+Usage:
+
+    team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
+| `--watch` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `send`
 
 Hidden: no
@@ -659,12 +686,13 @@ Hidden: no
 
 Usage:
 
-    team status [--session <name>] [--file <path>] [--json]
+    team status [--session <name>] [--file <path>] [--all] [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--all` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |

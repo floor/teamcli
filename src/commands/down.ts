@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, callerOf, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { grantGate, logGranted } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
@@ -408,6 +408,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     io.stderr(`team down: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
     // exit: down.invocation
     return 2;
+  }
+  const detached = detachedRefusal(walkCaller(io));
+  if (detached !== undefined) {
+    io.stderr(`team down: ${detached}\n`);
+    // exit: down.detached
+    return 1;
   }
   const dry = args.flags.has('dry-run');
   const refusals: string[] = [];
@@ -932,9 +938,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       drop(name) {
         let pane: string | undefined;
         updateState(dir, (file) => {
-          const seatsOf = (file.sessions[session] ??= emptySession()).seats;
-          pane = seatsOf[name]?.pane;
-          delete seatsOf[name];
+          const current = (file.sessions[session] ??= emptySession());
+          const prior = current.seats[name];
+          pane = prior?.pane;
+          if (prior?.id && !prior.temporary) {
+            (current.retained_seats ??= {})[name] = {
+              id: prior.id,
+              ...(prior.last_active ? { last_active: prior.last_active } : {}),
+            };
+          }
+          delete current.seats[name];
         });
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
       },

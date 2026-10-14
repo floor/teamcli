@@ -75,8 +75,9 @@ is the thing the lock serializes. The wait listens at this process's own
 
 The owner, or the orchestrator from its own seat, on the pane the project's state records for
 it — the same check `team answer` makes, judged the same way. Every other caller is refused
-before the seat is looked up. `--list` is the exception: it prints the file's roster and sends
-nothing, so it needs no caller check.
+before the seat is looked up. A run with no terminal is refused before `--list` as well:
+`team send: only the owner runs this, from a terminal outside herdr`. For every other caller,
+`--list` prints the file's roster and sends nothing, so it needs no caller check.
 
 ## Outcomes
 
