@@ -601,6 +601,31 @@ describe('team add', () => {
     expect(gone.err).toContain("doesn't exist");
   });
 
+  test('refuses a result path that is absolute or contains ..', async () => {
+    const absolute = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:/tmp/out.md'], absolute, sources(world()))).toBe(1);
+    expect(absolute.err).toContain('relative to the project');
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+
+    // `../outside.md` is outside this project (home/acme). `notes/../../outside.md` contains
+    // `..` and lands in the same place. Neither may be stored, and no seat is recorded.
+    const escaped = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:../outside.md'], escaped, sources(world()))).toBe(1);
+    expect(escaped.err).toContain('relative to the project');
+    expect(existsSync(join(home, 'outside.md'))).toBe(false);
+    const nested = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/../../outside.md'], nested, sources(world()))).toBe(1);
+    expect(nested.err).toContain('relative to the project');
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+  });
+
+  test('refuses a merged branch that starts with a dash', async () => {
+    const io = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'merged:-not-a-branch'], io, sources(world()))).toBe(1);
+    expect(io.err).toContain('is not a branch name');
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+  });
+
   test('each start limit refuses with its figure before the file is edited', async () => {
     const cases: { machine: Machine; text: string }[] = [
       { machine: { ...fine, loadPerCore: 9 }, text: 'the load is 9.0 per core, above 3' },

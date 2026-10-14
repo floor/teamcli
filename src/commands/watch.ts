@@ -67,7 +67,7 @@ export type WatchSources = {
   /** This process's pane, `'gone'` when herdr answered and none has it, null when herdr can't say. */
   ownPane?(session: string, pid: number): { pane: string; workspace: string } | 'gone' | null;
   /** How an end is read. The real watch uses git and the filesystem. */
-  readEnd?(root: string, until: string, base: string | null, ownBefore: boolean): EndView;
+  readEnd?(root: string, until: string, base: string | null, ownBefore: boolean, seat?: string): EndView;
   /** Stops one free seat. The real watch uses the same steps as `remove`. */
   stopSeat?(session: string, seat: DownSeat): Promise<boolean>;
   /** Removes one merged worktree. The real watch calls `worktree remove`. */
@@ -592,7 +592,7 @@ async function closeEnded(input: {
     const task = temporary.task;
     const work = task ? state.worktrees[task] : undefined;
     const ownBefore = work ? work.own_commits === true : temporary.own_commits === true;
-    const end = endOf(root, temporary.until, team.workspace.base, ownBefore);
+    const end = endOf(root, temporary.until, team.workspace.base, ownBefore, name);
     const agent = live.agents.find((item) => item.name === name);
     const cli = team.seats.find((seat) => seat.name === temporary.like)?.cli ?? '';
     const free = agent

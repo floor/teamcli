@@ -13,6 +13,7 @@ import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts'
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
+import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, hasSeat, restoreSeat, seatIsStopped } from '../file/lines.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -666,11 +667,14 @@ function temporarySeat(
   if (!until) return { error: '--until is result:<path> or merged:<branch>' };
   let own: boolean | undefined;
   if (until.kind === 'result') {
-    if (until.path.startsWith('/') || until.path.startsWith('~')) return { error: 'a result path is relative to the project' };
+    const problem = resultPathProblem(root, until.path);
+    if (problem) return { error: problem };
     if (existsSync(resolve(root, until.path))) return { error: `${until.path} already exists` };
   } else if (!base) {
     return { error: 'workspace.base is required to read a merged end' };
   } else {
+    const name = branchProblem(root, until.branch);
+    if (name) return { error: name };
     const read = readMerge(root, until.branch, base, false);
     const here = branchPresent(root, until.branch);
     if (read.detail.includes('the branch is gone') || here === false) return { error: `branch ${until.branch} doesn't exist` };
