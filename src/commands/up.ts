@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
-import { callerLabel, callerOf, describeCaller, mayLaunchSeats } from '../caller.ts';
+import { callerLabel, callerOf, describeCaller, mayLaunchSeats, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { declaredModel } from '../file/model.ts';
@@ -455,12 +455,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // DEFAULT live file of this cwd, read with no flag — before any `--file` or `--session` is
   // honoured. Both are the owner's alone: the gate refuses them for a delegated run, and a
   // delegate's eligibility never comes from a file the caller names. A gate refusal replaces the
-  // ordinary caller refusal below and the flagged target is never read; a passed verdict makes
+  // ordinary caller refusal, and the flagged target is never read; a passed verdict makes
   // the run the delegate's, on that same default file. The owner's runs never come here, and
-  // with no `delegates` section — or no readable default file — nothing changes: today's order,
-  // today's texts.
-  const caller = callerOf(io);
-  const defaultLoad = mayLaunchSeats(caller) ? null : loadTeamFile(io.cwd, { home: sources.home });
+  // with no `delegates` section, a non-owner's `--session`, or a `--file` other than this
+  // folder's own team file, is the ordinary refusal and returns before that file or session is
+  // read. A delegate verdict that already refused the same aim returns here too, in the gate's
+  // own words. This folder's own file, with no `--session`, continues below. The path comparison
+  // is the resolved spelling: a link, or a differently-cased spelling of this folder's own team
+  // file, is not that file, and is refused here before it is opened.
+  const walked = walkCaller(io);
+  const defaultLoad = mayLaunchSeats(walked) ? null : loadTeamFile(io.cwd, { home: sources.home });
   const delegateTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
   const verdict = delegateTeam
     ? (sources.delegateGate ?? delegateGate)({
@@ -477,6 +481,28 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // refused, the default file's `delegates` section named a pane, and the gate passed it.
   let delegated: string | null = null;
   if (verdict?.kind === 'passed') delegated = verdict.pane;
+  // A non-owner passing `--session`, or a `--file` other than this folder's own team file, is
+  // refused here, before that file is read, before a session is asked, and before an out-of-band
+  // owner token is matched. The walk reads no session. The token is a yes for the launch this
+  // folder's own file would make, so it is matched only on the path below, which never opens a
+  // flagged file and never asks a named session. A delegate verdict that already refused this aim
+  // returns in the gate's words, before the caller is placed. This folder's own file, with no
+  // `--session`, continues below.
+  const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
+  const aimed = otherFile || args.values.session !== undefined;
+  if (!mayLaunchSeats(walked) && aimed && verdict === null) {
+    out.stderr(
+      `team up: only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(walked)}\n`,
+    );
+    // exit: up.not-owner
+    return 1;
+  }
+  if (!mayLaunchSeats(walked) && aimed && verdict?.kind === 'refused') {
+    out.stderr(`team up: ${verdict.text}\n`);
+    // exit: up.delegate-flag
+    return 1;
+  }
+  const caller = callerOf(io);
   // The file this run is whole on: the default one whenever the gate decided on it — a refused
   // run stops on the gate's words without reading a flagged target, a delegated one runs the
   // file its delegation was read from — and otherwise today's load, `--file` honoured exactly
@@ -813,7 +839,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   }
   if (refusals.length) {
     if (!dry) for (const refusal of [...new Set(refusals)]) out.stderr(`team up: ${plainText(refusal)}\n`);
-    // exit: up.not-owner
     // exit: up.delegate
     // exit: up.delegate-approval
     // exit: up.delegate-approved-copy
@@ -821,7 +846,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.delegate-evidence
     // exit: up.delegate-placement
     // exit: up.delegate-command
-    // exit: up.delegate-flag
     // exit: up.never-approved
     // exit: up.differs
     // exit: up.doctor
