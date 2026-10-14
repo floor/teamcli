@@ -43,13 +43,14 @@ That line names the schema of the release that wrote the file — the tag `v` pl
 
 ## Who may run it
 
-The owner, from a terminal outside herdr. A seat, an agent-run CLI, or a command without a terminal
-is refused.
+The owner, from a terminal outside herdr. A seat or an agent-run CLI is refused with the caller
+named. A run with no terminal is refused with one sentence, before the repository is read.
 
 ## Refusals
 
 | Message | Exit |
 | --- | --- |
+| `team init: only the owner runs this, from a terminal outside herdr` — a run with no terminal | 1 |
 | `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team init: not inside a git repository` | 2 |
 | `team init: .agents/team.yaml is tracked by git, and a team file is private. Untrack it, keeping the file:` … | 1 |

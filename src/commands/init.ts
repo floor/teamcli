@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
-import { callerOf, describeCaller, isOwner } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { TEAM_FILE, findRoot } from '../file/load.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import type { Command, Io } from '../io.ts';
@@ -153,6 +153,12 @@ export async function runInit(
     return 2;
   }
   const caller = callerOf(io);
+  const detached = detachedRefusal(caller);
+  if (detached !== undefined) {
+    io.stderr(`team init: ${detached}\n`);
+    // exit: init.not-owner
+    return 1;
+  }
   if (!isOwner(caller)) {
     io.stderr(`team init: only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
     // exit: init.not-owner
