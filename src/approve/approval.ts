@@ -71,6 +71,13 @@ export function approvedFingerprints(record: ApprovalRecord): Fingerprints {
     const omitted = fingerprints({ ...checked.team, tasks: null }).sections.tasks;
     if (omitted !== undefined) sections = { ...sections, tasks: omitted };
   }
+  // A record written before `grant` has no fingerprint for it. The omitted section is null, so
+  // the arrival baseline is that null: a file that still omits `grant` matches, and a file that
+  // adds the section differs. Filling from the live file would hide the add.
+  if (checked.ok && stored.sections.grant === undefined) {
+    const omitted = fingerprints({ ...checked.team, grant: null }).sections.grant;
+    if (omitted !== undefined) sections = { ...sections, grant: omitted };
+  }
   if (checked.ok && checked.team.watch.idleRepeat === undefined) {
     const legacy = legacyWatchDigest(checked.team);
     if (legacy && stored.sections['watch'] === legacy) {

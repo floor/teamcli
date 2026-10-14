@@ -100,6 +100,36 @@ or out of the list, changes that key, because the word is part of the seat.
 
 Nothing in the launch line reads `effort`.
 
+## `grant`
+
+Records the grant the owner gives the orchestrator's seat. It is an owner section: adding,
+changing or removing it is a change to the file the owner approves. Omitted, it reads as `null`.
+
+```yaml
+grant:
+  session: acme          # the file's own session
+  seat: lead             # the orchestrator's seat
+  scope:                 # non-empty, distinct, order kept
+    - up
+    - down
+    - approve
+    - init
+```
+
+- `session` is the team's own session: the `session` key, or the project name when that key is
+  omitted. Any other value is `grant.session must be the file's session "<session>": "<written>"`.
+- `seat` is the orchestrator's name, the one `coordinator:` or `leads: true` resolves. The
+  operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":
+  "<written>"`.
+- `scope` names acts from the closed set `up`, `down`, `approve` and `init`. The list is
+  non-empty, each act appears once, and the order is part of the value the owner approves. An
+  empty list is `grant.scope must name at least one of: up, down, approve, init`. A repeated act
+  is `grant.scope names "<act>" twice`. Any other word is `grant.scope must name up, down,
+  approve, init: "<word>" is not one`.
+- `approve` in `scope` is an ordinary approval: the roster and `rules`. A change to `grant`
+  itself, and a change to any other owner section, stays the owner's to approve.
+- Any other key, including `path`, is an unknown field.
+
 ## `delegates`
 
 Names panes outside the team's session that may run some operational commands as a delegate of
