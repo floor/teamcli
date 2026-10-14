@@ -36,10 +36,13 @@ them — and `rules`. The guard is an allowlist, and it is fail-closed: `rules` 
 section it admits, and every other one is refused by default — `delegates` first, and `budgets`,
 `limits`, identity, `trust`, the workspace whose `setup` runs commands, the operator and
 orchestrator sections, and any section a later version adds — with
-`this change needs the owner: <what changed>`. The ceiling counts: adding or taking out a
+`this change needs the owner: <what changed>`. The orchestrator's seat may approve that same
+ordinary class when the approved `grant` lists `approve`. The run is this folder's own file:
+`--file` is refused before a different path is read, the first approval stays the owner's, and
+a change to any owner section — `grant` included — stays the owner's. The ceiling counts: adding or taking out a
 seat on a file that declares no `limits` moves the default ceiling with it — `limits` changed —
 so that roster edit is the owner's, while the same edit on a file whose ceiling is declared
-leaves `limits` alone and is the delegate's. The difference is judged against the approved
+leaves `limits` alone and is the delegate's, or the granted seat's. The difference is judged against the approved
 copy alone, before anything else is read, so a delegate can never widen its own grant, raise a
 ceiling, hand a seat the verdict over the team, point `setup` at a command, or add a folder the
 owner did not trust: the widened value is never signed, and the owner is the only caller who
