@@ -47,6 +47,7 @@ import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
+import { lobbyPretrustLine } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -983,7 +984,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     ...(watchFile ? { watchFile } : {}),
   });
 
+  // A dry run only reports a CLI whose trust record is unknown. The real run writes
+  // the records below, after the lobby exists.
+  const stampLobbyTrust = (write: boolean) => {
+    const now = sources.now?.() ?? new Date();
+    for (let index = 0; index < seats.length; index++) {
+      const seat = seats[index];
+      if (!seat) continue;
+      const line = lobbyPretrustLine(seat, sources.home, { write, now });
+      if (line) seats[index] = { ...seat, launchProblem: line };
+    }
+  };
+
   if (dry) {
+    stampLobbyTrust(false);
     // The same cause can reach the list twice — the gate and `doctor` both read the
     // approval — so a refusal is said once. A refusal leaves through the real run's
     // return below, so the status and the exit id are that refusal's; the words stay these.
@@ -1081,6 +1095,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       }
     }
     // Built after the make above: the lobby it may have made is every lobby seat's `cwd`.
+    // The trust record is written for that path, before the workspace, and a seat whose
+    // record cannot be written is left out of the launch.
+    stampLobbyTrust(true);
     const plan = buildPlan();
 
     // The ceilings the launch holds are the verified record's own, fixed at approval.
