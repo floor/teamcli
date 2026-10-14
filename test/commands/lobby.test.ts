@@ -680,8 +680,8 @@ describe('the lobby gate', () => {
     const made = world();
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: root });
-    expect(made.workspaces).toContainEqual({ label: 'Claude Opus 5.5', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
     const state = readState(dir);
     expect(state.sessions['acme']?.seats.lead?.start_cwd).toBe(root);
     expect(state.sessions['acme']?.seats.worker?.start_cwd).toBe(canonicalLanding(lobby).landing);
@@ -1124,7 +1124,7 @@ describe('the lobby gate with files declared', () => {
     // the worker's confirmation is the second read, and the swap lands there.
     const run = await runUpCmd([], made, { fs: swapLockAt(2) });
     expect(run.code).toBe(1);
-    expect(made.workspaces).toEqual([{ label: 'Claude Opus 5.5', cwd: root }]);
+    expect(made.workspaces).toEqual([{ label: 'lead', cwd: root }]);
     expect(made.workspaces.some((workspace) => workspace.cwd === lobby)).toBe(false);
     expect(run.out).toContain('lead: ready\n');
     expect(run.out).toContain('worker: left out: the lobby: .claude/scheduled_tasks.lock is not the file the gate read\n');
@@ -2905,7 +2905,7 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     // difference, the same canonical path. Only device and inode tell it from the gate's folder.
     const run = await runUpCmd([], made, { fs: swapLobbyAt(2, 'folder') });
     expect(run.code).toBe(1);
-    expect(made.workspaces).toEqual([{ label: 'Claude Opus 5.5', cwd: root }]);
+    expect(made.workspaces).toEqual([{ label: 'lead', cwd: root }]);
     expect(made.workspaces.some((workspace) => workspace.cwd === lobby)).toBe(false);
     expect(made.typed).toEqual([]);
     // The record holds the words; the folder it names is stderr detail, for the owner alone.

@@ -3775,7 +3775,7 @@ describe('team up, the pause', () => {
     expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w1:p1 was gone and was replaced; its workspace w1 was left\n');
     expect(io.out).not.toContain('left out: its waiting pane is gone');
     expect(made.closes).toEqual([]);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
     expect(made.terminal.reads).toBe(0);
     expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.waiting)
       .toBeUndefined();
@@ -3825,7 +3825,7 @@ describe('team up, the pause', () => {
       const io = testIo(root, { kind: 'owner' });
       const code = await runUp(FILE, io, sources(host, made));
       expect(code).toBe(0);
-      expect(made.creates).toEqual(['Claude Opus 5.5']);
+      expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
       expect(made.closes).toEqual([]);
       expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1']);
       expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced; its workspace w9 was left\n');
@@ -3844,7 +3844,7 @@ describe('team up, the pause', () => {
       const second = testIo(root, { kind: 'owner' });
       const code2 = await runUp(FILE, second, sources({ ...host, agents: again }, made));
       expect(code2).toBe(0);
-      expect(made.creates).toEqual(['Claude Opus 5.5']);
+      expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
       expect(made.closes).toEqual([]);
       expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1']);
       expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.pane).toBe('w1:p1');
@@ -3967,10 +3967,10 @@ describe('team up, the pause', () => {
     expect(report).not.toContain('`team remove deepseek-acme --keep` then `team add deepseek-acme`');
     expect(report).not.toContain('`team remove deepseek-acme-2 --keep` then `team add deepseek-acme-2`');
     expect(made.creates).toEqual([
-      'Claude Opus 5.5',
-      'Claude Opus 5.5',
-      'DeepSeek V4.1 Flash',
-      'DeepSeek V4.1 Flash',
+      'claude-coordinator-acme · project coordinator',
+      'claude-operator-acme · operator',
+      'deepseek-acme · implementer',
+      'deepseek-acme-2 · implementer',
     ]);
     expect(made.closes).toEqual([]);
     expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1', 'w2:p1', 'w3:p1', 'w4:p1']);
@@ -3998,10 +3998,10 @@ describe('team up, the pause', () => {
     expect(`${second.out}${second.err}`).not.toContain('was gone and was replaced');
     expect(`${second.out}${second.err}`).not.toContain('its record still names it');
     expect(made.creates).toEqual([
-      'Claude Opus 5.5',
-      'Claude Opus 5.5',
-      'DeepSeek V4.1 Flash',
-      'DeepSeek V4.1 Flash',
+      'claude-coordinator-acme · project coordinator',
+      'claude-operator-acme · operator',
+      'deepseek-acme · implementer',
+      'deepseek-acme-2 · implementer',
     ]);
     expect(made.closes).toEqual([]);
     expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1', 'w2:p1', 'w3:p1', 'w4:p1']);
@@ -4056,7 +4056,7 @@ describe('team up, the pause', () => {
     expect(`${io.out}${io.err}`).not.toContain('was left');
     expect(`${io.out}${io.err}`).not.toContain('workspace w9');
     expect(made.closes).toEqual([]);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'];
     expect(seat?.waiting).toBeUndefined();
     expect(seat?.pane).toBe('w1:p1');
