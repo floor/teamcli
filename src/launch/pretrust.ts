@@ -34,8 +34,14 @@ export function lobbyPretrustLine(
 ): string | null {
   if (!launchesIntoLobby(seat)) return null;
   const writer = WRITERS[seat.cli];
-  if (!writer) return repair(seat.cli, seat.cwd);
-  if (!opts.write) return null;
+  // A shipped CLI with no captured record still starts. Inventing its file would be a guess,
+  // and leaving it out would make the repair unusable: the next run could not see the grant.
+  if (!writer) return null;
+  if (!opts.write) {
+    // A dry run writes nothing. It still reports a Claude file that cannot be merged.
+    if (seat.cli === 'claude-code' && claudeUnmergeable(home)) return repair(seat.cli, seat.cwd);
+    return null;
+  }
   let lobby = seat.cwd;
   try {
     lobby = realpathSync(seat.cwd);
@@ -114,6 +120,18 @@ function writeCursor(lobby: string, home: string, now: Date): void {
 
 /** Claude Code reads `projects[<path>].hasTrustDialogAccepted` from `~/.claude.json`.
  *  A trust of the home directory is session-only, so that path is never written. */
+function claudeUnmergeable(home: string): boolean {
+  const file = join(home, '.claude.json');
+  if (!existsSync(file)) return false;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    if (!plain(parsed)) return true;
+    return parsed.projects !== undefined && !plain(parsed.projects);
+  } catch {
+    return true;
+  }
+}
+
 function writeClaude(lobby: string, home: string): void {
   if (realpathSync(home) === lobby) throw new Error('home trust is session-only');
   const file = join(home, '.claude.json');

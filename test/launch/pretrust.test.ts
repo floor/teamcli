@@ -105,8 +105,9 @@ describe('lobby pretrust', () => {
     const lobby = lobbyOf();
     const file = join(home, '.claude.json');
     writeFileSync(file, 'not json\n');
-    const line = lobbyPretrustLine(seat('claude-code', lobby), home, { write: true, now: NOW });
+    const line = lobbyPretrustLine(seat('claude-code', lobby), home, { write: false, now: NOW });
     expect(line).toBe(`the lobby is not trusted for claude: run claude in ${lobby} and accept the folder`);
+    expect(lobbyPretrustLine(seat('claude-code', lobby), home, { write: true, now: NOW })).toBe(line);
     expect(readFileSync(file, 'utf8')).toBe('not json\n');
 
     const homePath = realpathSync(home);
@@ -130,12 +131,11 @@ describe('lobby pretrust', () => {
     expect(readFileSync(file, 'utf8')).toBe(again);
   });
 
-  test('antigravity is left out with its repair line and no settings file', () => {
+  test('antigravity is started without a guessed settings file', () => {
     const home = homeOf();
     const lobby = lobbyOf();
-    const line = `the lobby is not trusted for agy: run agy in ${lobby} and accept the folder`;
-    expect(lobbyPretrustLine(seat('antigravity', lobby), home, { write: false, now: NOW })).toBe(line);
-    expect(lobbyPretrustLine(seat('antigravity', lobby), home, { write: true, now: NOW })).toBe(line);
+    expect(lobbyPretrustLine(seat('antigravity', lobby), home, { write: false, now: NOW })).toBeNull();
+    expect(lobbyPretrustLine(seat('antigravity', lobby), home, { write: true, now: NOW })).toBeNull();
     expect(existsSync(join(home, '.gemini'))).toBe(false);
   });
 
