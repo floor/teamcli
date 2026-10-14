@@ -189,7 +189,7 @@ describe('team up, a pane that is gone or unknown', () => {
       const code = await runUp(FILE, io, sources({
         sessionState: () => 'running',
         alive: () => true,
-        workspaces: () => [{ id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
+        workspaces: () => [{ id: 'w2', label: 'deepseek-acme · implementer' }, { id: 'w3', label: 'deepseek-acme-2 · implementer' }],
         agents: listed,
       }, made));
       expect(code).toBe(0);
@@ -244,9 +244,9 @@ describe('team up, a pane that is gone or unknown', () => {
       sessionState: () => 'running',
       alive: () => true,
       workspaces: () => [
-        { id: 'w9', label: 'Claude Opus 5.5' },
-        { id: 'w2', label: 'DeepSeek V4.1 Flash' },
-        { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w9', label: 'claude-coordinator-acme · project coordinator' },
+        { id: 'w2', label: 'deepseek-acme · implementer' },
+        { id: 'w3', label: 'deepseek-acme-2 · implementer' },
       ],
       agents: listed,
     }, made));
@@ -298,9 +298,9 @@ describe('team up, a pane that is gone or unknown', () => {
       sessionState: () => 'running',
       alive: () => true,
       workspaces: () => [
-        { id: 'w9', label: 'Claude Opus 5.5' },
-        { id: 'w2', label: 'DeepSeek V4.1 Flash' },
-        { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w9', label: 'claude-coordinator-acme · project coordinator' },
+        { id: 'w2', label: 'deepseek-acme · implementer' },
+        { id: 'w3', label: 'deepseek-acme-2 · implementer' },
       ],
       agents: listed,
     }, made));
@@ -353,8 +353,8 @@ describe('team up, a pane that is gone or unknown', () => {
       sessionState: () => 'running',
       alive: () => true,
       workspaces: () => [
-        { id: 'w7', label: 'DeepSeek V4.1 Flash' },
-        { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w7', label: 'deepseek-acme · implementer' },
+        { id: 'w3', label: 'deepseek-acme-2 · implementer' },
       ],
       agents: listed,
     }, made));
