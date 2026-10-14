@@ -4877,17 +4877,15 @@ describe('team up, delegated', () => {
     expect(io.out + io.err).not.toContain('[o] open pane');
   });
 
-  // The other side of the same hold: a caller the ordinary rule accepts never enters the
-  // delegate branch. The owner without a terminal keeps everything as today — the gate is not
-  // asked, and its idle timeout stays the plain record that leaves the seat at launched, not
-  // the delegated run's close.
-  test('an owner without a terminal never enters the delegate branch: gate unasked, plain timeout', async () => {
+  // A run with no terminal is not admitted, so it never enters the delegate branch. The gate
+  // is not asked, the one sentence is the refusal, and nothing is launched.
+  test('a run with no terminal never enters the delegate branch', async () => {
     delegateFile();
     await approve();
     const made = world("❯ zsh ../tools/launcher.sh\nzsh: can't open input file: ../tools/launcher.sh\n~ ❯\n");
     let asked = 0;
     const { audits, logDelegated } = auditsOf();
-    const io = quietIo();
+    const io = testIo(root, { kind: 'owner-no-tty' });
     const code = await runUp(FILE, io, sources({
       delegateGate: () => {
         asked++;
@@ -4898,8 +4896,8 @@ describe('team up, delegated', () => {
     expect(code).toBe(1);
     expect(asked).toBe(0);
     expect(audits).toEqual([]);
-    expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
-    expect(io.err).toContain('left at launched\n');
+    expect(io.err).toContain('team up: only the owner runs this, from a terminal outside herdr\n');
+    expect(io.out).not.toContain('left out:');
     expect(made.closes).toEqual([]);
   });
 
