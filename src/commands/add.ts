@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
+import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -42,7 +42,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
-import { emptySession, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -150,6 +150,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     out.stderr(`team add: ${plainText(args.error)}\n${USAGE}`);
     // exit: add.invocation
     return 2;
+  }
+  const detached = detachedRefusal(walkCaller(io));
+  if (detached !== undefined) {
+    out.stderr(`team add: ${detached}\n`);
+    // exit: add.detached
+    return 1;
   }
   const temporary = args.flags.has('temporary');
   const dry = args.flags.has('dry-run');
@@ -924,11 +930,15 @@ function hostOf(input: {
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
+        const retained = current.retained_seats?.[name];
+        if (current.retained_seats?.[name]) delete current.retained_seats[name];
+        const id = prior.id ?? retained?.id ?? mintSeatId();
         // The process identity goes in the same write, so the owner's later `team up` — and
         // `team answer` — can tell a pane that is still the seat's from one that is not.
         const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
+          id,
           waiting,
           pane,
           ...(workspace ? { workspace } : {}),
@@ -965,6 +975,18 @@ function hostOf(input: {
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: patch.stage };
+        const retained = current.retained_seats?.[name];
+        if (current.retained_seats?.[name]) delete current.retained_seats[name];
+        const id = prior.id ?? retained?.id ?? mintSeatId();
+        const isTarget = name === seat.name;
+        const cli = (isTarget ? seat.cli : undefined) ?? prior.cli;
+        const model = (isTarget ? seat.model : undefined) ?? prior.model;
+        const version = (isTarget ? seat.version : undefined) ?? prior.version;
+        const effort = (isTarget ? seat.effort : undefined) ?? prior.effort;
+        const launch_line = (isTarget ? seat.launch : undefined) ?? prior.launch_line;
+        const last_active = patch.stage === 'ready'
+          ? input.now().toISOString()
+          : (prior.last_active ?? retained?.last_active);
         let start_cwd = prior.start_cwd;
         if (!start_cwd && patch.createdWorkspace) {
           if (input.inLobby) {
@@ -975,7 +997,19 @@ function hostOf(input: {
         }
         // `waiting: null` removes the field alone; anything else written replaces it.
         const { waiting: written, ...rest } = patch;
-        const seatState: SeatState = { ...prior, ...rest, ...(temporary && name === seat.name ? { temporary } : {}), ...(start_cwd ? { start_cwd } : {}) };
+        const seatState: SeatState = {
+          ...prior,
+          ...rest,
+          id,
+          ...(cli ? { cli } : {}),
+          ...(model ? { model } : {}),
+          ...(version ? { version } : {}),
+          ...(effort ? { effort } : {}),
+          ...(launch_line ? { launch_line } : {}),
+          ...(last_active ? { last_active } : {}),
+          ...(temporary && isTarget ? { temporary } : {}),
+          ...(start_cwd ? { start_cwd } : {}),
+        };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;
         current.seats[name] = seatState;
@@ -998,9 +1032,17 @@ function hostOf(input: {
       if (temporary && name === seat.name) removeRulesFile(input.standing, name, input.root, input.home);
       let pane: string | undefined;
       updateState(dir, (file) => {
-        const seats = file.sessions[session]?.seats;
-        pane = seats?.[name]?.pane;
-        if (seats) delete seats[name];
+        const current = file.sessions[session];
+        if (!current) return;
+        const prior = current.seats[name];
+        pane = prior?.pane;
+        if (!temporary && prior?.id && !prior.temporary) {
+          (current.retained_seats ??= {})[name] = {
+            id: prior.id,
+            ...(prior.last_active ? { last_active: prior.last_active } : {}),
+          };
+        }
+        delete current.seats[name];
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
     },

@@ -13,7 +13,8 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import type { Key } from '../../src/launch/terminal.ts';
 import { readState } from '../../src/state.ts';
-import { storePath, writeApproval } from '../../src/store/store.ts';
+import { upFingerprint, OWNER_APPROVAL_ENV } from '../../src/approve/owner-token.ts';
+import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { readScreen } from '../../src/watch/screen.ts';
 import { claudeBox, testIo } from '../helpers.ts';
 
@@ -400,6 +401,15 @@ function exitOf(code: number, want: number, io: { out: string; err: string }, wh
  *  `down` itself. Then the sequence in its order, first step included (the record gone, the
  *  next `up` through). A seat that is both of the file's leads needs its own file; every other
  *  cell uses the two-lead shape. */
+/** An admitted run that is not the owner at a terminal, so `up` launches and does not prompt. */
+function quietIo() {
+  const standing = approvalStanding(root, home);
+  if (standing.kind !== 'verified') throw new Error('the no-prompt run needs a verified approval');
+  const io = testIo(root, { kind: 'seat', name: 'dev-acme', pane: 'w9:p1', session: SESSION });
+  io.env[OWNER_APPROVAL_ENV] = upFingerprint(standing.record.approval.fingerprints, standing.generation);
+  return io;
+}
+
 async function prove(seat: string, pane: 'unnamed' | 'dialog', both = false): Promise<void> {
   if (both) setup(true);
   seed(seat);
@@ -409,7 +419,7 @@ async function prove(seat: string, pane: 'unnamed' | 'dialog', both = false): Pr
 
   // 1. The refusal: this seat cannot be resumed, and the line names what comes first — the
   //    dialog answered or the nameless pane closed by hand — then this seat's own repair.
-  const first = testIo(root, { kind: 'owner-no-tty' });
+  const first = quietIo();
   const refused = await runUp(FILE, first, made.up());
   exitOf(refused, 1, first, 'the refusal run');
   expect(first.out).toContain(
@@ -433,7 +443,7 @@ async function prove(seat: string, pane: 'unnamed' | 'dialog', both = false): Pr
     if (pane === 'dialog') {
       expect(down.out).toContain(`  skip ${seat}: is blocked at a prompt, which \`team\` never answers; left running\n`);
       expect(made.stopped).toEqual([]);
-      const stuck = testIo(root, { kind: 'owner-no-tty' });
+      const stuck = quietIo();
       exitOf(await runUp(FILE, stuck, made.up()), 1, stuck, 'the up without its first step');
       expect(stuck.out).toContain(`${seat}: left out: its waiting record has no process identity\n`);
       expect(stateOf(seat)?.waiting).toEqual({ state: 'waiting-owner', classification: 'trust' });
@@ -457,7 +467,7 @@ async function prove(seat: string, pane: 'unnamed' | 'dialog', both = false): Pr
     if (pane === 'dialog') {
       exitOf(code, 1, remove, 'the remove without its first step');
       expect(remove.err).toContain(`team remove: ${seat} is blocked at a prompt, which team never answers\n`);
-      const stuck = testIo(root, { kind: 'owner-no-tty' });
+      const stuck = quietIo();
       exitOf(await runUp(FILE, stuck, made.up()), 1, stuck, 'the up after the refused remove');
       expect(stuck.out).toContain(`${seat}: left out: its waiting record has no process identity\n`);
       expect(stateOf(seat)?.waiting).toEqual({ state: 'waiting-owner', classification: 'trust' });
@@ -468,7 +478,7 @@ async function prove(seat: string, pane: 'unnamed' | 'dialog', both = false): Pr
       exitOf(await runAdd([seat, ...FILE], add, made.add()), 0, add, 'the add with the pane left open');
       // The nameless pane is still open, so `add` started a second one; the next `up` refuses
       // the whole session for the agent this file's state doesn't record.
-      const stuck = testIo(root, { kind: 'owner-no-tty' });
+      const stuck = quietIo();
       exitOf(await runUp(FILE, stuck, made.up()), 1, stuck, 'the up with the nameless pane left');
       expect(stuck.err).toContain(`team up: session ${SESSION} has 1 agent this file's state doesn't record: \`up\` never touches a running team\n`);
     }

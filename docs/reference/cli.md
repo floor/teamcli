@@ -273,6 +273,29 @@ Usage:
 
 None.
 
+## `feed`
+
+Hidden: no
+
+Usage:
+
+    team feed [--seat <name>] [--limit <n>] [--follow] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--follow` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--limit` | yes | no | no |
+| `--seat` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `help`
 
 Hidden: yes
@@ -334,7 +357,7 @@ Hidden: no
 
 Usage:
 
-    team list [--all] [--json]
+    team list [--all] [--watch] [--json]
 
 ### Flags
 
@@ -343,6 +366,7 @@ Usage:
 | `--all` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -600,6 +624,30 @@ Usage:
 | --- | --- | --- |
 | `name` | no | no |
 
+## `seats`
+
+Hidden: no
+
+Usage:
+
+    team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
+| `--watch` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `send`
 
 Hidden: no
@@ -636,12 +684,13 @@ Hidden: no
 
 Usage:
 
-    team status [--session <name>] [--file <path>] [--json]
+    team status [--session <name>] [--file <path>] [--all] [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--all` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |

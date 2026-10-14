@@ -36,7 +36,9 @@ describe('Grok launch and captured screens', () => {
 
   test('a version is placed against the tested range', () => {
     expect(versionVerdict('grok 1.0.50 (c58f321264ba) [stable]', grok.tested)).toBe('tested');
-    expect(versionVerdict('1.0.51', grok.tested)).toBe('newer');
+    expect(versionVerdict('grok 1.0.52 (0920c8169e27) [stable]', grok.tested)).toBe('tested');
+    expect(versionVerdict('1.0.51', grok.tested)).toBe('tested');
+    expect(versionVerdict('1.0.53', grok.tested)).toBe('newer');
     expect(versionVerdict('1.0.49', grok.tested)).toBe('older');
     expect(versionVerdict('dev build', grok.tested)).toBe('unread');
   });
@@ -78,6 +80,16 @@ describe('Grok launch and captured screens', () => {
       expect(boxHoldsText('grok', '/exit', fixture(file))).toBe(true);
     }
     expect(boxHoldsText('grok', '/', fixture('slash-menu'))).toBe(true);
+  });
+
+  test('1.0.52 captures: the answer widget is a question, and the exit shell is unknown', () => {
+    const current = (name: string) => readFileSync(new URL(`../fixtures/grok/1.0.52/${name}.txt`, import.meta.url), 'utf8');
+    expect(readScreen('grok', current('idle')).kind).toBe('idle');
+    expect(readScreen('grok', current('working')).kind).toBe('working');
+    expect(readScreen('grok', current('question')).kind).toBe('question');
+    expect(readScreen('grok', current('permission')).kind).toBe('question');
+    expect(readScreen('grok', current('exit')).kind).toBe('unknown');
+    expect(readScreen('grok', current('exit-typed')).kind).toBe('unsent');
   });
 
   test('a one-row text reads back exactly; the 52-character watch line wraps and never does', () => {

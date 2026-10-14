@@ -24,8 +24,8 @@ when the team allows it, and it is built by the adapter at the source — a sour
 read, not scrubbed from a string.
 The socket sits at `.agents/broker.sock` in this clone and carries the filesystem's own
 permissions. The broker reads the key from the macOS Keychain, once, at start — the facility `team
-release check` uses. On a platform without that facility, or without a terminal, the broker
-refuses to start.
+release check` uses. On a platform without that facility the broker refuses to start. A run
+with no terminal is refused before the Keychain is read.
 The broker is a running process. Nothing starts it for you, and nothing restarts it.
 
 A request is one JSON line: the one op `read`, and the seat and pane the caller claims. The broker
@@ -94,6 +94,7 @@ Every line goes to stderr. Nothing is printed on stdout.
 ## Refusals
 
 ```text
+team broker: only the owner runs this, from a terminal outside herdr
 team broker: only the owner runs `broker`, from a terminal outside herdr; this call is <caller>
 team broker: the team file declares no task source
 team broker: tasks.source must be linear; the broker serves a tracker source
