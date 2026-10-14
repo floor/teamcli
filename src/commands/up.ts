@@ -43,7 +43,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { launchedIdentity, paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
+import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
@@ -293,6 +293,26 @@ function modelDrift(
 /** A record with no process identity whose pane is a bare shell or another model. `up` does not
  *  close it: without an identity there is no proof the pane is the seat's. Null when the record
  *  has an identity, or when the pane cannot be told apart from the seat the file describes. */
+/** The refusal a replaced pane already had when its screen is working or unsent.
+ *  Null when the screen is free or was not read: that seat is left with the cannot-tie line. */
+function replacedScreenRefusal(
+  seat: Seat,
+  pane: string,
+  screenOf: (pane: string) => string | null,
+  status: string | undefined,
+): string | null {
+  const text = screenOf(pane);
+  if (text == null || text === '') return null;
+  const kind = readScreen(seat.cli, text).kind;
+  if (status === 'working' || kind === 'working') {
+    return `the process in its pane is working; nothing closed (stop it there, or run team remove ${seat.name})`;
+  }
+  if (kind === 'unsent') {
+    return `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${seat.name})`;
+  }
+  return null;
+}
+
 function unidentifiedHold(
   team: TeamFile,
   seat: Seat,
@@ -325,7 +345,7 @@ function seatPlan(
   team: TeamFile,
   seat: Seat,
   recorded: SeatState | undefined,
-  agents: readonly HerdrAgent[],
+  agents: readonly HerdrAgent[] | null,
   workspaces: HerdrWorkspace[] | null,
   resume: boolean,
   root: string,
@@ -351,6 +371,8 @@ function seatPlan(
     rules: rulesOf(team, seat, root),
     ...seatDeliveryOf(standing, team, seat, root, home),
   };
+  const known = agents ?? [];
+  const asked = agents !== null;
   if (!resume || !recorded || seat.stopped) return planned;
   // §5: a seat recorded waiting takes precedence over everything below. Its recorded pane and
   // workspace are reused — never launched again — while the host still lists that pane: the
@@ -360,8 +382,8 @@ function seatPlan(
   // lists, including one whose process this run cannot account for, is never closed or
   // recreated.
   if (recorded.waiting) {
-    const named = agents.filter((agent) => agent.name === seat.name);
-    const paneListed = recorded.pane !== undefined && agents.some((agent) => agent.pane === recorded.pane);
+    const named = known.filter((agent) => agent.name === seat.name);
+    const paneListed = recorded.pane !== undefined && known.some((agent) => agent.pane === recorded.pane);
     if (named.length === 0 && recorded.pane && !paneListed) {
       // The old workspace stays when the host still lists it. A listed workspace still holds
       // a pane — herdr closes a workspace with its last pane — so it is named, not closed.
@@ -394,17 +416,54 @@ function seatPlan(
   // itself reads herdr again, immediately before it (`execute.ts`), so this reading only
   // decides that the seat needs repair, never that its recorded workspace is still its own.
   const verdict = seatProcessVerdict(recorded.launched, processes[seat.name] ?? null);
-  if ((verdict === 'gone' || verdict === 'replaced') && recorded.workspace && recorded.pane && recorded.launched) {
+  const onRecordedPane = recorded.pane
+    ? known.find((agent) => agent.name === seat.name && agent.pane === recorded.pane)
+    : undefined;
+  const continuity = replacedSeat(verdict, {
+    asked,
+    namedOnPane: Boolean(onRecordedPane),
+    recordedSession: recorded.agent_session,
+    liveSession: onRecordedPane?.session,
+  });
+  // A program is in front and its agent session is the one stored at launch. The pids changed;
+  // the seat did not. Nothing is closed, and the record takes the pids the pane holds now.
+  if (continuity === 'restored' && recorded.agent_session && recorded.pane && recorded.workspace && recorded.launched) {
+    const next = launchedIdentity(processes[seat.name] ?? null);
+    if (next) {
+      return {
+        ...planned,
+        stage: 'ready',
+        restored: {
+          launched: next,
+          session: recorded.agent_session,
+          detail: restoredDetail(seat, recorded, screenOf),
+        },
+      };
+    }
+  }
+  // A program is in front and the session cannot be shown. Leave the record. Do not close.
+  // A working or unsent screen keeps the refusal the close used to give.
+  if (continuity === 'doubt' && recorded.workspace && recorded.pane && recorded.launched) {
+    const refusal = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
+    return {
+      ...planned,
+      stage: recorded.stage,
+      sessionDoubt: refusal ?? 'its pane holds a process this record cannot tie to the launch',
+      ...(refusal ? { doubtHeld: true } : {}),
+    };
+  }
+  // The shell is in front. The seat's name surviving on the pane does not make it the CLI.
+  if (verdict === 'gone' && recorded.workspace && recorded.pane && recorded.launched) {
     return {
       ...planned,
       repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli },
     };
   }
-  const named = agents.find((agent) => agent.name === seat.name);
-  const onPane = recorded.pane ? agents.some((agent) => agent.pane === recorded.pane) : false;
+  const named = known.find((agent) => agent.name === seat.name);
+  const onPane = recorded.pane ? known.some((agent) => agent.pane === recorded.pane) : false;
   if (recorded.stage === 'ready') {
     if (named || onPane) {
-      const drift = modelDrift(team, seat, recorded, agents, processes, screenOf, owner);
+      const drift = modelDrift(team, seat, recorded, known, processes, screenOf, owner);
       if (drift.kind === 'cycle' && recorded.pane && recorded.workspace && recorded.launched) {
         return {
           ...planned,
@@ -439,6 +498,21 @@ function seatPlan(
 // never recorded (a launch from before identities were), or a start outside the machine lobby
 // (an old release's start). The skip line says what does repair it; both repairs relaunch the
 // seat — one seat at a time, or the whole team (for an orchestrator or operator, only the whole team).
+/** The restored seat's detail. A model that differs from the file is reported and is not closed. */
+function restoredDetail(
+  seat: Seat,
+  recorded: SeatState,
+  screenOf: (pane: string) => string | null,
+): string {
+  const kept = 'restored; left as it is';
+  if (!recorded.pane || !seat.version || !canShowModel(seat)) return kept;
+  const text = screenOf(recorded.pane);
+  if (text == null || text === '') return kept;
+  const running = seatModel(seat, text);
+  if (!running || !modelDiffers(running, { model: seat.model, version: seat.version })) return kept;
+  return `${kept}; its model drifted; left as it is`;
+}
+
 function restartNote(
   team: Pick<TeamFile, 'orchestrator' | 'operator' | 'entity' | 'lobby'>,
   name: string,
@@ -716,7 +790,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       team,
       seat,
       recorded?.seats[seat.name],
-      agents ?? [],
+      agents,
       workspaces,
       state === 'running',
       root,
@@ -729,7 +803,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     );
     // A stopped seat, one without a profile, and one already ready are left out of the budget.
     // A seat resumed into a live workspace starts nowhere new, but its reading is still said.
-    if (planned.unidentifiedHold || planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
+    if (planned.unidentifiedHold || planned.sessionDoubt || planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
       seats.push(planned);
       continue;
     }

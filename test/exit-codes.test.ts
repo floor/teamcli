@@ -630,6 +630,21 @@ scene('add.already-running', async (place) => {
     sessionState: () => 'running', agents: () => [agent('worker')], workspaces: () => [{ id: 'w1' }],
   })), 'already running');
 });
+scene('add.session-doubt', async (place) => {
+  approve(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.worker = { stage: 'ready', workspace: 'w1', pane: 'w1:p1', launched: { shell: 400, cli: [401] } };
+  });
+  const launch = launching(IDLE);
+  launch.processInfo = () => ({ shell: 400, foreground: [500] });
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, {
+    sessionState: () => 'running',
+    agents: () => [agent('worker')],
+    workspaces: () => [{ id: 'w1' }],
+    launch,
+  })), 'cannot tie to the launch');
+});
 scene('add.placed', async (place) => {
   const side = join(place.base, 'side');
   mkdirSync(side);

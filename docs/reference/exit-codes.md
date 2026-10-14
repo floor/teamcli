@@ -48,6 +48,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.result-exists` | `add` | 1 | the result path already exists | `team add --temporary --like lead --until result:README.md` |
 | `add.run-lock` | `add` | 1 | another session-mutating run is holding the session | `team add worker` |
 | `add.server` | `add` | 1 | the session's server did not start | `team add worker` |
+| `add.session-doubt` | `add` | 1 | the pane holds a process the record cannot tie to the launch | `team add worker` |
 | `add.session-owner` | `add` | 1 | --session is the owner's | `team add worker --session other` |
 | `add.start` | `add` | 1 | the seat has nowhere to start | `team add worker` |
 | `add.stopped` | `add` | 1 | the session is stopped | `team add worker` |

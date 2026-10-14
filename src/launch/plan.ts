@@ -25,7 +25,18 @@ export type Op =
   | { do: 'refuse'; seat: string; why: string; detail?: string }
   /** A seat's final record, decided by the plan: no profile, already ready. The step's printed
    *  text stays for the dry run; `detail` is the stderr lines said after the record. */
-  | { do: 'record'; seat: string; record: FinalRecord; detail?: string }
+  | {
+      do: 'record';
+      seat: string;
+      record: FinalRecord;
+      detail?: string;
+      /** A restored seat: the process ids to store, so the next `up` sees `same`. */
+      launched?: LaunchedIdentity;
+      /** The agent session kept beside those pids. */
+      agentSession?: string;
+      /** This record is a refusal: the run exits 1 even when the stored stage stays ready. */
+      held?: boolean;
+    }
   | {
       do: 'idle';
       seat: string;
@@ -170,6 +181,19 @@ export interface UpSeat {
    *  working, or its screen shows a running turn. The record stays ready. */
   driftHold?: string;
   /**
+   * The pane's pids differ and its agent session is the one stored at launch. Nothing is
+   * closed. `launched` is the process in the pane now; the record stores it.
+   */
+  restored?: { launched: LaunchedIdentity; session: string; detail: string };
+  /**
+   * The pane holds a program this record cannot tie to the launch. Nothing is closed and
+   * the stored process is left as it is.
+   */
+  sessionDoubt?: string;
+  /** The doubt is a working or unsent screen: the refusal that already existed.
+   *  The seat is left out and the run exits 1. Nothing is closed. */
+  doubtHeld?: boolean;
+  /**
    * A seat recorded with no process identity whose pane is a bare shell or another model.
    * This `up` does not close it: the record cannot prove the pane is the seat's. The line
    * names the repair (`--abandon`, then `up`). A ready seat keeps that record; any earlier
@@ -294,6 +318,57 @@ export function upPlan(input: UpInput): Step[] {
             do: 'record',
             seat: seat.name,
             record: { kind: 'left out', reason: seat.unidentifiedHold },
+          },
+        });
+      }
+      continue;
+    }
+    if (seat.restored) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: ${seat.restored.detail}`,
+        do: {
+          do: 'record',
+          seat: seat.name,
+          record: { kind: 'ready' },
+          detail: `  ${seat.restored.detail}\n`,
+          launched: seat.restored.launched,
+          agentSession: seat.restored.session,
+        },
+      });
+      continue;
+    }
+    if (seat.sessionDoubt) {
+      if (seat.doubtHeld) {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.sessionDoubt}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'left out', reason: seat.sessionDoubt },
+            held: true,
+          },
+        });
+      } else if (seat.stage === 'ready') {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.sessionDoubt}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'ready' },
+            detail: `  ${seat.sessionDoubt}\n`,
+          },
+        });
+      } else {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.sessionDoubt}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'left out', reason: seat.sessionDoubt },
           },
         });
       }

@@ -16,6 +16,8 @@ export const restored: SeatCheck = {
       ctx.keep(key);
       return [];
     }
+    // The stored agent session is on this pane: the seat came back. Not a report.
+    if (seat.continuity === 'restored') return [];
     if (seat.identity !== 'gone' && seat.identity !== 'replaced') return [];
     return reported(
       ctx.once(
