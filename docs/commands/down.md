@@ -29,7 +29,8 @@ plan and runs nothing.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--abandon`, `--session` and `--file` are the owner's own |
-| the orchestrator's seat, the operator's seat | stop the team; never the orchestrator's or the operator's own seat |
+| the orchestrator's seat | stop the other seats, and leave its own seat and the operator's seat running. When the file has a `grant`, this needs `down` in that grant. `--abandon`, `--session` and `--file` stay the owner's |
+| the operator's seat | stop the team; never the orchestrator's or the operator's own seat |
 | the approved delegate, when the file's `delegates` section names it | stop the whole team, the orchestrator's and the operator's seats included; never `--abandon`, `--session` or `--file` |
 
 ## Output and exit codes
