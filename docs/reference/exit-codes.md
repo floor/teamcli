@@ -44,7 +44,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.no-seat` | `add` | 1 | the approved file has no such seat | `team add missing` |
 | `add.not-ready` | `add` | 1 | the launch finished without a ready seat | `team add worker` |
 | `add.not-restored` | `add` | 1 | the seat can't be put back from the approved copy | `team add worker` |
+| `add.override-owner` | `add` | 1 | --model and --effort on a declared seat are the owner's | `team add worker --model claude-sonnet-5-5` |
 | `add.placed` | `add` | 1 | the seat would be placed outside the project | `team add worker` |
+| `add.pretrust` | `add` | 1 | the lobby is not trusted for this seat's CLI | `team add worker` |
 | `add.result-absolute` | `add` | 1 | a result path is absolute | `team add --temporary --like lead --until result:/tmp/out.md` |
 | `add.result-exists` | `add` | 1 | the result path already exists | `team add --temporary --like lead --until result:README.md` |
 | `add.run-lock` | `add` | 1 | another session-mutating run is holding the session | `team add worker` |
@@ -56,10 +58,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.until` | `add` | 1 | --until is not a result path or a merged branch | `team add --temporary --like lead --until nope` |
 | `add.worktree-failed` | `add` | 1 | the worktree setup failed | `team add --temporary --like lead --until result:out.md --worktree task` |
 | `add.worktree-missing` | `add` | 1 | no worktree with that name is recorded | `team add --temporary --like lead --until result:out.md --worktree missing` |
+| `add.effort` | `add` | 2 | the --effort override is not allowed for the seat's CLI or vendor | `team add worker --effort unknown` |
 | `add.file` | `add` | 2 | the team file can't be read | `team add worker --file missing.yaml` |
 | `add.file-invalid` | `add` | 2 | the team file can't be parsed | `team add worker --file team.yaml` |
 | `add.invocation` | `add` | 2 | the invocation can't be read | `team add --nope` |
 | `add.locked` | `add` | 2 | the locked edit does not validate | `team add worker` |
+| `add.model` | `add` | 2 | the --model override is not known for the seat's CLI | `team add worker --model unknown` |
 | `add.not-a-repo` | `add` | 2 | not inside a git repository | `team add worker` |
 | `add.prepared` | `add` | 2 | the prepared edit does not validate | `team add worker` |
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
@@ -329,6 +333,15 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.invocation` | `remove` | 2 | the invocation can't be read | `team remove` |
 | `remove.locked` | `remove` | 2 | the locked edit does not validate | `team remove worker` |
 | `remove.not-a-repo` | `remove` | 2 | not inside a git repository | `team remove worker` |
+| `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
+| `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
+| `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |
+| `seats.file` | `seats` | 2 | the team file can't be read | `team seats --file missing.yaml` |
+| `seats.file-invalid` | `seats` | 2 | the team file can't be parsed | `team seats --file team.yaml` |
+| `seats.herdr` | `seats` | 2 | herdr doesn't answer | `team seats` |
+| `seats.invocation` | `seats` | 2 | the invocation can't be read | `team seats extra` |
+| `seats.not-a-repo` | `seats` | 2 | not inside a git repository | `team seats` |
+| `seats.not-yours` | `seats` | 2 | the caller may not read this team | `team seats` |
 | `send.answered` | `send` | 0 | the seat's reply came back within the window | `team send worker hello --wait` |
 | `send.delivered` | `send` | 0 | the seat's channel took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |

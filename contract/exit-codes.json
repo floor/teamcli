@@ -270,8 +270,22 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.override-owner",
+      "meaning": "--model and --effort on a declared seat are the owner's",
+      "trigger": "team add worker --model claude-sonnet-5-5"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.placed",
       "meaning": "the seat would be placed outside the project",
+      "trigger": "team add worker"
+    },
+    {
+      "code": 1,
+      "command": "add",
+      "id": "add.pretrust",
+      "meaning": "the lobby is not trusted for this seat's CLI",
       "trigger": "team add worker"
     },
     {
@@ -354,6 +368,13 @@
     {
       "code": 2,
       "command": "add",
+      "id": "add.effort",
+      "meaning": "the --effort override is not allowed for the seat's CLI or vendor",
+      "trigger": "team add worker --effort unknown"
+    },
+    {
+      "code": 2,
+      "command": "add",
       "id": "add.file",
       "meaning": "the team file can't be read",
       "trigger": "team add worker --file missing.yaml"
@@ -378,6 +399,13 @@
       "id": "add.locked",
       "meaning": "the locked edit does not validate",
       "trigger": "team add worker"
+    },
+    {
+      "code": 2,
+      "command": "add",
+      "id": "add.model",
+      "meaning": "the --model override is not known for the seat's CLI",
+      "trigger": "team add worker --model unknown"
     },
     {
       "code": 2,
@@ -2261,6 +2289,69 @@
       "id": "remove.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team remove worker"
+    },
+    {
+      "code": 0,
+      "command": "seats",
+      "id": "seats.shown",
+      "meaning": "the seats table was printed",
+      "trigger": "team seats"
+    },
+    {
+      "code": 1,
+      "command": "seats",
+      "id": "seats.file-owner",
+      "meaning": "--file is the owner's",
+      "trigger": "team seats --file .agents/team.yaml"
+    },
+    {
+      "code": 1,
+      "command": "seats",
+      "id": "seats.session-owner",
+      "meaning": "--session is the owner's",
+      "trigger": "team seats --session team"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team seats --file missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.file-invalid",
+      "meaning": "the team file can't be parsed",
+      "trigger": "team seats --file team.yaml"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.herdr",
+      "meaning": "herdr doesn't answer",
+      "trigger": "team seats"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team seats extra"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.not-a-repo",
+      "meaning": "not inside a git repository",
+      "trigger": "team seats"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.not-yours",
+      "meaning": "the caller may not read this team",
+      "trigger": "team seats"
     },
     {
       "code": 0,
