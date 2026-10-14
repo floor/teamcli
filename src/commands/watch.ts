@@ -290,7 +290,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         silent = true;
       } else {
         silent = false;
-        noteWorked(dir, session, live);
+        noteWorked(dir, session, live, sources.now());
         const state = readState(dir).sessions[session] ?? emptySession();
         const now = sources.now().getTime();
         // The check commands run here, outside the pass, at most every `check_every` (§ 5): the
@@ -570,19 +570,23 @@ function tellOnce(told: Set<string>, key: string, text: string, tell: (text: str
   tell(text, true);
 }
 
-function noteWorked(dir: string, session: string, live: Live): void {
+function noteWorked(dir: string, session: string, live: Live, now: Date): void {
   const recorded = readState(dir).sessions[session];
   if (!recorded) return;
   const due = live.agents.some((agent) => {
     const seat = agent.name ? recorded.seats[agent.name] : undefined;
-    return seat?.temporary && seat.stage === 'ready' && !seat.worked && agent.status === 'working';
+    return seat && seat.stage === 'ready' && agent.status === 'working';
   });
   if (!due) return;
+  const activeAt = now.toISOString();
   updateState(dir, (file) => {
     const seats = (file.sessions[session] ??= emptySession()).seats;
     for (const agent of live.agents) {
       const seat = agent.name ? seats[agent.name] : undefined;
-      if (seat?.temporary && seat.stage === 'ready' && agent.status === 'working') seat.worked = true;
+      if (seat && seat.stage === 'ready' && agent.status === 'working') {
+        if (seat.temporary) seat.worked = true;
+        seat.last_active = activeAt;
+      }
     }
   });
 }

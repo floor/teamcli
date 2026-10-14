@@ -329,6 +329,15 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.invocation` | `remove` | 2 | the invocation can't be read | `team remove` |
 | `remove.locked` | `remove` | 2 | the locked edit does not validate | `team remove worker` |
 | `remove.not-a-repo` | `remove` | 2 | not inside a git repository | `team remove worker` |
+| `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
+| `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
+| `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |
+| `seats.file` | `seats` | 2 | the team file can't be read | `team seats --file missing.yaml` |
+| `seats.file-invalid` | `seats` | 2 | the team file can't be parsed | `team seats --file team.yaml` |
+| `seats.herdr` | `seats` | 2 | herdr doesn't answer | `team seats` |
+| `seats.invocation` | `seats` | 2 | the invocation can't be read | `team seats extra` |
+| `seats.not-a-repo` | `seats` | 2 | not inside a git repository | `team seats` |
+| `seats.not-yours` | `seats` | 2 | the caller may not read this team | `team seats` |
 | `send.answered` | `send` | 0 | the seat's reply came back within the window | `team send worker hello --wait` |
 | `send.delivered` | `send` | 0 | the seat's channel took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |

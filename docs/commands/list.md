@@ -6,7 +6,7 @@ pane is read, no team file or state is written.
 
 ## Synopsis
 
-    team list [--all] [--json]
+    team list [--all] [--watch] [--json]
 
 ## What it reads and writes
 
@@ -33,6 +33,7 @@ Anyone, from any folder. It needs no approval and no project of its own.
 | Flag | Meaning |
 | --- | --- |
 | `--all` | include stopped sessions; without it, only running sessions are listed |
+| `--watch` | refresh the table every 2 seconds until interrupted |
 | `--json` | print a JSON array, one object per row, valid when the array is empty |
 | `--help`, `-h` | the usage, including the duplicate rule below, and exit 0 |
 
@@ -162,7 +163,7 @@ An option it does not know stops it before it reads anything:
 ```console
 $ team list --nope ; echo "exit $?"
 team list: unknown option --nope
-Usage: team list [--all] [--json]
+Usage: team list [--all] [--watch] [--json]
 
 Run from any folder. Lists the herdr sessions on this machine, the running ones unless --all is given, and changes nothing.
 

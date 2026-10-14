@@ -34,6 +34,7 @@ import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
@@ -1802,6 +1803,35 @@ scene('status.not-yours', async (place) => {
   // the one fixed sentence, byte for byte, on stderr, and nothing else anywhere.
   const ran = await status(place, [], { ...statusSources(quiet), home: place.home, gate: { standing: () => ({ kind: 'none' }) } }, other);
   expect(ran.err).toBe('team status: this team is not yours to read\n');
+  expect(ran.out).toBe('');
+  return ran;
+});
+
+async function seats(place: Place, argv: string[], sources: SeatsSources, caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runSeats(argv, io, sources), out: io.out, err: io.err };
+}
+
+scene('seats.invocation', async (place) => show(await seats(place, ['extra'], statusSources(quiet)), 'unexpected'));
+scene('seats.not-a-repo', async (place) => show(await seats(place, [], statusSources(quiet)), 'not inside a git repository'), false);
+scene('seats.file', async (place) => show(await seats(place, ['--file', 'missing.yaml'], statusSources(quiet)), 'no team file'));
+scene('seats.file-invalid', async (place) => {
+  invalid(place);
+  return show(await seats(place, ['--file', 'team.yaml'], statusSources(quiet)), 'line');
+});
+scene('seats.herdr', async (place) => {
+  write(place, TEAM);
+  return show(await seats(place, [], statusSources(null)), "doesn't answer");
+});
+scene('seats.shown', async (place) => {
+  write(place, TEAM);
+  return show(await seats(place, [], statusSources(quiet)), 'SEAT');
+});
+scene('seats.file-owner', async (place) => show(await seats(place, ['--file', '.agents/team.yaml'], statusSources(quiet), other), "--file is the owner's"));
+scene('seats.session-owner', async (place) => show(await seats(place, ['--session', 'team'], statusSources(quiet), other), "--session is the owner's"));
+scene('seats.not-yours', async (place) => {
+  const ran = await seats(place, [], { ...statusSources(quiet), home: place.home, gate: { standing: () => ({ kind: 'none' }) } }, other);
+  expect(ran.err).toBe('team seats: this team is not yours to read\n');
   expect(ran.out).toBe('');
   return ran;
 });

@@ -66,7 +66,7 @@ import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, readState, updateState, type SeatState } from '../state.ts';
+import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -1204,8 +1204,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[name] ?? { stage: patch.stage };
+          const retained = current.retained_seats?.[name];
+          if (current.retained_seats?.[name]) delete current.retained_seats[name];
+          const id = prior.id ?? retained?.id ?? mintSeatId();
+          const declared = team.seats.find((seat) => seat.name === name);
           // The CLI the seat was launched with: `down` needs it when the file no longer names the seat.
-          const cli = team.seats.find((seat) => seat.name === name)?.cli;
+          const cli = declared?.cli ?? prior.cli;
+          const model = declared?.model ?? prior.model;
+          const version = declared?.version ?? prior.version;
+          const effort = declared?.effort ?? prior.effort;
+          const launch_line = declared?.launch ?? prior.launch_line;
+          const last_active = patch.stage === 'ready'
+            ? now().toISOString()
+            : (prior.last_active ?? retained?.last_active);
           let start_cwd = prior.start_cwd;
           if (!start_cwd && patch.createdWorkspace) {
             const planned = seats.find((item) => item.name === name);
@@ -1217,7 +1228,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           }
           // `waiting: null` removes the field alone; anything else written replaces it.
           const { waiting: written, ...rest } = patch;
-          const seat: SeatState = { ...prior, ...rest, ...(cli ? { cli } : {}), ...(start_cwd ? { start_cwd } : {}) };
+          const seat: SeatState = {
+            ...prior,
+            ...rest,
+            id,
+            ...(cli ? { cli } : {}),
+            ...(model ? { model } : {}),
+            ...(version ? { version } : {}),
+            ...(effort ? { effort } : {}),
+            ...(launch_line ? { launch_line } : {}),
+            ...(last_active ? { last_active } : {}),
+            ...(start_cwd ? { start_cwd } : {}),
+          };
           if (written === null) delete seat.waiting;
           else if (written) seat.waiting = written;
           current.seats[name] = seat;
@@ -1239,9 +1261,17 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       drop(name) {
         let pane: string | undefined;
         updateState(dir, (file) => {
-          const seats = file.sessions[session]?.seats;
-          pane = seats?.[name]?.pane;
-          if (seats) delete seats[name];
+          const current = file.sessions[session];
+          if (!current) return;
+          const prior = current.seats[name];
+          pane = prior?.pane;
+          if (prior?.id && !prior.temporary) {
+            (current.retained_seats ??= {})[name] = {
+              id: prior.id,
+              ...(prior.last_active ? { last_active: prior.last_active } : {}),
+            };
+          }
+          delete current.seats[name];
         });
         if (pane) forgetLaunchedPane(sources.home, pane, session);
       },
@@ -1301,6 +1331,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[input.seat] ?? { stage: 'launched' as const };
+          const retained = current.retained_seats?.[input.seat];
+          if (current.retained_seats?.[input.seat]) delete current.retained_seats[input.seat];
+          const id = prior.id ?? retained?.id ?? mintSeatId();
           const record = change(prior.waiting);
           // The process identity is read here, at the moment the record is written, in the same
           // write: `[o]`, `[s]`, a resumed `up` and `team answer` all refuse a pane whose
@@ -1308,6 +1341,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           const identity = launchedIdentity(launch.processInfo?.(session, input.pane) ?? null);
           current.seats[input.seat] = {
             ...prior,
+            id,
             waiting: record,
             pane: input.pane,
             ...(input.workspace ? { workspace: input.workspace } : {}),
