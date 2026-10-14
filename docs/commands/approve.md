@@ -190,7 +190,7 @@ Each signing moves the project's counter, and the line after the seat names name
 signing key's short fingerprint: `approval #4 for this project; the last one was on 2026-10-04;
 key fe21ef6293de.` The fingerprint is the first twelve hex digits of the key's public half;
 `team doctor` and `team status` show the same three — the number, its date, the key. An
-amendment — `add` starting a stopped seat, `remove --keep` parking one — is a signing too, and
+amendment — `add` starting a stopped seat, `remove --keep` stopping one — is a signing too, and
 moves the counter like an approval.
 
 Approvals guard against mistakes, not against a hostile process running as the owner. The
