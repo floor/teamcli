@@ -21,8 +21,10 @@ import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { commits } from '../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
+import { runFeed } from '../src/commands/feed.ts';
 import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
+import { historyPath } from '../src/send/history.ts';
 import { plantMessage, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
@@ -3151,6 +3153,26 @@ scene('send.listed', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['--list'], owner, sendHost(place)), 'lead  claude-code');
 });
+
+async function fed(place: Place, argv: string[]): Promise<Ran> {
+  const io = testIo(place.root);
+  const code = await runFeed(argv, io, { home: place.home, poll: async () => false });
+  return { code, out: io.out, err: io.err };
+}
+
+scene('feed.ok', async (place) => {
+  write(place, TEAM);
+  return show(await fed(place, []), '(no messages)');
+});
+scene('feed.unreadable', async (place) => {
+  write(place, TEAM);
+  const log = historyPath('acme', place.root, place.home);
+  mkdirSync(dirname(log), { recursive: true, mode: 0o700 });
+  symlinkSync('/etc/passwd', log);
+  return show(await fed(place, []), 'the history log cannot be read: a symbolic link was found and not followed');
+});
+scene('feed.configuration', async (place) => show(await fed(place, []), 'no team file'));
+scene('feed.usage', async (place) => show(await fed(place, ['extra']), 'unexpected "extra"'));
 
 // --- team mcp: a synthetic helper, bridge and front, under the scene's own temp base. The tree
 // is real (modes, sizes and the config's bytes are read as the command reads them), while the
