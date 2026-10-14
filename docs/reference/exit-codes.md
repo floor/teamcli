@@ -172,6 +172,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.delegate-flag` | `down` | 1 | a prohibited flag is the owner's | `team down --abandon, from the approved delegate` |
 | `down.delegate-placement` | `down` | 1 | the approved delegate must be an external non-seat pane | `team down, with a delegate entry naming a seat's pane` |
 | `down.file-owner` | `down` | 1 | --file is the owner's | `team down --file .agents/team.yaml` |
+| `down.grant-approval` | `down` | 1 | a grant needs a verified approval | `team down` |
+| `down.grant-approved-copy` | `down` | 1 | a grant needs a readable approved copy | `team down` |
+| `down.grant-drift` | `down` | 1 | a grant needs the approved file | `team down` |
+| `down.grant-scope` | `down` | 1 | the grant does not list down | `team down` |
 | `down.held` | `down` | 1 | a step was held | `team down` |
 | `down.legacy` | `down` | 1 | a legacy approval record stops nobody | `team down` |
 | `down.never-approved` | `down` | 1 | a file that was never approved stops nobody | `team down` |
@@ -352,6 +356,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.delegate-placement` | `up` | 1 | the approved delegate must be an external non-seat pane | `team up` |
 | `up.differs` | `up` | 1 | the file differs from its approval | `team up` |
 | `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
+| `up.grant-another-pane` | `up` | 1 | the granted seat is not on its recorded pane | `team up` |
+| `up.grant-approval` | `up` | 1 | a grant needs a verified approval | `team up` |
+| `up.grant-approved-copy` | `up` | 1 | a grant needs a readable approved copy | `team up` |
+| `up.grant-caller` | `up` | 1 | only the seat the grant names runs this | `team up` |
+| `up.grant-drift` | `up` | 1 | a grant needs the approved file | `team up` |
+| `up.grant-flag` | `up` | 1 | a granted seat cannot aim --session or --file | `team up --file other` |
+| `up.grant-no-pane` | `up` | 1 | no pane is recorded for the granted seat | `team up` |
+| `up.grant-scope` | `up` | 1 | the grant does not list up | `team up` |
 | `up.herdr` | `up` | 1 | herdr doesn't answer | `team up` |
 | `up.lobby` | `up` | 1 | the lobby could not be created for the launch | `team up` |
 | `up.machine` | `up` | 1 | the machine is over a launch limit | `team up` |
