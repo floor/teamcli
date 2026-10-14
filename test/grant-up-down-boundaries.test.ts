@@ -577,7 +577,7 @@ describe('the seats a granted down keeps', () => {
     expect(trace.audits).toEqual([{ seat: 'lead', act: 'down' }]);
   });
 
-  test.failing('a granted down keeps the operator\'s pane when herdr shows no name for it', async () => {
+  test('a granted down keeps the operator\'s pane when herdr shows no name for it', async () => {
     record({
       lead: { pane: 'lead-pane', workspace: 'lead-ws' },
       pilot: { pane: 'pilot-pane', workspace: 'pilot-ws' },
@@ -591,7 +591,7 @@ describe('the seats a granted down keeps', () => {
     expect(trace.closed).not.toContain('pilot-ws');
   });
 
-  test.failing('a granted down keeps the orchestrator\'s pane when herdr shows another name for it', async () => {
+  test('a granted down keeps the orchestrator\'s pane when herdr shows another name for it', async () => {
     record({
       lead: { pane: 'lead-pane', workspace: 'lead-ws' },
       pilot: { pane: 'pilot-pane', workspace: 'pilot-ws' },
