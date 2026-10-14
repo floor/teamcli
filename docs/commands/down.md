@@ -19,7 +19,7 @@ plan and runs nothing.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--dry-run` | — | print the plan, and the refusals the real run would stop on; a run that reaches its plan runs nothing |
-| `--wait` | — | give a working seat up to 120 seconds to come free, then stop it |
+| `--wait` | — | give a working seat up to 120 seconds to come free; one that never does is left running, as without it |
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it; a seat this run asks and cannot stop is closed in the same run |
 | `--session` | `<name>` | the herdr session to stop, instead of `team.session`; the owner's alone — a delegate is refused it by the gate |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone — a delegate is refused it by the gate |
