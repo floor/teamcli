@@ -12,9 +12,9 @@ the same folders `up` refuses, before it writes anything.
 
 ## Synopsis
 
-    team add <name> [--dry-run] [--session <name>] [--file <path>]
+    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>]
-             [--dry-run] [--session <name>] [--file <path>]
+             [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
 
 ## What it reads and writes
 
@@ -30,7 +30,7 @@ seats the team has had, and, through herdr: the workspace, the launch, and the n
 
 ## Who may run it
 
-The owner, the orchestrator's seat and the operator's seat. The seat is that name's, in a session
+The owner, the orchestrator's seat and the operator's seat. A run with no terminal is refused before the file is read: `team add: only the owner runs this, from a terminal outside herdr`. The seat is that name's, in a session
 this project's state records — the file's session, or one the state records the caller's pane in —
 on the pane the state records for that name in that session: a seat of another session, or a pane
 merely renamed to the orchestrator's or the operator's name, is refused — and so is a seat the state
@@ -63,6 +63,8 @@ that proceeds is attributed in the log before its effects, as
 
 | Flag | Meaning |
 | --- | --- |
+| `--model <model>` | override the seat's model for this launch (CLI model id or `<model> <version>`) |
+| `--effort <effort>` | override the seat's reasoning effort for this launch |
 | `--temporary` | start a seat the file does not declare, beside the team |
 | `--like <seat>` | the approved seat a temporary seat is a copy of: its CLI, model and launch |
 | `--until <end>` | what the temporary seat works for: `result:<path>` or `merged:<branch>`, as below |
@@ -315,7 +317,7 @@ team add: --like, --until and --worktree are for --temporary
 exit 2
 $ team add ; echo "exit $?"
 team add: a seat name is required
-Usage: team add <name> [--dry-run] [--session <name>] [--file <path>]
-       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--dry-run] [--session <name>] [--file <path>]
+Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
 exit 2
 ```

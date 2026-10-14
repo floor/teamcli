@@ -26,7 +26,7 @@ line in `.agents/team.log`. The record is signed, and signing moves this project
 
 ## Who may run it
 
-The owner, from a terminal outside herdr, approves anything. The approved delegate may approve
+The owner, from a terminal outside herdr, approves anything. A run with no terminal is refused before the token is read: `team approve: only the owner runs this, from a terminal outside herdr`. The approved delegate may approve
 too: the pane a `delegates` entry names, with `approve` among its commands, placed exactly where
 the approved file puts it — the gate reads the pane, never the name a seat is given, and every
 other caller is refused with `only the owner or the approved delegate approves a team file`.

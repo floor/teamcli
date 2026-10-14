@@ -7,7 +7,7 @@ is not the owner's writes nothing at all.
 
 ## Synopsis
 
-    team status [--session <name>] [--file <path>] [--json]
+    team status [--session <name>] [--file <path>] [--all] [--json]
 
 ## Flags
 
@@ -15,6 +15,7 @@ is not the owner's writes nothing at all.
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
+| `--all` | — | render the expanded seat registry columns (`SEAT`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `LAST ACTIVE`, `PANE`) and include those fields in `--json` rows |
 | `--json` | — | the same reading as one JSON document instead of the table, the notes and the repairs |
 | `--help`, `-h` | — | the usage, and exit 0 |
 

@@ -1531,12 +1531,9 @@ describe('team usage', () => {
   });
 
   test('a process placed as the owner without a terminal still reads the restricted view', async () => {
-    // The forged-owner witness, and the interim rule's own reason: a confined process that
-    // double-forks out of the herdr tree walks to no herdr ancestor and no agent above it, so the
-    // walk resolves it as the owner — `owner-no-tty` — and `mayLaunchSeats` admits that caller to
-    // launch seats. The full view must not follow from that placement: `viewFor` turns on
-    // `kind === 'owner'`, the owner at a terminal alone, while owner placement is forgeable. The
-    // witness below is placed as the owner by the same walk every command uses, and the full view
+    // A run with no terminal is placed `owner-no-tty` and reads the restricted view. The full view
+    // is `kind === 'owner'`, the owner at a terminal. The witness below is placed by the same walk
+    // every command uses, and the full view
     // is still not its to read.
     const io = testIo(root);
     io.callerSources = () => ({
@@ -1548,9 +1545,9 @@ describe('team usage', () => {
     });
     const placed = walkCaller(io);
     expect(placed).toEqual({ kind: 'owner-no-tty' });
-    // It is the owner for the one gate that admits the owner without a terminal — which is what
-    // makes the witness a witness, not a caller the walk already refused.
-    expect(mayLaunchSeats(placed)).toBe(true);
+    // Launching is the owner at a terminal. This placement is refused there, and the full view
+    // is still not its to read.
+    expect(mayLaunchSeats(placed)).toBe(false);
     expect(viewFor(io, root)).toEqual({ full: false, mine: root });
 
     // And the command it runs reads the restricted view: no name, no root, no seat of another

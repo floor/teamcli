@@ -294,13 +294,9 @@ describe('team init', () => {
       expect(await init([], io)).toBe(1);
       expect(io.err).toContain('only the owner runs init');
     }
-    // The owner's own process with no terminal: only `up` may run for it. Every other command
-    // refuses it with main's own line — where this caller was `unplaced`, with this reason — so a
-    // script that reads the refusal sees the same sentence main printed, byte for byte.
     const noTty = testIo(project, { kind: 'owner-no-tty' });
     expect(await init([], noTty)).toBe(1);
-    expect(noTty.err).toContain('only the owner runs init');
-    expect(noTty.err).toContain('this call is unplaced (it doesn\'t run on a terminal)');
+    expect(noTty.err).toBe('team init: only the owner runs this, from a terminal outside herdr\n');
     expect(existsSync(join(project, '.agents'))).toBe(false);
   });
 
