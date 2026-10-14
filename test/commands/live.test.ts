@@ -356,7 +356,7 @@ describe('team up, live', () => {
     writeFileSync(path, makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
     await approve();
     const capture = readFileSync(join(import.meta.dir, '../fixtures/codex/0.161.0/idle.txt'), 'utf8');
-    const made = world((_pane, label) => (label === 'GPT-6 Sol' ? capture : IDLE));
+    const made = world((_pane, label) => (label === 'codex-acme · implementer' ? capture : IDLE));
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(made.runs.some((run) => run.command.includes('-m gpt-6-sol'))).toBe(true);
