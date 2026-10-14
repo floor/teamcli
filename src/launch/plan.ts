@@ -518,11 +518,17 @@ export interface DownSeat {
   exitInBox?: boolean;
   /** The pane already shows this CLI's framed exit question. This run did not ask it. */
   atExitQuestion?: boolean;
+  /** Herdr has not named this pane. The state records it for this seat: close it, type nothing. */
+  unnamed?: boolean;
+  /** Herdr's name for this pane, when it is not the seat's name. The state records the pane
+   *  and the workspace for this seat: close it, type nothing. The name is not the match. */
+  title?: string;
 }
 
 export interface DownInput {
   session: string;
-  /** The running seats the file and the state name; nothing else is closed. */
+  /** The running seats the file names, plus a pane whose pane and workspace the state records
+   *  for a seat, named or not. A name the file does not carry is not closed on that name. */
   seats: readonly DownSeat[];
   /** Agents in the session that the file and the state don't name. */
   extra: number;
@@ -555,6 +561,25 @@ export function downPlan(input: DownInput): Step[] {
   let left = input.extra;
 
   for (const seat of input.seats) {
+    if (seat.unnamed || seat.title) {
+      const said = seat.title
+        ? `titled ${seat.title}, not its seat name; the state records its pane and workspace, so its workspace was closed`
+        : 'created for this seat and never named; its workspace was closed';
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'workspace', 'close', seat.workspace),
+        note: seat.title
+          ? `titled ${seat.title}; recorded for this seat; closed without typing`
+          : 'created for this seat and never named; closed without typing',
+        do: {
+          do: 'close',
+          seat: seat.name,
+          workspace: seat.workspace,
+          said,
+        },
+      });
+      continue;
+    }
     if (input.keep.includes(seat.name)) {
       steps.push({
         kind: 'skip',

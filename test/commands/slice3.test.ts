@@ -837,11 +837,15 @@ describe('team down', () => {
         },
       }),
     );
+    const state = readFileSync(join(root, '.agents/team.state.json'), 'utf8');
     const run = await down(['--dry-run'], OWNER, {
       agents: () => [agent('deepseek-acme-tmp-1'), agent('stranger'), agent(null), agent('codex-acme', 'blocked')],
     });
+    // None of these panes is recorded, so the plan must not claim a close. The first head
+    // printed the unnamed pane's leave-line in front of this text and closed nothing.
     expect(run.out).toStartWith(
       [
+        'pane x:p1: not recorded for a seat of this team; left as it is',
         'deepseek-acme-tmp-1: its record is not an approved seat; left running (the owner cleans it: team remove deepseek-acme-tmp-1 --abandon)',
         'stranger: its record is not an approved seat; left running (the owner cleans it: team remove stranger --abandon)',
         'watch: its pid is only in the state; left running',
@@ -849,7 +853,33 @@ describe('team down', () => {
         '  skip session acme-web: not stopped, 4 agents left in it',
       ].join('\n'),
     );
+    expect(run.out).not.toContain('workspace close');
     expect(run.out).not.toContain('+ kill');
+    expect(run.out).toContain('dry run: nothing was run\n');
+    expect(readFileSync(join(root, '.agents/team.state.json'), 'utf8')).toBe(state);
+  });
+
+  test('--dry-run says it would close a pane whose ids match a record, and touches nothing', async () => {
+    writeFileSync(
+      join(root, '.agents/team.state.json'),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: { 'deepseek-acme': { stage: 'launched', pane: 'seat-1:p1', workspace: 'seat-1' } },
+            worktrees: {},
+          },
+        },
+      }),
+    );
+    const state = readFileSync(join(root, '.agents/team.state.json'), 'utf8');
+    const run = await down(['--dry-run'], OWNER, {
+      agents: () => [agent(null, 'idle', 'seat-1')],
+    });
+    expect(run.code).toBe(0);
+    expect(run.out).toContain("+ herdr --session acme-web workspace close seat-1\n    (created for this seat and never named; closed without typing)\n");
+    expect(run.out).toContain('dry run: nothing was run\n');
+    expect(readFileSync(join(root, '.agents/team.state.json'), 'utf8')).toBe(state);
   });
 
   test('an idle status at a permission prompt is blocked, and unsent text stays unsent', async () => {
