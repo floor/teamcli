@@ -30,6 +30,7 @@ import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
 import { runUnlock } from '../src/commands/unlock.ts';
+import { runTempo } from '../src/commands/tempo.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
@@ -270,6 +271,9 @@ function launching(text: string, paneOk: (command: string) => boolean = () => tr
       const known = panes.get(pane);
       if (known) known.agent = true;
       return true;
+    },
+    spawnWatch(command) {
+      return paneOk(command) ? 4242 : null;
     },
     renameAgent: () => true,
     closeWorkspace: () => true,
@@ -2094,7 +2098,7 @@ scene('watch.watchdog', async (place) => {
     const session = (state.sessions.acme ??= emptySession());
     session.watchdog = { file: join(place.root, 'custom', 'team.yaml'), pane: 'w2:p1' };
   });
-  return show(await watched(place, ['--session', 'acme'], other), 'watchdog pane');
+  return show(await watched(place, ['--session', 'acme'], other), 'only the watch this session records');
 });
 scene('watch.no-nudge', async (place) => {
   write(place, TEAM);
@@ -2869,6 +2873,31 @@ scene('unlock.unknown-holder', async (place) => {
 });
 scene('unlock.invocation', async (place) => show(await unlocked(place, [], LOCK_OWNER), 'a <name> is required'));
 scene('unlock.project', async (place) => show(await unlocked(place, ['heavy-run']), 'no team file'));
+
+async function tempo(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runTempo(argv, io, { home: place.home }), out: io.out, err: io.err };
+}
+
+scene('tempo.set', async (place) => {
+  write(place, TEAM);
+  return show(await tempo(place, ['urgent']), 'it takes effect when the file is approved');
+});
+scene('tempo.unchanged', async (place) => {
+  write(place, TEAM.replace('format: 1\n', 'format: 1\ntempo: urgent\n'));
+  const ran = await tempo(place, ['urgent']);
+  expect(ran.err).toBe('');
+  return show(ran, 'tempo: urgent');
+});
+scene('tempo.not-owner', async (place) => {
+  write(place, TEAM);
+  return show(await tempo(place, ['urgent'], other), 'only the owner runs tempo');
+});
+scene('tempo.detached', async (place) => show(await tempo(place, ['urgent'], detachedCaller), 'only the owner runs this, from a terminal outside herdr'));
+scene('tempo.invocation', async (place) => show(await tempo(place, []), 'a word is required'));
+scene('tempo.word', async (place) => show(await tempo(place, ['faster']), 'must be relaxed, normal or urgent'));
+scene('tempo.not-a-repo', async (place) => show(await tempo(place, ['urgent']), 'not inside a git repository'), false);
+scene('tempo.file', async (place) => show(await tempo(place, ['urgent']), 'no team file'));
 
 async function nexted(place: Place, argv: string[] = [], caller: Caller = leadSeat): Promise<Ran> {
   const io = testIo(place.root, caller);

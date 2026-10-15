@@ -117,8 +117,12 @@ export type Host = {
   drop(seat: string): void;
   say(line: string): void;
   log(who: string, what: string): void;
-  /** Records the file the watchdog pane may read, before that pane's command runs. */
-  noteWatch?(pane: string, file: string): void;
+  /** Records the file the watch may read, before the process is spawned. */
+  noteWatchFile?(file: string): void;
+  /** Records the spawned watch's pid. The file, when one was recorded, stays. */
+  noteWatchSpawn?(pid: number): void;
+  /** Starts the watch detached in `cwd`. The pid, or null when it did not start. */
+  spawnWatch?(command: string, cwd: string): number | null;
   /** The seat's line: first drawn before its workspace is created, rewritten in place as it
    *  advances. Present on `up` and `add`; `down` has none, and its records keep their old lines. */
   progress?(seat: string, state: ProgressState): void;
@@ -960,15 +964,18 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         finishReady(op.seat);
         break;
       }
-      case 'watch': {
-        const here = places.get(op.label);
-        if (here && op.file) host.noteWatch?.(here.pane, op.file);
-        if (!here || !host.paneRun(session, here.pane, op.command)) {
+      case 'spawn-watch': {
+        // The file lands before the process can read it. The pid lands as soon as spawn
+        // returns, before this function awaits anything else.
+        if (op.file) host.noteWatchFile?.(op.file);
+        const pid = host.spawnWatch?.(op.command, op.cwd) ?? null;
+        if (pid === null || pid <= 0) {
           watchFailed = true;
           host.say('watch: it did not start\n');
           host.log('watch', 'it did not start');
           break;
         }
+        host.noteWatchSpawn?.(pid);
         host.say('watch: started\n');
         host.log('watch', 'started');
         break;
@@ -1260,13 +1267,11 @@ export async function executePlan(steps: readonly Step[], session: string, host:
     // seat this run never gave a final record — the current one and the later configured,
     // non-stopped ones — is recorded `stopped cleanly`, in file order, while earlier final
     // records stand. The session goes only when this run created it and nothing is left in it:
-    // a session that existed before, a ready seat and a watchdog stay. `q` is only ever read
-    // inside a seat's pause, and the plan appends the watchdog's two steps after every seat's
-    // (`upPlan`), so a session this run created holds no watchdog at this point — its absence
-    // needs no check of its own; a watchdog running in a session is a previous run's, and such
-    // a session is not this run's to stop. The agent list is what still tells of a ready seat:
-    // a watchdog pane would not be on it (captured on herdr 0.7.1: a pane running `node -e …`
-    // answered `herdr agent list` with `"agents":[]`).
+    // a session that existed before, and a ready seat, stay. `q` is only ever read inside a
+    // seat's pause, and the plan appends the watch after every seat (`upPlan`), so a session
+    // this run created holds no watch at this point. A watch already running is a previous
+    // run's process, not an agent, and the agent list does not include it: a session this run
+    // created is stopped only when that list is empty.
     for (const [seat, made] of created) {
       if (ready.has(seat) || closed.has(seat)) continue;
       const lock = host.seatLock?.(seat);

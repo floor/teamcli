@@ -755,6 +755,13 @@
       },
       "$comment": "one task source. source file needs path; source linear needs the linear block. pull is self or any; fallback is file or id. a path that leaves the checkout, a linear block or policy with source file, and a policy that omits id or title are refused"
     },
+    "tempo": {
+      "enum": [
+        "relaxed",
+        "normal",
+        "urgent"
+      ]
+    },
     "grant": {
       "type": "object",
       "additionalProperties": false,
