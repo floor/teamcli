@@ -33,9 +33,11 @@ CLI's exit text is cleared inside that stop. Every other seat, and the session, 
 Reads the team file, the session's state (`.agents/team.state.json`, for a temporary seat's record),
 herdr: whether the session runs, its agents, each pane's screen and status, and the pane's
 foreground processes, which is how it knows the CLI has really exited, and the approval store:
-stopping a seat and editing the file are changes the owner approves first. Without an approval in
-force — never approved, a record from before records were signed, or one the verification refused —
-nothing is stopped and nothing is written, with the one-line repair every command prints.
+stopping a seat and editing the file are changes the owner approves first. A record that is not in
+force — one written before records were signed, or one the verification refused — stops the run
+before anything is stopped or written, with the one-line repair every command prints. A machine
+with no record at all is not that case: the live file stands in for the approved copy, and the run
+goes ahead.
 
 Writes the team file (the seat's entry taken out, or `stopped: true` added to it),
 `.agents/team.state.json` (the seat's record is dropped), `.agents/team.log`, and, through herdr:
@@ -161,7 +163,6 @@ with the text named, in the refusal below.
 | `team remove: <seat> holds unsent text in its input box; left as it is` | 1 |
 | `team remove: <seat> holds this CLI's exit text (<exit>) unsent in its input box; left as it is (the owner sends it or clears it in its pane)` | 1 |
 | ``team remove: no launch profile for `<cli>`; left as it is`` | 1 |
-| ``team remove: the file was never approved on this machine: run `team approve` `` | 1 |
 | ``team remove: approved before records were signed: run `team approve` once`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
 | ``team remove: another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share; the line names no command, because the lock is shared. The lock is taken before this run's first effect and released at its end; every refusal above is decided first and never shows it | 1 |
 | ``team remove: another session-mutating run may be holding session <session>, and its lock cannot be read; if no run is using it, delete <state dir>/seat-locks/<session>/.run`` — the lock file does not read as a token, so its holder is unknown and only the owner clears it; the line names the file | 1 |
