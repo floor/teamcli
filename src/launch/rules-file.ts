@@ -346,8 +346,9 @@ export function checkRulesFile(path: string, approvedText: string): RulesFileChe
  *  the path resolved through `rulesFilePathOf` like every other reader of this file. The live
  *  `team` is deliberately not read here, not even for its project name: `up` and `add` refuse
  *  a file that differs from the approval, so on a normal run both texts are equal, and the
- *  invariant does not depend on that gate. `live` is the one exception, a dev-mode mount with
- *  no approval in force: the text and the folder are the live file's, and nothing is signed.
+ *  invariant does not depend on that gate. `live` is the one exception, a dev-mode mount:
+ *  the text and the folder are the live file's whether or not an approval is in force, and
+ *  nothing is signed.
  *  A path that can't be typed safely is a refusal — before anything is written or typed. */
 export function rulesDeliveryOf(
   standing: Standing,
@@ -358,8 +359,10 @@ export function rulesDeliveryOf(
   live = false,
 ): { text: string; path: string; line: string } | { refusal: string } {
   if (profileFor(seat.cli)?.rulesOption != null) return { refusal: 'its rules travel as a launch option' };
-  if (standing.kind !== 'verified') {
-    if (!live) return { refusal: notInForce(standing) };
+  // A dev-mode mount reads the live file even when an approval is in force. An unverified
+  // standing with no live mount is the ordinary refusal. A verified standing otherwise
+  // keeps the approved copy.
+  if (live) {
     const path = rulesFilePath(team.project, root, home, seat.name);
     if (path === null || !typeablePath(path)) {
       return { refusal: "its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -" };
@@ -367,6 +370,7 @@ export function rulesDeliveryOf(
     const text = rulesOf(team, seat, root);
     return { text, path, line: rulesLine(path, rulesFileHash(text)) };
   }
+  if (standing.kind !== 'verified') return { refusal: notInForce(standing) };
   const copy = validateTeamFile(standing.record.file);
   if (!copy.ok) return { refusal: "the approved copy of the team file can't be read" };
   const path = rulesFilePathOf(standing, seat.name, root, home);
