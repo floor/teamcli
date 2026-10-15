@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -8,18 +9,25 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
 import { legacySeatDigests } from '../../src/approve/fingerprint.ts';
+import { loadConfig } from '../../src/check/load.ts';
+import { runApprove } from '../../src/commands/approve.ts';
+import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
+import { testIo } from '../helpers.ts';
 import {
   approvalStanding,
   approvedCopy,
   findStore,
   mergeLedger,
+  otherMatchingStores,
+  otherStoreNote,
   readApproval,
   readLedger,
   storePath,
@@ -160,6 +168,145 @@ describe('the approved copy, from the root alone', () => {
     expect(findStore(root, home)).toBe(store);
     expect(approvedCopy(root, home)).toBe(TEAM);
     expect(approvedCopy(home, home)).toBeNull();
+  });
+});
+
+describe('a project rename', () => {
+  function projectFile(root: string, project: string) {
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1\nproject: ${project}\n`);
+  }
+
+  function approve(project: string, root: string, file: string) {
+    const store = storePath(project, root, home);
+    writeApproval(store, { approval: approval(root), file }, [opus], home);
+    return store;
+  }
+
+  test('one store under the previous name is still the approval', () => {
+    const root = join(home, 'repo');
+    mkdirSync(root);
+    projectFile(root, 'beta');
+    const store = approve('alpha', root, 'format: 1\n');
+    expect(findStore(root, home)).toBe(store);
+    expect(approvalStanding(root, home).kind).toBe('verified');
+    expect(otherMatchingStores(root, home)).toEqual([]);
+    expect(existsSync(store)).toBe(true);
+  });
+
+  test('a ledger-only folder under the current name does not hide that approval', () => {
+    const root = join(home, 'repo');
+    mkdirSync(root);
+    projectFile(root, 'beta');
+    const store = approve('alpha', root, 'format: 1\n');
+    mkdirSync(storePath('beta', root, home), { recursive: true });
+    expect(findStore(root, home)).toBe(store);
+    expect(approvalStanding(root, home).kind).toBe('verified');
+  });
+
+  test('the current project\'s store is read, and the earlier one is named and left in place', () => {
+    const root = join(home, 'repo');
+    mkdirSync(root);
+    projectFile(root, 'beta');
+    const oldStore = approve('alpha', root, 'old\n');
+    const current = approve('beta', root, 'new\n');
+    expect(basename(oldStore) < basename(current)).toBe(true);
+    expect(findStore(root, home)).toBe(current);
+    const standing = approvalStanding(root, home);
+    expect(standing.kind).toBe('verified');
+    if (standing.kind === 'verified') expect(standing.record.file).toBe('new\n');
+    expect(otherMatchingStores(root, home)).toEqual([basename(oldStore)]);
+    expect(existsSync(join(oldStore, 'approval.json'))).toBe(true);
+    expect(readdirSync(join(home, '.config', 'team')).sort()).toEqual([basename(oldStore), basename(current)].sort());
+  });
+
+  test('the same when the earlier name sorts last', () => {
+    const root = join(home, 'repo');
+    mkdirSync(root);
+    projectFile(root, 'alpha');
+    const oldStore = approve('zeta', root, 'old\n');
+    const current = approve('alpha', root, 'new\n');
+    expect(basename(current) < basename(oldStore)).toBe(true);
+    expect(findStore(root, home)).toBe(current);
+    expect(otherMatchingStores(root, home)).toEqual([basename(oldStore)]);
+    expect(existsSync(join(oldStore, 'approval.json'))).toBe(true);
+  });
+
+  test('several stores, none of them the current project, are named and not read', () => {
+    const root = join(home, 'repo');
+    mkdirSync(root);
+    projectFile(root, 'beta');
+    const alpha = approve('alpha', root, 'a\n');
+    const gamma = approve('gamma', root, 'g\n');
+    expect(findStore(root, home)).toBeNull();
+    expect(approvalStanding(root, home).kind).toBe('none');
+    expect(otherMatchingStores(root, home)).toEqual([basename(alpha), basename(gamma)].sort());
+    expect(existsSync(join(alpha, 'approval.json'))).toBe(true);
+    expect(existsSync(join(gamma, 'approval.json'))).toBe(true);
+  });
+
+  test('a linked team file is not the current project, so two stores are not guessed', () => {
+    const root = join(home, 'repo');
+    mkdirSync(root);
+    const aside = join(home, 'linked.yaml');
+    writeFileSync(aside, 'format: 1\nproject: beta\n');
+    mkdirSync(join(root, '.agents'));
+    symlinkSync(aside, join(root, '.agents', 'team.yaml'));
+    const alpha = approve('alpha', root, 'a\n');
+    const beta = approve('beta', root, 'b\n');
+    expect(findStore(root, home)).toBeNull();
+    expect(otherMatchingStores(root, home)).toEqual([basename(alpha), basename(beta)].sort());
+    expect(existsSync(join(alpha, 'approval.json'))).toBe(true);
+    expect(existsSync(join(beta, 'approval.json'))).toBe(true);
+  });
+
+  test('approve and doctor name the earlier store, and the ledger is read from the one store in force', async () => {
+    const root = join(home, 'repo');
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    const text = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8')
+      .replace('project: acme-web\n', 'project: beta\n')
+      .replace('../worktrees/acme-web/*', '../worktrees/beta/*');
+    writeFileSync(join(root, '.agents', 'team.yaml'), text);
+    const checked = validateTeamFile(text, { home, root });
+    if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
+    const oldStore = storePath('alpha', root, home);
+    const current = storePath('beta', root, home);
+    const kept = { display: 'Kept From Alpha', role: 'implementer', model: 'Claude Opus', version: '5.5' };
+    writeApproval(oldStore, { approval: approvalOf(checked.team, root), file: text }, [kept], home);
+    writeApproval(current, { approval: approvalOf(checked.team, root), file: text }, [opus], home);
+    const note = otherStoreNote(basename(oldStore));
+
+    const shown = testIo(root, { kind: 'owner' });
+    const code = await runApprove(['--show'], shown, {
+      ask: async () => null,
+      waiting: () => 'empty',
+      now: () => new Date('2026-10-15T01:15:00Z'),
+      home,
+    });
+    expect(code).toBe(0);
+    expect(shown.out).toContain(`Note: ${note}\n`);
+    expect(shown.out).not.toContain('the record is approval #1');
+    expect(existsSync(join(oldStore, 'approval.json'))).toBe(true);
+    expect(findStore(root, home)).toBe(current);
+
+    const sources: DoctorSources = {
+      version: () => '0.0.0',
+      onPath: () => true,
+      loggedIn: () => true,
+      herdrVersion: () => '0.7.1',
+      sessionRunning: () => false,
+      now: () => new Date('2026-10-15T01:15:00Z'),
+      home,
+    };
+    const diagnosed = testIo(root, { kind: 'owner' });
+    await runDoctor([], diagnosed, sources);
+    expect(diagnosed.out).toContain(note);
+    expect(existsSync(join(oldStore, 'approval.json'))).toBe(true);
+
+    const loaded = loadConfig(root, undefined, home);
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    expect(loaded.config.ledger.some((seat) => seat.display === opus.display)).toBe(true);
+    expect(loaded.config.ledger.some((seat) => seat.display === kept.display)).toBe(false);
   });
 });
 

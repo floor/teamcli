@@ -652,7 +652,8 @@ export type SessionLiveness = (session: string) => boolean | null;
  * folder listed, each name ending `-<12 hex>`, each record read whole for its root, each root
  * read by `projectUsage` under this caller's view. One bad store, one moved project, one
  * unreadable state is a problem on that entry, never a refusal for the rest. A root two stores
- * record (a rename keeps the old folder) is one team: the first store in name order stands. The
+ * record (a rename keeps the old folder) is one team: the approval read is the current project's
+ * store, and another store for that root is left in place. The walk counts the root once. The
  * caller's own project is the one entry that needs no store: it prints whether or not the owner
  * ever approved it, because it is the caller's own material. The store folder not existing is an
  * empty machine; the folder itself unreadable is `StoreUnreadable`, the one refusal (§ 2.4).

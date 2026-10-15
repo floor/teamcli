@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fromTeamFile, type CheckConfig } from './config.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Problem } from '../file/types.ts';
-import { readLedger, storePath } from '../store/store.ts';
+import { findStore, readLedger, storePath } from '../store/store.ts';
 
 export type LoadConfig = (
   cwd: string,
@@ -18,7 +18,7 @@ export type LoadConfig = (
 export function loadConfig(cwd: string, file?: string, home: string = homedir()): ReturnType<LoadConfig> {
   const loaded = readTeamConfig(cwd, { file, home, checkOnly: true });
   if (!loaded.ok) return loaded;
-  const store = storePath(loaded.team.project, loaded.root, home);
+  const store = findStore(loaded.root, home) ?? storePath(loaded.team.project, loaded.root, home);
   const ledgerFile = join(store, 'ledger.json');
   try {
     const ledger = readLedger(store);

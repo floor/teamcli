@@ -18,7 +18,7 @@ import { grantGate, logGranted } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { OVERRIDE_CHANGED, overrideFile } from '../profiles/overrides.ts';
-import { approvalStanding, approvedRecordOf, LEGACY_LINE, readApproval, storePath, writeApproval, type Ceilings } from '../store/store.ts';
+import { approvalStanding, approvedRecordOf, findStore, LEGACY_LINE, otherMatchingStores, otherStoreNote, readApproval, storePath, writeApproval, type Ceilings } from '../store/store.ts';
 import { keyFingerprint, keyOf, keyRefusal, keyState, recordedGeneration } from '../store/keys.ts';
 
 // What a read of the terminal found: a canonical-mode line is queued (`waiting`), nothing is
@@ -259,11 +259,17 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   }
   let previous: ReturnType<typeof readApproval> = null;
   try {
-    previous = readApproval(store);
+    // The same store `approvalStanding` reads. The write below still goes to the
+    // current project's folder; a rename that has not been approved again is diffed
+    // against the one approval this root has, not reported as never approved.
+    previous = readApproval(findStore(root, sources.home) ?? store);
   } catch {
     // A malformed record is named by the standing below; nothing is diffed against it.
   }
   const standing = approvalStanding(root, sources.home);
+  for (const name of otherMatchingStores(root, sources.home)) {
+    io.stdout(`Note: ${otherStoreNote(name)}\n`);
+  }
   const ceilings = ceilingsOf(team);
   const seats = team.seats.length;
 

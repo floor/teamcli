@@ -67,7 +67,7 @@ One line per finding, the level first, then two spaces:
 The findings come in order: the file's own warnings — each deprecated key among them, with the
 repair `team check` prints — one warning per seat whose name or label
 repeats the project or the session (the session already carries it; the warning never refuses the
-file), the approval — no line when there is no record or the record verifies, and one `MISS` with the case when the record is legacy (`approved before records were signed`) or refused — the override file when it is not the approved copy or cannot be parsed (a
+file), the approval — no line when there is no record or the record verifies, and one `MISS` with the case when the record is legacy (`approved before records were signed`) or refused — a `note` when another folder for this root still holds an approval, naming that folder and leaving it in place — the override file when it is not the approved copy or cannot be parsed (a
 missing line either way: `up` and `add` refuse, and the approved copy stays in force — or the
 shipped profiles, when nothing was approved), each account whose `check`
 command is unapproved, or no longer matches the file hashed at approval (a warning either way: that
