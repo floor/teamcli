@@ -1,7 +1,7 @@
 # team seats
 
-Shows the seat registry for the team: one row per active seat, or every seat when `--all` is given,
-with its stable seat handle (`seat_<12 hex>`), role, CLI, model, effort, status, last active time,
+Shows the seat registry for the team: one row per seat whose STATUS is not `stopped`, or every seat
+when `--all` is given, with its stable seat handle (`seat_<12 hex>`), role, CLI, model, effort, status, last active time,
 and pane.
 
 ## Synopsis
@@ -14,7 +14,7 @@ and pane.
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
-| `--all` | — | include stopped seats; without it, only active and non-stopped seats are listed |
+| `--all` | — | include the seats whose STATUS reads `stopped`; without it those rows are dropped, and every other state is listed either way |
 | `--watch` | — | refresh the table every 2 seconds until interrupted |
 | `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`) |
 | `--help`, `-h` | — | the usage, and exit 0 |
@@ -26,7 +26,7 @@ and pane.
 | SEAT | the seat name |
 | ID | the stable seat handle (`seat_<12 hex>`), or `-` before first launch |
 | ROLE | the seat's role (`temporary` when no declared seat matches) |
-| CLI | the CLI profile (`claude-code`, `codex`, `cursor`, `antigravity`) |
+| CLI | the CLI profile (`claude-code`, `codex`, `cursor`, `antigravity`, `grok`) |
 | MODEL | the live model reading or declared display |
 | EFFORT | the effort level, or `-` when unset |
 | STATUS | the seat's live state |

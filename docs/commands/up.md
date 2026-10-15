@@ -38,7 +38,8 @@ rewritten from the file: the workspace title, and the display line. Nothing is t
 | `--dry-run` | the plan; `! up would refuse: …` per refusal above it | the refusal's own exit, else 0 |
 | the run is refused | one `team up: <reason>` per reason, on stderr, before the first step | 1 |
 | a seat was left out, the server did not start, the watch did not start | the seats' records and the run's own lines | 1 |
-| the invocation, or the team file, can't be read | `team up: <problem>` and the usage | 2 |
+| the invocation can't be read | `team up: <problem>` and the usage | 2 |
+| the team file can't be read | `team up: line <n>: <message>` (`team up: <message>` when the problem names no line) | 2 |
 
 ## Example
 
