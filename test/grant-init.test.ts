@@ -113,12 +113,12 @@ describe('grant-gated team init', () => {
     const code = await runInit(['--restore'], io, home, undefined, noLogin);
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toContain('Restored .agents/team.yaml from the approved copy.');
+    expect(io.out).toContain('Restored .agents/team.yaml from the copy you last approved on this machine.');
     expect(readFileSync(file, 'utf8')).toBe(text);
 
     const log = readFileSync(join(project, '.agents', 'team.log'), 'utf8');
     expect(log).toMatch(/ grant \[grant\] lead init\n/);
-    expect(log).toMatch(/ init \[lead\] restored the approved copy as \.agents\/team\.yaml\n/);
+    expect(log).toMatch(/ init \[lead\] restored the approved copy as \.agents\/team\.yaml/);
     expect(approvalStanding(project, home).kind).toBe('verified');
   });
 
@@ -135,7 +135,7 @@ describe('grant-gated team init', () => {
     const code = await runInit([], io, home, undefined, noLogin);
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toContain('Wrote .agents/team.yaml.');
+    expect(io.out).toContain('Wrote .agents/team.yaml: a skeleton with one seat.');
     expect(io.out).toContain('team approve');
 
     const freshFile = join(fresh, '.agents', 'team.yaml');
@@ -148,7 +148,7 @@ describe('grant-gated team init', () => {
 
     const log = readFileSync(join(fresh, '.agents', 'team.log'), 'utf8');
     expect(log).toMatch(/ grant \[grant\] lead init\n/);
-    expect(log).toMatch(/ init \[lead\] wrote a skeleton as \.agents\/team\.yaml\n/);
+    expect(log).toMatch(/ init \[lead\] wrote a skeleton as \.agents\/team\.yaml/);
   });
 
   test('without a grant block, a non-owner caller is refused with init.not-owner', async () => {
@@ -159,7 +159,7 @@ describe('grant-gated team init', () => {
     const io = testIo(project, leadSeat);
     const code = await runInit(['--restore'], io, home, undefined, noLogin);
     expect(code).toBe(1);
-    expect(io.err).toBe('team init: only the owner runs `init`\n');
+    expect(io.err).toBe('team init: only the owner runs init, from a terminal outside herdr; this call is lead\n');
     expect(existsSync(join(project, '.agents', 'team.yaml'))).toBe(false);
     expect(existsSync(join(project, '.agents', 'team.log'))).toBe(false);
   });

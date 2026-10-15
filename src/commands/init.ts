@@ -16,7 +16,7 @@ import { approvalStanding, approvedCopy, LEGACY_LINE, type Standing } from '../s
 import { version } from '../version.ts';
 import { realSources as doctorSources, type DoctorSources } from './doctor.ts';
 
-export type InitSources = Pick<DoctorSources, 'loggedIn'> & {
+export type InitSources = Partial<Pick<DoctorSources, 'loggedIn'>> & {
   grantGate?: typeof grantGate;
   logGranted?: typeof logGranted;
 };
@@ -299,7 +299,13 @@ export async function runInit(
     }
     text = copy;
   } else {
-    text = skeleton(basename(root), git(root, 'rev-parse', 'HEAD'), version(), root, firstLoggedInCli(sources));
+    text = skeleton(
+      basename(root),
+      git(root, 'rev-parse', 'HEAD'),
+      version(),
+      root,
+      firstLoggedInCli({ loggedIn: sources.loggedIn ?? doctorSources.loggedIn }),
+    );
     const check = validateTeamFile(text);
     // exit: init.skeleton
     if (!check.ok) throw new Error(`the skeleton doesn't validate: ${check.errors[0]?.message}`);
