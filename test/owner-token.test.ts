@@ -12,7 +12,7 @@ import { approvalOf } from '../src/approve/approval.ts';
 import { fingerprints } from '../src/approve/fingerprint.ts';
 import { approveFingerprint, upFingerprint } from '../src/approve/owner-token.ts';
 import type { Caller } from '../src/caller.ts';
-import { runApprove, type ApproveSources } from '../src/commands/approve.ts';
+import { runApprove, type ApproveSources } from '../src/approve/command.ts';
 import { runUp, type UpSources } from '../src/commands/up.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -214,12 +214,17 @@ describe('team up with an out-of-band owner token', () => {
     const fp = upFingerprint(fingerprints(team), 1);
 
     const without = await upDry(p, SEAT, {}, standing);
-    expect(without.out).toContain('only the owner runs `up`');
+    expect(without.code).toBe(1);
+    expect(without.err).toBe('deny\n');
+    expect(without.out).toBe('');
 
     const wrong = await upDry(p, SEAT, { TEAM_OWNER_APPROVAL: `${fp}00` }, standing);
-    expect(wrong.out).toContain('only the owner runs `up`');
+    expect(wrong.code).toBe(1);
+    expect(wrong.err).toBe('deny\n');
+    expect(wrong.out).toBe('');
 
     const withToken = await upDry(p, SEAT, { TEAM_OWNER_APPROVAL: fp }, standing);
-    expect(withToken.out).not.toContain('only the owner runs `up`');
+    expect(withToken.err).toBe('');
+    expect(withToken.out).not.toContain('deny');
   });
 });

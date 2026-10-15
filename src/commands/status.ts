@@ -12,10 +12,11 @@ import { currentTeam } from '../file/current.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
-import type { Command, Io } from '../io.ts';
+import { cleanedIo, type Command, type Io } from '../io.ts';
 import { emptySession, readState, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
+import { plainLine, plainText } from '../launch/plain.ts';
 import { checkRulesFile, rulesFilePathOf } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { profileFor } from '../profiles/index.ts';
@@ -134,9 +135,10 @@ export interface StatusJson {
 export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n';
 
 export async function runStatus(argv: string[], io: Io, sources: StatusSources): Promise<number> {
+  const out = cleanedIo(io);
   const args = readArgs(argv, ['session', 'file'], ['all', 'json']);
   if (args.error || args.rest.length) {
-    io.stderr(`team status: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
+    out.stderr(`team status: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
     // exit: status.invocation
     return 2;
   }
@@ -149,13 +151,13 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   if (args.values.file !== undefined) {
     const refusal = fileOwnerRefusal(io, args.values.file);
     if (refusal !== undefined) {
-      io.stderr(`team status: ${refusal}\n`);
+      out.stderr(`team status: ${plainText(refusal)}\n`);
       // exit: status.file-owner
       return 1;
     }
   }
   if (args.values.session !== undefined && !owner) {
-    io.stderr(`team status: ${sessionOwnerRefusal(walked)}\n`);
+    out.stderr(`team status: ${plainText(sessionOwnerRefusal(walked))}\n`);
     // exit: status.session-owner
     return 1;
   }
@@ -163,33 +165,33 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
   if (!owner) {
     if (!current.ok || !mayReadTeam(current, io, sources)) {
-      io.stderr('team status: this team is not yours to read\n');
+      out.stderr('team status: this team is not yours to read\n');
       // exit: status.not-yours
       return 2;
     }
   } else if (!current.ok) {
-    printProblems(io, current.errors);
+    printProblems(out, current.errors);
     // exit: status.not-a-repo
     // exit: status.file
     // exit: status.file-invalid
     return 2;
   }
   const { team, root, dir } = current;
-  if (!args.flags.has('json') && current.notice) io.stdout(`${current.notice}\n`);
-  for (const warning of current.warnings) io.stderr(`team status: warning, line ${warning.line}: ${warning.message}\n`);
+  if (!args.flags.has('json') && current.notice) out.stdout(`${plainText(current.notice)}\n`);
+  for (const warning of current.warnings) out.stderr(`team status: warning, line ${warning.line}: ${plainText(warning.message)}\n`);
 
   const session = args.values.session ?? team.session;
   // The one read of the approval store: everything below derives from it.
   const standing = sources.standing(root);
   const overrides = sources.home ? overridesInForceOf(standing, team.project, root, sources.home) : emptyOverrides();
-  for (const problem of overrides.problems) io.stderr(`team status: ${problem}\n`);
+  for (const problem of overrides.problems) out.stderr(`team status: ${plainText(problem)}\n`);
   // The state is read before the world: the live read compares each pane with the process the
   // state recorded for the seat it holds.
   const whole = readState(dir);
   const state = whole.sessions[session] ?? emptySession();
   const live = sources.live(session, team, state);
   if (!live) {
-    io.stderr('team status: herdr doesn\'t answer; is it installed and running?\n');
+    out.stderr('team status: herdr doesn\'t answer; is it installed and running?\n');
     // exit: status.herdr
     return 2;
   }
@@ -250,7 +252,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     };
     io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
   } else {
-    io.stdout(render(team, session, comparison, budgets, registryRows));
+    out.stdout(render(team, session, comparison, budgets, registryRows));
   }
   // exit: status.agrees
   // exit: status.difference
@@ -339,28 +341,34 @@ function render(
   budgets: BudgetRow[],
   registryRows?: SeatRegistryRow[],
 ): string {
-  const lines = [`team ${team.project}, session "${session}"`];
+  const lines = [`team ${plainLine(team.project)}, session "${plainLine(session)}"`];
   if (registryRows) {
     lines.push(...renderSeatsTable(registryRows, '  ').trimEnd().split('\n'));
   } else {
+    const rows = comparison.rows.map((row) => ({
+      name: plainLine(row.name),
+      state: plainLine(row.state),
+      model: plainLine(row.model),
+      pane: plainLine(row.pane),
+    }));
     const widths = [0, 0, 0];
-    for (const row of comparison.rows) {
+    for (const row of rows) {
       widths[0] = Math.max(widths[0] as number, row.name.length);
       widths[1] = Math.max(widths[1] as number, row.state.length);
       widths[2] = Math.max(widths[2] as number, row.model.length);
     }
-    for (const row of comparison.rows) {
+    for (const row of rows) {
       lines.push(`  ${row.name.padEnd(widths[0] as number)}  ${row.state.padEnd(widths[1] as number)}  ${row.model.padEnd(widths[2] as number)}  ${row.pane}`.trimEnd());
     }
   }
   if (budgets.length) {
     lines.push('budgets:');
     // The row carries its own reserve: the line and the JSON can't disagree (queue 79).
-    for (const row of budgets) lines.push(`  ${budgetLine(row)}`);
+    for (const row of budgets) lines.push(`  ${plainLine(budgetLine(row))}`);
   }
-  for (const note of comparison.notes) lines.push(`note: ${note}`);
+  for (const note of comparison.notes) lines.push(`note: ${plainLine(note)}`);
   for (const difference of comparison.differences) {
-    lines.push(`difference: ${difference.what}`, `  repair: ${difference.repair}`);
+    lines.push(`difference: ${plainLine(difference.what)}`, `  repair: ${plainLine(difference.repair)}`);
   }
   const ownerCount = comparison.differences.filter((difference) => difference.owner === true).length;
   if (ownerCount > 0) {
@@ -373,6 +381,6 @@ function render(
 
 function printProblems(io: Io, problems: Problem[]): void {
   for (const problem of problems) {
-    io.stderr(`team status: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${problem.message}\n`);
+    io.stderr(`team status: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
   }
 }
