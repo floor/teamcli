@@ -431,7 +431,7 @@ note: approval #1 (2026-10-04), key fe21ef6293de
 exit 0
 ```
 
-The machine's own swap is read for one case only: the check in force — the 2GB default, or the
+The machine's own swap is read for one case only: the check in force — the 100MB default, or the
 file's own `swap_free_min` — asks for more free swap than this reading says the machine has in
 total. The same fact `doctor` warns about is one note, above the approval note, with both figures
 and the repair, in the reading's own words — `would refuse now`, never a promise about a later run;
@@ -447,7 +447,7 @@ budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
-note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep, then run `team approve`
+note: the machine check asks for 0.1 GB free swap; at this reading the machine has 0.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep, then run `team approve`
 note: approval #1 (2026-10-04), key fe21ef6293de
 0 difference(s)
 exit 0

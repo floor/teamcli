@@ -147,7 +147,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `the load is <n> per core, above <n>` | over `machine.load_max` |
 | `free memory is <n>%, below <n>%` | under `machine.memory_min` |
 | `free disk is <n> GB, below <n> GB` | under `machine.disk_min` |
-| `free swap is <n> GB, below <n> GB` | under `machine.swap_free_min` |
+| `free swap is <n> GB, below <n> GB` | under `machine.swap_free_min`; 100MB when the file sets none |
 | `swap grew by <n> GB in <n> minutes, above <n> GB` | over `machine.swap_growth_max` inside `machine.swap_growth_window` |
 | `<account> <window> is <n>% used, past the <n>% mark` | the account's figure is at or past a mark of `budgets.marks`, once per window |
 | `<account> <window> left <n>%, inside its <n>% reserve` | a subscription account at or inside its `reserve` |
@@ -477,7 +477,7 @@ Needs a new approval: `watch.checks` changed.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 056248e0763543ab3fed6f7d26c49a46c7188868d50cec2ae241ce1376813df8
+Owner-authorization fingerprint: 25ad96f677949ef3ca33364ac06de7801a99d66f005abc795f601274a462430f
 Approved. The record is in ~/.config/team/beacon-<hash>; signed with key fe21ef6293de; check the rest with `team doctor`.
 exit 0
 ```

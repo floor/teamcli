@@ -15,7 +15,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { parseLoadavg, parseMeminfo, parseMemoryPressure, parseSwapUsage, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
+import { launchLimit, parseLoadavg, parseMeminfo, parseMemoryPressure, parseSwapUsage, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { newMemory, NUDGE_TEXT, pass, RING_TEXT } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
@@ -211,6 +211,20 @@ describe('the machine\'s figures', () => {
     // both null, and `launchLimit`'s swap rule can't fire there either.
     expect(swapTotalProblem({ ...small, swapTotal: null, swapFree: null }, limits)).toBeNull();
     expect(swapTotalProblem({ ...small, swapFree: null }, limits)).toBeNull();
+  });
+
+  test('free swap above the floor is not a refusal; load and memory are the start guards', () => {
+    const limits = team().machine;
+    expect(limits.swapFreeMin).toBe(100e6);
+    // Free memory and load inside the start limits, swap allocated and still above the floor.
+    const held: Machine = { loadPerCore: 0.8, memoryFree: 46, diskFree: 200e9, swapTotal: 2.1e9, swapFree: 0.6e9, swapUsed: 1.5e9 };
+    expect(launchLimit(held, limits, [], 0)).toBeNull();
+    expect(swapTotalProblem(held, limits)).toBeNull();
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: held, now: 0, memory: newMemory() }).reports).toEqual([]);
+    const empty: Machine = { ...held, swapFree: 20e6, swapUsed: 2.1e9 - 20e6 };
+    expect(launchLimit(empty, limits, [], 0)).toBe('free swap is 0.0 GB, below 0.1 GB');
+    expect(launchLimit({ ...empty, loadPerCore: 4 }, limits, [], 0)).toBe('the load is 4.0 per core, above 3');
+    expect(launchLimit({ ...empty, memoryFree: 10 }, limits, [], 0)).toBe('free memory is 10%, below 25%');
   });
 
   test('the readings as one sentence, in the log\'s fixed order, in the bytes the gate compared', () => {
@@ -678,13 +692,13 @@ describe('a pass of the watch', () => {
   });
 
   test('the machine: load per core, memory, disk and free swap, each against its threshold', () => {
-    const tight: Machine = { loadPerCore: 6.5, memoryFree: 10, diskFree: 5e9, swapTotal: 23.3e9, swapFree: 0.3e9, swapUsed: 23e9 };
+    const tight: Machine = { loadPerCore: 6.5, memoryFree: 10, diskFree: 5e9, swapTotal: 23.3e9, swapFree: 20e6, swapUsed: 23.28e9 };
     const reports = pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: tight, now: 0, memory: newMemory() }).reports;
     expect(reports.map((report) => report.text)).toEqual([
       'the load is 6.5 per core, above 6',
       'free memory is 10%, below 15%',
       'free disk is 5.0 GB, below 10.0 GB',
-      'free swap is 0.3 GB, below 2.0 GB',
+      'free swap is 0.0 GB, below 0.1 GB',
     ]);
     expect(reports.every((report) => report.to === 'owner')).toBe(true);
   });

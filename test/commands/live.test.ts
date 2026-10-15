@@ -1888,7 +1888,7 @@ describe('team up, live', () => {
     await approve();
     const cases: { machine: Machine; text: string }[] = [
       { machine: { ...fine, memoryFree: 10 }, text: 'free memory is 10%, below 25%' },
-      { machine: { ...fine, swapFree: 1.1e9 }, text: 'free swap is 1.1 GB, below 2.0 GB' },
+      { machine: { ...fine, swapFree: 20e6 }, text: 'free swap is 0.0 GB, below 0.1 GB' },
       { machine: { ...fine, diskFree: 5e9 }, text: 'free disk is 5.0 GB, below 10.0 GB' },
     ];
     for (const item of cases) {
@@ -1907,19 +1907,19 @@ describe('team up, live', () => {
     await approve();
     const made = world();
     const io = testIo(root, { kind: 'owner' });
-    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9 };
+    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 20e6, swapUsed: 8.18e9 };
     expect(await runUp(FILE, io, sources({ machine: () => machine }, made))).toBe(1);
-    expect(io.err).toContain('free swap is 1.2 GB, below 2.0 GB');
+    expect(io.err).toContain('free swap is 0.0 GB, below 0.1 GB');
     const lines = readFileSync(join(root, '.agents', 'team.log'), 'utf8').split('\n')
       .filter((line) => line.includes('refused: free swap is '));
     expect(lines).toEqual([
-      '2026-10-03T14:02:00.000Z up [owner] refused: free swap is 1.2 GB, below 2.0 GB — readings: load 1.0/core, memory 69%, disk 200000000000 B free, swap used 7000000000 B of 8200000000 B (free 1200000000 B)',
+      '2026-10-03T14:02:00.000Z up [owner] refused: free swap is 0.0 GB, below 0.1 GB — readings: load 1.0/core, memory 69%, disk 200000000000 B free, swap used 8180000000 B of 8200000000 B (free 20000000 B)',
     ]);
   });
 
   test('a caller refused before the gate writes nothing, and a dry run writes nothing', async () => {
     await approve();
-    const refusing = { ...fine, swapFree: 1.2e9 };
+    const refusing = { ...fine, swapFree: 20e6 };
     // A seat may not run `up`; the machine gate below the caller gate still reads and refuses —
     // and this call leaves the files as they were, so the log gains nothing.
     const seat = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1' });
@@ -1930,7 +1930,7 @@ describe('team up, live', () => {
     // A dry run decides nothing — its refused run exits as the real one, and it writes nothing.
     const dry = testIo(root, { kind: 'owner' });
     expect(await runUp(['--dry-run', ...FILE], dry, sources({ machine: () => refusing }, world()))).toBe(1);
-    expect(dry.out).toContain('! up would refuse: free swap is 1.2 GB, below 2.0 GB');
+    expect(dry.out).toContain('! up would refuse: free swap is 0.0 GB, below 0.1 GB');
     log = existsSync(join(root, '.agents', 'team.log')) ? readFileSync(join(root, '.agents', 'team.log'), 'utf8') : '';
     expect(log).not.toContain('readings:');
   });
@@ -1966,14 +1966,14 @@ describe('team up, live', () => {
     await approve();
     const made = world();
     const io = testIo(root, { kind: 'owner' });
-    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9 };
+    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 20e6, swapUsed: 8.18e9 };
     // The approval wrote its own team.log line; replace the file with a directory, so the
     // readings write can only fail — and the command's own work must be untouched by the log's
     // trouble: the refusal prints, the exit is the refusal's.
     rmSync(join(root, '.agents', 'team.log'), { force: true });
     mkdirSync(join(root, '.agents', 'team.log'), { recursive: true });
     expect(await runUp(FILE, io, sources({ machine: () => machine }, made))).toBe(1);
-    expect(io.err).toContain('free swap is 1.2 GB, below 2.0 GB');
+    expect(io.err).toContain('free swap is 0.0 GB, below 0.1 GB');
     expect(made.starts).toBe(0);
   });
 

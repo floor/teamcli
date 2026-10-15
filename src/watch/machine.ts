@@ -145,9 +145,11 @@ export function recordSwap(samples: SwapSample[], used: number, now: number, win
 }
 
 /**
- * The first `machine:` start limit this reading crosses, or null. A figure that was not read
- * (null) is neither fine nor a refusal. Swap growth uses the samples this command has already
- * taken; one reading on its own never crosses it.
+ * The first `machine:` start limit this reading crosses, or null. Load per core and free
+ * memory are the primary guards and are checked first. Free swap is only the file's floor
+ * (100MB when the file sets none). A figure that was not read (null) is neither fine nor a
+ * refusal. Swap growth uses the samples this command has already taken; one reading on its
+ * own never crosses it.
  */
 export function launchLimit(
   machine: Machine,

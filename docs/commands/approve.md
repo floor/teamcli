@@ -274,7 +274,7 @@ team approve: warning, line 3: `coordinator:` is now `leads: true` on the lead's
 Ceilings this approval fixes: 3 seats at most, 2 temporary.
 Seats: 1 (claude-keeper).
 approval #1 for this project; key fe21ef6293de.
-Owner-authorization fingerprint: 4d72c10c02a010e7edf90c95317f2236802f1951b4d8d3f43fbcdf4c11277b6d
+Owner-authorization fingerprint: c94634a9a97cdff46c640899741419fece8c00239a4ed81c62307fe32b997bb4
 exit 0
 ```
 
@@ -310,7 +310,7 @@ team approve: warning, line 3: `coordinator:` is now `leads: true` on the lead's
 Ceilings this approval fixes: 3 seats at most, 2 temporary.
 Seats: 1 (claude-keeper).
 approval #1 for this project; key fe21ef6293de.
-Owner-authorization fingerprint: 4d72c10c02a010e7edf90c95317f2236802f1951b4d8d3f43fbcdf4c11277b6d
+Owner-authorization fingerprint: c94634a9a97cdff46c640899741419fece8c00239a4ed81c62307fe32b997bb4
 Approved. The record is in ~/.config/team/beacon-<hash>; signed with key fe21ef6293de; check the rest with `team doctor`.
 ```
 
@@ -326,7 +326,7 @@ Nothing in it needs a new approval.
 Ceilings this approval fixes: 3 seats at most, 2 temporary.
 Seats: 1 (claude-keeper).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 4d72c10c02a010e7edf90c95317f2236802f1951b4d8d3f43fbcdf4c11277b6d
+Owner-authorization fingerprint: c94634a9a97cdff46c640899741419fece8c00239a4ed81c62307fe32b997bb4
 team approve: only the owner approves a team file, from a terminal outside herdr; this call is claude-keeper
 exit 1
 ```
@@ -369,7 +369,7 @@ Needs a new approval: `trust` changed.
 Ceilings this approval fixes: 3 seats at most, 2 temporary.
 Seats: 1 (claude-keeper).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 8cd9f8b6c145b912717ea320a1efd28e4b9c496dde0c9674bbcc6e2c7362ddd0
+Owner-authorization fingerprint: fef17fb44b3c625b5ed2f90d0b79ebbe0366db259f11e90cb4f9f3c58b76458f
 exit 0
 ```
 
@@ -433,7 +433,7 @@ Ceilings approved: 3 seats at most, 2 temporary.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
+Owner-authorization fingerprint: 8649acc4f2856a3b3d0bac74b505cabf7c938a581025ebb957c51a6769e167e9
 
 Type the number of seats (2) to approve this file, and its commands and rules, to run: 1
 team approve: not approved; nothing was written
@@ -463,7 +463,7 @@ Ceilings approved: 3 seats at most, 2 temporary.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
+Owner-authorization fingerprint: 8649acc4f2856a3b3d0bac74b505cabf7c938a581025ebb957c51a6769e167e9
 team approve: input was waiting on the terminal: run `team approve` on its own line
 exit 1
 ```
@@ -490,7 +490,7 @@ Ceilings approved: 3 seats at most, 2 temporary.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
+Owner-authorization fingerprint: 8649acc4f2856a3b3d0bac74b505cabf7c938a581025ebb957c51a6769e167e9
 team approve: the terminal this call runs on could not be read to check for input waiting on it; nothing was written
 exit 1
 ```
@@ -517,7 +517,7 @@ Ceilings approved: 3 seats at most, 2 temporary.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
+Owner-authorization fingerprint: 8649acc4f2856a3b3d0bac74b505cabf7c938a581025ebb957c51a6769e167e9
 
 Type the number of seats (2) to approve this file, and its commands and rules, to run: 2
 Approved. The record is in ~/.config/team/beacon-<hash>; signed with key fe21ef6293de; check the rest with `team doctor`.
@@ -534,7 +534,7 @@ Nothing in it needs a new approval.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #3 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
+Owner-authorization fingerprint: 8649acc4f2856a3b3d0bac74b505cabf7c938a581025ebb957c51a6769e167e9
 exit 0
 ```
 
@@ -589,6 +589,6 @@ Needs a new approval: `overrides` changed.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #3 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
+Owner-authorization fingerprint: 8649acc4f2856a3b3d0bac74b505cabf7c938a581025ebb957c51a6769e167e9
 exit 0
 ```
