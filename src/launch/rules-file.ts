@@ -192,8 +192,12 @@ export function writeRulesFile(
   text: string,
   hash12: string,
   random: () => string = () => randomBytes(10).toString('hex'),
+  /** The live project, only when `up` is mounting without an approval. The path is still built
+   *  here. Absent on every ordinary write, which keeps resolving the approved copy alone. */
+  devProject?: string,
 ): RulesFileWrite {
-  const built = rulesFilePathOf(standing, seat, root, home);
+  const built = rulesFilePathOf(standing, seat, root, home)
+    ?? (devProject !== undefined ? rulesFilePath(devProject, root, home, seat) : null);
   if (built === null) return { ok: false, why: 'not-written' };
   const path = built;
   // The ladder, top down: team's per-user state root (`<home>/.config/team`), the project state
@@ -342,17 +346,27 @@ export function checkRulesFile(path: string, approvedText: string): RulesFileChe
  *  the path resolved through `rulesFilePathOf` like every other reader of this file. The live
  *  `team` is deliberately not read here, not even for its project name: `up` and `add` refuse
  *  a file that differs from the approval, so on a normal run both texts are equal, and the
- *  invariant does not depend on that gate. A path that can't be typed safely is a refusal —
- *  before anything is written or typed. */
+ *  invariant does not depend on that gate. `live` is the one exception, a dev-mode mount with
+ *  no approval in force: the text and the folder are the live file's, and nothing is signed.
+ *  A path that can't be typed safely is a refusal — before anything is written or typed. */
 export function rulesDeliveryOf(
   standing: Standing,
   team: TeamFile,
   seat: Seat,
   root: string,
   home: string,
+  live = false,
 ): { text: string; path: string; line: string } | { refusal: string } {
   if (profileFor(seat.cli)?.rulesOption != null) return { refusal: 'its rules travel as a launch option' };
-  if (standing.kind !== 'verified') return { refusal: notInForce(standing) };
+  if (standing.kind !== 'verified') {
+    if (!live) return { refusal: notInForce(standing) };
+    const path = rulesFilePath(team.project, root, home, seat.name);
+    if (path === null || !typeablePath(path)) {
+      return { refusal: "its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -" };
+    }
+    const text = rulesOf(team, seat, root);
+    return { text, path, line: rulesLine(path, rulesFileHash(text)) };
+  }
   const copy = validateTeamFile(standing.record.file);
   if (!copy.ok) return { refusal: "the approved copy of the team file can't be read" };
   const path = rulesFilePathOf(standing, seat.name, root, home);
@@ -367,9 +381,9 @@ export function rulesDeliveryOf(
 
 /** A message seat's delivery in the plan: the file its rules go to and the line that points at
  *  it, or the refusal that stops the seat before anything is typed. An option seat has neither. */
-export function seatDeliveryOf(standing: Standing, team: TeamFile, seat: Seat, root: string, home: string): { rulesFile?: { path: string; line: string }; rulesRefusal?: string } {
+export function seatDeliveryOf(standing: Standing, team: TeamFile, seat: Seat, root: string, home: string, live = false): { rulesFile?: { path: string; line: string }; rulesRefusal?: string } {
   if (profileFor(seat.cli)?.rulesOption != null) return {};
-  const delivery = rulesDeliveryOf(standing, team, seat, root, home);
+  const delivery = rulesDeliveryOf(standing, team, seat, root, home, live);
   if ('refusal' in delivery) return { rulesRefusal: delivery.refusal };
   return { rulesFile: { path: delivery.path, line: delivery.line } };
 }
