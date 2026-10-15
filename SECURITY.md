@@ -2,8 +2,9 @@
 
 A weakness in TeamCLI — the `team` command of this repository — is reported in private,
 through this repository's security advisories on GitHub: the repository's Security tab,
-"Report a vulnerability". Please do not report one in a public issue, discussion or pull
-request.
+"Report a vulnerability", or this direct link:
+https://github.com/floor/teamcli/security/advisories/new. Please do not report one in a
+public issue, discussion or pull request.
 
 ## What to include
 
