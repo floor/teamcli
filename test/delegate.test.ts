@@ -445,6 +445,7 @@ describe('commands and flags', () => {
     expect(refused({ command: 'add', flags: ['until'] }).text).toContain('--until');
     expect(refused({ command: 'add', flags: ['worktree'] }).text).toContain('--worktree');
     expect(refused({ command: 'remove', flags: ['keep'] }).id).toBe('remove.delegate-flag');
+    expect(refused({ command: 'remove', flags: ['lead'] }).text).toContain('--lead');
     expect(refused({ command: 'remove', flags: ['abandon'] }).text).toContain('--abandon');
   });
 });

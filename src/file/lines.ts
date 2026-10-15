@@ -177,6 +177,65 @@ export function takeOut(text: string, name: string): string {
   return replaceLines(ready.text, ready.block.start, ready.block.start + fieldEnd(lines), []);
 }
 
+/** Whether `name`'s entry writes `leads: true`. */
+function leadsMarked(text: string, name: string): boolean {
+  const ready = prepared(text, name);
+  if (!ready) return false;
+  return body(ready.text, ready.block).some((line) => /^\s*leads:\s*true\b/.test(line));
+}
+
+/** Drops a `field: true` line from `name`'s entry. Other lines stay. */
+function dropTrue(text: string, name: string, field: string): string {
+  const ready = prepared(text, name);
+  if (!ready) return text;
+  const lines = body(ready.text, ready.block).filter((line) => !new RegExp(`^\\s*${field}:\\s*true\\b`).test(line));
+  return replaceLines(ready.text, ready.block.start, ready.block.end, lines);
+}
+
+/** Writes `field: true` on `name`'s entry when it is not already there. */
+function setTrue(text: string, name: string, field: string): string {
+  const ready = prepared(text, name);
+  if (!ready) return text;
+  const lines = body(ready.text, ready.block);
+  if (lines.some((line) => new RegExp(`^\\s*${field}:\\s*true\\b`).test(line))) return ready.text;
+  const nested = lines.find((line) => /^\s+[A-Za-z0-9_-]+:/.test(line));
+  const pad = ' '.repeat(nested ? indent(nested) : indent(lines[0] ?? '') + 2);
+  lines.splice(fieldEnd(lines), 0, `${pad}${field}: true`);
+  return replaceLines(ready.text, ready.block.start, ready.block.end, lines);
+}
+
+/** Rewrites one top-level key when its value is `from`. A comment on the line stays. */
+function renameKey(text: string, key: 'coordinator' | 'operator', from: string, to: string): string {
+  return text.split('\n').map((line) => {
+    const match = new RegExp(`^(${key}:\\s*)(.*)$`).exec(line);
+    if (!match) return line;
+    const rest = match[2] ?? '';
+    const comment = /\s+#.*$/.exec(rest)?.[0] ?? '';
+    if (scalar(rest) !== from) return line;
+    return `${match[1]}${to}${comment}`;
+  }).join('\n');
+}
+
+/**
+ * Moves the lead off `from` and onto `to`, then stops `from`, in one text.
+ * `orchestrator` moves `leads: true` when `from` carries it, and a `coordinator:`
+ * key that names `from`. `operator` rewrites `operator:` only. Launch lines stay.
+ */
+export function handLead(
+  text: string, from: string, to: string, which: { orchestrator: boolean; operator: boolean },
+): string {
+  let next = text;
+  if (which.orchestrator) {
+    if (leadsMarked(next, from)) {
+      next = dropTrue(next, from, 'leads');
+      next = setTrue(next, to, 'leads');
+    }
+    next = renameKey(next, 'coordinator', from, to);
+  }
+  if (which.operator) next = renameKey(next, 'operator', from, to);
+  return markStopped(next, from);
+}
+
 /** Leaves `name` in the file with `stopped: true`. A counted entry is split first. */
 export function markStopped(text: string, name: string): string {
   const ready = prepared(text, name);

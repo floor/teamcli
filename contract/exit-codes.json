@@ -2188,6 +2188,13 @@
     {
       "code": 1,
       "command": "remove",
+      "id": "remove.lead",
+      "meaning": "only the owner moves the lead",
+      "trigger": "team remove worker --keep --lead lead"
+    },
+    {
+      "code": 1,
+      "command": "remove",
       "id": "remove.never-approved",
       "meaning": "the file was never approved",
       "trigger": "team remove worker"
@@ -2275,6 +2282,13 @@
       "id": "remove.invocation",
       "meaning": "the invocation can't be read",
       "trigger": "team remove"
+    },
+    {
+      "code": 2,
+      "command": "remove",
+      "id": "remove.lead-usage",
+      "meaning": "--lead needs --keep, and not --abandon",
+      "trigger": "team remove lead --lead worker"
     },
     {
       "code": 2,

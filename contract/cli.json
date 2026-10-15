@@ -1003,6 +1003,12 @@
         },
         {
           "hidden": false,
+          "name": "--lead",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -1025,7 +1031,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]"
+        "team remove <name> [--keep] [--abandon] [--lead <name>] [--session <name>] [--file <path>]"
       ]
     },
     {

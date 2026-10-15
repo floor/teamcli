@@ -318,6 +318,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.file-owner` | `remove` | 1 | --file is the owner's | `team remove worker --file .agents/team.yaml` |
 | `remove.herdr` | `remove` | 1 | herdr doesn't answer | `team remove worker` |
 | `remove.keep-temporary` | `remove` | 1 | a temporary seat is not kept in the file | `team remove worker --keep` |
+| `remove.lead` | `remove` | 1 | only the owner moves the lead | `team remove worker --keep --lead lead` |
 | `remove.never-approved` | `remove` | 1 | the file was never approved | `team remove worker` |
 | `remove.no-launch` | `remove` | 1 | this call has no way to reach herdr | `team remove worker` |
 | `remove.no-pane` | `remove` | 1 | the state records no pane for the caller's seat | `team remove worker` |
@@ -331,6 +332,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.file` | `remove` | 2 | the team file can't be read | `team remove worker --file missing.yaml` |
 | `remove.file-invalid` | `remove` | 2 | the team file can't be parsed | `team remove worker --file team.yaml` |
 | `remove.invocation` | `remove` | 2 | the invocation can't be read | `team remove` |
+| `remove.lead-usage` | `remove` | 2 | --lead needs --keep, and not --abandon | `team remove lead --lead worker` |
 | `remove.locked` | `remove` | 2 | the locked edit does not validate | `team remove worker` |
 | `remove.not-a-repo` | `remove` | 2 | not inside a git repository | `team remove worker` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |

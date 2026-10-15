@@ -8,13 +8,14 @@ unless its owner abandons it.
 
 ## Synopsis
 
-    team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]
+    team remove <name> [--keep] [--abandon] [--lead <name>] [--session <name>] [--file <path>]
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--keep` | — | leave the seat in the file with `stopped: true`: `team up` leaves it out, and `team add <name>` starts it again |
+| `--lead` | `<name>` | the owner's, with `--keep`: move the lead onto that seat and stop the seat named on the command. The file keeps one lead, and that lead is not stopped. The old pane closes after that write. When the replacement is not already ready, the last line is `team add <name>` |
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
@@ -24,10 +25,10 @@ unless its owner abandons it.
 
 | Caller | May |
 | --- | --- |
-| the owner | run it, from a terminal outside herdr; `--abandon`, `--session` and `--file` are the owner's own |
+| the owner | run it, from a terminal outside herdr; `--abandon`, `--lead`, `--session` and `--file` are the owner's own |
 | a run with no terminal | nothing: `team remove: only the owner runs this, from a terminal outside herdr` |
-| the orchestrator's seat, the operator's seat | remove another seat; never the orchestrator's or the operator's own seat, and never `--abandon` |
-| the approved delegate, when the file's `delegates` section names it | remove a named seat; never `--keep`, `--abandon`, `--session` or `--file` |
+| the orchestrator's seat, the operator's seat | remove another seat; never the orchestrator's or the operator's own seat, and never `--abandon` or `--lead` |
+| the approved delegate, when the file's `delegates` section names it | remove a named seat; never `--keep`, `--abandon`, `--lead`, `--session` or `--file` |
 
 A caller other than the owner meeting a seat herdr reports idle or done that is not free takes the
 seat out of the team and leaves its pane running: nothing typed, the workspace left open, the

@@ -138,13 +138,18 @@ with the text named, in the refusal below.
 | ``team remove: delegation cannot verify its placement or seats: <reason>`` | 1 |
 | `team remove: the approved delegate must be an external non-seat pane` | 1 |
 | ``team remove: the approved delegate <session>/<pane id> may not run `remove`; its approved commands are <list>`` | 1 |
-| `team remove: --<flag> is the owner's; the approved delegate cannot use it` — `--keep`, `--abandon`, `--session` or `--file` | 1 |
+| `team remove: --<flag> is the owner's; the approved delegate cannot use it` — `--keep`, `--abandon`, `--lead`, `--session` or `--file` | 1 |
 | `team remove: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team remove: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | ``team remove: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
 | ``team remove: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team remove: only the owner abandons a seat, from a terminal outside herdr` | 1 |
 | `team remove: only the owner removes the orchestrator's or the operator's seat; this call is <caller>` | 1 |
+| `team remove: --lead needs --keep, and not --abandon` (with the usage) | 2 |
+| `team remove: only the owner moves the lead; this call is <caller>` | 1 |
+| `team remove: --lead needs a different seat` | 1 |
+| `team remove: <name> can't take the lead` — the named seat is stopped, parked, or a count seat | 1 |
+| `team remove: <name> is not the lead` | 1 |
 | `team remove: session can't be "default", herdr's own session` | 1 |
 | `team remove: the team has no seat "<name>"` | 1 |
 | `team remove: a temporary seat is not in the file; there is nothing to keep` | 1 |
@@ -342,6 +347,6 @@ A name is required, and its absence stops at the usage line before the file is r
 ```console
 $ team remove ; echo "exit $?"
 team remove: a seat name is required
-Usage: team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]
+Usage: team remove <name> [--keep] [--abandon] [--lead <name>] [--session <name>] [--file <path>]
 exit 2
 ```

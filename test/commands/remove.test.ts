@@ -8,7 +8,7 @@ import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
 import { delegateGate } from '../../src/delegate.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
-import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
+import { approvalStanding, readApproval, storePath, writeApproval } from '../../src/store/store.ts';
 import { rulesFileHash, rulesFilePathOf, writeRulesFile } from '../../src/launch/rules-file.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import type { DownLaunch } from '../../src/commands/down.ts';
@@ -558,6 +558,145 @@ describe('team remove', () => {
     expect(await runRemove(['worker'], io, made.sources)).toBe(0);
     expect(made.typed).toEqual([]);
     expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
+  });
+
+  test('--keep of the lead is refused, and --lead moves the role in one write', async () => {
+    const made = world();
+    const refused = testIo(dir, owner);
+    expect(await runRemove(['lead', '--keep'], refused, made.sources)).toBe(2);
+    expect(refused.err).toContain('can\'t be a stopped seat');
+    expect(readFileSync(file, 'utf8')).toBe(FILE);
+    const io = testIo(dir, owner);
+    expect(await runRemove(['lead', '--keep', '--lead', 'worker'], io, made.sources)).toBe(0);
+    const text = readFileSync(file, 'utf8');
+    expect(text.startsWith('format: 1\nproject: acme\ncoordinator: worker\noperator: worker\n')).toBe(true);
+    expect(text).toContain('operator: worker\n');
+    expect(text).toContain('# stays above lead');
+    expect(text).toContain(`  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`);
+    expect(text).toMatch(/name: lead\n(?:    .*\n)*    stopped: true\n/);
+    const workerBlock = text.slice(text.indexOf('name: worker'), text.indexOf('# stays above lead'));
+    expect(workerBlock).not.toContain('stopped:');
+    expect(io.out).toBe('stopped lead\nteam add worker\n');
+    const loaded = loadTeamFile(dir, { home });
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    expect(loaded.team.orchestrator).toBe('worker');
+    expect(loaded.team.operator).toBe('worker');
+    const record = readApproval(storePath(loaded.team.project, loaded.root, home));
+    expect(record?.file).toBe(text);
+    expect(approvalDifferences(loaded.team, loaded.root, home)).toEqual([]);
+    expect(record?.generation).toBe(2);
+  });
+
+  test('--lead from a seat that is not the owner writes nothing', async () => {
+    recordLead();
+    const made = world();
+    const io = testIo(dir, lead);
+    expect(await runRemove(['worker', '--keep', '--lead', 'lead'], io, made.sources)).toBe(1);
+    expect(io.err).toContain('only the owner moves the lead');
+    expect(readFileSync(file, 'utf8')).toBe(FILE);
+  });
+
+  test('--lead refuses a stopped replacement and a seat that is not the lead', async () => {
+    const stopped = FILE.replace('    name: worker\n', '    name: worker\n    stopped: true\n');
+    writeFileSync(file, stopped);
+    approveCurrent();
+    const made = world();
+    const io = testIo(dir, owner);
+    expect(await runRemove(['lead', '--keep', '--lead', 'worker'], io, made.sources)).toBe(1);
+    expect(io.err).toContain('worker can\'t take the lead');
+    expect(readFileSync(file, 'utf8')).toBe(stopped);
+    writeFileSync(file, FILE);
+    approveCurrent();
+    const ordinary = testIo(dir, owner);
+    expect(await runRemove(['worker', '--keep', '--lead', 'lead'], ordinary, made.sources)).toBe(1);
+    expect(ordinary.err).toContain('worker is not the lead');
+    expect(readFileSync(file, 'utf8')).toBe(FILE);
+  });
+
+  test('a leads mark moves onto the replacement and the old seat is the one that stops', async () => {
+    const marked = FILE.replace('    name: lead\n', '    name: lead\n    leads: true\n');
+    writeFileSync(file, marked);
+    approveCurrent();
+    const made = world();
+    expect(await runRemove(['lead', '--keep', '--lead', 'worker'], testIo(dir, owner), made.sources)).toBe(0);
+    const text = readFileSync(file, 'utf8');
+    expect(text).toContain('name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n    leads: true\n');
+    expect(text).not.toMatch(/name: lead\n(?:    .*\n)*    leads: true\n/);
+    expect(text).toMatch(/name: lead\n(?:    .*\n)*    stopped: true\n/);
+    const loaded = loadTeamFile(dir, { home });
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    expect(loaded.team.orchestrator).toBe('worker');
+    expect(approvalDifferences(loaded.team, loaded.root, home)).toEqual([]);
+  });
+
+  test('an operator who is not the orchestrator moves only operator', async () => {
+    const split = FILE
+      .replace('operator: lead\n', 'operator: ops\n')
+      .replace(
+        '  - role: implementer\n    name: worker\n',
+        `  - role: implementer
+    name: ops
+    label: ops
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: worker
+`,
+      );
+    writeFileSync(file, split);
+    approveCurrent();
+    const made = world();
+    const io = testIo(dir, owner);
+    expect(await runRemove(['ops', '--keep', '--lead', 'worker'], io, made.sources)).toBe(0);
+    const text = readFileSync(file, 'utf8');
+    expect(text.startsWith('format: 1\nproject: acme\ncoordinator: lead\noperator: worker\n')).toBe(true);
+    expect(text).toMatch(/name: ops\n(?:    .*\n)*    stopped: true\n/);
+    expect(text).not.toMatch(/name: lead\n(?:    .*\n)*    stopped: true\n/);
+    const loaded = loadTeamFile(dir, { home });
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    expect(loaded.team.orchestrator).toBe('lead');
+    expect(loaded.team.operator).toBe('worker');
+    expect(approvalDifferences(loaded.team, loaded.root, home)).toEqual([]);
+  });
+
+  test('the old pane closes after the file names the replacement', async () => {
+    const made = world();
+    made.agents.push({ name: 'lead', agent: 'claude', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: null });
+    const launch = made.sources.launch;
+    if (!launch) throw new Error('fixture');
+    let fileAtClose = '';
+    launch.closeWorkspace = () => {
+      fileAtClose = readFileSync(file, 'utf8');
+      made.closed.push('w0');
+      return true;
+    };
+    const io = testIo(dir, owner);
+    expect(await runRemove(['lead', '--keep', '--lead', 'worker'], io, made.sources)).toBe(0);
+    expect(fileAtClose.startsWith('format: 1\nproject: acme\ncoordinator: worker\noperator: worker\n')).toBe(true);
+    expect(fileAtClose).toMatch(/name: lead\n(?:    .*\n)*    stopped: true\n/);
+    expect(made.closed).toEqual(['w0']);
+    expect(io.out.endsWith('team add worker\n')).toBe(true);
+  });
+
+  test('a replacement that is already ready is not named for add', async () => {
+    updateState(join(dir, '.agents'), (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'w1:p2' };
+    });
+    const made = world();
+    const io = testIo(dir, owner);
+    expect(await runRemove(['lead', '--keep', '--lead', 'worker'], io, made.sources)).toBe(0);
+    expect(io.out).toBe('stopped lead\n');
   });
 
   test('--keep leaves the seat stopped', async () => {

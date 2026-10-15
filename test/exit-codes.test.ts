@@ -1517,6 +1517,14 @@ async function removed(place: Place, argv: string[], caller: Caller, sources: Re
 }
 
 scene('remove.invocation', async (place) => show(await removed(place, [], owner, downSources()), 'a seat name is required'));
+scene('remove.lead-usage', async (place) => show(await removed(place, ['lead', '--lead', 'worker'], owner, downSources()), '--lead needs --keep'));
+scene('remove.lead', async (place) => {
+  write(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await removed(place, ['worker', '--keep', '--lead', 'lead'], leadSeat, downSources({ home: place.home })), 'only the owner moves the lead');
+});
 scene('remove.not-a-repo', async (place) => show(await removed(place, ['worker'], owner, downSources()), 'not inside a git repository'), false);
 scene('remove.file', async (place) => show(await removed(place, ['worker', '--file', 'missing.yaml'], owner, downSources()), 'no team file'));
 scene('remove.file-invalid', async (place) => {

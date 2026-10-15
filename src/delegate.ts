@@ -93,7 +93,7 @@ const PROHIBITED: Record<DelegateCommand, readonly string[]> = {
   up: ['session', 'file'],
   down: ['abandon', 'session', 'file'],
   add: ['temporary', 'like', 'until', 'worktree', 'session', 'file'],
-  remove: ['keep', 'abandon', 'session', 'file'],
+  remove: ['keep', 'abandon', 'lead', 'session', 'file'],
   approve: ['file'],
 };
 

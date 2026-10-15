@@ -611,7 +611,7 @@ Hidden: no
 
 Usage:
 
-    team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]
+    team remove <name> [--keep] [--abandon] [--lead <name>] [--session <name>] [--file <path>]
 
 ### Flags
 
@@ -621,6 +621,7 @@ Usage:
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--keep` | no | no | no |
+| `--lead` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

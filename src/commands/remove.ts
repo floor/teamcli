@@ -1,16 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
-import { recordSeatDigestOf, notInForce } from '../approve/approval.ts';
+import { approvalOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
-import { markStopped, takeOut } from '../file/lines.ts';
+import { handLead, markStopped, takeOut } from '../file/lines.ts';
 import type { Problem } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
-import { approvalStanding, type Standing } from '../store/store.ts';
+import { approvalStanding, storePath, writeApproval, type Standing } from '../store/store.ts';
 import { writeTeamFile } from '../file/write.ts';
 import { agentRename, paneForeground, paneForegroundCwd } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
@@ -55,7 +55,7 @@ export const realSources: RemoveSources = {
   foregroundCwd: (session, pane) => paneForegroundCwd(pane, aim(session)),
 };
 
-export const USAGE = 'Usage: team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]\n';
+export const USAGE = 'Usage: team remove <name> [--keep] [--abandon] [--lead <name>] [--session <name>] [--file <path>]\n';
 
 /** The gate's refusal as this command prints it: the verdict's own sentence behind the prefix.
  *  Both delegate branches print it — the caller rule's below and the owner-only flags' — so the
@@ -70,6 +70,20 @@ function delegateRefused(io: { stderr(text: string): void }, verdict: { text: st
   // exit: remove.delegate
   // exit: remove.delegate-command
   // exit: remove.delegate-flag
+  return 1;
+}
+
+/** Every refused lead move writes nothing. The sentences differ; the exit is one. */
+function refuseLead(io: { stderr(text: string): void }, sentence: string): number {
+  io.stderr(`team remove: ${sentence}\n`);
+  // exit: remove.lead
+  return 1;
+}
+
+/** The pane did not close. The markers sit on this one return. */
+function stopFailed(): number {
+  // exit: remove.no-launch
+  // exit: remove.stop-failed
   return 1;
 }
 
@@ -107,17 +121,24 @@ export function leftoverName(name: string): boolean {
   return match[2] === undefined || Number(match[2]) >= 2;
 }
 
+type Handoff = { to: string; orchestrator: boolean; operator: boolean };
+
 /** The file edit `remove` would write, or null when that edit is valid or changes nothing. */
-function editProblems(path: string, name: string, keep: boolean): Problem[] | null {
+function editProblems(path: string, name: string, keep: boolean, hand?: Handoff): Problem[] | null {
   const text = readFileSync(path, 'utf8');
-  const next = keep ? markStopped(text, name) : takeOut(text, name);
+  const next = hand ? handLead(text, name, hand.to, hand) : keep ? markStopped(text, name) : takeOut(text, name);
   if (next === text) return null;
   const parsed = validateTeamFile(next);
   return parsed.ok ? null : parsed.errors;
 }
 
+/** The same edit the pre-check validated, read again under the lock. */
+function editedText(text: string, name: string, keep: boolean, hand?: Handoff): string {
+  return hand ? handLead(text, name, hand.to, hand) : keep ? markStopped(text, name) : takeOut(text, name);
+}
+
 export async function runRemove(argv: string[], io: Io, sources: RemoveSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['session', 'file'], ['keep', 'abandon']);
+  const args = readArgs(argv, ['session', 'file', 'lead'], ['keep', 'abandon']);
   if (args.error || args.rest.length !== 1) {
     io.stderr(`team remove: ${args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : 'a seat name is required')}\n${USAGE}`);
     // exit: remove.invocation
@@ -130,6 +151,14 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const name = args.rest[0] ?? '';
+  const replacement = args.values.lead;
+  // `--lead` is the cross-seat move. Without `--keep` it would take the seat out, and with
+  // `--abandon` it would close a pane the move does not ask to abandon. Both are the invocation.
+  if (replacement !== undefined && (!args.flags.has('keep') || args.flags.has('abandon'))) {
+    io.stderr(`team remove: --lead needs --keep, and not --abandon\n${USAGE}`);
+    // exit: remove.lead-usage
+    return 2;
+  }
   // The `--file` check is the walk's, and it runs before that file is read: a non-owner aiming
   // `--file` must not make this command read and validate another project's team file, nor leave
   // its `last_valid` in that project's state. The one place every command whose `--file` is the owner's
@@ -236,6 +265,24 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     io.stderr(`team remove: only the owner removes the orchestrator's or the operator's seat; this call is ${describeCaller(caller)}\n`);
     // exit: remove.coordinator
     return 1;
+  }
+  // The move is the owner's. A delegate never reaches it: `lead` is a prohibited flag, so the
+  // gate refused above. An orchestrator who may remove another seat still may not move the lead.
+  let handoff: Handoff | undefined;
+  if (replacement !== undefined) {
+    if (caller.kind !== 'owner' || delegatePane !== null) {
+      return refuseLead(io, `only the owner moves the lead; this call is ${describeCaller(caller)}`);
+    }
+    if (replacement === name) return refuseLead(io, '--lead needs a different seat');
+    const nextSeat = team.seats.find((seat) => seat.name === replacement);
+    if (!nextSeat) return refuseLead(io, `the team has no seat ${JSON.stringify(replacement)}`);
+    if (nextSeat.stopped || nextSeat.parked || nextSeat.count > 1) {
+      return refuseLead(io, `${replacement} can't take the lead`);
+    }
+    const movesOrchestrator = name === team.orchestrator;
+    const movesOperator = name === team.operator;
+    if (!movesOrchestrator && !movesOperator) return refuseLead(io, `${name} is not the lead`);
+    handoff = { to: replacement, orchestrator: movesOrchestrator, operator: movesOperator };
   }
 
   const recorded = readState(dir).sessions[session]?.seats[name];
@@ -387,7 +434,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // An edit that will not validate is refused before the seat is stopped. Stopping first would
   // end the live session and then report that nothing was written.
   if (!temporary) {
-    const ahead = editProblems(path, name, args.flags.has('keep'));
+    const ahead = editProblems(path, name, args.flags.has('keep'), handoff);
     if (ahead) {
       for (const problem of ahead) {
         io.stderr(`team remove: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
@@ -409,11 +456,14 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   try {
     // The audit line, exactly at the effects boundary: a delegated run that reaches here is
-    // committed to its effects — the stop below when the seat runs, the file edit after it. Every
-    // refusal came sooner; a `--keep` run never got past the gate.
+    // committed to its effects. Every refusal came sooner; a `--keep` run never got past the
+    // gate. A lead move writes the file before it closes the pane. Every other removal closes first.
     if (delegatePane !== null) logDelegated(dir, delegatePane, 'remove', sources.now());
 
-    if (agent && !leave) {
+    // Closes the named seat's pane. A lead move calls this only after the file names the
+    // replacement: closing first can drop the live lead and leave the role on that seat.
+    const closePane = async (): Promise<boolean> => {
+      if (!agent || leave) return true;
       const liveCwd = sources.foregroundCwd ? sources.foregroundCwd(session, agent.pane) : null;
       const screen = sources.screen(session, agent.pane, cli, liveCwd);
       const profile = profileFor(cli);
@@ -426,7 +476,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       });
       const exitInBox = where === 'unsent' && profile !== null && profile.exitClear !== null
         && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
-      const stopped = await stopRunning({
+      return stopRunning({
         io, dir, session, sources, logCommand: 'remove', caller: describeCaller(caller),
         seat: {
           name, cli, pane: agent.pane, workspace: agent.workspace,
@@ -439,17 +489,15 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         closeUnasked: abandon,
         unasked: `team remove ${name} --abandon closes it`,
       });
-      // exit: remove.no-launch
-      // exit: remove.stop-failed
-      if (!stopped) return 1;
-    }
+    };
+    if (!handoff && !await closePane()) return stopFailed();
 
     let kept: string | null = null;
     let rewrote: string | null = null;
     if (!temporary) {
       const refused = withLock(dir, () => {
         const text = readFileSync(path, 'utf8');
-        const next = args.flags.has('keep') ? markStopped(text, name) : takeOut(text, name);
+        const next = editedText(text, name, args.flags.has('keep'), handoff);
         if (next === text) return null;
         const wrote = writeTeamFile(path, next);
         if (!wrote.ok) return wrote.errors;
@@ -480,8 +528,30 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       const parsed = validateTeamFile(kept);
       // A delegated remove never re-signs the approval: `--keep` is the gate's to refuse, and the
       // signing itself stays the owner's for a delegate whatever reached here.
-      if (parsed.ok && delegatePane === null) recordSeatDigestOf(standing, parsed.team, root, name, home);
+      if (parsed.ok && delegatePane === null) {
+        if (handoff) {
+          // The move changes who leads. That is an owner section, so the signed copy is the
+          // text just written, not the previous snapshot.
+          const prior = standing.record.approval;
+          writeApproval(
+            storePath(parsed.team.project, root, home),
+            {
+              approval: {
+                ...approvalOf(parsed.team, root, sources.now(), prior.checks ?? {}),
+                ...(prior.overrides !== undefined ? { overrides: prior.overrides } : {}),
+              },
+              file: kept,
+            },
+            [],
+            home,
+            sources.now(),
+          );
+        } else {
+          recordSeatDigestOf(standing, parsed.team, root, name, home);
+        }
+      }
     }
+    if (handoff && !await closePane()) return stopFailed();
     const hadRetained = Boolean(readState(dir).sessions[session]?.retained_seats?.[name]);
     if ((recorded && (!agent || leave)) || (!args.flags.has('keep') && hadRetained)) {
       updateState(dir, (file) => {
@@ -525,9 +595,12 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     const who = describeCaller(caller);
     const what = temporary ? `removed temporary ${name}` : args.flags.has('keep') ? `stopped ${name}` : `removed ${name}`;
     logLine(dir, 'remove', who, what, sources.now());
+    const follow = handoff && readState(dir).sessions[session]?.seats[handoff.to]?.stage !== 'ready'
+      ? `team add ${handoff.to}\n`
+      : '';
     io.stdout(left
-      ? `${what} (its pane ${left.pane} was left running; nothing was typed; ${left.renamed ? `it now reads as ${left.free}` : "it still carries the seat's name"})\n`
-      : `${what}\n`);
+      ? `${what} (its pane ${left.pane} was left running; nothing was typed; ${left.renamed ? `it now reads as ${left.free}` : "it still carries the seat's name"})\n${follow}`
+      : `${what}\n${follow}`);
     // exit: remove.removed
     // exit: remove.kept
     // exit: remove.temporary
