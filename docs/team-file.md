@@ -139,7 +139,7 @@ grant:
   the owner's. A roster edit that moves the derived ceiling — a file that declares no `limits`
   — stays the owner's too.
 - Any other key, including `path`, is an unknown field.
-- `team up` admits the orchestrator's seat when the approved grant lists `up`. The run is this
+- `team up` admits the orchestrator's seat when the file's `grant` lists `up`. The run is this
   folder's own file: `--session` and `--file` are refused, and the run does not relaunch or close
   the orchestrator's seat. `team down` admits that seat when the list includes `down`, and leaves
   the orchestrator's seat and the operator's seat running. A file that omits `grant` keeps

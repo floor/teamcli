@@ -27,8 +27,8 @@ into — and its sidebar is rewritten from the file either way.
 | the owner | run it, from a terminal outside herdr |
 | a run with no terminal | a real run is refused: `team up: only the owner runs this, from a terminal outside herdr`; `--dry-run` prints the plan and `! up would refuse:` with that sentence, and launches nothing |
 | anyone | run `--dry-run`, which reaches nothing and changes nothing |
-| the orchestrator's seat, when the approved `grant` lists `up` | run it on this folder's own team file. The run does not relaunch or close that seat. `--session` and `--file` are refused before either is read |
-| a seat, or a pane of another session | run `--dry-run` only; a real run is refused, unless the approved `grant` admits the orchestrator's seat or the approved file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
+| the orchestrator's seat, when the file's `grant` lists `up` | run it on this folder's own team file. The run does not relaunch or close that seat. `--session` and `--file` are refused before either is read |
+| a seat, or a pane of another session | run `--dry-run` only; a real run is refused, unless the file's `grant` admits the orchestrator's seat or the file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
 
 ## Output and exit codes
 
