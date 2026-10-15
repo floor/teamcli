@@ -5,6 +5,14 @@ Shows the team as it stands: one line per seat with what the session's herdr sho
 that repairs it. It changes nothing but the owner's `last_valid` copy of the file it read; a run that
 is not the owner's writes nothing at all.
 
+A pane that no longer holds the process `team` launched is not by itself a difference: when a
+program `team` did not launch is in front and the agent session stored at its launch is the
+session the pane reports now — a herdr restart brings the pane back under a new shell pid — the
+row is the ordinary one and no difference is made for it. Otherwise a pane with no CLI left reads
+`missing` (the CLI ended, or a restore left the shell in front) and a pane fronted by any other
+program reads `restored, not launched by team`; both carry a difference, and the second's model
+is `-`, never the file's.
+
 ## Synopsis
 
     team status [--session <name>] [--file <path>] [--all] [--json]
