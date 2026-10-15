@@ -12,6 +12,7 @@ import {
   type Ceilings,
   type Standing,
 } from '../store/store.ts';
+import { applyTempo, type Tempo } from '../file/sections/tempo.ts';
 import { compare, describe, fingerprints, legacyLabelDigests, legacySeatDigests, legacyWatchDigest, OWNER_SECTIONS, type Fingerprints } from './fingerprint.ts';
 
 /** The ceilings an approval fixes: `up` and `add` read them from the record, never from the file. */
@@ -77,6 +78,13 @@ export function approvedFingerprints(record: ApprovalRecord): Fingerprints {
   if (checked.ok && stored.sections.grant === undefined) {
     const omitted = fingerprints({ ...checked.team, grant: null }).sections.grant;
     if (omitted !== undefined) sections = { ...sections, grant: omitted };
+  }
+  // A record written before `tempo` has no fingerprint for it. The omitted section is `normal`,
+  // so the arrival baseline is that word: a file that still omits it, or sets `normal`, matches,
+  // and `relaxed` or `urgent` differs. Filling from the live file would hide the change.
+  if (checked.ok && stored.sections.tempo === undefined) {
+    const omitted = fingerprints({ ...checked.team, tempo: 'normal' }).sections.tempo;
+    if (omitted !== undefined) sections = { ...sections, tempo: omitted };
   }
   if (checked.ok && checked.team.watch.idleRepeat === undefined) {
     const legacy = legacyWatchDigest(checked.team);
@@ -181,7 +189,9 @@ export function approvalDifferences(team: TeamFile, root: string, home: string =
  * The watch values in force. The watch section is the owner's, so what a file sets takes effect
  * only once the owner has approved it: a file never approved runs with the defaults, and a file
  * whose `watch` section differs from the approved one runs with the values of the approved copy.
- * An edit to a threshold changes nothing until `approve`.
+ * An edit to a threshold changes nothing until `approve`. A tempo scales those waits on the way
+ * out: an unapproved `relaxed` or `urgent` scales by the approved tempo, which is `normal`
+ * for a record that predates the key.
  *
  * `watch.checks` is the finer line inside that section. Whenever its digest differs, the checks
  * in force are the approved copy's — or none, when that copy can't be read — even when the
@@ -193,11 +203,19 @@ export function watchInForceOf(standing: Standing, team: TeamFile): TeamFile['wa
   const differences = compare(approvedFingerprints(record), fingerprints(team));
   const timingsDiffer = differences.some((difference) => difference.kind === 'section' && difference.name === 'watch');
   const checksDiffer = differences.some((difference) => difference.kind === 'section' && difference.name === 'watch.checks');
-  if (!timingsDiffer && !checksDiffer) return team.watch;
+  const tempoDiffer = differences.some((difference) => difference.kind === 'section' && difference.name === 'tempo');
+  const tempo = tempoDiffer ? approvedTempo(record) : team.tempo;
+  if (!timingsDiffer && !checksDiffer) return applyTempo(team.watch, tempo);
   const copy = validateTeamFile(record.file);
   const approved = copy.ok ? copy.team.watch : defaultWatch();
-  if (!timingsDiffer) return { ...team.watch, checks: approved.checks };
-  return approved;
+  if (!timingsDiffer) return applyTempo({ ...team.watch, checks: approved.checks }, tempo);
+  return applyTempo(approved, tempo);
+}
+
+/** The tempo of the approved copy. A copy that can't be read, or that predates the key, is `normal`. */
+function approvedTempo(record: ApprovalRecord): Tempo {
+  const copy = validateTeamFile(record.file);
+  return copy.ok ? copy.team.tempo : 'normal';
 }
 
 /**

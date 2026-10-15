@@ -186,3 +186,20 @@ delegates:
   herdr's pid vouch are forgeable by a hostile process of the same user, which this tool does
   not resist: it guards a mistaken agent, not a hostile one. Nothing in the grants or in
   `trust:` is changed by that.
+
+## tempo
+
+How fast the watch's waits run. It is an owner section. Omitted, it reads as `normal`.
+
+```yaml
+tempo: urgent
+```
+
+- `relaxed`, `normal` or `urgent`.
+- `relaxed` doubles `idle_first`, `idle_repeat`, `team_idle`, `nudge_wait` and `unsent_after`.
+  `urgent` halves them, to the nearest second, and never below one second. `normal` leaves
+  them as written.
+- An omitted `idle_repeat` stays off. `interval` is the pass rate and is not scaled, and
+  neither are the quota marks or the check switches.
+- `relaxed` and `urgent` take effect when the file is approved. A file that omits the key,
+  and one that sets `normal`, stay the file that was approved.

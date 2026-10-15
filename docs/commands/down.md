@@ -1,7 +1,8 @@
 # team down
 
 Stops the team: asks every running seat the approved copy names to exit, closes its workspace, and
-stops the herdr session. A pane herdr names with something that copy does not carry is closed when
+stops the herdr session — unless something was left in it: an agent still running at the end keeps
+the session up, and the last line says it is not stopped and counts what is left in it. A pane herdr names with something that copy does not carry is closed when
 the state records that pane and that workspace for one seat, and left running when no seat record
 accounts for it: the name is not what decides. A pane with no name is closed on that same record.
 When the record also holds the process `up` launched, the pane is closed only while that process
@@ -18,7 +19,7 @@ plan and runs nothing.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--dry-run` | — | print the plan, and the refusals the real run would stop on; a run that reaches its plan runs nothing |
-| `--wait` | — | give a working seat up to 120 seconds to come free, then stop it |
+| `--wait` | — | give a working seat up to 120 seconds to come free; one that never does is left running, as without it |
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it; a seat this run asks and cannot stop is closed in the same run |
 | `--session` | `<name>` | the herdr session to stop, instead of `team.session`; the owner's alone — a delegate is refused it by the gate |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone — a delegate is refused it by the gate |
@@ -42,7 +43,7 @@ plan and runs nothing.
 | a seat was left running — busy, blocked, at its own exit question, on an unreadable screen | its `  skip` line, and the last line naming it | 0 |
 | there was nothing to stop | `session <session> is not running: nothing to stop` | 0 |
 | `--dry-run` | the plan; `dry run: nothing was run` | the refusal's own exit, else 0 |
-| the run was refused, or a step failed | `team down: <reason>` | 1 |
+| the run was refused, or a step was held | `team down: <reason>` for a refusal; a held step ends on its own line instead, `<seat>: left out: <reason>` | 1 |
 | the invocation, the team file or herdr can't be read | `team down: <problem>` and the usage | 2 |
 
 ## Example

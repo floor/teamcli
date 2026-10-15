@@ -376,4 +376,133 @@ describe('team send history log & team feed', () => {
       .map((line) => (JSON.parse(line) as { id: string }).id);
     expect(jsonIds).toEqual(['m2', 'req-1']);
   });
+
+  test('parses multi-section briefs/*-to-*.md with ## <ISO-8601> — From <Sender> headers in chronological order', async () => {
+    const { root, home } = world();
+    const briefsDir = join(root, 'briefs');
+    mkdirSync(briefsDir, { recursive: true });
+    writeFileSync(
+      join(briefsDir, 'iris-to-atlas.md'),
+      [
+        '# Iris -> Atlas',
+        '',
+        '## 2026-10-14T15:00:01Z — From Iris: Round 1',
+        '',
+        'First brief section from Iris.',
+        '',
+        '---',
+        '',
+        '## 2026-10-14T15:00:05Z — From Atlas: Round 1 Reply',
+        '',
+        'Reply section from Atlas in the same file.',
+        '',
+      ].join('\n'),
+    );
+
+    const io = testIo(root);
+    expect(await runFeed([], io, { home })).toBe(0);
+    expect(io.out).toBe(
+      [
+        '15:00:01  iris -> atlas  [brief]  Round 1: First brief section from Iris.',
+        '15:00:05  atlas -> iris  [brief]  Round 1 Reply: Reply section from Atlas in the same file.',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  test('streams across all project state folders (--all or outside a repo) and discovers Desk lobby guard/bridge audit and signed answers without touching files', async () => {
+    const { root, home } = world();
+    const otherRoot = join(base, 'other-repo');
+    mkdirSync(otherRoot, { recursive: true });
+
+    appendHistory('acme', root, home, {
+      ts: '2026-10-14T16:00:01.000Z',
+      from: 'lead',
+      to: 'helper',
+      body: 'acme message',
+      id: 'acme-1',
+      outcome: 'delivered',
+    });
+    appendHistory('beacon', otherRoot, home, {
+      ts: '2026-10-14T16:00:02.000Z',
+      from: 'keeper',
+      to: 'reviewer',
+      body: 'beacon message',
+      id: 'beacon-1',
+      outcome: 'delivered',
+    });
+
+    // Set up a Desk lobby guard subdir with guard.json, seat-reply-config.json, audit.jsonl, and answers/req-9.json
+    const guardSubdir = join(lobbyDir(home), 'guard');
+    const answersDir = join(guardSubdir, 'answers');
+    mkdirSync(answersDir, { recursive: true });
+    const lobbyAudit = join(guardSubdir, 'audit.jsonl');
+    writeFileSync(
+      join(guardSubdir, 'guard.json'),
+      JSON.stringify({ target_alias: 'orchestrator', audit_file: lobbyAudit }),
+    );
+    writeFileSync(
+      join(guardSubdir, 'seat-reply-config.json'),
+      JSON.stringify({ seat_alias: 'orchestrator', answer_dir: answersDir }),
+    );
+    const auditContent = `${JSON.stringify({ ts: '2026-10-14T16:00:03.000Z', event: 'accepted', request_id: 'req-9' })}\n`;
+    writeFileSync(lobbyAudit, auditContent);
+    const answerFile = join(answersDir, 'req-9.json');
+    const answerContent = JSON.stringify({
+      request_id: 'req-9',
+      seat: 'orchestrator',
+      caller: 'desk',
+      ts: '2026-10-14T16:00:04.000Z',
+      summary: 'gate approved',
+    });
+    writeFileSync(answerFile, answerContent);
+
+    // Running outside any git checkout (e.g. from the Desk lobby directory) merges all projects + Desk lobby records
+    const deskPaneIo = testIo(lobbyDir(home));
+    expect(await runFeed([], deskPaneIo, { home })).toBe(0);
+    expect(deskPaneIo.out).toBe(
+      [
+        '16:00:01  lead -> helper  [delivered]  acme message',
+        '16:00:02  keeper -> reviewer  [delivered]  beacon message',
+        '16:00:03  desk -> orchestrator  [accepted]  accepted (req-9)',
+        '16:00:04  orchestrator -> desk  [answered]  gate approved',
+        '',
+      ].join('\n'),
+    );
+
+    // Running inside `acme` with `--all`, `--audit`, and `--briefs` flags
+    const customBriefs = join(base, 'custom-briefs');
+    mkdirSync(customBriefs, { recursive: true });
+    const briefPath = join(customBriefs, 'desk-to-lead.md');
+    writeFileSync(briefPath, 'custom brief line\n');
+    const briefTime = new Date('2026-10-14T16:00:05.000Z');
+    utimesSync(briefPath, briefTime, briefTime);
+
+    const customAudit = join(base, 'custom-audit.jsonl');
+    writeFileSync(
+      customAudit,
+      `${JSON.stringify({ ts: '2026-10-14T16:00:06.000Z', from: 'desk', to: 'lead', body: 'explicit audit line', id: 'aud-1', event: 'forwarded' })}\n`,
+    );
+
+    const flagIo = testIo(root);
+    expect(
+      await runFeed(['--all', '--briefs', customBriefs, '--audit', customAudit], flagIo, { home }),
+    ).toBe(0);
+    expect(flagIo.out).toBe(
+      [
+        '16:00:01  lead -> helper  [delivered]  acme message',
+        '16:00:02  keeper -> reviewer  [delivered]  beacon message',
+        '16:00:03  desk -> orchestrator  [accepted]  accepted (req-9)',
+        '16:00:04  orchestrator -> desk  [answered]  gate approved',
+        '16:00:05  desk -> lead  [brief]  custom brief line',
+        '16:00:06  desk -> lead  [forwarded]  explicit audit line',
+        '',
+      ].join('\n'),
+    );
+
+    // Desk ask/answer and audit files remain untouched (read-only)
+    expect(readFileSync(lobbyAudit, 'utf8')).toBe(auditContent);
+    expect(readFileSync(answerFile, 'utf8')).toBe(answerContent);
+  });
 });
+
