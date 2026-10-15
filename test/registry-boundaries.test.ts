@@ -510,7 +510,7 @@ ${seatBlock('worker', 'implementer', ['    count: 1'])}
     const upIo = testIo(root, foreign);
     const upCode = await runUp([], upIo, up.sources);
     expect(upCode).toBe(1);
-    expect(upIo.err).toContain('only the owner runs `up`');
+    expect(upIo.err).toBe('deny\n');
     expect(readFileSync(join(dir, STATE_FILE), 'utf8')).toBe(stateBefore);
 
     const removal = removeSources(() => [leadAgent(), workerAgent()]);

@@ -18,7 +18,7 @@ import { approveFingerprint, upFingerprint } from '../src/approve/owner-token.ts
 import { DETACHED_REFUSAL, placeCaller, type CallerSources, type Process } from '../src/caller.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
-import { runApprove, type ApproveSources } from '../src/commands/approve.ts';
+import { runApprove, type ApproveSources } from '../src/approve/command.ts';
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';

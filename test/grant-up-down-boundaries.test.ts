@@ -425,14 +425,14 @@ describe('the scope the approval signed', () => {
     expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
   });
 
-  test('up with no grant section keeps today\'s owner refusal', async () => {
+  test('up with no grant section denies a seat', async () => {
     setup({ grant: false });
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runUp([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toContain('team up: only the owner runs `up`, from a terminal outside herdr; this call is ');
+    expect(io.err).toBe('deny\n');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
@@ -453,15 +453,16 @@ describe('the scope the approval signed', () => {
 });
 
 describe('the approval the grant rides on', () => {
-  test('up is refused on a file never approved', async () => {
+  test('the granted seat is admitted with no approval record', async () => {
     setup({ approve: false });
     rmSync(storePath('acme', root, home), { recursive: true, force: true });
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runUp([], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toContain('team up: a grant needs a verified approval: the file was never approved on this machine: run `team approve`\n');
+    expect(code, io.err + io.out).toBe(0);
+    expect(io.err).not.toContain('never approved');
+    expect(io.err).not.toContain('deny');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
@@ -473,7 +474,7 @@ describe('the approval the grant rides on', () => {
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runUp([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toContain('team up: a grant needs the approved file: the file is not the approved one (`grant` changed): run `team approve`\n');
+    expect(io.err).toContain('team up: the file is not the approved one (`grant` changed): run `team approve`\n');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 

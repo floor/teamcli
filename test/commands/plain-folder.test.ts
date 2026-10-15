@@ -423,7 +423,8 @@ describe('a folder with no git repository', () => {
     const owner = testIo(root, { kind: 'owner' });
     const added = await runAdd(['claude-coordinator-acme'], owner, addSources(home));
     expect(added).toBe(1);
-    expect(owner.err).toBe('team add: the file was never approved on this machine: run `team approve`\n');
+    expect(owner.err).toContain('the file is legacy:');
+    expect(owner.err).not.toContain('never approved');
     expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
 
     const seat = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'w9:p1', session: 'elsewhere' });
