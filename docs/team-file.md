@@ -92,6 +92,12 @@ either folder is left there. The fields are in the README's
   (`DeepSeek V4.1 Flash`, `Gemini 3.8 Flash`). Herdr draws line 2 as its status word, then
   ` · `, then that text (`done · Grok 4.7 high`, `idle · Opus 5.5 default`). That is line 2.
 
+While the seat runs, the watch paints both lines. Line 1 is the file's title. Line 2 takes the
+running model and version the pane's screen shows when they differ from the file's, and the
+effort word the screen shows; a screen this version cannot read, or one that shows no running
+model, keeps the file's display — never the CLI's name. An effort word, once seen, stays until a
+later screen shows a different one.
+
 `effort` is optional. It is a known field: a file may set it, and a file that leaves it out
 loads as before. The words a lab allows are [`src/profiles/efforts.json`](../src/profiles/efforts.json),
 format 1, keyed by the seat's `vendor`. Each list is the words that lab's own CLI help printed.
