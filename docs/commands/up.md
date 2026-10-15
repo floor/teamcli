@@ -8,13 +8,14 @@ into — and its sidebar is rewritten from the file either way.
 
 ## Synopsis
 
-    team up [--dry-run] [--session <name>] [--file <path>]
+    team up [--dry-run] [--serial] [--session <name>] [--file <path>]
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--dry-run` | — | prints the plan and runs nothing; prints the refusals the real run would stop on as `! up would refuse: …` above it |
+| `--serial` | — | launches and waits on one seat at a time instead of concurrently |
 | `--session` | `<name>` | the herdr session to start, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
 | `--help`, `-h` | — | the usage, and exit 0 |
