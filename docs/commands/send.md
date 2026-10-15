@@ -30,14 +30,14 @@ run of it names the drop channel instead. This build does not carry that seat's 
 The socket frame is a measured observation of Claude Code 2.1.295, not a stable API: JSON
 lines, one frame per line, a first-line deadline of 30,000 ms, and a buffer limit of 1,048,576
 characters. A frame over that limit is refused, never truncated. The message's body is written
-down: a run that ends `delivered`, `answered`, `timeout` or `unreachable` appends one line to
-the project's message history, which [team feed](feed.md) reads. A reply's text is not written
-down — it reaches this terminal and no file. The daily log keeps the seat and the sizes.
+down: a run that ends `delivered`, `answered`, `held`, `timeout` or `unreachable` appends one
+line to the project's message history, which [team feed](feed.md) reads. A reply's text is not
+written down — it reaches this terminal and no file. The daily log keeps the seat and the sizes.
 
-The outcome is always confirmed — one of `delivered`, `answered`, `timeout`, `unreachable` or
-`refused` — printed and matched by the exit code, or written as one machine-readable document
-with `--json`. `--list` sends nothing: it prints the file's addressable seats. Broadcast is not
-in this build.
+The outcome is always confirmed — one of `delivered`, `answered`, `held`, `timeout`,
+`unreachable` or `refused` — printed and matched by the exit code, or written as one
+machine-readable document with `--json`. `--list` sends nothing: it prints the file's addressable
+seats. Broadcast is not in this build.
 
 ## Synopsis
 
@@ -91,20 +91,22 @@ before the seat is looked up. A run with no terminal is refused before `--list` 
 | delivered | 0 | `<seat>: delivered` on stdout |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | listed | 0 | one `<name>  <cli>  <role>` line per seat on stdout |
+| held | 1 | `team send: <seat>: held: <reason>` on stderr |
 | timeout | 1 | `team send: <seat>: timeout: sent, no reply within <s>s; a seat which does not accept messages from other sessions holds the frame until a person lets it through` on stderr |
 | unreachable | 1 | `team send: <seat>: unreachable: <reason>` on stderr |
 | refused | 1 | `team send: refused: <reason>` on stderr |
 | usage | 2 | `team send: <message>` and the usage on stderr |
 | configuration | 2 | `team send: <message>` on stderr |
 
-`unreachable` is the seat not reached: no live agent of that name, a screen that is one of the
-dialogs listed above, no socket file for a waited Claude Code seat, a connection that would not
-take that frame, or a seat whose herdr status did not show the trigger was submitted. `timeout`
-is a waited frame written on the socket and no reply inside the window. `refused` is nothing
-being sent on purpose: an unknown seat (the file's seats are named), `--wait` to a seat that is
-not Claude Code, a frame over the socket limit, a trigger longer than the measured line, a
-reply listener that could not be opened, a lock another command holds, or a caller that may not
-send.
+`held` is nothing typed: the message is safely on disk, the pane was left as it was, and the run
+exits 1 — the reason it prints says what held it. `unreachable` is the seat not reached: no live
+agent of that name, a screen that is one of the dialogs listed above, no socket file for a waited
+Claude Code seat, a connection that would not take that frame, or a seat whose herdr status did
+not show the trigger was submitted. `timeout` is a waited frame written on the socket and no
+reply inside the window. `refused` is nothing being sent on purpose: an unknown seat (the file's
+seats are named), `--wait` to a seat that is not Claude Code, a frame over the socket limit, a
+trigger longer than the measured line, a reply listener that could not be opened, a lock another
+command holds, or a caller that may not send.
 
 ## Examples
 
