@@ -362,7 +362,7 @@ Hidden: no
 
 Usage:
 
-    team list [--all] [--watch] [--json]
+    team list [--all] [--seats] [--watch] [--json]
 
 ### Flags
 
@@ -371,6 +371,7 @@ Usage:
 | `--all` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--seats` | no | no | no |
 | `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -705,6 +706,27 @@ Usage:
 ### Positionals
 
 None.
+
+## `tempo`
+
+Hidden: no
+
+Usage:
+
+    team tempo <word>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `word` | no | no |
 
 ## `unlock`
 

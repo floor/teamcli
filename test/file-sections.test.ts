@@ -32,6 +32,7 @@ test('the generated owner sections equal the hand-kept list, in order', () => {
     // in, are the ones records were written with. `grant` sits immediately before `delegates`,
     // so `delegates` stays last.
     'tasks',
+    'tempo',
     'grant',
     'delegates',
   ]);

@@ -32,7 +32,7 @@ swap, and, when a temporary seat's end is judged, git.
 Writes `.agents/team.state.json` (the watch's pid and a heartbeat, once a pass; a temporary seat's
 `worked` and `own_commits` when it sees them; the accounts' latest screen readings and the money the
 spend checks read), `.agents/team.log` (every line it prints), and, through herdr: the nudge's text
-and Enter, and the panes and workspaces of the seats it closes.
+and Enter, and the seats' sidebar lines — the workspace title and the display line — from the file.
 
 The readings are only written when the watch's session is the file's own `session`: `up` and `add`
 count the state as the project's, so a watch on another session — `--session <other>`, which anyone
@@ -478,7 +478,7 @@ Needs a new approval: `watch.checks` changed.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: beebf708a139e1adf48cc0c47d50770ab32e2e8d193364ce0613d63a3a748766
+Owner-authorization fingerprint: 056248e0763543ab3fed6f7d26c49a46c7188868d50cec2ae241ce1376813df8
 Approved. The record is in ~/.config/team/beacon-<hash>; signed with key fe21ef6293de; check the rest with `team doctor`.
 exit 0
 ```
