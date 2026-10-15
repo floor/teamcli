@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
+import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -22,7 +22,7 @@ import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
-import { validateTeamFile } from '../file/validate.ts';
+import { defaultLabel, validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
 import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
 import {
@@ -34,14 +34,16 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
+import { lobbyPretrustLine } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
+import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
-import { emptySession, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -114,8 +116,8 @@ export const realSources: AddSources = {
   launch: realLaunch,
 };
 
-export const USAGE = `Usage: team add <name> [--dry-run] [--session <name>] [--file <path>]
-       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--dry-run] [--session <name>] [--file <path>]
+export const USAGE = `Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
 `;
 
 /** The gate's refusal as this command prints it: the verdict's own sentence behind the prefix.
@@ -144,11 +146,17 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['like', 'until', 'worktree', 'session', 'file'], ['temporary', 'dry-run']);
+  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file'], ['temporary', 'dry-run']);
   if (args.error) {
     out.stderr(`team add: ${plainText(args.error)}\n${USAGE}`);
     // exit: add.invocation
     return 2;
+  }
+  const detached = detachedRefusal(walkCaller(io));
+  if (detached !== undefined) {
+    out.stderr(`team add: ${detached}\n`);
+    // exit: add.detached
+    return 1;
   }
   const temporary = args.flags.has('temporary');
   const dry = args.flags.has('dry-run');
@@ -382,10 +390,50 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.delegate-edit
     return 1;
   }
-  if (!profileFor(built.seat.cli)) {
+  const profile = profileFor(built.seat.cli);
+  if (!profile) {
     out.stderr(`team add: no launch profile for \`${plainLine(built.seat.cli)}\` in this version\n`);
     // exit: add.no-profile
     return 1;
+  }
+  if (!temporary && (args.values.model !== undefined || args.values.effort !== undefined) && caller.kind !== 'owner') {
+    out.stderr("team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat\n");
+    // exit: add.override-owner
+    return 1;
+  }
+  const resolvedModel = args.values.model !== undefined
+    ? resolveModelOverride(profile, args.values.model, built.seat.version)
+    : undefined;
+  if (args.values.model !== undefined && !resolvedModel) {
+    out.stderr(`team add: ${plainLine(built.name)}: unknown model ${JSON.stringify(args.values.model)} for ${plainLine(built.seat.cli)}\n`);
+    // exit: add.model
+    return 2;
+  }
+  const resolvedEffort = args.values.effort !== undefined
+    ? resolveEffortOverride(built.seat.cli, built.seat.vendor, args.values.effort)
+    : undefined;
+  if (resolvedEffort && 'error' in resolvedEffort) {
+    out.stderr(`team add: ${plainLine(built.name)}: ${plainText(resolvedEffort.error)}\n`);
+    // exit: add.effort
+    return 2;
+  }
+  if (resolvedModel || (resolvedEffort && !('error' in resolvedEffort))) {
+    const nextModel = resolvedModel?.model ?? built.seat.model;
+    const nextVersion = resolvedModel?.version ?? built.seat.version;
+    const nextEffort = resolvedEffort && !('error' in resolvedEffort) ? resolvedEffort.effort : built.seat.effort;
+    const nextDisplay = resolvedModel ? defaultLabel(nextModel, nextVersion) : built.seat.display;
+    const nextLaunch = withLaunchOverrides(profile, built.seat.launch, {
+      ...(resolvedModel ? { modelId: resolvedModel.id } : {}),
+      ...(nextEffort && supportsEffortLaunch(built.seat.cli) ? { effort: nextEffort } : {}),
+    });
+    built.seat = {
+      ...built.seat,
+      model: nextModel,
+      version: nextVersion,
+      display: nextDisplay,
+      ...(nextEffort ? { effort: nextEffort } : {}),
+      launch: nextLaunch,
+    };
   }
 
   const prepared = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
@@ -467,7 +515,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const launchProblemDetail = line?.level === 'miss' && line.record ? line.why : undefined;
   const doctorTeam = built.temporary
     ? { ...prepared.team, seats: prepared.team.seats.map((item) => item.name === built.temporary?.like ? { ...item, stopped: false } : item) }
-    : prepared.team;
+    : { ...prepared.team, seats: prepared.team.seats.map((item) => item.name === built.name ? built.seat : item) };
   // `team` is the file on disk, already the approved one. `doctorTeam` is the
   // seat about to run, so a stopped seat's CLI is still checked. The digest is
   // recorded with the write, after a refusal has left the file alone. The seat's own launch
@@ -586,6 +634,15 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
     }
   }
+  const trustCwd = verifiedLobby && seatForPlan.lobby ? verifiedLobby : seatForPlan.cwd;
+  const trustSeat = { ...seatForPlan, cwd: trustCwd };
+  // A CLI with no captured trust record is refused before the file is edited. A dry
+  // run writes nothing and still shows that line. A CLI with a record is written
+  // below, once the lobby exists.
+  if (intoLobby && wouldLaunch && !trustSeat.launchProblem) {
+    const line = lobbyPretrustLine(trustSeat, sources.home, { write: false, now: sources.now() });
+    if (line) return refusePretrust(out, built.name, line, dry);
+  }
   if (dry) {
     if (decision.kind === 'unknown') out.stdout(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
     const preview = upPlan({
@@ -617,6 +674,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         verifiedLobby = gate.path;
         lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
       }
+    }
+    // Before the file edit: a record that cannot be written leaves the seat out of the file.
+    {
+      const trustPath = verifiedLobby && seatForPlan.lobby ? verifiedLobby : seatForPlan.cwd;
+      const line = lobbyPretrustLine(
+        { ...seatForPlan, cwd: trustPath },
+        sources.home,
+        { write: true, now: sources.now() },
+      );
+      if (line) return refusePretrust(out, built.name, line, false);
     }
     if (decision.kind === 'unknown') out.stderr(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
     // The audit line, exactly at the effects boundary: a delegated run that reaches here is
@@ -905,11 +972,15 @@ function hostOf(input: {
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
+        const retained = current.retained_seats?.[name];
+        if (current.retained_seats?.[name]) delete current.retained_seats[name];
+        const id = prior.id ?? retained?.id ?? mintSeatId();
         // The process identity goes in the same write, so the owner's later `team up` — and
         // `team answer` — can tell a pane that is still the seat's from one that is not.
         const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
+          id,
           waiting,
           pane,
           ...(workspace ? { workspace } : {}),
@@ -946,6 +1017,18 @@ function hostOf(input: {
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: patch.stage };
+        const retained = current.retained_seats?.[name];
+        if (current.retained_seats?.[name]) delete current.retained_seats[name];
+        const id = prior.id ?? retained?.id ?? mintSeatId();
+        const isTarget = name === seat.name;
+        const cli = (isTarget ? seat.cli : undefined) ?? prior.cli;
+        const model = (isTarget ? seat.model : undefined) ?? prior.model;
+        const version = (isTarget ? seat.version : undefined) ?? prior.version;
+        const effort = (isTarget ? seat.effort : undefined) ?? prior.effort;
+        const launch_line = (isTarget ? seat.launch : undefined) ?? prior.launch_line;
+        const last_active = patch.stage === 'ready'
+          ? input.now().toISOString()
+          : (prior.last_active ?? retained?.last_active);
         let start_cwd = prior.start_cwd;
         if (!start_cwd && patch.createdWorkspace) {
           if (input.inLobby) {
@@ -956,12 +1039,24 @@ function hostOf(input: {
         }
         // `waiting: null` removes the field alone; anything else written replaces it.
         // `effort: null` is a launch that set no word: the stored word goes with it.
-        const { waiting: written, effort, ...rest } = patch;
-        const seatState: SeatState = { ...prior, ...rest, ...(temporary && name === seat.name ? { temporary } : {}), ...(start_cwd ? { start_cwd } : {}) };
+        const { waiting: written, effort: patchedEffort, ...rest } = patch;
+        const seatState: SeatState = {
+          ...prior,
+          ...rest,
+          id,
+          ...(cli ? { cli } : {}),
+          ...(model ? { model } : {}),
+          ...(version ? { version } : {}),
+          ...(effort ? { effort } : {}),
+          ...(launch_line ? { launch_line } : {}),
+          ...(last_active ? { last_active } : {}),
+          ...(temporary && isTarget ? { temporary } : {}),
+          ...(start_cwd ? { start_cwd } : {}),
+        };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;
-        if (effort === null) delete seatState.effort;
-        else if (effort !== undefined) seatState.effort = effort;
+        if (patchedEffort === null) delete seatState.effort;
+        else if (patchedEffort !== undefined) seatState.effort = patchedEffort;
         current.seats[name] = seatState;
         if (patch.pane) {
           replaced = prior.pane !== patch.pane ? prior.pane : undefined;
@@ -982,9 +1077,17 @@ function hostOf(input: {
       if (temporary && name === seat.name) removeRulesFile(input.standing, name, input.root, input.home);
       let pane: string | undefined;
       updateState(dir, (file) => {
-        const seats = file.sessions[session]?.seats;
-        pane = seats?.[name]?.pane;
-        if (seats) delete seats[name];
+        const current = file.sessions[session];
+        if (!current) return;
+        const prior = current.seats[name];
+        pane = prior?.pane;
+        if (!temporary && prior?.id && !prior.temporary) {
+          (current.retained_seats ??= {})[name] = {
+            id: prior.id,
+            ...(prior.last_active ? { last_active: prior.last_active } : {}),
+          };
+        }
+        delete current.seats[name];
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
     },
@@ -1016,6 +1119,13 @@ function hostOf(input: {
     },
     log: (who, what) => logLine(dir, 'add', input.caller, `${who}: ${what}`, input.now()),
   };
+}
+
+function refusePretrust(out: Io, name: string, line: string, dry: boolean): number {
+  if (dry) out.stdout(`${plainLine(name)}: would refuse: ${plainText(line)}\ndry run: nothing was run\n`);
+  else out.stderr(`team add: refused: ${plainText(line)}\n`);
+  // exit: add.pretrust
+  return 1;
 }
 
 function refuseLobby(out: Io, name: string, text: string, dry: boolean): number {

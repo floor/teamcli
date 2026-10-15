@@ -25,6 +25,7 @@ unless its owner abandons it.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--abandon`, `--session` and `--file` are the owner's own |
+| a run with no terminal | nothing: `team remove: only the owner runs this, from a terminal outside herdr` |
 | the orchestrator's seat, the operator's seat | remove another seat; never the orchestrator's or the operator's own seat, and never `--abandon` |
 | the approved delegate, when the file's `delegates` section names it | remove a named seat; never `--keep`, `--abandon`, `--session` or `--file` |
 

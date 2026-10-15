@@ -11,7 +11,7 @@ import { logLine } from './log.ts';
 import { approvalStanding, approvedCopy, type Standing } from './store/store.ts';
 
 /**
- * What `up`, `down` and `reload` ask the grant, decided and not yet done. `passed` is the grant the
+ * What `up`, `down`, `approve` and `reload` ask the grant, decided and not yet done. `passed` is the grant the
  * approval in force names. `refused` is the sentence, with no newline; `id` is the exit id
  * a command records when it refuses on this verdict.
  */
@@ -34,9 +34,10 @@ export type GrantSources = {
 /**
  * The audit line of a granted run, in the same shape as a delegated run's line. `up` and
  * `down` call it when the gate has passed and the run is about to have effects, and not
- * before: a dry run and a refusal write nothing. `reload` calls it in the close, once the
- * re-read has passed and before the workspace is closed, and `detail` names the seat and
- * the difference.
+ * before: a dry run and a refusal write nothing. `approve` calls it in the same function as
+ * the store write, after that write, and `detail` is the differences that approval sealed.
+ * `reload` calls it in the close, once the re-read has passed and before the workspace is
+ * closed, and `detail` names the seat and the difference.
  */
 export function logGranted(dir: string, seat: string, act: GrantScope, now?: Date, detail?: string): void {
   logLine(dir, 'grant', 'grant', `${seat} ${act}${detail ? `: ${detail}` : ''}`, now);
@@ -44,7 +45,7 @@ export function logGranted(dir: string, seat: string, act: GrantScope, now?: Dat
 
 /**
  * Whether this caller may perform `act` under the grant the approval in force names.
- * `up`, `down` and `reload` call this. It reads the live default file and the approval again on this
+ * `up`, `down`, `approve` and `reload` call this. It reads the live default file and the approval again on this
  * call: no remembered copy, no `--file`, and no walk of other sessions the state holds.
  * It decides and stops. It does not print, write, or launch.
  *

@@ -158,6 +158,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team add worker"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.differs",
       "meaning": "the file differs from its approval",
       "trigger": "team add worker"
@@ -263,8 +270,22 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.override-owner",
+      "meaning": "--model and --effort on a declared seat are the owner's",
+      "trigger": "team add worker --model claude-sonnet-5-5"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.placed",
       "meaning": "the seat would be placed outside the project",
+      "trigger": "team add worker"
+    },
+    {
+      "code": 1,
+      "command": "add",
+      "id": "add.pretrust",
+      "meaning": "the lobby is not trusted for this seat's CLI",
       "trigger": "team add worker"
     },
     {
@@ -347,6 +368,13 @@
     {
       "code": 2,
       "command": "add",
+      "id": "add.effort",
+      "meaning": "the --effort override is not allowed for the seat's CLI or vendor",
+      "trigger": "team add worker --effort unknown"
+    },
+    {
+      "code": 2,
+      "command": "add",
       "id": "add.file",
       "meaning": "the team file can't be read",
       "trigger": "team add worker --file missing.yaml"
@@ -371,6 +399,13 @@
       "id": "add.locked",
       "meaning": "the locked edit does not validate",
       "trigger": "team add worker"
+    },
+    {
+      "code": 2,
+      "command": "add",
+      "id": "add.model",
+      "meaning": "the --model override is not known for the seat's CLI",
+      "trigger": "team add worker --model unknown"
     },
     {
       "code": 2,
@@ -440,6 +475,13 @@
       "command": "answer",
       "id": "answer.caller",
       "meaning": "the caller may not answer a trust dialog",
+      "trigger": "team answer lead trust"
+    },
+    {
+      "code": 1,
+      "command": "answer",
+      "id": "answer.detached",
+      "meaning": "a run with no terminal",
       "trigger": "team answer lead trust"
     },
     {
@@ -627,6 +669,69 @@
     {
       "code": 1,
       "command": "approve",
+      "id": "approve.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-another-pane",
+      "meaning": "the granted seat is not on its recorded pane",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-approval",
+      "meaning": "a grant needs a verified approval",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-approved-copy",
+      "meaning": "a grant needs a readable approved copy",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-caller",
+      "meaning": "only the seat the grant names runs this",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-flag",
+      "meaning": "a granted seat cannot aim --file",
+      "trigger": "team approve --file other"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-no-pane",
+      "meaning": "no pane is recorded for the granted seat",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-not-ordinary",
+      "meaning": "this change needs the owner",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
+      "id": "approve.grant-scope",
+      "meaning": "the grant does not list approve",
+      "trigger": "team approve"
+    },
+    {
+      "code": 1,
+      "command": "approve",
       "id": "approve.input-unreadable",
       "meaning": "the terminal could not be read to check for input waiting",
       "trigger": "team approve"
@@ -762,6 +867,13 @@
       "command": "broker",
       "id": "broker.busy",
       "meaning": "a broker is already answering on this clone's socket",
+      "trigger": "team broker"
+    },
+    {
+      "code": 1,
+      "command": "broker",
+      "id": "broker.detached",
+      "meaning": "a run with no terminal",
       "trigger": "team broker"
     },
     {
@@ -1159,6 +1271,13 @@
     {
       "code": 1,
       "command": "down",
+      "id": "down.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team down"
+    },
+    {
+      "code": 1,
+      "command": "down",
       "id": "down.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team down --file .agents/team.yaml"
@@ -1291,6 +1410,34 @@
     },
     {
       "code": 0,
+      "command": "feed",
+      "id": "feed.ok",
+      "meaning": "the message feed was printed",
+      "trigger": "team feed"
+    },
+    {
+      "code": 1,
+      "command": "feed",
+      "id": "feed.unreadable",
+      "meaning": "the history log cannot be read",
+      "trigger": "team feed"
+    },
+    {
+      "code": 2,
+      "command": "feed",
+      "id": "feed.configuration",
+      "meaning": "the team file can't be read",
+      "trigger": "team feed"
+    },
+    {
+      "code": 2,
+      "command": "feed",
+      "id": "feed.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team feed extra"
+    },
+    {
+      "code": 0,
       "command": "init",
       "id": "init.restored",
       "meaning": "the approved copy was restored",
@@ -1301,6 +1448,13 @@
       "command": "init",
       "id": "init.wrote",
       "meaning": "a skeleton was written",
+      "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.detached",
+      "meaning": "a run with no terminal",
       "trigger": "team init"
     },
     {
@@ -2174,6 +2328,13 @@
     {
       "code": 1,
       "command": "remove",
+      "id": "remove.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team remove worker"
+    },
+    {
+      "code": 1,
+      "command": "remove",
       "id": "remove.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team remove worker --file .agents/team.yaml"
@@ -2299,6 +2460,69 @@
     },
     {
       "code": 0,
+      "command": "seats",
+      "id": "seats.shown",
+      "meaning": "the seats table was printed",
+      "trigger": "team seats"
+    },
+    {
+      "code": 1,
+      "command": "seats",
+      "id": "seats.file-owner",
+      "meaning": "--file is the owner's",
+      "trigger": "team seats --file .agents/team.yaml"
+    },
+    {
+      "code": 1,
+      "command": "seats",
+      "id": "seats.session-owner",
+      "meaning": "--session is the owner's",
+      "trigger": "team seats --session team"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team seats --file missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.file-invalid",
+      "meaning": "the team file can't be parsed",
+      "trigger": "team seats --file team.yaml"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.herdr",
+      "meaning": "herdr doesn't answer",
+      "trigger": "team seats"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team seats extra"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.not-a-repo",
+      "meaning": "not inside a git repository",
+      "trigger": "team seats"
+    },
+    {
+      "code": 2,
+      "command": "seats",
+      "id": "seats.not-yours",
+      "meaning": "the caller may not read this team",
+      "trigger": "team seats"
+    },
+    {
+      "code": 0,
       "command": "send",
       "id": "send.answered",
       "meaning": "the seat's reply came back within the window",
@@ -2324,6 +2548,20 @@
       "id": "send.listed",
       "meaning": "the addressable seats were printed, nothing was sent",
       "trigger": "team send --list"
+    },
+    {
+      "code": 1,
+      "command": "send",
+      "id": "send.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team send --list"
+    },
+    {
+      "code": 1,
+      "command": "send",
+      "id": "send.held",
+      "meaning": "the message is on disk and the pane was left untouched",
+      "trigger": "team send worker hello"
     },
     {
       "code": 1,
@@ -2608,6 +2846,13 @@
     {
       "code": 1,
       "command": "up",
+      "id": "up.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team up --session elsewhere"
+    },
+    {
+      "code": 1,
+      "command": "up",
       "id": "up.differs",
       "meaning": "the file differs from its approval",
       "trigger": "team up"
@@ -2832,6 +3077,13 @@
     {
       "code": 1,
       "command": "watch",
+      "id": "watch.caller",
+      "meaning": "a run with no terminal",
+      "trigger": "team watch"
+    },
+    {
+      "code": 1,
+      "command": "watch",
       "id": "watch.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team watch --file .agents/team.yaml"
@@ -2975,6 +3227,13 @@
       "id": "worktree.default-session",
       "meaning": "the session can't be \"default\"",
       "trigger": "team worktree new task --session default"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team worktree list"
     },
     {
       "code": 1,

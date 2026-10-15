@@ -220,11 +220,35 @@ function addSources(home: string): AddSources {
   };
 }
 
-/** The recorded pane command, run as the pane runs it: a shell, cwd the watchdog's start folder. */
+/** The pane herdr recorded for the watchdog, when `up` wrote one. */
+function recordedWatchdogPane(cwd: string): string | undefined {
+  try {
+    for (const session of Object.values(readState(join(cwd, '.agents')).sessions)) {
+      if (session.watchdog?.pane) return session.watchdog.pane;
+    }
+  } catch {
+    // No state yet: the watch starts with no recorded pane.
+  }
+  return undefined;
+}
+
+/** The recorded pane command, run as the pane runs it. The parent is named `herdr` and stays
+ *  alive, and the stub on `PATH` answers the pane's own root, so the walk places the pane. */
 function runAsPane(command: string, cwd: string, home: string): Promise<{ pid: number; heartbeat: string }> {
   const bin = join(cwd, 'bin');
   mkdirSync(bin);
   writeFileSync(join(bin, 'herdr'), `#!/bin/sh
+while [ "$1" = "--session" ]; do
+  shift 2
+done
+if [ "$1" = agent ] && [ "$2" = list ]; then
+  printf '%s\\n' '{"result":{"agents":[]}}'
+  exit 0
+fi
+if [ "$1" = pane ] && [ "$2" = process-info ]; then
+  printf '%s\\n' "{\\"result\\":{\\"process_info\\":{\\"shell_pid\\":$PANE_ROOT_PID}}}"
+  exit 0
+fi
 if [ "$1" = session ] && [ "$2" = list ]; then
   printf '%s\\n' '{"sessions":[]}'
   exit 0
@@ -232,12 +256,40 @@ fi
 exit 1
 `);
   chmodSync(join(bin, 'herdr'), 0o755);
+  const parent = join(cwd, 'parent');
+  mkdirSync(parent);
+  writeFileSync(join(parent, 'pane.c'), `#include <stdio.h>
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+  char pid[32];
+  snprintf(pid, sizeof pid, "%d", (int)getpid());
+  setenv("PANE_ROOT_PID", pid, 1);
+  pid_t child = fork();
+  if (child == 0) {
+    execl("/bin/sh", "sh", "-c", argv[1], (char *)0);
+    _exit(127);
+  }
+  if (child < 0) return 127;
+  int status = 0;
+  if (waitpid(child, &status, 0) < 0) return 127;
+  return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+`);
+  execFileSync('cc', ['-o', join(parent, 'herdr'), join(parent, 'pane.c')]);
+  const pane = recordedWatchdogPane(cwd);
   return new Promise((resolve, reject) => {
     let stderr = '';
-    const child = spawn('sh', ['-c', command], {
+    const child = spawn(join(parent, 'herdr'), [command], {
       cwd,
       detached: true,
-      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` },
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${bin}:${process.env.PATH ?? ''}`,
+        ...(pane ? { HERDR_PANE_ID: pane } : {}),
+      },
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     child.stderr?.on('data', (chunk: Buffer) => {
