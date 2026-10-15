@@ -405,6 +405,18 @@ type Found =
  * The caller is placed in each entry's session, because a pane id only means something inside
  * the session that lists it.
  */
+/** Whether the live file names this caller for `command`. No approval record is read. */
+export function delegateNamedFor(
+  team: TeamFile,
+  command: DelegateCommand,
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+): boolean {
+  const entries = team.delegates;
+  if (!entries || entries.length === 0) return false;
+  const found = findEntry(entries, io);
+  return found.kind === 'match' && found.entry.commands.includes(command);
+}
+
 function findEntry(entries: readonly Delegate[], io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>): Found {
   let shown: Caller | undefined;
   for (const entry of entries) {

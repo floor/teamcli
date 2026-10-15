@@ -2,8 +2,9 @@
 
 A weakness in TeamCLI — the `team` command of this repository — is reported in private,
 through this repository's security advisories on GitHub: the repository's Security tab,
-"Report a vulnerability". Please do not report one in a public issue, discussion or pull
-request.
+"Report a vulnerability", or this direct link:
+https://github.com/floor/teamcli/security/advisories/new. Please do not report one in a
+public issue, discussion or pull request.
 
 ## What to include
 
@@ -23,6 +24,13 @@ never ignored.
 ## Which versions get fixes
 
 The latest release only.
+
+## What is in scope
+
+Everything this repository ships — the `team` command, its schema and its examples — and
+what a run of it does in a project: the team file and the grants it holds, the caller
+gate that reads them, the message files and drop files it writes, the local sockets it
+binds, and the behaviour its own documentation states.
 
 ## What is not a weakness in TeamCLI
 
