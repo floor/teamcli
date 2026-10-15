@@ -24,6 +24,9 @@ the project's stored budget readings), herdr (the session's state, its agents an
 the seat's CLI's own config under the seat's home when the seat is about to start in the lobby,
 and, like `up`: the doctor's findings and the machine's load, free memory, free disk and free swap.
 
+A machine with no approval record at all is the one case without an approved copy: the live file
+stands in for it, ceilings included.
+
 Writes the team file when the seat has to be put back into it, `.agents/team.state.json` (the seat's
 stage, pane and workspace; a seat stopped at a dialog's `waiting-owner` record, with the process
 identity read at that moment; a temporary seat's entry), `.agents/team.log`, the store's ledger of
@@ -160,7 +163,6 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | ``team add: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
 | ``team add: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team add: <name>: its pane holds a process this record cannot tie to the launch` — the record holds the pane's own shell pid and the CLI's pids, read when the seat was launched; the pane is running neither, and the agent session herdr shows there is not the stored one. Nothing is closed and no second CLI is started in it | 1 |
-| ``team add: the file was never approved on this machine: run `team approve` `` | 1 |
 | ``team add: approved before records were signed: run `team approve` once`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
 | ``team add: the file is not the approved one (<differences>): run `team approve` `` | 1 |
 | ``team add: the approved copy can't be read: run `team approve` `` | 1 |
