@@ -281,12 +281,15 @@ Hidden: no
 
 Usage:
 
-    team feed [--seat <name>] [--limit <n>] [--follow] [--json]
+    team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--audit` | yes | no | no |
+| `--briefs` | yes | no | no |
 | `--follow` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
@@ -752,7 +755,7 @@ Hidden: no
 
 Usage:
 
-    team up [--dry-run] [--session <name>] [--file <path>]
+    team up [--dry-run] [--serial] [--session <name>] [--file <path>]
 
 ### Flags
 
@@ -761,6 +764,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--serial` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

@@ -29,6 +29,16 @@ export function launchBinary(launch: string): string | null {
   );
 }
 
+/** Whether the launch line starts something other than the CLI's own binary, or the file
+ *  says the launcher chooses the model. A restored process is then the CLI without that program. */
+export function usesLauncher(seat: Pick<Seat, 'cli' | 'launch' | 'modelFrom'>): boolean {
+  if (seat.modelFrom === 'launcher') return true;
+  const binary = profileFor(seat.cli)?.binary;
+  const first = launchBinary(seat.launch);
+  if (!binary || first === null) return false;
+  return first !== binary;
+}
+
 /** The folder a seat's launch line runs in, as the file writes it: the lobby for a seat that
  *  works in worktrees and names no folder of its own, the seat's own folder otherwise. */
 export function startFolder(team: TeamFile, seat: Seat): string {

@@ -203,9 +203,8 @@ describe('up --dry-run', () => {
         '  wait until claude-docs shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of claude-docs> claude-docs',
         "+ herdr --session acme-web pane report-metadata <pane of claude-docs> --source team --display-agent 'Claude Opus 5.5 default'",
-        '+ herdr --session acme-web workspace create --cwd /work/acme-web --label watchdog --no-focus',
-        "+ herdr --session acme-web pane run <pane of watchdog> 'team watch --session acme-web'",
-        '    (a desktop notification follows when the watch exits)',
+        "+ 'team watch --session acme-web'",
+        '    (detached; the state records its pid)',
         'dry run: nothing was run',
         '',
       ].join('\n'),
@@ -214,10 +213,8 @@ describe('up --dry-run', () => {
 
   test('a running session is not started again', () => {
     const plan = upPlan({ root: '/work/a', session: 'a', sessionRunning: true, seats: [] });
-    expect(plan.map((step) => step.kind)).toEqual(['run', 'run']);
-    expect(plan[0]).toMatchObject({
-      argv: ['herdr', '--session', 'a', 'workspace', 'create', '--cwd', '/work/a', '--label', 'watchdog', '--no-focus'],
-    });
+    expect(plan.map((step) => step.kind)).toEqual(['run']);
+    expect(plan[0]).toMatchObject({ argv: ['team watch --session a'] });
   });
 
   test('never holds a command that answers, closes or deletes', () => {
