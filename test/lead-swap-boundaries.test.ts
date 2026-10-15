@@ -277,8 +277,13 @@ describe('the swap across its two halves', () => {
     const made = stopWorld();
     made.agents.push({ name: 'lead', agent: 'claude', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: null });
     const io = testIo(dir, pilot);
-    // The real gate, with only the approval-store home it cannot know on its own.
-    const sources = { ...made.sources, delegateGate: (input: Parameters<typeof delegateGate>[0]) => delegateGate({ ...input, home }) };
+    // The real gate, with only what it cannot know on its own: the approval-store home, and
+    // the herdr answers a machine without herdr cannot give (an empty session, still running).
+    const sources = {
+      ...made.sources,
+      delegateGate: (input: Parameters<typeof delegateGate>[0]) =>
+        delegateGate({ ...input, home, sources: { agents: () => [], sessionRunning: () => true } }),
+    };
     expect(await runRemove(['lead', '--keep'], io, sources)).toBe(1);
     expect(io.err).toBe(
       'team remove: the approved delegate main/w1:p1 may not swap a lead seat (`swap`); its approved commands are up, remove\n',
