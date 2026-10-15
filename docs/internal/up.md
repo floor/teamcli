@@ -564,13 +564,14 @@ A team file that is not `.agents/team.yaml` in the folder the watch starts in is
 `up` records the resolved path for the watchdog pane and starts `watch` with no `--file`. That
 pane reads the recorded file. Any other non-owner is refused.
 
-## The examples the page keeps
+## The examples, moved off the page
 
 The fixture and the examples below are the page's own, moved here whole. They run in the order they
 stand in, and the `fixture` line is theirs: the two seats are up, the third is stopped in the file,
-and this session has never had a watchdog pane. The first example is also on [the `team up`
-page](../commands/up.md); the rest stand only here and are not executed by any test —
-`test/docs.test.ts` reads `docs/commands/` alone.
+and this session has never had a watchdog pane. The first example was also on [the `team up`
+page](../commands/up.md) until its one-glance cut; none of them is on the page now — it keeps one
+five-line refusal scene of its own — and none is executed by any test: `test/docs.test.ts` reads
+`docs/commands/` alone.
 
 ```yaml file=.agents/team.yaml
 format: 1
