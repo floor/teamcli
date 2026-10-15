@@ -28,7 +28,7 @@ Node 22 or later runs the built command.
 
 ```sh
 npm install -g team       # or run it without installing: npx team
-team --version            # 0.4.7
+team --version            # 0.4.8
 ```
 
 ## The file is private to each clone
@@ -278,7 +278,9 @@ check, and this build acts on what the commands below read.
 
 Each command has its own page in [docs/commands](https://github.com/floor/teamcli/tree/main/docs/commands): the synopsis, what it reads and
 writes, who may run it, every flag, the refusals with their exact text, the exit codes, and examples
-that `bun run ci` runs against a fixture team.
+that `bun run ci` runs against a fixture team. [herdr as a team uses
+it](https://github.com/floor/teamcli/blob/main/docs/reference/herdr.md) — the session, the
+workspaces and panes a team lives in, and the two names a seat shows — is the reference beside them.
 
 The owner is a terminal outside herdr with no agent process above it. `approve` and `up` read the
 processes above the call and refuse a seat — or a script a seat runs — that makes it: a guard
@@ -367,7 +369,7 @@ cd team
 bun install
 bun run build
 npm install -g .          # puts `team` on the PATH
-team --version            # 0.4.7
+team --version            # 0.4.8
 ```
 
 Bun builds and tests the sources:
