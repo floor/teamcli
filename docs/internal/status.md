@@ -147,6 +147,10 @@ here.
 | `<seat> is in the file and is not running` | `team add <seat>` when something else runs, `the owner runs team up` when nothing does |
 | `<seat>: its pane runs no CLI (the CLI ended or the session was restored)` | `the owner runs team up` (it closes the pane without input and launches the seat fresh) |
 | `<seat>: the process in its pane is not the one team launched; nothing checks its model, account or rules` | `the owner runs team up` (it closes the pane without input and launches the seat fresh) |
+| `<seat>: its pane holds a process this record cannot tie to the launch` | `look at the pane`. The row is `restored, not launched by team` and its model is `-`. A screen that names a model adds a note; it is not shown as the model running |
+| `<seat> runs <model> <version>; the file says <declared>; the process in its pane is not the one team launched` | `team remove <seat> --keep, then team add <seat>`. A lead is not removed: `team down, then team up` (to restart the whole team). The row stays `-`. `status` does not start the seat |
+| `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched` | the same restart. Said when the launch line starts a program other than the CLI's own binary, or the file says the launcher chooses the model, and the process is not the one `team` launched — including when the stored agent session is still the live one, in which case the row stays the running seat |
+| `<seat> runs <model> <version>; the file says <declared>; its launch line starts a launcher; the process in its pane is not the one team launched` | the same restart, when the screen's model is not the file's and the launch line names a launcher |
 | `<seat>: the agent in <pane> is named "x"` | `herdr --session <s> agent rename <pane> <seat>` |
 | `<seat> runs <model> <version>; the file says <declared>` (`<declared>` is the seat's `display` spelling) | restart it (`team remove <seat> --keep`, then `team add <seat>`), or correct the file and `team approve`. A lead (the orchestrator or the operator) is not removed: `team down`, then `team up` (to restart the whole team), or correct the file and `team approve` |
 | `<seat> is marked stopped in the file and is running` | `team remove <seat> --keep`, or take `stopped: true` off the seat |
@@ -156,6 +160,7 @@ here.
 | `<seat>: its rules were not delivered` | `team remove <seat> --keep`, then `team add <seat>` |
 | `<seat>: its rules file is missing` / `… is a symbolic link` / `… is not a regular file` / `… has mode 0644, not 0600` / `… is not owned by this user` / `… cannot be read` / `… differs from the approved rules` | `the owner runs team up` — the seat's rules travel in a file in the project state folder, and it no longer holds the approved rules text; `status` never rewrites it |
 | `<seat> holds text in its input box that was never sent` | `the owner clears or sends it in the pane; team does not type into a box it can't verify` |
+| `<seat> waits at a permission prompt: its owner's to answer` | `the owner answers it in the pane` |
 | `<seat>: its launch stopped at "named", and it holds text in its input box that was never sent` | `the owner clears or sends it in the pane, then runs team up (it resumes the launch)` |
 | `<name>: a temporary seat is recorded and is not running` | `team remove <name>` |
 | `no watch has run for this session` | `team watch --session <s>` |
