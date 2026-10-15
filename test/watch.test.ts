@@ -341,7 +341,7 @@ describe('a pass of the watch', () => {
     const screen = readFileSync(new URL('./fixtures/codex/0.157.0/working.txt', import.meta.url), 'utf8');
     const drift = live({ 'codex-acme': { status: 'working', screen } });
     const texts = pass({ team: team(), watch: team().watch, state: emptySession(), live: drift, machine: fine, now: 0, memory: newMemory() }).reports.map((report) => report.text);
-    expect(texts).toEqual(['codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol: it signs with the wrong model']);
+    expect(texts).toEqual(['codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol: it signs with the wrong model — team remove codex-acme --keep, then team add codex-acme']);
   });
 
   test('a stopped seat that runs is watched like a parked one: its permission prompt is reported', () => {
@@ -474,7 +474,7 @@ describe('a pass of the watch', () => {
     now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: 'watchdog' });
     const texts = pass({ team: team(), watch: team().watch, state: emptySession(), live: now, machine: fine, now: 0, memory: newMemory() }).reports.map((report) => report.text);
     expect(texts).toEqual([
-      'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model',
+      'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)',
       'deepseek-acme-2 is in the file and is not running',
       'stranger (w8:p1) is running and is not in the file',
     ]);
@@ -591,16 +591,17 @@ describe('a pass of the watch', () => {
     const at = (processes: Record<string, { shell: number; foreground: number[] }>) =>
       pass({ team: team(), watch: team().watch, state, live: live(), machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
     const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
-    // Another CLI under the recorded shell: replaced.
-    expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored]);
+    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team remove deepseek-acme --keep, then team add deepseek-acme';
+    // Another CLI under the recorded shell: replaced. The launch line names a launcher, so both lines.
+    expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored, launcher]);
     // The same reading again: the condition still holds, and it stands reported once.
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([]);
-    // The pane back at its own shell: the same condition, no second report.
+    // The pane back at its own shell: the same condition, no second report. A shell is not the launcher line.
     expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([]);
     // The recorded process in front again: the condition cleared.
     expect(at({ 'w3:p1': { shell: 400, foreground: [401] } })).toEqual([]);
     // Held by another process anew — a new change, reported anew.
-    expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([restored]);
+    expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([restored, launcher]);
   });
 
   test('a matching agent session is not reported as restored', () => {
@@ -613,7 +614,10 @@ describe('a pass of the watch', () => {
     const at = (processes: Record<string, { shell: number; foreground: number[] }>) =>
       pass({ team: team(), watch: team().watch, state, live: seen, machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
     const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
-    expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([]);
+    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team remove deepseek-acme --keep, then team add deepseek-acme';
+    // The stored session is on the pane: the generic line stays quiet, and the launcher is still said.
+    expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([launcher]);
+    // A pane back at its shell is the generic line only.
     expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([restored]);
   });
 
@@ -624,11 +628,13 @@ describe('a pass of the watch', () => {
     const at = (processes: Record<string, { shell: number; foreground: number[] } | null>) =>
       pass({ team: team(), watch: team().watch, state, live: live(), machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
     const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
+    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team remove deepseek-acme --keep, then team add deepseek-acme';
     // same, replaced, replaced, same, gone, unknown, gone: reported at the 2nd and 5th readings
     // only. `unknown` is herdr failing to read, not the condition clearing: were it to clear the
     // mark, the `gone` after it would report a second time what the `gone` before it reported.
+    // The launcher line rides the replaced readings and stays quiet once the pane is a shell.
     expect(at({ 'w3:p1': { shell: 400, foreground: [400, 401] } })).toEqual([]);
-    expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored]);
+    expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored, launcher]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [400, 401] } })).toEqual([]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([restored]);
