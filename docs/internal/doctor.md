@@ -70,7 +70,8 @@ repeats the project or the session (the session already carries it; the warning 
 file), the approval — `ok  ` with the signing's number, its date and the signing key's
 fingerprint (`ok    the file is the one the owner approved (approval #1, 2026-10-04, key fe21ef6293de)`) when the record
 verifies, `MISS` with the one-line repair when it does not: never approved on this machine,
-written before records were signed, or refused with the case — the override file when it is not the approved copy or cannot be parsed (a
+written before records were signed, or refused with the case — a `--  ` note when another folder
+for this root still holds an approval, naming that folder and leaving it in place — the override file when it is not the approved copy or cannot be parsed (a
 missing line either way: `up` and `add` refuse, and the approved copy stays in force — or the
 shipped profiles, when nothing was approved), each account whose `check`
 command is unapproved, or no longer matches the file hashed at approval (a warning either way: that

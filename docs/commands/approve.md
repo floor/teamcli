@@ -24,6 +24,12 @@ every seat the team has had here — both in the store, `~/.config/team/<project
 line in `.agents/team.log`. The record is signed, and signing moves this project's counter in
 `~/.config/team-key`, a folder of its own beside the store. `--show` writes nothing.
 
+The store read is the current project's folder. Renaming `project:` leaves the earlier folder where
+it is. When that folder still holds an approval and the current project's folder does too, the run
+reads the current one and prints `Note: another approval store matches this project root and was
+left in place: <folder>`. Nothing deletes the earlier folder. Until the renamed project is approved
+again, the one approval this root has is the store.
+
 ## Who may run it
 
 The owner, from a terminal outside herdr, approves anything. A run with no terminal is refused before the token is read: `team approve: only the owner runs this, from a terminal outside herdr`. The approved delegate may approve

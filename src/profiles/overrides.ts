@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { QuotaPattern } from './quota.ts';
 import { profileFor, quotaFor, quotaList } from './profile.ts';
-import { approvalStanding, storePath, type Standing } from '../store/store.ts';
+import { approvalStanding, findStore, storePath, type Standing } from '../store/store.ts';
 import { addedRules } from '../watch/screen-file.ts';
 import type { ScreenData, Stage } from '../watch/screen-data.ts';
 import { classifyData, screenData, type Screen } from '../watch/screen.ts';
@@ -30,9 +30,11 @@ export type OverrideParse =
   | { ok: true; profiles: ProfileOverride[] }
   | { ok: false; errors: OverrideProblem[] };
 
-/** `<store>/overrides.yaml`, the same folder as the approval for this root. */
+/** `<store>/overrides.yaml`, the same folder as the approval for this root. The folder is the
+ *  one `findStore` reads, so a rename that has not been approved again still finds the file.
+ *  The next approval is written under the current project's own folder. */
 export function overridesPath(project: string, root: string, home: string): string {
-  return join(storePath(project, root, home), 'overrides.yaml');
+  return join(findStore(root, home) ?? storePath(project, root, home), 'overrides.yaml');
 }
 
 /** The file's added patterns, or the line that refuses it. One error, the first. */
