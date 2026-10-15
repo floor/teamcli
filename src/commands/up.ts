@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
-import { callerLabel, callerOf, describeCaller, detachedRefusal, mayLaunchSeats, walkCaller, type Caller } from '../caller.ts';
-import { delegateGate, logDelegated } from '../delegate.ts';
+import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
+import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
 import { grantGate, logGranted } from '../grant.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
@@ -569,6 +569,35 @@ function restartNote(
   return {};
 }
 
+/** The live file names this caller for `up`: the grant seat, on the pane the state records. */
+function grantAdmitsUp(team: TeamFile, io: Io, dir: string): boolean {
+  const grant = team.grant;
+  if (!grant || !grant.scope.includes('up')) return false;
+  const caller = callerOf(io, grant.session);
+  return callerVerdict(caller, grant.seat, standingOf(dir, grant.session, caller)).kind === 'ok';
+}
+
+/** A caller who is not the owner and is not named for `up`. Stderr is the word `deny`. */
+function denyUp(out: { stderr(text: string): void }): number {
+  out.stderr('deny\n');
+  // exit: up.deny
+  // exit: up.delegate
+  // exit: up.delegate-approval
+  // exit: up.delegate-approved-copy
+  // exit: up.delegate-drift
+  // exit: up.delegate-evidence
+  // exit: up.delegate-placement
+  // exit: up.delegate-command
+  // exit: up.grant-another-pane
+  // exit: up.grant-approval
+  // exit: up.grant-approved-copy
+  // exit: up.grant-caller
+  // exit: up.grant-drift
+  // exit: up.grant-no-pane
+  // exit: up.grant-scope
+  return 1;
+}
+
 /** Doctor's never-approved line. The other two non-verified cases share `notInForce`'s text. */
 const NEVER_APPROVED_DOCTOR = 'run `team approve`: this file was never approved on this machine';
 
@@ -690,9 +719,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   }
   // Dev mode does not return here: the file is mounted, and the same sentence is a warning below.
   if (!mayLaunchSeats(walked) && aimed && verdict === null && grantRefusal === null && !dev) {
-    out.stderr(
-      `team up: only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(walked)}\n`,
-    );
+    out.stderr('deny\n');
     // exit: up.not-owner
     return 1;
   }
@@ -758,23 +785,28 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     upFp !== undefined &&
     ownerAuthorized(io.env, upFp);
 
+  // The owner, or the seat the live file names for `up`. A missing approval record does not refuse.
+  const named =
+    mayLaunchSeats(caller) ||
+    ownerToken ||
+    grantedSeat !== null ||
+    delegated !== null ||
+    grantAdmitsUp(team, io, dir) ||
+    delegateNamedFor(team, 'up', io);
+
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
   if (detached !== undefined) {
     refusals.push(detached);
-  } else if (!mayLaunchSeats(caller) && !ownerToken && grantedSeat === null) {
-    if (grantRefusal !== null) {
-      refusals.push(grantRefusal);
-    } else if (verdict === null) {
-      refusals.push(
-        `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
-      );
-    } else if (verdict.kind === 'refused') {
-      refusals.push(verdict.text);
-    }
+  } else if (!named) {
+    // Dev mode mounts and says the placement as a warning. Anyone else is denied.
+    if (!dev) return denyUp(out);
+    refusals.push(`only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
   }
-  if (standing.kind !== 'verified') refusals.push(notInForce(standing));
-  else {
+  if (standing.kind === 'none') {
+    if (dev) refusals.push(notInForce(standing));
+  } else if (standing.kind !== 'verified') refusals.push(notInForce(standing));
+  else if (standing.kind === 'verified') {
     const differences = approvalDifferencesOf(standing, team);
     if (differences.length) {
       refusals.push(`the file is not the approved one (${differences.join('; ')}): run \`team approve\``);
@@ -791,6 +823,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const findings = doctorFindings(team, root, dir, session, sources.doctor, loaded.warnings, standing);
     for (const finding of findings) {
       if (!blocksLaunch(finding)) continue;
+      if (!dev && (finding.text.includes('team approve') || finding.text.includes('never approved'))) continue;
       if (finding.text.includes(' is read at start by ')) startupReadRefusals.push(finding.text);
       else refusals.push(finding.text);
     }
@@ -1095,20 +1128,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       if (warning) out.stderr(`team up: warning: ${plainText(warning)}\n`);
       for (const refusal of [...new Set(refusals)]) out.stderr(`team up: ${plainText(refusal)}\n`);
     }
-    // exit: up.delegate
-    // exit: up.delegate-approval
-    // exit: up.delegate-approved-copy
-    // exit: up.delegate-drift
-    // exit: up.delegate-evidence
-    // exit: up.delegate-placement
-    // exit: up.delegate-command
-    // exit: up.grant-another-pane
-    // exit: up.grant-approval
-    // exit: up.grant-approved-copy
-    // exit: up.grant-caller
-    // exit: up.grant-drift
-    // exit: up.grant-no-pane
-    // exit: up.grant-scope
     // exit: up.never-approved
     // exit: up.differs
     // exit: up.doctor

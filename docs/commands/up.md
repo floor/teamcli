@@ -45,7 +45,7 @@ into — and its sidebar is rewritten from the file either way.
 
 ```console caller=agent
 $ team up --file other.yaml ; echo "exit $?"
-team up: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it is run by an agent (claude) outside herdr)
+deny
 exit 1
 ```
 

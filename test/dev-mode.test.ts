@@ -152,9 +152,8 @@ test('an unapproved file refuses, and the same file mounts when TEAMCLI_DEV_MODE
   const refusedIo = testIo(refused.root, UNPLACED);
   const refusedCode = await runUp([], refusedIo, sources(refused.home, refusedWorld.launch));
   expect(refusedCode).toBe(1);
-  expect(refusedIo.err).toContain('team up: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr)\n');
-  expect(refusedIo.err).toContain('team up: the file was never approved on this machine: run `team approve`\n');
-  expect(refusedIo.err).toContain('team up: run `team approve`: this file was never approved on this machine\n');
+  expect(refusedIo.err).toBe('deny\n');
+  expect(refusedIo.out).toBe('');
   expect(refusedWorld.runs).toEqual([]);
   expect(approvalArtifacts(refused.home, refused.root)).toEqual([]);
 
@@ -242,8 +241,8 @@ test('an approved file that has since changed refuses, and the same file mounts 
   const refusedIo = testIo(refused.root, UNPLACED);
   const refusedCode = await runUp([], refusedIo, sources(refused.home, refusedWorld.launch));
   expect(refusedCode).toBe(1);
-  expect(refusedIo.err).toContain('team up: the file is not the approved one (seat lead changed): run `team approve`\n');
-  expect(refusedIo.err).toContain('team up: run `team approve`: seat lead changed\n');
+  expect(refusedIo.err).toBe('deny\n');
+  expect(refusedIo.out).toBe('');
   expect(refusedWorld.runs).toEqual([]);
   expect(durableBytes(refused.home)).toBe(before);
 

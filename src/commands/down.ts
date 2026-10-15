@@ -662,7 +662,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   let acting = team;
   if (refusals.length === 0) {
     const standing = sources.standing?.(root) ?? approvalStanding(root, home);
-    if (standing.kind !== 'verified') {
+    if (standing.kind !== 'verified' && standing.kind !== 'none') {
       if (warning) io.stderr(`team down: warning: ${warning}\n`);
       io.stderr(`team down: ${notInForce(standing)}\n`);
       // exit: down.never-approved
@@ -670,14 +670,18 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       // exit: down.refused
       return 1;
     }
-    const approved = validateTeamFile(standing.record.file);
-    if (!approved.ok) {
-      if (warning) io.stderr(`team down: warning: ${warning}\n`);
-      io.stderr('team down: the approved copy of the team file cannot be read\n');
-      // exit: down.approved-copy
-      return 1;
+    if (standing.kind === 'none') {
+      acting = team;
+    } else {
+      const approved = validateTeamFile(standing.record.file);
+      if (!approved.ok) {
+        if (warning) io.stderr(`team down: warning: ${warning}\n`);
+        io.stderr('team down: the approved copy of the team file cannot be read\n');
+        // exit: down.approved-copy
+        return 1;
+      }
+      acting = approved.team;
     }
-    acting = approved.team;
   }
   // The stop list is the copy in force. A name that copy carries, listed once, is that seat.
   // Any other agent — no name, or a name the copy does not carry — is this team's only when

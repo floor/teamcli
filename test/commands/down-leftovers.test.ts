@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { runDown, type DownLaunch, type DownSources } from '../../src/commands/down.ts';
 import type { HerdrAgent, PaneProcesses } from '../../src/herdr.ts';
 import type { LaunchedIdentity } from '../../src/launch/identity.ts';
