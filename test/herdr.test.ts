@@ -244,12 +244,17 @@ describe('sessionCleared', () => {
 describe('captured Claude Code 2.1.289 stand-in helper', () => {
   test('CLAUDE_IDLE and claudeBox classify and read back as captured composer frames', async () => {
     const { CLAUDE_IDLE, claudeBox } = await import('./helpers.ts');
-    const { readScreen } = await import('../src/watch/screen.ts');
+    const { readBox, readScreen } = await import('../src/watch/screen.ts');
     const { boxHoldsText } = await import('../src/launch/deliver.ts');
     expect(readScreen('claude-code', CLAUDE_IDLE)).toEqual({ kind: 'idle' });
     expect(readScreen('claude-code', claudeBox(''))).toEqual({ kind: 'idle' });
     expect(readScreen('claude-code', claudeBox('/exit'))).toEqual({ kind: 'unsent' });
     expect(boxHoldsText('claude-code', '/exit', claudeBox('/exit'))).toBe(true);
-    expect(boxHoldsText('claude-code', 'line one\nline two', claudeBox('line one\nline two'))).toBe(true);
+    expect(readBox('claude-code', claudeBox('line one\nline two'))).toEqual({
+      first: 'line one',
+      indent: 2,
+      rows: ['  line two'],
+    });
+    expect(boxHoldsText('claude-code', 'line one line two', claudeBox('line one\nline two'))).toBe(true);
   });
 });
