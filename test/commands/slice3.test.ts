@@ -698,7 +698,7 @@ describe('team up', () => {
     expect(run.out).toContain('AGENT_UNATTENDED=1 codex -m gpt-6-sol -c model_reasoning_effort=high -a never -s danger-full-access');
     expect(run.out).toContain('pane send-text <pane of codex-acme>');
     expect(run.out).toContain('  skip grok-acme: stopped in the file; start it with `team add grok-acme`\n');
-    expect(run.out).toContain('pane run <pane of watchdog>');
+    expect(run.out).toContain('detached; the state records its pid');
     expect(run.out).toContain('watch --session acme-web');
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });

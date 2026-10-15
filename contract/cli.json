@@ -470,6 +470,24 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--audit",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--briefs",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--follow",
           "repeatable": false,
           "takesValue": false
@@ -510,7 +528,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team feed [--seat <name>] [--limit <n>] [--follow] [--json]"
+        "team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]"
       ]
     },
     {
@@ -1180,6 +1198,35 @@
       "subcommands": [],
       "usage": [
         "team status [--session <name>] [--file <path>] [--all] [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "tempo",
+      "positionals": [
+        {
+          "name": "word",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team tempo <word>"
       ]
     },
     {
