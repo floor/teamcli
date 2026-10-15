@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { launchedTeamFile } from '../file/launched-file.ts';
 import { TEAM_FILE, findRoot, loadTeamFile } from '../file/load.ts';
 import type { LoadResult } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
@@ -146,11 +145,10 @@ export const USAGE = 'Usage: team init [--restore]\n';
 /**
  * Evaluates the grant when a non-owner runs `team init`. Because `init` runs to create or
  * `--restore` `.agents/team.yaml`, the file on disk in `root` is ordinarily absent. The gate
- * checks in order:
+ * checks this root only (never another project):
  * 1. `<root>/.agents/team.yaml` on disk, when it exists and declares `grant:`
- * 2. `<root>`'s approved copy in the store, when it exists and declares `grant:`
- * 3. the team file this caller's pane was launched from (`launchedTeamFile`), when it declares `grant:`
- * Returns `null` when no grant is in play, leaving today's `init.not-owner` refusal unchanged.
+ * 2. `<root>`'s approved copy in the store, when `.agents/team.yaml` is absent and the copy declares `grant:`
+ * Returns `null` when no grant is in play for this root, leaving today's `init.not-owner` refusal unchanged.
  */
 function grantForInit(
   root: string | null,
@@ -159,51 +157,38 @@ function grantForInit(
   readStanding?: (root: string) => Standing,
   gate: typeof grantGate = grantGate,
 ): GrantVerdict | null {
+  if (root === null) return null;
   const standingSource = readStanding ? { standing: readStanding } : {};
-  if (root !== null) {
-    const filePath = join(root, TEAM_FILE);
-    if (existsSync(filePath)) {
-      const loaded = loadTeamFile(root, home === undefined ? {} : { home });
-      if (loaded.ok && loaded.team.grant !== null) {
-        return gate({
-          act: 'init',
-          io: { ...io, cwd: root },
-          home,
-          sources: { load: () => loaded, ...standingSource },
-        });
-      }
-    } else {
-      const copy = home === undefined ? approvedCopy(root) : approvedCopy(root, home);
-      const validated = copy === null ? null : validateTeamFile(copy, { home, root });
-      if (validated && validated.ok && validated.team.grant !== null) {
-        const synthesized: LoadResult = {
-          ok: true,
-          path: filePath,
-          root,
-          text: copy!,
-          team: validated.team,
-          warnings: validated.warnings,
-        };
-        return gate({
-          act: 'init',
-          io: { ...io, cwd: root },
-          home,
-          sources: { load: () => synthesized, ...standingSource },
-        });
-      }
-    }
-  }
-  const launched = launchedTeamFile(io, home);
-  if (launched !== undefined) {
-    const loaded = loadTeamFile(io.cwd, { file: launched, ...(home === undefined ? {} : { home }) });
+  const filePath = join(root, TEAM_FILE);
+  if (existsSync(filePath)) {
+    const loaded = loadTeamFile(root, home === undefined ? {} : { home });
     if (loaded.ok && loaded.team.grant !== null) {
       return gate({
         act: 'init',
-        io: { ...io, cwd: loaded.root },
+        io: { ...io, cwd: root },
         home,
         sources: { load: () => loaded, ...standingSource },
       });
     }
+    return null;
+  }
+  const copy = home === undefined ? approvedCopy(root) : approvedCopy(root, home);
+  const validated = copy === null ? null : validateTeamFile(copy, { home, root });
+  if (validated && validated.ok && validated.team.grant !== null) {
+    const synthesized: LoadResult = {
+      ok: true,
+      path: filePath,
+      root,
+      text: copy!,
+      team: validated.team,
+      warnings: validated.warnings,
+    };
+    return gate({
+      act: 'init',
+      io: { ...io, cwd: root },
+      home,
+      sources: { load: () => synthesized, ...standingSource },
+    });
   }
   return null;
 }

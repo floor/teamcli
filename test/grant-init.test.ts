@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { approvalOf } from '../src/approve/approval.ts';
 import { anotherPaneRefusal, noPaneRefusal, type Caller } from '../src/caller.ts';
 import { runInit } from '../src/commands/init.ts';
-import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { grantGate } from '../src/grant.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -121,31 +120,30 @@ describe('grant-gated team init', () => {
     expect(approvalStanding(project, home).kind).toBe('verified');
   });
 
-  test('the granted seat writes a skeleton in a fresh repo from its launched team file and never signs the first approval', async () => {
+  test('the granted seat writes a skeleton when the team file was removed and never signs the skeleton', async () => {
     const text = teamFile(project, ['init']);
     const file = approveRepo(project, text);
     recordSeat(project, 'lead-pane', file);
-    noteLaunchedPane(home, file, 'lead-pane', 'acme');
+    rmSync(file);
 
-    const fresh = join(base, 'fresh');
-    makeRepo(fresh);
+    const before = approvalStanding(project, home);
+    expect(before.kind).toBe('verified');
 
-    const io = testIo(fresh, leadSeat);
+    const io = testIo(project, leadSeat);
     const code = await runInit([], io, home, undefined, noLogin);
     expect(code).toBe(0);
     expect(io.err).toBe('');
     expect(io.out).toContain('Wrote .agents/team.yaml: a skeleton with one seat.');
     expect(io.out).toContain('team approve');
 
-    const freshFile = join(fresh, '.agents', 'team.yaml');
-    expect(existsSync(freshFile)).toBe(true);
-    const loaded = loadTeamFile(fresh, { file: freshFile, home });
+    expect(existsSync(file)).toBe(true);
+    const loaded = loadTeamFile(project, { file, home });
     expect(loaded.ok).toBe(true);
 
-    // Grant-gated init never writes or signs an approval record for the initialized repository.
-    expect(approvalStanding(fresh, home)).toEqual({ kind: 'none' });
+    // Grant-gated init never re-signs or overwrites the approval record.
+    expect(approvalStanding(project, home)).toEqual(before);
 
-    const log = readFileSync(join(fresh, '.agents', 'team.log'), 'utf8');
+    const log = readFileSync(join(project, '.agents', 'team.log'), 'utf8');
     expect(log).toMatch(/ grant \[grant\] lead init\n/);
     expect(log).toMatch(/ init \[lead\] wrote a skeleton as \.agents\/team\.yaml/);
   });

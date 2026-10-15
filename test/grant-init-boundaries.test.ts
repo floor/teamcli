@@ -3,8 +3,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-// The second scene is `test.failing`: it pins the guarantee the brief states — a grant of
-// another project never authorizes init in this root — as the behavior to reach.
 import { approvalOf } from '../src/approve/approval.ts';
 import { type Caller } from '../src/caller.ts';
 import { runInit } from '../src/commands/init.ts';
@@ -118,7 +116,7 @@ describe('grant-init boundaries', () => {
     expect(existsSync(join(project, '.agents', 'team.log'))).toBe(false);
   });
 
-  test.failing('a grant of another project never authorizes init in this root', async () => {
+  test('a grant of another project never authorizes init in this root', async () => {
     // This root: a team approved here, but its file and approved copy carry no grant.
     approveRepo(project, teamFile(project, 'acme', 'acme', null));
     rmSync(join(project, '.agents', 'team.yaml'));

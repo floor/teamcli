@@ -43,9 +43,8 @@ That line names the schema of the release that wrote the file — the tag `v` pl
 
 ## Who may run it
 
-The owner, from a terminal outside herdr, or the orchestrator's seat on its recorded pane when the
-approved `grant` lists `init` (either on this repository's approved copy or on the team file that
-seat's pane was launched from). A granted run writes `grant [grant] <seat> init` to
+The owner, from a terminal outside herdr, or the orchestrator's seat on its recorded pane when this
+repository's approved `grant` lists `init`. A granted run writes `grant [grant] <seat> init` to
 `.agents/team.log` beside the `init` log line and never signs an approval: the first approval of any
 repository stays the owner's. Any other seat or agent-run CLI is refused with the caller named. A
 run with no terminal is refused with one sentence, before the repository is read.
