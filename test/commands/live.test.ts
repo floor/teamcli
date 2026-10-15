@@ -362,6 +362,24 @@ describe('team up, live', () => {
     }
   });
 
+  test('a codex seat whose screen stays on another model is left unnamed', async () => {
+    const path = join(root, '.agents/team.yaml');
+    writeFileSync(path, makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
+    await approve();
+    const capture = readFileSync(join(import.meta.dir, '../fixtures/codex/0.161.0/idle.txt'), 'utf8');
+    const made = world((_pane, label) => (label === 'codex-acme · implementer' ? capture : IDLE));
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(FILE, io, sources({}, made));
+    expect(made.runs.some((run) => run.command.includes('-m gpt-6-sol'))).toBe(true);
+    expect(code).toBe(1);
+    expect(made.renames).not.toContain('codex-acme');
+    expect(io.out).toContain(
+      'codex-acme: left out: runs GPT Terra 5.6; the file says GPT Sol 6; left at launched, not named. '
+        + 'Add -m <id> to its launch, or correct the file\'s model and version and run `team approve`. '
+        + 'This CLI is told its model with -m <model id>.',
+    );
+  });
+
   test.each(['accepted', 'trust', 'swallowed'] as const)('Antigravity first-message rules: %s', async (outcome) => {
     const path = join(root, '.agents/team.yaml');
     const gemini = [

@@ -247,6 +247,14 @@ describe('the lobby_files a profile may name', () => {
     );
   });
 
+  test('a mismatch names how the CLI is told its model only where a run showed the form', () => {
+    expect(profileFor('codex')?.modelForm).toBe('-m <model id>');
+    expect(profileFor('claude-code')?.modelForm).toBeNull();
+    expect(profileFor('cursor')?.modelForm).toBeNull();
+    expect(profileFor('antigravity')?.modelForm).toBeNull();
+    expect(profileFor('grok')?.modelForm).toBeNull();
+  });
+
   test('the shipped profiles declare only what a capture showed, each path exactly once', () => {
     expect(profileFor('claude-code')?.lobbyFiles).toEqual(['.claude/scheduled_tasks.lock']);
     expect(profileFor('codex')?.lobbyFiles).toEqual([]);

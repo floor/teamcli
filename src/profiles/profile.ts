@@ -55,6 +55,9 @@ export interface Profile {
   startsOnLastModel: boolean;
   /** The model flag, and the id this profile maps to that model and version, when it knows one. */
   modelFlag(model: string, version: string): { option: string; id: string | null };
+  /** How a launch tells this CLI its model, when a run has shown the form. Null when none has:
+   *  a mismatch line then says nothing more. */
+  modelForm: string | null;
   /** Trust-answer records. Empty when this version sends no trust key for the CLI. */
   answers: readonly TrustRecord[];
 }
@@ -269,7 +272,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok'] as const
 // without the first belongs to a CLI whose screen doesn't show its model; the second says the
 // CLI starts on its last-used model when a launch names none, and no shipped profile sets it.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'exit', 'timeouts', 'models'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['status_model', 'last_used_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['status_model', 'last_used_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads', 'model_form'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -505,6 +508,7 @@ function launchOf(root: YamlNode): Shipped {
   const exitClearEntry = optional(entries, 'exit_clear');
   const exitConfirmEntry = optional(entries, 'exit_confirm');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
+  const modelFormEntry = optional(entries, 'model_form');
   const startupReadsEntry = optional(entries, 'startup_reads');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
   const login = loginOf(required(entries, 'login', root.line).value);
@@ -534,6 +538,7 @@ function launchOf(root: YamlNode): Shipped {
         option: models.option[0] ?? '--model',
         id: suggestId(models.ids, model, version),
       }),
+      modelForm: modelFormEntry ? text(modelFormEntry, 'model_form') : null,
       answers: trustAnswers(optional(entries, 'trust_answer')),
     },
     status: statusEntry ? modelRules(statusEntry.value, 'status_model') : [],

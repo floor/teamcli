@@ -1605,8 +1605,10 @@ function modelLeft(running: Running, declared: { model: string; version: string 
   const profile = profileFor(cli);
   const flag = profile?.modelFlag(declared.model, declared.version) ?? { option: '--model', id: null };
   const id = flag.id ?? '<id>';
+  const form = profile?.modelForm;
+  const told = form ? `. This CLI is told its model with ${form}.` : '';
   return (
     `runs ${running.model} ${running.version}; the file says ${declared.model} ${declared.version}; ` +
-    `left at launched, not named. Add ${flag.option} ${id} to its launch, or correct the file's model and version and run \`team approve\``
+    `left at launched, not named. Add ${flag.option} ${id} to its launch, or correct the file's model and version and run \`team approve\`${told}`
   );
 }
