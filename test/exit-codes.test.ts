@@ -270,6 +270,9 @@ function launching(text: string, paneOk: (command: string) => boolean = () => tr
       if (known) known.agent = true;
       return true;
     },
+    spawnWatch(command) {
+      return paneOk(command) ? 4242 : null;
+    },
     renameAgent: () => true,
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
@@ -2093,7 +2096,7 @@ scene('watch.watchdog', async (place) => {
     const session = (state.sessions.acme ??= emptySession());
     session.watchdog = { file: join(place.root, 'custom', 'team.yaml'), pane: 'w2:p1' };
   });
-  return show(await watched(place, ['--session', 'acme'], other), 'watchdog pane');
+  return show(await watched(place, ['--session', 'acme'], other), 'only the watch this session records');
 });
 scene('watch.no-nudge', async (place) => {
   write(place, TEAM);
