@@ -542,6 +542,8 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | ``only the owner or the approved delegate runs `up`; this call is <caller>`` — the delegate gate: the file's `delegates` section names panes, and this caller is none of them |
 | ``--<flag> is the owner's; the approved delegate cannot use it`` — the delegate gate, for `--session` and `--file` on a delegated run, refused before the file or the session the flag names is read |
 | the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the approved copy unreadable, the live file drifted from the approved copy, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |
+| ``--<flag> is the owner's; the granted seat cannot use it`` — the granted seat, for `--session` and `--file`, refused before the file or the session the flag names is read |
+| ``deny`` — a caller `up` does not admit: not the owner, not a pane the file's `delegates` names with `up`, and not the seat the file's `grant` names for it. Stderr is the four characters `deny` and a newline — no `team up:` prefix, no reason — and stdout is empty; a `--dry-run` by that caller is the same reply and prints no plan. The sentences the ordinary refusal and the delegate and grant gates used to print here are not said: their ids all exit through this word |
 | ``the file was never approved on this machine: run `team approve` `` |
 | ``approved before records were signed: run `team approve` once`` — the record was written by an earlier `team` |
 | ``the record <case>: run `team approve` once`` — a signed record that does not verify |
