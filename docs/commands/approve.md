@@ -29,7 +29,10 @@ line in `.agents/team.log`. The record is signed, and signing moves this project
 The owner, from a terminal outside herdr, approves anything. A run with no terminal is refused before the token is read: `team approve: only the owner runs this, from a terminal outside herdr`. The approved delegate may approve
 too: the pane a `delegates` entry names, with `approve` among its commands, placed exactly where
 the approved file puts it — the gate reads the pane, never the name a seat is given, and every
-other caller is refused with `only the owner or the approved delegate approves a team file`.
+other caller is refused: by the `grant` gate's own line when the file carries a `grant`, by the
+delegate list's `only the owner or the approved delegate approves a team file; this call is
+<caller>` when it names delegates and no `grant`, and by the not-owner sentence when it names
+neither (Refusals, below).
 
 A delegate's approval is for ordinary changes: the roster — seats and the launch lines that place
 them — and `rules`. The guard is an allowlist, and it is fail-closed: `rules` is the only owner
@@ -87,7 +90,9 @@ new approval is a change to an owner section
 (`trust`, `limits`, `machine`, `rules`, `identity`, `workspace`, `orchestrator`, `operator`,
 `session`, `visibility`, `tools`, `budgets`, `watch` — its timings included, down to `watch.checks`,
 whose turn-offs are their own line — and `delegates`, its entries, their panes and their command
-lists included) or to a seat's own fields. A seat taken out does not.
+lists included) or to a seat's own fields. A seat taken out does not, where the file declares its
+ceiling; where it declares no `limits`, the default counts the seats, so taking one out moves
+`limits` with it, above.
 Parking or stopping one does, except that `remove --keep` and `add` record the new digest
 themselves, so those commands do not send the owner back to `approve`. Until an edit is
 approved its section changes nothing: the watch, the budget reports, the check cadence, `up`'s and
@@ -190,7 +195,7 @@ Each signing moves the project's counter, and the line after the seat names name
 signing key's short fingerprint: `approval #4 for this project; the last one was on 2026-10-04;
 key fe21ef6293de.` The fingerprint is the first twelve hex digits of the key's public half;
 `team doctor` and `team status` show the same three — the number, its date, the key. An
-amendment — `add` starting a stopped seat, `remove --keep` parking one — is a signing too, and
+amendment — `add` starting a stopped seat, `remove --keep` stopping one — is a signing too, and
 moves the counter like an approval.
 
 Approvals guard against mistakes, not against a hostile process running as the owner. The
@@ -368,7 +373,8 @@ Owner-authorization fingerprint: 8cd9f8b6c145b912717ea320a1efd28e4b9c496dde0c967
 exit 0
 ```
 
-A new seat needs one too — a seat already approved may be taken out without bothering the owner.
+A new seat needs one too — a seat already approved may be taken out without bothering the owner,
+unless the file declares no `limits`: its default ceiling moves with the count (above).
 Parking or stopping one needs an approval, unless `remove --keep` or `add` wrote the mark and
 recorded the digest. A seat the file never had is not approved:
 
