@@ -2,8 +2,9 @@
 // `oldPass` below is src/watch/pass.ts as it stood before the checks were split into modules
 // (the merge of #45), copied in unchanged — except the one field read the lead's rename moved,
 // `team.coordinator` to `team.orchestrator`, the same value under the section's canonical name,
-// and the unrecognised-screen fail-safe's quiet-unknown line, added to both sides below,
-// and the model-drift line's restart, which the check now names —
+// the unrecognised-screen fail-safe's quiet-unknown line, added to both sides below,
+// the model-drift line's restart, which the check now names,
+// and the nudge, which now types into the idle seat rather than the operator —
 // and used by this file alone. Every scenario runs both
 // implementations over the same fixtures, step for step, and demands equal PassResults and equal
 // pending state — for a team file without `watch.checks`, which is every fixture here.
@@ -49,7 +50,7 @@ const OLD_NUDGE_TEXT = 'Team watch: reports are waiting in .agents/team.log';
 
 type OldPassResult = {
   reports: OldReport[];
-  nudge: { pane: string; text: string; pending: string[] } | null;
+  nudge: { pane: string; text: string; pending: string[]; seat: string; cli: string } | null;
   fallback: string | null;
 };
 
@@ -211,14 +212,29 @@ function oldPass(
   let fallback: string | null = null;
   if (memory.pending.length) {
     memory.pendingSince ??= now;
-    const operator = live.agents.find((agent) => agent.name === team.operator);
-    const cli = team.seats.find((seat) => seat.name === team.operator)?.cli ?? '';
-    const free = operator !== undefined && (operator.status === 'idle' || operator.status === 'done')
-      && readScreen(cli, live.screens[operator.pane]).kind === 'idle';
-    if (operator && free) {
-      nudge = { pane: operator.pane, text: OLD_NUDGE_TEXT, pending: memory.pending.slice() };
+    // The nudge target moved off the operator onto the idle seat. This copy follows that
+    // rule; the rest of oldPass is still the pass from the merge of #45.
+    const choices: { pane: string; cli: string; seat: string; since: number }[] = [];
+    for (const seat of team.seats) {
+      if (seat.name === team.operator || seat.name === team.orchestrator || seat.parked || seat.stopped) continue;
+      const named = live.agents.filter((agent) => agent.name === seat.name);
+      if (named.length !== 1) continue;
+      const agent = named[0]!;
+      const screen = readScreen(seat.cli, live.screens[agent.pane]);
+      if (!((agent.status === 'idle' || agent.status === 'done') && screen.kind === 'idle')) continue;
+      choices.push({
+        pane: agent.pane,
+        cli: seat.cli,
+        seat: seat.name,
+        since: memory.lastWorking[seat.name] ?? memory.idleSince[seat.name] ?? now,
+      });
+    }
+    choices.sort((a, b) => a.since - b.since || a.seat.localeCompare(b.seat));
+    const chosen = choices[0];
+    if (chosen) {
+      nudge = { pane: chosen.pane, text: OLD_NUDGE_TEXT, pending: memory.pending.slice(), seat: chosen.seat, cli: chosen.cli };
     } else if (now - memory.pendingSince >= team.watch.nudgeWait * 1000) {
-      fallback = `the operator could not be nudged for ${oldMinutes(now - memory.pendingSince)} minutes; ${memory.pending.length} report(s) wait: ${memory.pending.join('; ')}`;
+      fallback = `no idle seat could be nudged for ${oldMinutes(now - memory.pendingSince)} minutes; ${memory.pending.length} report(s) wait: ${memory.pending.join('; ')}`;
     }
     if (nudge || fallback) {
       memory.pending = [];

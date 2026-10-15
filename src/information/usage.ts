@@ -37,18 +37,9 @@ export type UsageView = {
  * the process table, never the environment (`caller.ts:11-12`, `:73-92`) — and applied by one
  * filter to every row, text or `--json`, so no other line decides a caller's view again.
  *
- * The interim rule, and the one line the full view turns on: only the owner **with a terminal**
- * (`isOwner`'s case alone, `caller.ts:94-96`) reads the full view. The design note's § 2.1 would
- * give `owner-no-tty` the full view too — it is the owner, and `mayLaunchSeats` admits it
- * (`caller.ts:102-104`) — and this is a deliberate, fail-closed deviation while owner placement
- * is forgeable: a confined process that double-forks out of the herdr tree walks to no herdr
- * ancestor, resolves as the owner without a terminal, and the full view there would hand it
- * every team's name and root in one read — the disclosure the restricted default exists to
- * prevent. Until caller placement can tell a real detached owner from a detached process, every
- * caller but the owner-with-a-terminal reads the restricted view; the day placement is
- * trustworthy this comparison flips `owner-no-tty` to full and nothing else changes. The
- * widening field (`usage: owner | seats`, S2b) is not read here or anywhere in S2: a seat's
- * route to the full view is not built yet.
+ * The full view is the owner at a terminal (`kind === 'owner'`). A run with no terminal reads the
+ * restricted view, the same as every other caller who is not that owner. The widening field
+ * (`usage: owner | seats`) is not read here: a seat's route to the full view is not built yet.
  */
 export function viewFor(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>, mine: string | null): UsageView {
   return { full: walkCaller(io).kind === 'owner', mine };

@@ -113,7 +113,7 @@ describe('doctor names a watch whose pane is gone', () => {
     const after = testIo(root, { kind: 'owner' });
     const afterCode = await runUp(FILE, after, upSources(repaired, () => false));
     expect({ code: afterCode, err: after.err, out: after.out }).toMatchObject({ code: 0 });
-    expect(repaired.creates).toContain('watchdog');
+    expect(repaired.creates).not.toContain('watchdog');
     expect(after.err).toContain('watch: started\n');
   });
 });

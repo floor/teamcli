@@ -191,6 +191,11 @@ export type TeamFile = {
       }
     | null;
   /**
+   * How the watch's five waits are scaled: `relaxed` doubles them, `urgent` halves them, and
+   * `normal` leaves them as written. Omitted in the file reads as `normal`. An owner section.
+   */
+  tempo: 'relaxed' | 'normal' | 'urgent';
+  /**
    * The orchestrator seat's grant, or null when the file has no `grant` section. An owner
    * section: changing it needs a new approval. `approve` in `scope` is an ordinary approval;
    * this section itself stays the owner's.

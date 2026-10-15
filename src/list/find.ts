@@ -1,5 +1,6 @@
 import { lstatSync, readFileSync, readdirSync, realpathSync, type Stats } from 'node:fs';
 import { dirname, join } from 'node:path';
+import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { storesFolder } from '../store/store.ts';
 import { parseYaml, type YamlNode } from '../yaml.ts';
@@ -12,6 +13,11 @@ export type FoundTeam = {
   root: string | null;
   seats: number | null;
   unreadable: boolean;
+};
+
+export type FoundTeamWithFile = {
+  found: FoundTeam;
+  team: TeamFile | null;
 };
 
 // The same folder-name rule `machineUsage` walks: a store directory ends in a dash and 12 hex digits.
@@ -69,7 +75,7 @@ function teamFileAt(dir: string): string | null {
   return isRealFile(file) ? file : null;
 }
 
-function interpret(path: string, root: string, session: string, home: string): FoundTeam | null {
+function interpret(path: string, root: string, session: string, home: string): FoundTeamWithFile | null {
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
@@ -81,14 +87,20 @@ function interpret(path: string, root: string, session: string, home: string): F
   const folder = resolved(root);
   const validated = validateTeamFile(text, { home, root: folder });
   if (validated.ok) {
-    return { project: validated.team.project, root: folder, seats: validated.team.seats.length, unreadable: false };
+    return {
+      found: { project: validated.team.project, root: folder, seats: validated.team.seats.length, unreadable: false },
+      team: validated.team,
+    };
   }
-  return { project: names.project, root: folder, seats: null, unreadable: true };
+  return {
+    found: { project: names.project, root: folder, seats: null, unreadable: true },
+    team: null,
+  };
 }
 
 /** Walk up from a workspace folder. The first team file whose session is this one wins; a file
  *  that names another session is stepped past. */
-function fromDir(start: string, session: string, home: string): FoundTeam | null {
+function fromDir(start: string, session: string, home: string): FoundTeamWithFile | null {
   let dir = start;
   for (let depth = 0; depth < 40; depth++) {
     const file = teamFileAt(dir);
@@ -119,7 +131,7 @@ function workspaceCwds(sessionDir: string): string[] {
   }
 }
 
-function fromSessionDir(sessionDir: string | null, session: string, home: string): FoundTeam | null {
+function fromSessionDir(sessionDir: string | null, session: string, home: string): FoundTeamWithFile | null {
   if (!sessionDir) return null;
   for (const cwd of workspaceCwds(sessionDir)) {
     const found = fromDir(cwd, session, home);
@@ -137,7 +149,7 @@ function storeRoot(store: string): string | null {
   }
 }
 
-function fromStores(session: string, home: string): FoundTeam | null {
+function fromStores(session: string, home: string): FoundTeamWithFile | null {
   let names: string[];
   try {
     names = readdirSync(storesFolder(home));
@@ -161,6 +173,10 @@ function fromStores(session: string, home: string): FoundTeam | null {
   return null;
 }
 
+export function findTeamFile(session: string, sessionDir: string | null, home: string): FoundTeamWithFile | null {
+  return fromSessionDir(sessionDir, session, home) ?? fromStores(session, home);
+}
+
 /**
  * The team file that names `session`, or null when none does. The session registry's
  * `identity_cwd` is tried first — captured on herdr 0.7.1 as `workspaces[].identity_cwd` in
@@ -168,5 +184,6 @@ function fromStores(session: string, home: string): FoundTeam | null {
  * for the file is not opened. Nothing here is written.
  */
 export function findTeam(session: string, sessionDir: string | null, home: string): FoundTeam | null {
-  return fromSessionDir(sessionDir, session, home) ?? fromStores(session, home);
+  return findTeamFile(session, sessionDir, home)?.found ?? null;
 }
+

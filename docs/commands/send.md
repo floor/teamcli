@@ -24,13 +24,15 @@ which does not accept messages from other sessions holds the frame until a perso
 through. A reply the replying harness stamped with its attribution wrapper
 (`<cross-session-message …>`) is printed as the body inside it. A listener that cannot be
 opened — a live listener already at that address, or a leftover file that cannot be removed —
-is a refusal: nothing is sent. `--wait` to any other seat is refused and nothing is written:
-this build does not carry that seat's reply.
+is a refusal: nothing is sent. `--wait` to any other seat is refused and nothing is written; a dry
+run of it names the drop channel instead. This build does not carry that seat's reply.
 
 The socket frame is a measured observation of Claude Code 2.1.295, not a stable API: JSON
 lines, one frame per line, a first-line deadline of 30,000 ms, and a buffer limit of 1,048,576
-characters. A frame over that limit is refused, never truncated. Nothing of a message or its
-reply is written down: the log keeps the seat and the sizes.
+characters. A frame over that limit is refused, never truncated. The message's body is written
+down: a run that ends `delivered`, `answered`, `timeout` or `unreachable` appends one line to
+the project's message history, which [team feed](feed.md) reads. A reply's text is not written
+down — it reaches this terminal and no file. The daily log keeps the seat and the sizes.
 
 The outcome is always confirmed — one of `delivered`, `answered`, `timeout`, `unreachable` or
 `refused` — printed and matched by the exit code, or written as one machine-readable document
@@ -69,14 +71,18 @@ so a launch of the same seat cannot act beside it and two sends cannot type into
 once; a `--wait` send holds it until the reply or the timeout, because the outstanding request
 is the thing the lock serializes. The wait listens at this process's own
 `<sockets dir>/<pid>.sock` and removes it when the send ends. It writes one line to
-`.agents/team.log`. The log keeps the seat and the size, never the message.
+`.agents/team.log` — two for a waited send, the socket write and then the reply or the timeout —
+and appends the message's body to the project's message history
+([team feed](feed.md)). The daily log keeps the seat and the size; the history keeps the
+message.
 
 ## Who may run it
 
 The owner, or the orchestrator from its own seat, on the pane the project's state records for
 it — the same check `team answer` makes, judged the same way. Every other caller is refused
-before the seat is looked up. `--list` is the exception: it prints the file's roster and sends
-nothing, so it needs no caller check.
+before the seat is looked up. A run with no terminal is refused before `--list` as well:
+`team send: only the owner runs this, from a terminal outside herdr`. For every other caller,
+`--list` prints the file's roster and sends nothing, so it needs no caller check.
 
 ## Outcomes
 

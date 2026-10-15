@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -5,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
-import { callerLabel, callerOf, describeCaller, mayLaunchSeats, walkCaller } from '../caller.ts';
+import { callerLabel, callerOf, describeCaller, detachedRefusal, mayLaunchSeats, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { grantGate, logGranted } from '../grant.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
@@ -48,6 +49,7 @@ import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
+import { lobbyPretrustLine } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -66,7 +68,7 @@ import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, readState, updateState, type SeatState } from '../state.ts';
+import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -150,7 +152,20 @@ export type Launch = {
   deleteSession?(session: string): boolean | Promise<boolean>;
   sleep(ms: number): Promise<void>;
   now(): Date;
-};
+  /** Starts the watch detached. The pid, or null when it did not start. */
+  spawnWatch?(command: string, cwd: string): number | null;
+}
+
+/** The watch, off in its own process: no pane, no workspace. */
+function detachWatch(command: string, cwd: string): number | null {
+  try {
+    const child = spawn('sh', ['-c', `exec ${command}`], { cwd, detached: true, stdio: 'ignore' });
+    child.unref();
+    return child.pid ?? null;
+  } catch {
+    return null;
+  }
+}
 
 function aim(session: string): string | undefined {
   return session === 'default' ? undefined : session;
@@ -210,6 +225,7 @@ const realLaunch: Launch = {
   deleteSession: sessionDelete,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => new Date(),
+  spawnWatch: detachWatch,
 };
 
 export const realSources: UpSources = {
@@ -575,7 +591,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // is the resolved spelling: a link, or a differently-cased spelling of this folder's own team
   // file, is not that file, and is refused here before it is opened.
   const walked = walkCaller(io);
-  const defaultLoad = mayLaunchSeats(walked) ? null : loadTeamFile(io.cwd, { home: sources.home });
+  // A run with no terminal is not the owner, and it is not asked of the delegate gate, the grant,
+  // or the token. The refusal is one sentence, on the dry run and the real run.
+  const detached = detachedRefusal(walked);
+  const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : loadTeamFile(io.cwd, { home: sources.home });
   const delegateTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
   const verdict = delegateTeam
     ? (sources.delegateGate ?? delegateGate)({
@@ -615,6 +634,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // file, with no `--session`, continues below.
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const aimed = otherFile || args.values.session !== undefined;
+  if (detached !== undefined && aimed) {
+    out.stderr(`team up: ${detached}\n`);
+    // exit: up.detached
+    return 1;
+  }
   if (!mayLaunchSeats(walked) && aimed && grantedSeat !== null) {
     const flag = args.values.session !== undefined ? 'session' : 'file';
     out.stderr(`team up: --${flag} is the owner's; the granted seat cannot use it\n`);
@@ -682,6 +706,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const upFp =
     standing.kind === 'verified' ? upFingerprint(standing.record.approval.fingerprints, standing.generation) : undefined;
   const ownerToken =
+    detached === undefined &&
     !mayLaunchSeats(caller) &&
     verdict === null &&
     grantedSeat === null &&
@@ -691,7 +716,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
-  if (!mayLaunchSeats(caller) && !ownerToken && grantedSeat === null) {
+  if (detached !== undefined) {
+    refusals.push(detached);
+  } else if (!mayLaunchSeats(caller) && !ownerToken && grantedSeat === null) {
     if (grantRefusal !== null) {
       refusals.push(grantRefusal);
     } else if (verdict === null) {
@@ -976,8 +1003,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   }
   const watch = recorded?.watch;
   const watchAlive = Boolean(watch && sources.alive?.(watch.pid));
-  // The watchdog starts in `root` and runs `watch` with no `--file`. When that load would miss
-  // this file, or read another one, the resolved path is recorded for the watchdog pane.
+  // The watch starts in `root` and runs `watch` with no `--file`. When that load would miss
+  // this file, or read another one, the resolved path is recorded for the process.
   const watchFile = watchWouldRead(root, loaded.path, sources.home) ? undefined : loaded.path;
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
@@ -993,7 +1020,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     ...(watchFile ? { watchFile } : {}),
   });
 
+  // A dry run only reports a CLI whose trust record is unknown. The real run writes
+  // the records below, after the lobby exists.
+  const stampLobbyTrust = (write: boolean) => {
+    const now = sources.now?.() ?? new Date();
+    for (let index = 0; index < seats.length; index++) {
+      const seat = seats[index];
+      if (!seat) continue;
+      const line = lobbyPretrustLine(seat, sources.home, { write, now });
+      if (line) seats[index] = { ...seat, launchProblem: line };
+    }
+  };
+
   if (dry) {
+    stampLobbyTrust(false);
     // The same cause can reach the list twice — the gate and `doctor` both read the
     // approval — so a refusal is said once. A refusal leaves through the real run's
     // return below, so the status and the exit id are that refusal's; the words stay these.
@@ -1091,6 +1131,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       }
     }
     // Built after the make above: the lobby it may have made is every lobby seat's `cwd`.
+    // The trust record is written for that path, before the workspace, and a seat whose
+    // record cannot be written is left out of the launch.
+    stampLobbyTrust(true);
     const plan = buildPlan();
 
     // The ceilings the launch holds are the verified record's own, fixed at approval.
@@ -1193,8 +1236,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[name] ?? { stage: patch.stage };
+          const retained = current.retained_seats?.[name];
+          if (current.retained_seats?.[name]) delete current.retained_seats[name];
+          const id = prior.id ?? retained?.id ?? mintSeatId();
+          const declared = team.seats.find((seat) => seat.name === name);
           // The CLI the seat was launched with: `down` needs it when the file no longer names the seat.
-          const cli = team.seats.find((seat) => seat.name === name)?.cli;
+          const cli = declared?.cli ?? prior.cli;
+          const model = declared?.model ?? prior.model;
+          const version = declared?.version ?? prior.version;
+          const effort = declared?.effort ?? prior.effort;
+          const launch_line = declared?.launch ?? prior.launch_line;
+          const last_active = patch.stage === 'ready'
+            ? now().toISOString()
+            : (prior.last_active ?? retained?.last_active);
           let start_cwd = prior.start_cwd;
           if (!start_cwd && patch.createdWorkspace) {
             const planned = seats.find((item) => item.name === name);
@@ -1206,7 +1260,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           }
           // `waiting: null` removes the field alone; anything else written replaces it.
           const { waiting: written, ...rest } = patch;
-          const seat: SeatState = { ...prior, ...rest, ...(cli ? { cli } : {}), ...(start_cwd ? { start_cwd } : {}) };
+          const seat: SeatState = {
+            ...prior,
+            ...rest,
+            id,
+            ...(cli ? { cli } : {}),
+            ...(model ? { model } : {}),
+            ...(version ? { version } : {}),
+            ...(effort ? { effort } : {}),
+            ...(launch_line ? { launch_line } : {}),
+            ...(last_active ? { last_active } : {}),
+            ...(start_cwd ? { start_cwd } : {}),
+          };
           if (written === null) delete seat.waiting;
           else if (written) seat.waiting = written;
           current.seats[name] = seat;
@@ -1228,9 +1293,17 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       drop(name) {
         let pane: string | undefined;
         updateState(dir, (file) => {
-          const seats = file.sessions[session]?.seats;
-          pane = seats?.[name]?.pane;
-          if (seats) delete seats[name];
+          const current = file.sessions[session];
+          if (!current) return;
+          const prior = current.seats[name];
+          pane = prior?.pane;
+          if (prior?.id && !prior.temporary) {
+            (current.retained_seats ??= {})[name] = {
+              id: prior.id,
+              ...(prior.last_active ? { last_active: prior.last_active } : {}),
+            };
+          }
+          delete current.seats[name];
         });
         if (pane) forgetLaunchedPane(sources.home, pane, session);
       },
@@ -1247,11 +1320,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return sources.doctor.version(profile.binary);
       },
       log: (who, what) => logLine(dir, 'up', callerLabel(caller), `${who}: ${what}`, now()),
-      noteWatch(pane, file) {
+      noteWatchFile(file) {
         updateState(dir, (state) => {
           const current = (state.sessions[session] ??= emptySession());
-          current.watchdog = { file, pane };
+          current.watchdog = { file };
         });
+      },
+      noteWatchSpawn(pid) {
+        updateState(dir, (state) => {
+          const current = (state.sessions[session] ??= emptySession());
+          current.watch = { pid, heartbeat: now().toISOString() };
+        });
+      },
+      spawnWatch(command, cwd) {
+        return launch.spawnWatch ? launch.spawnWatch(command, cwd) : 4242;
       },
       /**
        * §3/§4: what happens to a seat this run finds at a dialog. The owner at a terminal is
@@ -1290,6 +1372,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[input.seat] ?? { stage: 'launched' as const };
+          const retained = current.retained_seats?.[input.seat];
+          if (current.retained_seats?.[input.seat]) delete current.retained_seats[input.seat];
+          const id = prior.id ?? retained?.id ?? mintSeatId();
           const record = change(prior.waiting);
           // The process identity is read here, at the moment the record is written, in the same
           // write: `[o]`, `[s]`, a resumed `up` and `team answer` all refuse a pane whose
@@ -1297,6 +1382,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           const identity = launchedIdentity(launch.processInfo?.(session, input.pane) ?? null);
           current.seats[input.seat] = {
             ...prior,
+            id,
             waiting: record,
             pane: input.pane,
             ...(input.workspace ? { workspace: input.workspace } : {}),

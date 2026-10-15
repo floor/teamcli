@@ -1,7 +1,7 @@
 # team up
 
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
-declares and this machine can run, and the watchdog pane. A fresh launch of the orchestrator or the
+declares and this machine can run, and starts the watch as a background process. A fresh launch of the orchestrator or the
 operator starts in the project folder. Every other seat starts in the team's lobby. A lead already
 running, in the lobby or in the project folder, is left as it is: its pane is not closed and not
 moved. Every other seat already ready is left as it is. Either way, that seat's sidebar is
@@ -24,7 +24,8 @@ rewritten from the file: the workspace title, and the display line. Nothing is t
 
 | Caller | May |
 | --- | --- |
-| the owner | run it, from any terminal or none — without a terminal it never prompts, and leaves every dialog to the owner |
+| the owner | run it, from a terminal outside herdr |
+| a run with no terminal | a real run is refused: `team up: only the owner runs this, from a terminal outside herdr`. `--dry-run` prints the plan and `! up would refuse:` with that sentence, and launches nothing |
 | anyone | run `--dry-run`, which reaches nothing and changes nothing |
 | the orchestrator's seat, when the approved `grant` lists `up` | run it on this folder's own team file. The run does not relaunch or close that seat. `--session` and `--file` are refused before either is read |
 | a seat, or a pane of another session | run `--dry-run` only; a real run is refused, unless the approved `grant` admits the orchestrator's seat or the approved file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
@@ -37,7 +38,8 @@ rewritten from the file: the workspace title, and the display line. Nothing is t
 | `--dry-run` | the plan; `! up would refuse: …` per refusal above it | the refusal's own exit, else 0 |
 | the run is refused | one `team up: <reason>` per reason, on stderr, before the first step | 1 |
 | a seat was left out, the server did not start, the watch did not start | the seats' records and the run's own lines | 1 |
-| the invocation, or the team file, can't be read | `team up: <problem>` and the usage | 2 |
+| the invocation can't be read | `team up: <problem>` and the usage | 2 |
+| the team file can't be read | `team up: line <n>: <message>` (`team up: <message>` when the problem names no line) | 2 |
 
 ## Example
 
@@ -102,9 +104,8 @@ $ team up --dry-run ; echo "exit $?"
 + herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
-+ herdr --session beacon workspace create --cwd . --label watchdog --no-focus
-+ herdr --session beacon pane run <pane of watchdog> 'team watch --session beacon'
-    (a desktop notification follows when the watch exits)
++ 'team watch --session beacon'
+    (detached; the state records its pid)
 dry run: nothing was run
 exit 0
 ```

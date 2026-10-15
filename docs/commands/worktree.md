@@ -32,6 +32,7 @@ writes nothing.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--session` and `--file` are the owner's own |
+| a run with no terminal | nothing: `team worktree: only the owner runs this, from a terminal outside herdr` |
 | the orchestrator's seat, the operator's seat | run it, on the pane the state records for that seat |
 
 ## Output and exit codes
@@ -43,7 +44,8 @@ writes nothing.
 | the worktree was removed | `removed <task>; the branch <branch> is kept` | 0 |
 | `new` created the worktree and `workspace.setup` failed | its folder, then `team worktree: setup failed on command <n> of <m>; the worktree is kept and recorded as setup: failed` | 1 |
 | the run was refused | `team worktree: <reason>` | 1 |
-| the invocation or the team file can't be read | `team worktree: <problem>` and the usage | 2 |
+| the invocation can't be read | `team worktree: <problem>` and the usage | 2 |
+| the team file can't be read | `team worktree: line <n>: <message>` (`team worktree: <message>` when the problem names no line) | 2 |
 
 ## Example
 

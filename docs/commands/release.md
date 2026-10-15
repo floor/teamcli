@@ -42,7 +42,7 @@ wherever they appear, so `--file --help` prints the usage and exits 0.
 | every check passed | the table, one row per check in its fixed order, each `pass`, `missing` or `unknown` — or the one JSON object with `--json` | 0 |
 | no check is unknown, but one or more are missing | the same table, the failing rows' detail under `missing` | 1 |
 | at least one check is unknown | the same table, the failed reads' detail under `unknown` | 2 |
-| a bad invocation, an invalid team file, or a package the file does not declare | `team release: <reason>`, with the usage for a bad invocation; with `--json`, one error object instead (`usage` for the arguments and an undeclared package, `configuration` for the file) | 64 |
+| a bad invocation, an invalid team file, or a package the file does not declare | `team release: <reason>`; with `--json`, one error object instead (`usage` for the arguments and an undeclared package, `configuration` for the file) | 64 |
 
 A timeout, a transport failure, or a 408, 429 or 5xx response is retried exactly once; other failures are not retried.
 

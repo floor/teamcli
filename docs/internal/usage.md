@@ -66,13 +66,8 @@ text and `--json` alike — is rendered from the one report it builds:
   team's own rows, every problem in the words its own read produced.
 - Every other caller reads the **restricted view**.
 
-That comparison is deliberate, and it is fail-closed: a process that double-forks out of the herdr
-tree walks to no herdr ancestor and is placed as the owner without a terminal (`owner-no-tty`) —
-the placement a forged ancestry would produce; a caller the walk places as the owner without a
-terminal is nevertheless admitted to launch seats by `mayLaunchSeats`. While the walk cannot tell a
-real detached owner from a detached stranger, every caller but the owner at a terminal reads the
-restricted view, a detached owner's own runs included; the day placement is trustworthy, this one
-comparison flips and nothing else changes. The per-team widening field (`owner | seats`) is not
+The full view is the owner at a terminal. A run with no terminal reads the restricted view, as
+every other caller who is not that owner does. The per-team widening field (`owner | seats`) is not
 read by this build: a team's route to the full view is not built yet.
 
 ## The report

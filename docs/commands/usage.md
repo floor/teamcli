@@ -28,8 +28,8 @@ read, and nothing is written anywhere.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the report printed, whatever its figures, and whether or not this folder holds a project | the header (`usage on this machine, 1 team, 2 labs, 1 account`), then one block per lab and its team rows — outside every project, the header, the counts and the notes only | 0 |
-| the invocation can't be read, or the stores folder can't be read | `team usage: <problem>`, with the usage for the invocation; the stores folder alone gets `team usage: the store folder cannot be read: the owner reads the reason` | 2 |
+| the report printed, whatever its figures, and whether or not this folder holds a project | the header (`usage on this machine, 1 team, 2 labs, 1 account`), then one block per lab and its team rows; in the restricted view — every caller but the owner at a terminal — a caller outside every project reads the header, the counts and the notes only | 0 |
+| the invocation can't be read, or the stores folder can't be read | `team usage: <problem>`, with the usage for the invocation; the stores folder alone gets `team usage: the store folder cannot be read: the owner reads the reason` for every caller but the owner, who reads the read's own message, the folder among it | 2 |
 
 ## Example
 
