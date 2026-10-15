@@ -8,7 +8,7 @@ import { delegateGate, logDelegated } from '../delegate.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { markStopped, takeOut } from '../file/lines.ts';
-import type { Problem } from '../file/types.ts';
+import type { Problem, Seat } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { writeTeamFile } from '../file/write.ts';
@@ -263,18 +263,23 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // not carry is left, unless the owner abandons it.
   const home = sources.home ?? homedir();
   const standing = sources.standing?.(root) ?? approvalStanding(root, home);
-  if (standing.kind !== 'verified') {
+  if (standing.kind !== 'verified' && standing.kind !== 'none') {
     io.stderr(`team remove: ${notInForce(standing)}\n`);
     // exit: remove.never-approved
     return 1;
   }
-  const approved = validateTeamFile(standing.record.file);
-  if (!approved.ok) {
-    io.stderr('team remove: the approved copy of the team file cannot be read\n');
-    // exit: remove.approved-copy
-    return 1;
+  let copySeat: Seat | undefined;
+  if (standing.kind === 'none') {
+    copySeat = team.seats.find((seat) => seat.name === name);
+  } else {
+    const approved = validateTeamFile(standing.record.file);
+    if (!approved.ok) {
+      io.stderr('team remove: the approved copy of the team file cannot be read\n');
+      // exit: remove.approved-copy
+      return 1;
+    }
+    copySeat = approved.team.seats.find((seat) => seat.name === name);
   }
-  const copySeat = approved.team.seats.find((seat) => seat.name === name);
   const temporary = Boolean(recorded?.temporary) && copySeat === undefined;
   if (args.flags.has('keep') && temporary) {
     io.stderr('team remove: a temporary seat is not in the file; there is nothing to keep\n');
@@ -480,7 +485,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       const parsed = validateTeamFile(kept);
       // A delegated remove never re-signs the approval: `--keep` is the gate's to refuse, and the
       // signing itself stays the owner's for a delegate whatever reached here.
-      if (parsed.ok && delegatePane === null) recordSeatDigestOf(standing, parsed.team, root, name, home);
+      if (parsed.ok && standing.kind === 'verified' && delegatePane === null) recordSeatDigestOf(standing, parsed.team, root, name, home);
     }
     const hadRetained = Boolean(readState(dir).sessions[session]?.retained_seats?.[name]);
     if ((recorded && (!agent || leave)) || (!args.flags.has('keep') && hadRetained)) {

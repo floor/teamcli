@@ -258,19 +258,26 @@ function capture(args: string[], session?: string): string | null {
   }
 }
 
-function parsed(out: string): { type?: string; result?: unknown } | null {
+export type HerdrEnvelope = { id?: string; type?: string; error?: unknown; result?: unknown };
+
+function parsed(out: string): HerdrEnvelope | null {
   try {
-    return JSON.parse(out) as { type?: string; result?: unknown };
+    return JSON.parse(out) as HerdrEnvelope;
   } catch {
     return null;
   }
+}
+
+export function isHerdrError(body: HerdrEnvelope | null): boolean {
+  if (!body) return false;
+  return body.type === 'error' || (body.error !== undefined && body.error !== null);
 }
 
 function resultOf(args: string[], session?: string): unknown | null {
   const out = capture(args, session);
   if (out === null) return null;
   const body = parsed(out);
-  if (!body || body.type === 'error') return null;
+  if (!body || isHerdrError(body)) return null;
   return body.result ?? null;
 }
 
@@ -302,7 +309,7 @@ export function workspaceRename(workspace: string, label: string, session?: stri
   const out = capture(['workspace', 'rename', workspace, label], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body === null || body.type !== 'error';
+  return body === null || !isHerdrError(body);
 }
 
 export function workspaceCreate(
@@ -326,7 +333,7 @@ export function paneRun(pane: string, command: string, session?: string): boolea
   const out = capture(['pane', 'run', pane, command], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body === null || body.type !== 'error';
+  return body === null || !isHerdrError(body);
 }
 
 // The id team reports a pane's display_agent under. Herdr 0.7.1 requires `--source`; nothing
@@ -343,7 +350,7 @@ export function reportDisplayAgent(pane: string, text: string, session?: string)
   );
   if (out === null) return false;
   const body = parsed(out);
-  return body === null || body.type !== 'error';
+  return body === null || !isHerdrError(body);
 }
 
 // Not proof an agent is there: herdr answers with agent_info for a pane that has none.
@@ -351,7 +358,7 @@ export function agentRename(pane: string, name: string, session?: string): boole
   const out = capture(['agent', 'rename', pane, name], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body === null || body.type !== 'error';
+  return body === null || !isHerdrError(body);
 }
 
 // Brings an agent's pane to the owner's attention and changes nothing in it: no key, no text.
@@ -362,22 +369,27 @@ export function focusAgent(target: string, session?: string): boolean {
   const out = capture(['agent', 'focus', target], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body === null || body.type !== 'error';
+  return body === null || !isHerdrError(body);
 }
 
 export function workspaceClose(workspace: string, session?: string): boolean {
   const out = capture(['workspace', 'close', workspace], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body !== null && body.type !== 'error';
+  return body !== null && !isHerdrError(body);
 }
 
 // Stops a session, which herdr keeps listed as stopped.
 export function sessionStop(name: string): boolean {
   const out = capture(['session', 'stop', name]);
   if (out === null) return false;
-  const body = parsed(out);
-  return body === null || body.type !== 'error';
+  return sessionStopped(out, name);
+}
+
+// Herdr 0.7.1's answer when `session stop` worked, captured on a scratch session: stdout is
+// `stopped session <name>` and one newline, exit 0, and `session list` keeps it with running false.
+export function sessionStopped(stdout: string, name: string): boolean {
+  return stdout === `stopped session ${name}\n`;
 }
 
 // Clears a stopped session. `down` deletes the session it has itself just stopped, once herdr
