@@ -1280,6 +1280,12 @@
         },
         {
           "hidden": false,
+          "name": "--serial",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -1296,7 +1302,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team up [--dry-run] [--session <name>] [--file <path>]"
+        "team up [--dry-run] [--serial] [--session <name>] [--file <path>]"
       ]
     },
     {
