@@ -35,14 +35,27 @@ export const SAMPLE_RULES = rulesText(
 
 export type TestIo = Io & { out: string; err: string };
 
-/** A Claude Code pane with `text` in its composer: the prompt row, continuation rows at the
- *  two-column indent the profile describes, between the rules, with the status footer. The shape
- *  the watch's own screens use, for tests that type text and read the box back. */
+/** The captured Claude Code 2.1.289 idle screen (`test/fixtures/claude-code/2.1.289/idle-suggestion-plain.txt`). */
+export const CLAUDE_IDLE = readFileSync(
+  new URL('./fixtures/claude-code/2.1.289/idle-suggestion-plain.txt', import.meta.url),
+  'utf8',
+);
+
+const CLAUDE_COMPOSER_LINES = (() => {
+  const lines = CLAUDE_IDLE.split('\n');
+  const open = lines.findIndex((line) => line.startsWith('─'));
+  if (open < 0) throw new Error('the claude-code idle capture has no opening rule');
+  return lines.slice(open);
+})();
+
+/** A Claude Code pane with `text` in its composer: the composer slice of the captured 2.1.289
+ *  idle screen, with `text` on its prompt row and continuation rows at the two-column indent the
+ *  profile describes, for tests that type text and read the box back. */
 export function claudeBox(text: string): string {
   const [first = '', ...rest] = text.split('\n');
-  const rule = '─'.repeat(40);
-  const status = '  main · …/acme · Opus 5.5 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on (shift+tab to cycle)';
-  return [rule, `❯ ${first}`, ...rest.map((line) => `  ${line}`), rule, status].join('\n') + '\n';
+  const lines = CLAUDE_COMPOSER_LINES.slice();
+  lines[1] = [`❯\u00a0${first}`, ...rest.map((line) => `  ${line}`)].join('\n');
+  return lines.join('\n');
 }
 
 export type AgyRuleShape = 'close-short' | 'close-long' | 'open-short';

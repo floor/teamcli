@@ -1,5 +1,22 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { paneRead, sessionCleared, setHerdrRun, setPaneExec, workspacePanes } from '../src/herdr.ts';
+import { isHerdrError, paneRead, sessionCleared, sessionStopped, setHerdrRun, setPaneExec, workspacePanes } from '../src/herdr.ts';
+
+const PANE_ONE = ['w1', 'p1'].join(':');
+const PANE_TWO = ['w1', 'p2'].join(':');
+
+function capturedPaneEntry(paneId: string, workspaceId: string, terminalId: string) {
+  return {
+    agent_status: 'unknown',
+    cwd: '/private/tmp',
+    focused: true,
+    foreground_cwd: '/private/tmp',
+    pane_id: paneId,
+    revision: 0,
+    tab_id: `${workspaceId}:t1`,
+    terminal_id: terminalId,
+    workspace_id: workspaceId,
+  };
+}
 
 // paneRead's process call is injectable, so these tests ask what it requests, what it falls
 // back to and when it gives up — without a live herdr. The timeout error it must recognise
@@ -57,49 +74,136 @@ describe('workspacePanes', () => {
   test('valid entries for the requested workspace return string pane ids', () => {
     setHerdrRun(() => ({
       panes: [
-        { pane_id: 'w1:p1', workspace_id: 'w1' },
-        { pane_id: 'w1:p2', workspace_id: 'w1' },
+        capturedPaneEntry(PANE_ONE, 'w1', 'term_65dd8274742df1'),
+        capturedPaneEntry(PANE_TWO, 'w1', 'term_65dd8274742df2'),
       ],
+      type: 'pane_list',
     }));
-    expect(workspacePanes('w1')).toEqual(['w1:p1', 'w1:p2']);
+    expect(workspacePanes('w1')).toEqual([PANE_ONE, PANE_TWO]);
   });
 
   test('the right pane id under another workspace id reads null', () => {
     setHerdrRun(() => ({
-      panes: [{ pane_id: 'w1:p1', workspace_id: 'w2' }],
+      panes: [capturedPaneEntry(PANE_ONE, 'w2', 'term_65dd8274742df1')],
+      type: 'pane_list',
     }));
     expect(workspacePanes('w1')).toBeNull();
   });
 
   test('entry under no workspace id reads null', () => {
+    const { workspace_id: _omitted, ...withoutWorkspace } = capturedPaneEntry(PANE_ONE, 'w1', 'term_65dd8274742df1');
     setHerdrRun(() => ({
-      panes: [{ pane_id: 'w1:p1' }],
+      panes: [withoutWorkspace],
+      type: 'pane_list',
     }));
     expect(workspacePanes('w1')).toBeNull();
   });
 
   test('a non-object entry reads null', () => {
     setHerdrRun(() => ({
-      panes: ['w1:p1'],
+      panes: [PANE_ONE],
+      type: 'pane_list',
     }));
     expect(workspacePanes('w1')).toBeNull();
   });
 
   test('a pane id that is not a string reads null', () => {
     setHerdrRun(() => ({
-      panes: [{ pane_id: 123, workspace_id: 'w1' }],
+      panes: [{ ...capturedPaneEntry(PANE_ONE, 'w1', 'term_65dd8274742df1'), pane_id: 123 }],
+      type: 'pane_list',
     }));
     expect(workspacePanes('w1')).toBeNull();
   });
 
   test('the right entry plus one malformed entry reads null', () => {
+    const { workspace_id: _omitted, ...withoutWorkspace } = capturedPaneEntry(PANE_TWO, 'w1', 'term_65dd8274742df2');
     setHerdrRun(() => ({
       panes: [
-        { pane_id: 'w1:p1', workspace_id: 'w1' },
-        { pane_id: 'w1:p2' },
+        capturedPaneEntry(PANE_ONE, 'w1', 'term_65dd8274742df1'),
+        withoutWorkspace,
       ],
+      type: 'pane_list',
     }));
     expect(workspacePanes('w1')).toBeNull();
+  });
+
+  test('ownWatchPane finds the watchdog pane from captured herdr 0.7.1 responses', async () => {
+    const { ownWatchPane } = await import('../src/watch/pane.ts');
+    const watchPane = ['w9', 'p1'].join(':');
+    const watchWorkspace = {
+      active_tab_id: ['w9', 't1'].join(':'),
+      created_at: 1776221303,
+      cwd: '/private/tmp',
+      focused: true,
+      Focused: true,
+      label: 'watchdog',
+      pane_count: 1,
+      tab_count: 1,
+      workspace_id: 'w9',
+    };
+    const seatWorkspace = {
+      active_tab_id: ['w1', 't1'].join(':'),
+      created_at: 1776221300,
+      cwd: '/private/tmp',
+      focused: false,
+      Focused: false,
+      label: 'seat',
+      pane_count: 1,
+      tab_count: 1,
+      workspace_id: 'w1',
+    };
+    const processEntry = (paneId: string, shellPid: number, fgPid: number) => ({
+      foreground_processes: [
+        {
+          argv0: 'bun',
+          name: 'bun',
+          pid: fgPid,
+          ppid: shellPid,
+          start_epoch: 1776221304,
+          start_lstart: 'Wed Apr 15 04:48:24 2026',
+        },
+      ],
+      pane_id: paneId,
+      shell_name: 'zsh',
+      shell_pid: shellPid,
+      shell_start_epoch: 1776221303,
+      shell_start_lstart: 'Wed Apr 15 04:48:23 2026',
+      tty: 'ttys015',
+    });
+    setHerdrRun((args) => {
+      if (args[0] === 'workspace' && args[1] === 'list') {
+        return { type: 'workspace_list', workspaces: [watchWorkspace, seatWorkspace] };
+      }
+      if (args[0] === 'pane' && args[1] === 'list' && args[3] === 'w9') {
+        return { panes: [capturedPaneEntry(watchPane, 'w9', 'term_65dd8274742df9')], type: 'pane_list' };
+      }
+      if (args[0] === 'pane' && args[1] === 'list') {
+        return { panes: [capturedPaneEntry(PANE_ONE, 'w1', 'term_65dd8274742df1')], type: 'pane_list' };
+      }
+      if (args[0] === 'pane' && args[1] === 'process-info' && args[3] === watchPane) {
+        return { process_info: processEntry(watchPane, process.ppid, process.pid), type: 'pane_process_info' };
+      }
+      return { process_info: processEntry(PANE_ONE, 1, 1), type: 'pane_process_info' };
+    });
+    expect(ownWatchPane('acme-web', process.pid)).toEqual({ pane: watchPane, workspace: 'w9' });
+  });
+});
+
+describe('sessionStopped and isHerdrError', () => {
+  const name = 'scratch-stop-032';
+
+  test('the captured plain stop line for the asked name is a stop', () => {
+    expect(sessionStopped('stopped session scratch-stop-032\n', name)).toBe(true);
+    expect(sessionStopped('deleted session scratch-stop-032\n', name)).toBe(false);
+    expect(sessionStopped('stopped session other\n', name)).toBe(false);
+    expect(sessionStopped('{}', name)).toBe(false);
+  });
+
+  test('recognises both the captured herdr 0.7.1 error envelope and legacy type:error', () => {
+    expect(isHerdrError({ error: { code: 'workspace_not_found', message: 'workspace w999 not found' }, id: 'cli:workspace:close' })).toBe(true);
+    expect(isHerdrError({ type: 'error' })).toBe(true);
+    expect(isHerdrError({ id: 'cli:workspace:close', result: { type: 'ok' } })).toBe(false);
+    expect(isHerdrError(null)).toBe(false);
   });
 });
 
@@ -134,5 +238,18 @@ describe('sessionCleared', () => {
 
   test('the right line plus a second line is not a clear', () => {
     expect(sessionCleared(`deleted session ${name}\nstill here\n`, name)).toBe(false);
+  });
+});
+
+describe('captured Claude Code 2.1.289 stand-in helper', () => {
+  test('CLAUDE_IDLE and claudeBox classify and read back as captured composer frames', async () => {
+    const { CLAUDE_IDLE, claudeBox } = await import('./helpers.ts');
+    const { readScreen } = await import('../src/watch/screen.ts');
+    const { boxHoldsText } = await import('../src/launch/deliver.ts');
+    expect(readScreen('claude-code', CLAUDE_IDLE)).toEqual({ kind: 'idle' });
+    expect(readScreen('claude-code', claudeBox(''))).toEqual({ kind: 'idle' });
+    expect(readScreen('claude-code', claudeBox('/exit'))).toEqual({ kind: 'unsent' });
+    expect(boxHoldsText('claude-code', '/exit', claudeBox('/exit'))).toBe(true);
+    expect(boxHoldsText('claude-code', 'line one\nline two', claudeBox('line one\nline two'))).toBe(true);
   });
 });
