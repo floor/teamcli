@@ -42,8 +42,8 @@ It does need herdr to answer once the caller has passed: without it, `status` ca
 and exits 2.
 
 `--file` and `--session` are the owner's. Aimed by anyone else, each is refused before any file
-or session is read (`--file is the owner's, from a terminal outside herdr; this call is …`) and
-exits 1.
+or session is read — `--file is the owner's, from a terminal outside herdr; this call is …`, or
+`only the owner runs this, from a terminal outside herdr` for a run with no terminal — and exits 1.
 
 A plain folder's seat runs `team status` from the folder that holds `.agents`. The lookup does
 not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim the parent's file.
@@ -212,6 +212,7 @@ may not read the team gets the fixed sentence on stderr and nothing on stdout, w
 | `team status: unexpected "x"` (with the usage) | 2 |
 | `team status: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team status: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
+| `team status: only the owner runs this, from a terminal outside herdr` — a run with no terminal aiming either flag; judged before the caller gate, so it is this line and not the fixed sentence below | 1 |
 | `team status: this team is not yours to read` | 2 |
 | `team status: team.yaml line <n>: <message>` | 2 |
 | `team status: herdr doesn't answer; is it installed and running?` | 2 |
