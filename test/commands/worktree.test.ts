@@ -306,6 +306,36 @@ describe('team worktree remove', () => {
     expect(git(project, 'rev-parse', '--verify', '--quiet', 'refs/heads/fix/select-width').trim()).not.toBe('');
     expect(readState(join(project, '.agents')).sessions.acme?.worktrees['select-width']).toBeUndefined();
   });
+
+  test('refuses when the state records a path or branch that does not match the approved workspace pattern', async () => {
+    expect((await run(['new', 'select-width', '--kind', 'fix'])).code).toBe(0);
+    expect((await run(['new', 'other-task', '--kind', 'fix'])).code).toBe(0);
+    git(project, 'push', '-q', 'origin', 'fix/select-width');
+    git(project, 'push', '-q', 'origin', 'fix/other-task');
+    const dir = join(project, '.agents');
+    const otherFolder = join(base, 'worktrees', 'acme', 'other-task');
+
+    updateState(dir, (state) => {
+      const work = state.sessions.acme?.worktrees['select-width'];
+      if (work) work.path = '../worktrees/acme/other-task';
+    });
+    const wrongPath = await run(['remove', 'select-width']);
+    expect(wrongPath.code).toBe(1);
+    expect(wrongPath.err).toContain('the recorded path "../worktrees/acme/other-task" is not "../worktrees/acme/select-width"');
+    expect(existsSync(otherFolder)).toBe(true);
+
+    updateState(dir, (state) => {
+      const work = state.sessions.acme?.worktrees['select-width'];
+      if (work) {
+        work.path = '../worktrees/acme/select-width';
+        work.branch = 'main';
+      }
+    });
+    const wrongBranch = await run(['remove', 'select-width']);
+    expect(wrongBranch.code).toBe(1);
+    expect(wrongBranch.err).toContain('the recorded branch "main" does not match "{kind}/{task}" for "select-width"');
+    expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
+  });
 });
 
 describe('team worktree and the approved copy', () => {
