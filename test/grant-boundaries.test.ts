@@ -323,10 +323,10 @@ describe('the grant\'s scope', () => {
 
   test('a token outside the closed set never validates, alone or beside a real one', () => {
     expect(messages(`${ONE}grant:\n  session: arena\n  seat: lead\n  scope: [ship]\n`)).toContain(
-      'grant.scope must name up, down, approve, init: "ship" is not one',
+      'grant.scope must name up, down, approve, init, swap: "ship" is not one',
     );
     expect(messages(`${ONE}grant:\n  session: arena\n  seat: lead\n  scope:\n    - up\n    - ship\n`)).toContain(
-      'grant.scope must name up, down, approve, init: "ship" is not one',
+      'grant.scope must name up, down, approve, init, swap: "ship" is not one',
     );
   });
 
@@ -334,7 +334,7 @@ describe('the grant\'s scope', () => {
     const empty = `${ONE}grant:\n  session: arena\n  seat: lead\n  scope: []\n`;
     const blank = `${ONE}grant:\n  session: arena\n  seat: lead\n  scope:\n`;
     for (const text of [empty, blank]) {
-      expect(messages(text)).toContain('grant.scope must name at least one of: up, down, approve, init');
+      expect(messages(text)).toContain('grant.scope must name at least one of: up, down, approve, init, swap');
     }
   });
 

@@ -6,7 +6,7 @@ import { approvalOf, notInForce } from '../src/approve/approval.ts';
 import { fingerprints } from '../src/approve/fingerprint.ts';
 import type { CallerSources, Process } from '../src/caller.ts';
 import { ADD_DELEGATE_EDIT, DELEGATE_EXIT_IDS, delegateGate, logDelegated, type DelegateVerdict } from '../src/delegate.ts';
-import { DELEGATE_COMMANDS, type DelegateCommand } from '../src/delegate-types.ts';
+import { ACTING_COMMANDS as DELEGATE_COMMANDS, type ActingCommand, type DelegateCommand } from '../src/delegate-types.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -80,7 +80,7 @@ const under: Process[] = [{ pid: 100, name: 'zsh' }, { pid: 10, name: 'herdr' }]
 const terminal: Process[] = [{ pid: 50, name: 'zsh' }, { pid: 40, name: 'login' }];
 
 type Scene = {
-  command?: DelegateCommand;
+  command?: ActingCommand;
   team?: TeamFile;
   file?: string;
   standing?: Standing;
@@ -94,6 +94,7 @@ type Scene = {
   stdinIsTTY?: boolean;
   flags?: readonly string[];
   callerSources?: (session: string | undefined) => CallerSources;
+  swap?: boolean;
 };
 
 function gate(scene: Scene = {}): DelegateVerdict {
@@ -111,6 +112,7 @@ function gate(scene: Scene = {}): DelegateVerdict {
     stdinIsTTY: scene.stdinIsTTY ?? true,
   }));
   return delegateGate({
+    ...(scene.swap ? { swap: true } : {}),
     command: scene.command ?? 'up',
     team,
     root: '/proj',
@@ -514,5 +516,35 @@ describe('the exit ids', () => {
     expect(DELEGATE_EXIT_IDS).toContain('approve.delegate-not-ordinary');
     expect(DELEGATE_EXIT_IDS).not.toContain('approve.delegate-drift');
     expect(new Set(DELEGATE_EXIT_IDS).size).toBe(41);
+  });
+});
+
+// `swap` admits the replacement of a lead seat's agent — `remove <lead> --keep` and
+// `add <lead>` — and nothing else. `remove` in an entry never reaches a lead.
+describe('the swap word', () => {
+  const swapping = yaml.replace('commands: [up, down, add, remove]', 'commands: [swap]');
+  const only = parsed(swapping);
+
+  test('remove of a lead needs swap; remove alone is refused and --keep stays the owner\'s for it', () => {
+    const verdict = refused({ command: 'remove', swap: true, flags: ['keep'] });
+    expect(verdict.id).toBe('remove.delegate-command');
+    expect(verdict.text).toBe('the approved delegate other/w1:p1 may not swap a lead seat (`swap`); its approved commands are up, down, add, remove');
+    expect(refused({ command: 'remove', flags: ['keep'] }).id).toBe('remove.delegate-flag');
+  });
+
+  test('an entry that lists swap passes a lead\'s remove --keep, and nothing else of remove', () => {
+    expect(gate({ command: 'remove', swap: true, flags: ['keep'], team: only, file: swapping })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(refused({ command: 'remove', team: only, file: swapping }).id).toBe('remove.delegate-command');
+    expect(refused({ command: 'remove', swap: true, flags: ['keep', 'abandon'], team: only, file: swapping }).id).toBe('remove.delegate-flag');
+  });
+
+  test('add of a lead passes on add or on swap', () => {
+    expect(gate({ command: 'add', swap: true })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(gate({ command: 'add', swap: true, team: only, file: swapping })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(refused({ command: 'add', team: only, file: swapping }).id).toBe('add.delegate-command');
+  });
+
+  test('swap is a word of the section, never a command with exit ids of its own', () => {
+    expect(DELEGATE_EXIT_IDS.some((id) => id.startsWith('swap.'))).toBe(false);
   });
 });

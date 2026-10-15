@@ -17,7 +17,7 @@ import { fingerprints, OWNER_SECTIONS } from '../src/approve/fingerprint.ts';
 import type { Caller, CallerSources, Process } from '../src/caller.ts';
 import { runApprove, type ApproveSources } from '../src/commands/approve.ts';
 import { ORDINARY_SECTIONS, delegateGate, type DelegateSources, type DelegateVerdict } from '../src/delegate.ts';
-import type { DelegateCommand } from '../src/delegate-types.ts';
+import type { ActingCommand } from '../src/delegate-types.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -100,7 +100,7 @@ const under: Process[] = [{ pid: 100, name: 'zsh' }, { pid: 10, name: 'herdr' }]
 const terminal: Process[] = [{ pid: 50, name: 'zsh' }, { pid: 40, name: 'login' }];
 
 type Scene = {
-  command?: DelegateCommand;
+  command?: ActingCommand;
   team?: TeamFile;
   file?: string;
   standing?: Standing;

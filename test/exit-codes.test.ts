@@ -1564,6 +1564,22 @@ scene('remove.coordinator', async (place) => {
   });
   return show(await removed(place, ['lead'], leadSeat, downSources({ home: place.home })), 'only the owner removes the orchestrator');
 });
+// A lead's `--keep` is a swap. The seat never swaps itself; another lead swaps it only
+// under a grant that lists `swap`; the owner's swap stops it and leaves the file as it was.
+scene('remove.swap-self', async (place) => {
+  write(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await removed(place, ['lead', '--keep'], leadSeat, downSources({ home: place.home })), "can't swap its own seat");
+});
+scene('remove.swap-grant', async (place) => {
+  write(place, TWO.replace('operator: lead', 'operator: worker').replace('    stopped: true\n', ''));
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await removed(place, ['worker', '--keep'], leadSeat, downSources({ home: place.home })), 'swaps the orchestrator');
+});
 scene('remove.no-seat', async (place) => {
   write(place, TWO);
   return show(await removed(place, ['missing'], owner, downSources({ home: place.home })), 'no seat "missing"');
@@ -1691,6 +1707,10 @@ scene('remove.run-lock', async (place) => {
 scene('remove.kept', async (place) => {
   approve(place, TWO);
   return show(await removed(place, ['worker', '--keep'], owner, downSources({ home: place.home })), 'stopped worker');
+});
+scene('remove.swapped', async (place) => {
+  approve(place, TWO);
+  return show(await removed(place, ['lead', '--keep'], owner, downSources({ home: place.home })), 'stopped lead for a swap');
 });
 scene('remove.temporary', async (place) => {
   approve(place, TEAM);
