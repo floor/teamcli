@@ -123,7 +123,7 @@ export const USAGE = 'Usage: team watch [--session <name>] [--file <path>] [--no
  *  Absent when this folder records none: a flagless watch then reads what it always did.
  *  `'wait'` is a file recorded and a pid not written yet: the process `up` just spawned. */
 function watchdogGrant(
-  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>, pid: number,
+  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
 ): { file: string } | { refuse: string } | { wait: true } | undefined {
   const name = session ?? 'default';
   const recorded = recordedWatchdog(cwd, name);
@@ -131,7 +131,7 @@ function watchdogGrant(
   if (recorded.pane && caller.kind === 'pane' && caller.pane === recorded.pane) return { file: recorded.file };
   if (isOwner(caller)) return undefined;
   const watchPid = readState(cwd).sessions[name]?.watch?.pid;
-  if (watchPid === pid) return { file: recorded.file };
+  if (watchPid === process.pid) return { file: recorded.file };
   if (watchPid === undefined && !recorded.pane) return { wait: true };
   return {
     refuse: `only the watch this session records may read the file up recorded; this call is ${describeCaller(caller)}`,
@@ -144,11 +144,11 @@ function recordedWatchdog(cwd: string, session: string): { file: string; pane?: 
 
 /** The grant, waiting out the moment between spawn and the pid landing in the state. */
 async function admittedWatchdog(
-  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>, pid: number,
+  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
 ): Promise<{ file: string } | { refuse: string } | undefined> {
   const deadline = Date.now() + 2000;
   for (;;) {
-    const grant = watchdogGrant(cwd, session, caller, pid);
+    const grant = watchdogGrant(cwd, session, caller);
     if (!grant || !('wait' in grant)) return grant;
     if (Date.now() >= deadline) {
       return {
@@ -159,19 +159,18 @@ async function admittedWatchdog(
   }
 }
 
-/** Whether `pid` is the detached watch process `up` recorded for this folder's session. */
-function isSpawnedWatchPid(cwd: string, session: string | undefined, pid: number): boolean {
-  if (pid <= 0) return false;
+/** Whether this process is the detached watch `up` recorded for this folder's session. */
+function isSpawnedWatchPid(cwd: string, session: string | undefined): boolean {
   for (const dir of [join(cwd, '.agents'), cwd]) {
     try {
       const sessions = readState(dir).sessions;
       if (session !== undefined) {
-        if (sessions[session]?.watch?.pid === pid) return true;
-      } else if (Object.values(sessions).some((entry) => entry?.watch?.pid === pid)) {
+        if (sessions[session]?.watch?.pid === process.pid) return true;
+      } else if (Object.values(sessions).some((entry) => entry?.watch?.pid === process.pid)) {
         return true;
       }
     } catch {
-      // A unreadable state file does not admit a detached caller.
+      // An unreadable state file does not admit a detached caller.
     }
   }
   return false;
@@ -204,8 +203,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     return 1;
   }
   const caller = callerOf(io, args.values.session);
-  const grant = args.values.file ? undefined : await admittedWatchdog(io.cwd, args.values.session, caller, sources.pid);
-  if (detached !== undefined && !(grant && 'file' in grant) && !isSpawnedWatchPid(io.cwd, args.values.session, sources.pid)) {
+  const grant = args.values.file ? undefined : await admittedWatchdog(io.cwd, args.values.session, caller);
+  if (detached !== undefined && !(grant && 'file' in grant) && !isSpawnedWatchPid(io.cwd, args.values.session)) {
     io.stderr(`team watch: ${detached}\n`);
     // exit: watch.caller
     return 1;
