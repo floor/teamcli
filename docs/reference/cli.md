@@ -730,7 +730,7 @@ Hidden: no
 
 Usage:
 
-    team up [--dry-run] [--session <name>] [--file <path>]
+    team up [--dry-run] [--serial] [--session <name>] [--file <path>]
 
 ### Flags
 
@@ -739,6 +739,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--serial` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

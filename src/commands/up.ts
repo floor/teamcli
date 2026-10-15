@@ -72,7 +72,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { leftoverName } from './remove.ts';
-import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
+import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
@@ -236,7 +236,7 @@ export const realSources: UpSources = {
   launch: realLaunch,
 };
 
-export const USAGE = 'Usage: team up [--dry-run] [--session <name>] [--file <path>]\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--session <name>] [--file <path>]\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -556,7 +556,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'file'], ['dry-run']);
+  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'serial']);
   if (args.error || args.rest.length) {
     out.stderr(`team up: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
     // exit: up.invocation
@@ -1137,6 +1137,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       }
     }
     const now = () => sources.now?.() ?? launch.now();
+    const concurrency = launchConcurrency(machine, team.machine, args.flags.has('serial'));
+    const rawSleep = sources.sleep ?? launch.sleep;
+    const sleepAt = new Map<string, Promise<void>>();
+    const sharedSleep = (ms: number): Promise<void> => {
+      if (concurrency <= 1) return rawSleep(ms);
+      const key = `${now().getTime()}:${ms}`;
+      const existing = sleepAt.get(key);
+      if (existing) return existing;
+      const promise = rawSleep(ms).finally(() => sleepAt.delete(key));
+      sleepAt.set(key, promise);
+      return promise;
+    };
     const host: Host = {
       startServer: launch.startServer,
       sessionUp: launch.sessionUp,
@@ -1180,7 +1192,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           foreground: () => launch.foreground(session, pane),
           report: (why) => { stopped.why = why; },
           now: () => now().getTime(),
-          sleep: sources.sleep ?? launch.sleep,
+          sleep: sharedSleep,
         });
         return delivered === false && stopped.why !== null ? stopped.why : delivered;
       },
@@ -1199,7 +1211,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       paneText: (session, pane) => launch.paneText(session, pane),
       shellBack: (session, pane) => launch.shellBack?.(session, pane) ?? null,
       processInfo: (session, pane) => launch.processInfo?.(session, pane) ?? null,
-      sleep: sources.sleep ?? launch.sleep,
+      sleep: sharedSleep,
       now: () => now().getTime(),
       allow(name) {
         if (sources.machine) {
@@ -1392,13 +1404,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       say: (line) => records.prompt(line.endsWith('\n') ? line.slice(0, -1) : line),
       entering: (classification) => host.log(input.seat, recordWhat({ kind: 'waiting for owner', classification })),
       key: (ms) => terminal.key(ms),
-      sleep: (ms) => (sources.sleep ?? launch.sleep)(ms),
+      sleep: (ms) => rawSleep(ms),
       now: () => now().getTime(),
       idleTimeout: profileFor(seatCli(input.seat))?.idleTimeout ?? 90,
       polled: trustPolicy(team) === 'coordinator' && input.classification === 'trust',
     });
 
-    const report = await executePlan(plan, session, host);
+    const report = await executePlan(plan, session, host, { concurrency });
     // The reach projection, after the plan's effects and outside the lobby's identity rechecks
     // (its temporary is a declared lobby file): the owner-approved `reach` grants written where
     // the bridge and the seat-shuttle daemon read them. A skip — no lobby, a lobby not 0700,

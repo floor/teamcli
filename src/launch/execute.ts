@@ -187,20 +187,41 @@ export function paneExcerpt(text: string | null, command: string, limit = 6): st
   return lines.slice(start).map((line) => `  | ${line}\n`).join('');
 }
 
-async function until(seconds: number, pace: number, host: Host, ready: () => boolean): Promise<boolean> {
+async function until(
+  seconds: number,
+  pace: number,
+  host: Host,
+  ready: () => boolean,
+  sleep: (ms: number) => Promise<void> = (ms) => host.sleep(ms),
+  cancelled: () => boolean = () => false,
+): Promise<boolean> {
   const deadline = host.now() + seconds * 1000;
   for (;;) {
+    if (cancelled()) return false;
     if (ready()) return true;
     if (host.now() >= deadline) return false;
     const before = host.now();
-    await host.sleep(pace);
+    await sleep(pace);
+    if (cancelled()) return false;
     // A clock that does not move would spin. Treat that as the wait running out.
     if (host.now() <= before) return false;
   }
 }
 
+export type ExecuteOptions = {
+  /** Maximum number of seats to launch and wait on concurrently. Defaults to 1 (serial). */
+  concurrency?: number;
+};
+
 /** Runs a plan. Steps carry the operation beside the command the dry run prints. */
-export async function executePlan(steps: readonly Step[], session: string, host: Host): Promise<Report> {
+export async function executePlan(
+  steps: readonly Step[],
+  session: string,
+  host: Host,
+  options?: ExecuteOptions,
+): Promise<Report> {
+  const concurrency = Math.max(1, options?.concurrency ?? 1);
+  const parallel = concurrency > 1;
   const places = new Map<string, Place>();
   const dropped = new Set<string>();
   const logged = new Set<string>();
@@ -220,6 +241,116 @@ export async function executePlan(steps: readonly Step[], session: string, host:
   const closed = new Set<string>();
   /** Whether this run started the session: only then may `q` stop it. */
   let createdSession = false;
+
+  // Concurrent seats polling at the same timestamp share one sleep call, so virtual clocks
+  // and real timers advance once per poll interval rather than once per concurrent seat.
+  const sleepAt = new Map<string, Promise<void>>();
+  const sharedSleep = (ms: number): Promise<void> => {
+    if (!parallel) return host.sleep(ms);
+    const key = `${host.now()}:${ms}`;
+    const existing = sleepAt.get(key);
+    if (existing) return existing;
+    const promise = host.sleep(ms).finally(() => sleepAt.delete(key));
+    sleepAt.set(key, promise);
+    return promise;
+  };
+
+  let dialogOpen = 0;
+  let dialogChain: Promise<void> = Promise.resolve();
+  const lastProgress = new Map<string, ProgressState>();
+  const reportProgress = (seat: string, state: ProgressState) => {
+    lastProgress.set(seat, state);
+    if (dialogOpen > 0) return;
+    host.progress?.(seat, state);
+  };
+
+  type BufferedFinal = { clean: FinalRecord; what: string; rest: string };
+  type SeatBuffer = {
+    beforeSay: string[];
+    settled?: BufferedFinal;
+    afterSay: string[];
+    done: boolean;
+    flushed: boolean;
+  };
+  const outputOrder: string[] = [];
+  const seatBuffers = new Map<string, SeatBuffer>();
+  let flushCursor = 0;
+
+  const ensureBuffer = (seat: string): SeatBuffer => {
+    let buf = seatBuffers.get(seat);
+    if (!buf) {
+      buf = { beforeSay: [], afterSay: [], done: false, flushed: false };
+      seatBuffers.set(seat, buf);
+      outputOrder.push(seat);
+    }
+    return buf;
+  };
+
+  const emitFinal = (seat: string, clean: FinalRecord, what: string, rest: string) => {
+    if (host.final) {
+      host.final(seat, clean);
+      for (const line of rest.split('\n')) host.detail?.(line);
+    } else host.say(`${seat}: ${what}\n${rest}`);
+    host.log(seat, what);
+  };
+
+  const flushSettled = () => {
+    if (!parallel || dialogOpen > 0) return;
+    let flushedAny = false;
+    while (flushCursor < outputOrder.length) {
+      const seat = outputOrder[flushCursor]!;
+      const buf = seatBuffers.get(seat);
+      if (!buf || (!buf.settled && !buf.done)) break;
+      for (const line of buf.beforeSay) host.say(line);
+      buf.beforeSay.length = 0;
+      if (buf.settled) {
+        emitFinal(seat, buf.settled.clean, buf.settled.what, buf.settled.rest);
+        flushedAny = true;
+      }
+      for (const line of buf.afterSay) host.say(line);
+      buf.afterSay.length = 0;
+      buf.flushed = true;
+      flushCursor++;
+    }
+    if (flushedAny && dialogOpen === 0) {
+      for (let i = flushCursor; i < outputOrder.length; i++) {
+        const nextSeat = outputOrder[i]!;
+        const state = lastProgress.get(nextSeat);
+        if (state) {
+          host.progress?.(nextSeat, state);
+          break;
+        }
+      }
+    }
+  };
+
+  const sayForSeat = (seat: string | undefined, line: string) => {
+    if (!parallel || !seat) {
+      host.say(line);
+      return;
+    }
+    const buf = ensureBuffer(seat);
+    if (buf.flushed) host.say(line);
+    else if (buf.settled) buf.afterSay.push(line);
+    else buf.beforeSay.push(line);
+  };
+
+  const withDialogLock = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const prev = dialogChain;
+    let release!: () => void;
+    dialogChain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await prev;
+    dialogOpen++;
+    try {
+      return await fn();
+    } finally {
+      dialogOpen--;
+      release();
+      flushSettled();
+    }
+  };
 
   // The reading is what is logged: screen text may follow it on the terminal (`detail`), and
   // never reaches the log file. `down`'s records keep this line exactly.
@@ -255,14 +386,17 @@ export async function executePlan(steps: readonly Step[], session: string, host:
   const final = (seat: string, record: FinalRecord, detail = '') => {
     if (logged.has(seat)) return;
     logged.add(seat);
+    lastProgress.delete(seat);
     const clean = cleanRecord(record);
     const what = clean.kind === 'left out' && clean.reason === 'stopped cleanly' ? 'stopped cleanly' : recordWhat(clean);
     const rest = detail + release(seat);
-    if (host.final) {
-      host.final(seat, clean);
-      for (const line of rest.split('\n')) host.detail?.(line);
-    } else host.say(`${seat}: ${what}\n${rest}`);
-    host.log(seat, what);
+    if (!parallel) {
+      emitFinal(seat, clean, what, rest);
+      return;
+    }
+    const buf = ensureBuffer(seat);
+    buf.settled = { clean, what, rest };
+    flushSettled();
   };
 
   /** A seat this run will not touch again, left exactly as it is, with its record said. */
@@ -346,7 +480,10 @@ export async function executePlan(steps: readonly Step[], session: string, host:
    *  the close's own fresh read of a changed process is never the identity kept. */
   const dialogIdentity = (seat: string, pane: string): LaunchedIdentity | undefined => {
     const recorded = identities.get(seat) ?? host.seatStates?.(session)?.[seat]?.launched;
-    return recorded ?? launchedIdentity(host.processInfo?.(session, pane) ?? null) ?? undefined;
+    if (recorded) return recorded;
+    const live = launchedIdentity(host.processInfo?.(session, pane) ?? null) ?? undefined;
+    if (live) identities.set(seat, live);
+    return live;
   };
 
   /** A seat left behind by a close this run refused. Its waiting record — with the reading that
@@ -378,17 +515,20 @@ export async function executePlan(steps: readonly Step[], session: string, host:
   ): Promise<'idle' | 'settled'> => {
     const dialog = host.dialog;
     if (dialog?.mode === 'prompt') {
-      return settle(
-        seat,
-        await dialog.run({
+      return withDialogLock(async () => {
+        if (stopped) return 'settled';
+        return settle(
           seat,
-          classification,
-          pane: here.pane,
-          label,
-          repairLine,
-          ...(here.workspace ? { workspace: here.workspace } : {}),
-        }),
-      );
+          await dialog.run({
+            seat,
+            classification,
+            pane: here.pane,
+            label,
+            repairLine,
+            ...(here.workspace ? { workspace: here.workspace } : {}),
+          }),
+        );
+      });
     }
     if (dialog?.mode === 'keep') {
       host.recordWaiting?.(seat, { state: 'waiting-owner', classification }, here.pane, here.workspace);
@@ -487,27 +627,31 @@ export async function executePlan(steps: readonly Step[], session: string, host:
       if (lock && 'release' in lock) lock.release();
     }
     if (dialog.mode === 'prompt') {
-      return settle(
-        op.seat,
-        await dialog.run({
-          seat: op.seat,
-          classification,
-          pane: op.pane,
-          label: op.label,
-          repairLine: op.repairLine,
-          ...(op.workspace ? { workspace: op.workspace } : {}),
-          recorded: op.record,
-        }),
-      );
+      return withDialogLock(async () => {
+        if (stopped) return 'settled';
+        return settle(
+          op.seat,
+          await dialog.run({
+            seat: op.seat,
+            classification,
+            pane: op.pane,
+            label: op.label,
+            repairLine: op.repairLine,
+            ...(op.workspace ? { workspace: op.workspace } : {}),
+            recorded: op.record,
+          }),
+        );
+      });
     }
     return 'settled';
   };
 
-  for (const step of steps) {
+  const runStep = async (step: Step, unitSeat?: string): Promise<void> => {
     const op = step.do;
     const seat = op && 'seat' in op ? op.seat : undefined;
-    if (abort) continue;
-    if (seat && dropped.has(seat)) continue;
+    if (stopped) return;
+    if (!parallel && abort) return;
+    if (seat && dropped.has(seat)) return;
 
     if (step.kind === 'skip') {
       if (op?.do === 'record' && op.seat) {
@@ -528,10 +672,10 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         // The record carries the reason in words; the full finding — the start folder it names —
         // follows as the record's detail, on stderr alone.
         final(op.seat, { kind: 'left out', reason: `refused: ${op.why}` }, op.detail ? `  ${op.detail}\n` : '');
-      } else host.say(`  skip ${step.text}\n`);
-      continue;
+      } else sayForSeat(unitSeat, `  skip ${step.text}\n`);
+      return;
     }
-    if (!op) continue;
+    if (!op) return;
 
     switch (op.do) {
       case 'server': {
@@ -543,7 +687,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         break;
       }
       case 'wait-session': {
-        const up = await until(op.seconds, 1000, host, () => host.sessionUp(op.session) === true);
+        const up = await until(op.seconds, 1000, host, () => host.sessionUp(op.session) === true, sharedSleep, () => stopped);
         if (!up) {
           serverFailed = true;
           abort = true;
@@ -554,7 +698,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
       case 'create': {
         // Before the allow and lobby checks, and before the workspace: the seat's line is drawn
         // whole, and nothing sits between the lobby's last look and the create it guards.
-        if (op.seat) host.progress?.(op.seat, 'launching');
+        if (op.seat) reportProgress(op.seat, 'launching');
         if (op.seat && op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
         if (op.seat) {
           const why = host.allow(op.seat);
@@ -619,7 +763,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         break;
       }
       case 'launch': {
-        host.progress?.(op.seat, 'launching');
+        reportProgress(op.seat, 'launching');
         if (op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
         const why = host.allow(op.seat);
         if (why) {
@@ -637,7 +781,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         break;
       }
       case 'idle': {
-        host.progress?.(op.seat, 'waiting for its prompt');
+        reportProgress(op.seat, 'waiting for its prompt');
         if (op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
         if (op.waiting && op.resumeGap) {
           dropped.add(op.seat);
@@ -761,6 +905,11 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         // restart the count the message states.
         let shellBackFirst: number | null = null;
         for (;;) {
+          if (stopped) break;
+          if (parallel && !identities.has(op.seat)) {
+            const live = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
+            if (live) identities.set(op.seat, live);
+          }
           const kind = host.classify(session, here.pane, op.cli);
           last = kind;
           const back = host.shellBack?.(session, here.pane) ?? null;
@@ -784,9 +933,11 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           }
           if (host.now() >= deadline) break;
           const before = host.now();
-          await host.sleep(pollMs);
+          await sharedSleep(pollMs);
+          if (stopped) break;
           if (host.now() <= before) break;
         }
+        if (stopped) break;
         if (outcome === 'idle') {
           idleOnwards();
           break;
@@ -866,7 +1017,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         break;
       }
       case 'rename': {
-        host.progress?.(op.seat, 'naming');
+        reportProgress(op.seat, 'naming');
         const here = place(op.seat, op.pane);
         if (!here) {
           dropped.add(op.seat);
@@ -878,7 +1029,10 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           2000,
           host,
           () => host.agentPanes(session)?.includes(here.pane) === true,
+          sharedSleep,
+          () => stopped,
         );
+        if (stopped) break;
         if (!seen || !host.renameAgent(session, here.pane, op.seat)) {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'was not in the agent list in time; left at launched' });
@@ -903,26 +1057,27 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         // Line 2, after the name. Absent on a host that does not launch seats. A call that
         // fails is one line; the seat stays named, and nothing here reads the owner's terminal.
         if (op.displayAgent && host.reportDisplayAgent && !host.reportDisplayAgent(session, here.pane, op.displayAgent)) {
-          host.say(`${op.seat}: its display was not reported\n`);
+          sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
         }
         break;
       }
       case 'relabel': {
         // The seat stays. Neither call types into the pane or launches it again.
         if (host.renameWorkspace && !host.renameWorkspace(session, op.workspace, op.title)) {
-          host.say(`${op.seat}: its title was not reported\n`);
+          sayForSeat(op.seat, `${op.seat}: its title was not reported\n`);
         }
         if (host.reportDisplayAgent && !host.reportDisplayAgent(session, op.pane, op.displayAgent)) {
-          host.say(`${op.seat}: its display was not reported\n`);
+          sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
         }
         break;
       }
       case 'deliver': {
-        host.progress?.(op.seat, 'sending its rules');
+        reportProgress(op.seat, 'sending its rules');
         if (op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
         const here = place(op.seat, op.pane);
         const file = { text: op.rules, path: op.path, line: op.line, seat: op.seat };
         const delivered = here ? await host.deliverRules?.(session, here.pane, op.cli, file, op.seconds) : false;
+        if (stopped) break;
         if (delivered === 'no-agent') {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'no live agent in its pane; its rules were not delivered' });
@@ -1011,6 +1166,8 @@ export async function executePlan(steps: readonly Step[], session: string, host:
           2000,
           host,
           () => host.agentPanes(session)?.includes(op.pane) === false,
+          sharedSleep,
+          () => stopped,
         );
         if (!gone) {
           if (op.closeUnasked && op.workspace) {
@@ -1030,7 +1187,7 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         break;
       }
       case 'repair': {
-        host.progress?.(op.seat, 'launching');
+        reportProgress(op.seat, 'launching');
         // The pane holds a process team did not launch (or no CLI at all): the workspace is
         // closed with no key and no text sent into it, the seat's launch state is cleared, and
         // the steps after this one launch the seat fresh, exactly as for a seat never launched.
@@ -1211,6 +1368,133 @@ export async function executePlan(steps: readonly Step[], session: string, host:
       default:
         break;
     }
+  };
+
+  const hasDownStep = steps.some((step) => {
+    const kind = step.do?.do;
+    return kind === 'type' || kind === 'gone' || kind === 'close';
+  });
+
+  if (!parallel || hasDownStep) {
+    for (const step of steps) {
+      await runStep(step);
+    }
+  } else {
+    let start = 0;
+    while (start < steps.length) {
+      const kind = steps[start]?.do?.do;
+      if (kind === 'server' || kind === 'wait-session') start++;
+      else break;
+    }
+    let end = steps.length;
+    while (end > start) {
+      const op = steps[end - 1]?.do;
+      if ((op?.do === 'create' && !op.seat) || op?.do === 'watch' || op?.do === 'kill' || op?.do === 'stop') end--;
+      else break;
+    }
+
+    const leadingSteps = steps.slice(0, start);
+    const middleSteps = steps.slice(start, end);
+    const trailingSteps = steps.slice(end);
+
+    type SeatUnit = {
+      seat: string;
+      standalone: boolean;
+      launchSteps: Step[];
+      waitSteps: Step[];
+    };
+    const units: SeatUnit[] = [];
+    const unitBySeat = new Map<string, SeatUnit>();
+    for (const step of middleSteps) {
+      const op = step.do;
+      const seat = op && 'seat' in op ? op.seat : undefined;
+      if (!seat) {
+        const key = `__skip_${units.length}`;
+        const unit: SeatUnit = { seat: key, standalone: true, launchSteps: [step], waitSteps: [] };
+        units.push(unit);
+        ensureBuffer(key);
+        continue;
+      }
+      let unit = unitBySeat.get(seat);
+      if (!unit) {
+        unit = { seat, standalone: false, launchSteps: [], waitSteps: [] };
+        unitBySeat.set(seat, unit);
+        units.push(unit);
+        ensureBuffer(seat);
+      }
+      const isWait = op?.do === 'idle' || op?.do === 'rename' || op?.do === 'deliver';
+      if (isWait || unit.waitSteps.length > 0) unit.waitSteps.push(step);
+      else unit.launchSteps.push(step);
+    }
+
+    for (const step of leadingSteps) {
+      if (abort) break;
+      await runStep(step);
+    }
+
+    if (!abort) {
+      let nextIndex = 0;
+      const inFlight = new Set<Promise<void>>();
+      const fillWindow = async (): Promise<void> => {
+        const readyToWait: SeatUnit[] = [];
+        while (nextIndex < units.length && !abort && inFlight.size + readyToWait.length < concurrency) {
+          const unit = units[nextIndex++]!;
+          for (const step of unit.launchSteps) {
+            if (abort) break;
+            if (!unit.standalone && dropped.has(unit.seat)) break;
+            await runStep(step, unit.seat);
+          }
+          if (abort || unit.standalone || dropped.has(unit.seat) || unit.waitSteps.length === 0) {
+            lastProgress.delete(unit.seat);
+            if (unit.standalone) {
+              const buf = seatBuffers.get(unit.seat);
+              if (buf) buf.done = true;
+            }
+            flushSettled();
+            continue;
+          }
+          readyToWait.push(unit);
+        }
+        for (const unit of readyToWait) {
+          let task!: Promise<void>;
+          task = (async () => {
+            try {
+              for (const step of unit.waitSteps) {
+                if (stopped || dropped.has(unit.seat)) break;
+                await runStep(step, unit.seat);
+              }
+            } finally {
+              lastProgress.delete(unit.seat);
+              inFlight.delete(task);
+              flushSettled();
+            }
+          })();
+          inFlight.add(task);
+        }
+      };
+
+      while ((nextIndex < units.length && !abort) || inFlight.size > 0) {
+        await fillWindow();
+        if (inFlight.size > 0) {
+          await Promise.race(inFlight);
+        }
+      }
+    }
+
+    if (abort && !stopped) {
+      for (const unit of units) {
+        const buf = seatBuffers.get(unit.seat);
+        if (buf && !buf.settled) buf.done = true;
+      }
+      flushSettled();
+    }
+
+    if (!abort) {
+      for (const step of trailingSteps) {
+        if (abort) break;
+        await runStep(step);
+      }
+    }
   }
 
   if (stopped) {
@@ -1282,6 +1566,10 @@ export async function executePlan(steps: readonly Step[], session: string, host:
         dropped.add(seat);
         final(seat, { kind: 'left out', reason: 'stopped cleanly' });
       }
+    }
+    if (parallel) {
+      for (const buf of seatBuffers.values()) buf.done = true;
+      flushSettled();
     }
     if (createdSession) {
       const left = host.agentList?.(session) ?? null;
