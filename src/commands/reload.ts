@@ -150,7 +150,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   const dir = dirname(loaded.path);
   const session = team.session;
   const recorded = readState(dir).sessions[session]?.seats[seat.name];
-  if (!recorded || recorded.stage !== 'ready' || !recorded.pane || !recorded.workspace || !recorded.launched) {
+  if (seat.stopped || !recorded || recorded.stage !== 'ready' || !recorded.pane || !recorded.workspace || !recorded.launched) {
     out.stderr(`team reload: ${seat.name} has no ready pane to close\n`);
     // exit: reload.not-running
     return 1;
