@@ -17,9 +17,10 @@ import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { declaredModel } from '../file/model.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, workspaceList, workspacePanes, type HerdrAgent } from '../herdr.ts';
-import type { Command, Io } from '../io.ts';
+import { cleanedIo, type Command, type Io } from '../io.ts';
 import { resolveLobby, verifyLobby } from '../lobby/gate.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
+import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
 import { checkRulesFile, rulesFilePathOf } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
@@ -170,12 +171,13 @@ function range(tested: { from: string; to: string }): string {
 }
 
 function versionFinding(name: string, printed: string, tested: { from: string; to: string }, cli: boolean): Finding {
-  const verdict = versionVerdict(printed, tested);
-  if (verdict === 'tested') return { level: 'ok', text: `${name} ${printed}` };
-  if (verdict === 'unread') return { level: 'warn', text: `${name}: its version can't be read from "${printed}"` };
+  const shown = plainLine(printed);
+  const verdict = versionVerdict(shown, tested);
+  if (verdict === 'tested') return { level: 'ok', text: plainLine(`${name} ${shown}`) };
+  if (verdict === 'unread') return { level: 'warn', text: plainLine(`${name}: its version can't be read from "${shown}"`) };
   // Only a CLI has screens to misread; herdr's version line says just where it sits.
   const tail = cli ? ": its screens are untested with this version; a seat that isn't read at launch is left out, never typed into" : '';
-  return { level: 'warn', text: `${name} ${printed} is ${verdict} than the tested ${range(tested)}${tail}` };
+  return { level: 'warn', text: plainLine(`${name} ${shown} is ${verdict} than the tested ${range(tested)}${tail}`) };
 }
 
 // The approved bytes rule, as the watch applies it (budgets/checks.ts): a check whose file no
@@ -233,7 +235,7 @@ export function budgetCheckFindings(team: TeamFile, standing: Standing, root: st
   for (const [name, account] of Object.entries(budgets.accounts)) {
     const noPattern = account.sources.includes('status_line') && !clisOf(team, name).some((cli) => quotaWith(cli, patterns).some((one) => one.account === name));
     const noCommand = account.sources.includes('check') && account.check === null;
-    if (noPattern || noCommand) findings.push({ level: 'warn', text: `${name}: no pattern can read this account` });
+    if (noPattern || noCommand) findings.push({ level: 'warn', text: plainLine(`${name}: no pattern can read this account`) });
   }
   const commands = checkCommands(budgets);
   if (!isOwner(caller)) {
@@ -252,14 +254,14 @@ export function budgetCheckFindings(team: TeamFile, standing: Standing, root: st
     if (!known || !entry || changedSinceApproval(known)) continue;
     const text = run(known.path);
     if (text === null) {
-      findings.push({ level: 'warn', text: `the check for ${account} failed or timed out; that account reads unknown` });
+      findings.push({ level: 'warn', text: plainLine(`the check for ${account} failed or timed out; that account reads unknown`) });
       continue;
     }
     const reading = parseOutput(entry, text, now);
     findings.push(
       reading
-        ? { level: 'ok', text: `the check for ${account} reads ${figureOf(reading)}` }
-        : { level: 'warn', text: `the check for ${account} broke its output contract; that account reads unknown` },
+        ? { level: 'ok', text: plainLine(`the check for ${account} reads ${figureOf(reading)}`) }
+        : { level: 'warn', text: plainLine(`the check for ${account} broke its output contract; that account reads unknown`) },
     );
   }
   return findings;
@@ -347,21 +349,21 @@ export function modelFlagFinding(
     // The owner wrote the key and approved it: that is what makes a note enough, and the note
     // says the truth for the seat — checked on the running seat, or nothing checks it.
     return shows
-      ? { level: 'note', text: `${seat.name}: the model is chosen by its launcher; checked on the running seat` }
+      ? { level: 'note', text: plainLine(`${seat.name}: the model is chosen by its launcher; checked on the running seat`) }
       : {
           level: 'note',
-          text: `${seat.name}: the model is chosen by its launcher (declared in the file); this version can't read ${declared} on this CLI's screen, so nothing checks it`,
+          text: plainLine(`${seat.name}: the model is chosen by its launcher (declared in the file); this version can't read ${declared} on this CLI's screen, so nothing checks it`),
         };
   }
   if (bare && profile.lastUsedModel) {
-    return { level: 'warn', text: `${seat.name}: the launch names no model this version knows; the file says ${declared}` };
+    return { level: 'warn', text: plainLine(`${seat.name}: the launch names no model this version knows; the file says ${declared}`) };
   }
   if (bare) {
-    return shows ? null : { level: 'warn', text: `${seat.name}: no model flag, and this version can't read ${declared} on this CLI's screen: nothing checks that it runs it` };
+    return shows ? null : { level: 'warn', text: plainLine(`${seat.name}: no model flag, and this version can't read ${declared} on this CLI's screen: nothing checks that it runs it`) };
   }
   return {
     level: 'warn',
-    text: `${seat.name}: the launch runs ${first}, not ${profile.binary}, and names no model: if the launcher chooses the model, say so with model_from: launcher`,
+    text: plainLine(`${seat.name}: the launch runs ${first}, not ${profile.binary}, and names no model: if the launcher chooses the model, say so with model_from: launcher`),
   };
 }
 
@@ -375,7 +377,7 @@ export function machineFindings(team: TeamFile, root: string, sources: DoctorSou
   const machine = sources.machine?.(root);
   if (!machine) return [];
   const problem = swapTotalProblem(machine, team.machine);
-  return problem === null ? [] : [{ level: 'warn', text: problem }];
+  return problem === null ? [] : [{ level: 'warn', text: plainLine(problem) }];
 }
 
 // `watch` is the watch values in force — the approved ones — so an unapproved interval edit can't
@@ -432,7 +434,7 @@ export function seatNameFindings(team: TeamFile, session: string): Finding[] {
     const which = same
       ? `its name and its label repeat ${quoted(hits[0]?.found ?? [])}`
       : hits.map((hit) => `its ${hit.field} repeats ${quoted(hit.found)}`).join(' and ');
-    findings.push({ level: 'warn', text: `${seat.name}: ${which}; the session already carries it` });
+    findings.push({ level: 'warn', text: plainLine(`${seat.name}: ${which}; the session already carries it`) });
   }
   return findings;
 }
@@ -745,14 +747,19 @@ export function doctorFindings(
     }
   }
 
+  for (let index = 0; index < findings.length; index++) {
+    const finding = findings[index]!;
+    findings[index] = { level: finding.level, text: plainLine(finding.text) };
+  }
+
   // The legacy note is told only while the file really is legacy: once the owner has written the
   // absolute trust entries, the approval findings carry the next step (`run \`team approve\``),
   // and a note that still says "migrate" would name a step already taken.
   if (!team.trust || team.trust.length === 0 || isLegacyTrust(team.trust)) {
-    const fromText = oldLobby ? `from ${oldLobby} to ${lobby}` : `to ${lobby}`;
+    const fromText = oldLobby ? `from ${plainLine(oldLobby)} to ${plainLine(lobby)}` : `to ${plainLine(lobby)}`;
     findings.push({
       level: 'note',
-      text: `the file is legacy: migrate ${fromText} by writing:\n${migrationText(team, root, sources.home)}`,
+      text: plainText(`the file is legacy: migrate ${fromText} by writing:\n${migrationText(team, root, sources.home)}`),
     });
   }
   return findings;
@@ -767,25 +774,26 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
   for (const cli of clis) {
     const profile = profileFor(cli);
     if (!profile) {
-      findings.push({ level: 'note', text: `${cli}: no launch profile in this version` });
+      findings.push({ level: 'note', text: plainLine(`${cli}: no launch profile in this version`) });
       continue;
     }
     const loggedIn = sources.loggedIn(profile);
     if (loggedIn === false) {
-      findings.push({ level: 'miss', text: `log in to ${cli}: \`${profile.loginHint}\`` });
+      findings.push({ level: 'miss', text: plainLine(`log in to ${cli}: \`${profile.loginHint}\``) });
     } else if (loggedIn === null) {
-      findings.push({ level: 'note', text: `${cli}: the login is not checked in this version` });
+      findings.push({ level: 'note', text: plainLine(`${cli}: the login is not checked in this version`) });
     } else {
-      findings.push({ level: 'ok', text: `${cli}: logged in` });
+      findings.push({ level: 'ok', text: plainLine(`${cli}: logged in`) });
     }
   }
   return findings;
 }
 
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
+  const out = cleanedIo(io);
   const args = readArgs(argv, ['session', 'file'], ['login']);
   if (args.error || args.rest.length) {
-    io.stderr(`team doctor: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
+    out.stderr(`team doctor: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
     // exit: doctor.invocation
     return 2;
   }
@@ -798,7 +806,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   const loaded = loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), ...(home ? { home } : {}) });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
-      io.stderr(`team doctor: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
+      out.stderr(`team doctor: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
     }
     // exit: doctor.not-a-repo
     // exit: doctor.file
@@ -829,7 +837,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
       ];
 
   const label: Record<Level, string> = { ok: 'ok  ', warn: 'warn', miss: 'MISS', note: '--  ' };
-  io.stdout(findings.map((finding) => `${label[finding.level]}  ${finding.text}\n`).join(''));
+  out.stdout(findings.map((finding) => `${label[finding.level]}  ${finding.text}\n`).join(''));
   const missing = findings.filter((finding) => finding.level === 'miss').length;
   const warnings = findings.filter((finding) => finding.level === 'warn').length;
   // The same rule `up` and `add` refuse on. A missing watch is `miss` but blocks nothing, so the
@@ -839,7 +847,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   let summary = `team doctor: ${missing} missing, ${warnings} warning${plural}`;
   if (!missing) summary = `team doctor: nothing missing, ${warnings} warning${plural}`;
   else if (blockers) summary += `: ${blockers} of them block \`up\` and \`add\``;
-  io.stdout(`${summary}\n`);
+  out.stdout(`${summary}\n`);
   // exit: doctor.clear
   // exit: doctor.missing
   return missing ? 1 : 0;

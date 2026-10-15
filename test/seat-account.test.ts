@@ -11,7 +11,7 @@ import { fingerprints } from '../src/approve/fingerprint.ts';
 import { seatBudget } from '../src/budgets/gate.ts';
 import { loadReadings, type Seen } from '../src/budgets/readings.ts';
 import { budgetTable } from '../src/budgets/table.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
