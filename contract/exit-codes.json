@@ -2994,7 +2994,7 @@
       "code": 1,
       "command": "watch",
       "id": "watch.watchdog",
-      "meaning": "only the recorded watchdog pane may read the file up recorded",
+      "meaning": "only the recorded watch may read the file up recorded",
       "trigger": "team watch --session acme"
     },
     {
