@@ -217,13 +217,39 @@ describe('the send daemon\'s boundaries', () => {
     const world = setupWorld();
     const host = makeHost(world);
     let typedOnce = false;
+    let screenAfterType = `${RULE}\n❯ 020:word] [1032:word] [1044:word]\n${RULE}`;
     host.native.typeText = (_session, pane, text) => {
       typedOnce = true;
       host.typed.push({ pane, text });
       return true;
     };
-    host.native.paneText = () => (typedOnce ? `${RULE}\n❯ a draft that is not the trigger\n${RULE}` : `${RULE}\n❯ \n${RULE}`);
+    host.native.paneText = () => (typedOnce ? screenAfterType : `${RULE}\n❯ \n${RULE}`);
 
+    const longBrief = Array.from({ length: 125 }, (_, idx) => `[${String(idx * 12).padStart(4, '0')}:word]`).join(' ');
+
+    // 1. Direct send (without daemon): a cut or paste-collapsed composer box is held before Enter
+    const directIo = ownerIo(world.root);
+    expect(await runSend(['lead', longBrief], directIo, host)).toBe(1);
+    expect(directIo.err).toContain('held: the composer read-back did not match the trigger');
+    expect(host.typed.length).toBe(1);
+    expect(host.enters).toEqual([]);
+    const directDrops = join(world.dir, 'send-drops', 'acme', 'lead');
+    const directFiles = readdirSync(directDrops);
+    expect(directFiles.length).toBe(1);
+    expect(readFileSync(join(directDrops, directFiles[0]!), 'utf8')).toBe(longBrief);
+
+    // 2. Direct send when composer shows a paste chip instead of the trigger
+    typedOnce = false;
+    screenAfterType = `${RULE}\n❯ [Pasted text #1]\n${RULE}`;
+    const chipIo = ownerIo(world.root);
+    expect(await runSend(['lead', longBrief], chipIo, host)).toBe(1);
+    expect(chipIo.err).toContain('held: the composer read-back did not match the trigger');
+    expect(host.typed.length).toBe(2);
+    expect(host.enters).toEqual([]);
+
+    // 3. Daemon send
+    typedOnce = false;
+    screenAfterType = `${RULE}\n❯ a draft that is not the trigger\n${RULE}`;
     const started = await startSendDaemon({ root: world.root, dir: world.dir, team: world.team, host });
     if (started.kind !== 'serving') throw new Error(started.kind);
     handles.push(started.handle);
@@ -231,11 +257,11 @@ describe('the send daemon\'s boundaries', () => {
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'the composer was clobbered'], io, host)).toBe(1);
     expect(io.err).toContain('held: the composer read-back did not match the trigger');
-    expect(host.typed.length).toBe(1);
+    expect(host.typed.length).toBe(3);
     expect(host.enters).toEqual([]);
 
     const history = readHistory('acme', world.root, world.home);
-    expect(history.ok && history.entries.map((entry) => entry.outcome)).toEqual(['held']);
+    expect(history.ok && history.entries.map((entry) => entry.outcome)).toEqual(['held', 'held', 'held']);
   });
 
   test('a delivered message writes 0600 files under the state folder and none in the lobby or the repository', async () => {
