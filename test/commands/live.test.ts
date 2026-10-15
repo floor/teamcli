@@ -4652,7 +4652,7 @@ describe('team up, delegated', () => {
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
   });
 
-  test("the gate's refusal replaces the caller's on a real run: exit 1, no effects, no audit line", async () => {
+  test('a live delegates entry for up runs even when the gate refuses', async () => {
     delegateFile();
     await approve();
     const made = world();
@@ -4666,15 +4666,15 @@ describe('team up, delegated', () => {
       }),
       logDelegated,
     }, made));
-    expect(code).toBe(1);
-    expect(io.err).toBe("team up: --file is the owner's; the approved delegate cannot use it\n");
-    expect(io.out).toBe('');
-    expect(made.starts).toBe(0);
-    expect(made.creates).toEqual([]);
+    expect(code).toBe(0);
+    expect(io.err).not.toContain("--file is the owner's");
+    expect(io.out).toContain('claude-coordinator-acme: ready\n');
+    expect(made.starts).toBe(1);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
     expect(audits).toEqual([]);
   });
 
-  test("the gate's refusal on a dry run: the would-refuse line, then the plan, exit 1", async () => {
+  test('a live delegates entry for up dry-runs even when the gate refuses', async () => {
     delegateFile();
     await approve();
     const made = world();
@@ -4688,8 +4688,8 @@ describe('team up, delegated', () => {
       }),
       logDelegated,
     }, made));
-    expect(code).toBe(1);
-    expect(io.out).toContain('! up would refuse: the delegate pane main/w1:p1 runs only what its commands list names, and up is not in it\n');
+    expect(code).toBe(0);
+    expect(io.out).not.toContain('would refuse');
     expect(io.out).toContain('dry run: nothing was run\n');
     expect(made.starts).toBe(0);
     expect(audits).toEqual([]);
@@ -4987,10 +4987,7 @@ describe('team up, delegated', () => {
       name: 'unreachable',
       live: () => null,
       running: null,
-      real: [
-        `delegation cannot verify its placement or seats: herdr doesn't answer`,
-        `herdr doesn't answer`,
-      ],
+      real: [`herdr doesn't answer`],
       starts: 1,
     },
   ] as const;
@@ -5025,7 +5022,8 @@ describe('team up, delegated', () => {
       machine: () => fine,
     }, made));
     expect(code).toBe(1);
-    expect(io.out).toContain('! up would refuse: only the owner or the approved delegate runs `up`; this call is it runs in pane main/w9:p1, which no grant lists\n');
+    expect(io.err).toBe('deny\n');
+    expect(io.out).toBe('');
     expect(made.starts).toBe(0);
     expect(made.creates).toEqual([]);
   });

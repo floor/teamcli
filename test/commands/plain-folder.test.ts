@@ -420,12 +420,6 @@ describe('a folder with no git repository', () => {
     const root = join(base, 'acme');
     mkdirSync(join(root, '.agents'), { recursive: true });
     writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
-    const owner = testIo(root, { kind: 'owner' });
-    const added = await runAdd(['claude-coordinator-acme'], owner, addSources(home));
-    expect(added).toBe(1);
-    expect(owner.err).toContain('the file is legacy:');
-    expect(owner.err).not.toContain('never approved');
-    expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
 
     const seat = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'w9:p1', session: 'elsewhere' });
     const refused = await runAdd(['claude-coordinator-acme'], seat, addSources(home));
@@ -449,6 +443,13 @@ describe('a folder with no git repository', () => {
     expect(watched).toBe(0);
     expect(watching.err).not.toContain('not inside a git repository');
     expect(watching.out).toContain('the file was never approved on this machine');
+
+    // The owner adds a seat the file already names. A missing record does not refuse that.
+    const owner = testIo(root, { kind: 'owner' });
+    const added = await runAdd(['claude-coordinator-acme'], owner, addSources(home));
+    expect(added, owner.err + owner.out).toBe(0);
+    expect(owner.err).not.toContain('never approved');
+    expect(owner.out).toContain('claude-coordinator-acme: ready\n');
   });
 });
 

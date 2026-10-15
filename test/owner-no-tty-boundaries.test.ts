@@ -595,19 +595,21 @@ describe('the owner at a terminal outside herdr still passes', () => {
 });
 
 describe('the one sentence is the no-terminal placement\'s alone', () => {
-  test('a run that kept AGENT_UNATTENDED is refused with the caller named, not the one sentence', async () => {
+  test('a run that kept AGENT_UNATTENDED is denied, not the one sentence', async () => {
     const io = sceneIo(ORPHANED, { env: { AGENT_UNATTENDED: '1' } });
     const code = await runUp(['--dry-run'], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW });
     expect(code).toBe(1);
-    expect(io.out).toContain('this call is unplaced (AGENT_UNATTENDED is set)');
+    expect(io.err).toBe('deny\n');
+    expect(io.out).toBe('');
     expect(io.out + io.err).not.toContain(DETACHED_REFUSAL);
   });
 
-  test('a run whose seat\'s CLI is still an ancestor is refused with the caller named', async () => {
+  test('a run whose seat\'s CLI is still an ancestor is denied, not the one sentence', async () => {
     const io = sceneIo(UNDER_A_CLI);
     const code = await runUp(['--dry-run'], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW });
     expect(code).toBe(1);
-    expect(io.out).toContain('this call is unplaced (it is run by an agent (claude) outside herdr)');
+    expect(io.err).toBe('deny\n');
+    expect(io.out).toBe('');
     expect(io.out + io.err).not.toContain(DETACHED_REFUSAL);
   });
 
