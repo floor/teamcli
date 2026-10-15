@@ -18,7 +18,7 @@ import { LINK_NOT_FOLLOWED, loadTeamFile, NOT_A_REPO } from '../../src/file/load
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval, type Standing } from '../../src/store/store.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
 const SESSION = 'acme-web';
@@ -90,7 +90,7 @@ seats:
 `;
 }
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 function approve(cwd: string, file: string, home: string, text: string): void {
   mkdirSync(dirname(file), { recursive: true });
@@ -252,15 +252,15 @@ while [ "$1" = "--session" ]; do
   shift 2
 done
 if [ "$1" = agent ] && [ "$2" = list ]; then
-  printf '%s\\n' '{"result":{"agents":[]}}'
+  printf '%s\\n' '{"id":"cli:agent:list","result":{"agents":[],"type":"agent_list"}}'
   exit 0
 fi
 if [ "$1" = pane ] && [ "$2" = process-info ]; then
-  printf '%s\\n' "{\\"result\\":{\\"process_info\\":{\\"shell_pid\\":$PANE_ROOT_PID}}}"
+  printf '%s\\n' "{\\"id\\":\\"cli:pane:process_info\\",\\"result\\":{\\"process_info\\":{\\"foreground_processes\\":[{\\"argv0\\":\\"-zsh\\",\\"name\\":\\"zsh\\",\\"pid\\":$PANE_ROOT_PID,\\"ppid\\":1,\\"start_epoch\\":1776221303,\\"start_lstart\\":\\"Wed Apr 15 04:48:23 2026\\"}],\\"pane_id\\":\\"\${HERDR_PANE_ID:-}\\",\\"shell_name\\":\\"zsh\\",\\"shell_pid\\":$PANE_ROOT_PID,\\"shell_start_epoch\\":1776221303,\\"shell_start_lstart\\":\\"Wed Apr 15 04:48:23 2026\\",\\"tty\\":\\"ttys015\\"},\\"type\\":\\"pane_process_info\\"}}"
   exit 0
 fi
 if [ "$1" = session ] && [ "$2" = list ]; then
-  printf '%s\\n' '{"sessions":[]}'
+  printf '%s\\n' '{"default":"default","sessions":[{"attached_clients":0,"created_at":1776221303,"id":"s1","name":"default","pid":51289,"socket":"/Users/shared/herdr-default.sock","status":"running","version":"0.7.1","workspaces":1}]}'
   exit 0
 fi
 exit 1
