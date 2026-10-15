@@ -87,6 +87,17 @@ export function relaunchRepair(
     : `team remove ${name} --keep, then team add ${name} (or team down, then team up, for the whole team)`;
 }
 
+/** The restart a report names. An ordinary seat is removed and added again. A lead cannot
+ *  be removed, so the whole team is started again. Nothing here starts the seat. */
+export function seatRestartRepair(
+  team: { orchestrator: string; operator: string },
+  name: string,
+): string {
+  return isLeadSeat(team, name)
+    ? 'team down, then team up (to restart the whole team)'
+    : `team remove ${name} --keep, then team add ${name}`;
+}
+
 /**
  * The repair for a seat recorded with no process identity whose pane is a bare shell or
  * another model. `up` will not close that pane: the record cannot prove it is the seat's.

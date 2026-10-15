@@ -416,6 +416,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     return 1;
   }
   const dry = args.flags.has('dry-run');
+  // Set to exactly `1`. Anything else, including unset, leaves the caller refusal where it is.
+  const dev = io.env.TEAMCLI_DEV_MODE === '1';
   const refusals: string[] = [];
 
   // --- the delegate branch -----------------------------------------------------------------
@@ -641,12 +643,27 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
   const branchRun = branching();
 
+  // Dev mode says the caller-placement line once, as a warning, and the stop continues.
+  // Every other refusal stays a refusal. Unset, the list is unchanged. Nothing here writes
+  // an approval, a key, or a grant.
+  const placement = `only the owner, the orchestrator or the operator stops the team; this call is ${describeCaller(caller)}`;
+  let warning = '';
+  if (dev) {
+    const kept: string[] = [];
+    for (const line of refusals) {
+      if (line === placement) warning = line;
+      else kept.push(line);
+    }
+    if (warning) refusals.splice(0, refusals.length, ...kept);
+  }
+
   const state = readState(dir).sessions[session];
   const home = sources.home ?? homedir();
   let acting = team;
   if (refusals.length === 0) {
     const standing = sources.standing?.(root) ?? approvalStanding(root, home);
     if (standing.kind !== 'verified') {
+      if (warning) io.stderr(`team down: warning: ${warning}\n`);
       io.stderr(`team down: ${notInForce(standing)}\n`);
       // exit: down.never-approved
       // exit: down.legacy
@@ -655,6 +672,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     }
     const approved = validateTeamFile(standing.record.file);
     if (!approved.ok) {
+      if (warning) io.stderr(`team down: warning: ${warning}\n`);
       io.stderr('team down: the approved copy of the team file cannot be read\n');
       // exit: down.approved-copy
       return 1;
@@ -809,11 +827,15 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if (dry) {
     // A refusal leaves through the real run's return below, so the status and the exit id
     // are that refusal's. The words stay the dry run's, and nothing is written.
+    if (warning) io.stdout(`! warning: ${warning}\n`);
     for (const refusal of refusals) io.stdout(`! down would refuse: ${refusal}\n`);
     io.stdout(formatPlan(plan));
   }
   if (refusals.length) {
-    if (!dry) for (const refusal of refusals) io.stderr(`team down: ${refusal}\n`);
+    if (!dry) {
+      if (warning) io.stderr(`team down: warning: ${warning}\n`);
+      for (const refusal of refusals) io.stderr(`team down: ${refusal}\n`);
+    }
     // exit: down.caller
     // exit: down.abandon
     // exit: down.no-pane
@@ -832,6 +854,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.grant-scope
     return 1;
   }
+  if (!dry && warning) io.stderr(`team down: warning: ${warning}\n`);
   if (dry) {
     // exit: down.dry-run
     return 0;
