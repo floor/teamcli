@@ -3,7 +3,9 @@
 // idle word is not enough — the screen decides. The close re-reads herdr itself: a seat that
 // turned busy between the check and the close, or whose pane holds a process team did not
 // launch, closes nothing. A version drift is a model drift; an effort dropped from the file is a
-// drift that leaves no effort behind. A second reload after a successful one finds nothing to do.
+// drift that leaves no effort behind. A second reload after a successful one finds nothing to
+// do. Only the seat named closes — a drifted lead beside it keeps running — and the relaunch
+// runs the file's current launch line.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -38,9 +40,9 @@ function git(cwd: string, ...args: string[]): void {
   });
 }
 
-// The worker with its effort line optional and a stopping flag optional: the scenes rewrite the
-// file the record was launched from.
-function seat(name: string, options: { effort?: string; stopped?: boolean } = {}): string {
+// The worker with its effort line, launch line and stopping flag optional: the scenes rewrite
+// the file the record was launched from.
+function seat(name: string, options: { effort?: string; stopped?: boolean; launch?: string } = {}): string {
   return [
     `  - role: ${name === 'lead' ? 'coordinator' : 'implementer'}`,
     `    name: ${name}`,
@@ -49,7 +51,7 @@ function seat(name: string, options: { effort?: string; stopped?: boolean } = {}
     '    vendor: anthropic',
     '    model: Claude Opus',
     '    version: "5.5"',
-    '    launch: claude --model claude-opus-5-5',
+    `    launch: ${options.launch ?? 'claude --model claude-opus-5-5'}`,
     ...(options.effort ? [`    effort: ${options.effort}`] : []),
     ...(options.stopped ? ['    stopped: true'] : []),
     '    mode: shared',
@@ -120,9 +122,10 @@ function harness(options: {
   create?: boolean;
   processes?: { shell: number; foreground: number[] };
   flipAfterFirstRead?: boolean;
-} = {}): { sources: ReloadSources; closed: string[] } {
+} = {}): { sources: ReloadSources; closed: string[]; commands: string[] } {
   const panes = new Map<string, string>();
   const closed: string[] = [];
+  const commands: string[] = [];
   let clock = NOW.getTime();
   let n = 0;
   let readsOfRecorded = 0;
@@ -137,7 +140,8 @@ function harness(options: {
       panes.set(pane, IDLE);
       return { pane, workspace: `ws-${n}` };
     },
-    paneRun(_session, pane) {
+    paneRun(_session, pane, command) {
+      commands.push(command);
       panes.set(pane, IDLE);
       return true;
     },
@@ -171,7 +175,7 @@ function harness(options: {
     },
     now: () => new Date(clock),
   };
-  return { sources: { launch, home, now: () => new Date(clock) }, closed };
+  return { sources: { launch, home, now: () => new Date(clock) }, closed, commands };
 }
 
 beforeEach(() => {
@@ -311,5 +315,37 @@ describe('after a reload', () => {
     expect(code, io.out + io.err).toBe(1);
     expect(closed).toEqual([]);
     expect(logText()).toBe('');
+  });
+});
+
+describe('only the seat that was named', () => {
+  test('a drifted lead beside the named seat is left running', async () => {
+    remember('lead', 'low');
+    remember('worker', 'low');
+    const { sources, closed } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect(code, io.out + io.err).toBe(0);
+    expect(closed).toEqual(['worker-ws']);
+    expect(readState(dir).sessions.alpha?.seats.lead?.effort).toBe('low');
+    expect(logText()).toContain('reload [owner] worker: effort');
+    expect(logText()).not.toContain('lead');
+  });
+});
+
+describe('the line the relaunch runs', () => {
+  test('the file\'s current launch line, not the one the record was launched with', async () => {
+    const line = 'claude --model claude-opus-5-5 --reasoning high';
+    approve(teamYaml(seat('worker', { effort: 'high', launch: line })));
+    remember('worker', 'low');
+    const { sources, closed, commands } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect(code, io.out + io.err).toBe(0);
+    expect(closed).toEqual(['worker-ws']);
+    // The pane runs the file's line, wrapped with the unattended environment and the rules.
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toContain(line);
+    expect(readState(dir).sessions.alpha?.seats.worker?.launch_line).toContain(line);
   });
 });
