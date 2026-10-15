@@ -2,10 +2,11 @@ import {
   chmodSync,
   closeSync,
   constants,
-   existsSync,
+  existsSync,
   fchmodSync,
   fstatSync,
   openSync,
+  readdirSync,
   readSync,
   renameSync,
   statSync,
@@ -267,11 +268,10 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
 }
 
 /**
- * Reads the project's history log (`messages.jsonl.2`, `messages.jsonl.1`, `messages.jsonl`)
+ * Reads one state folder's history log (`messages.jsonl.2`, `messages.jsonl.1`, `messages.jsonl`)
  * in chronological order without following symbolic links.
  */
-export function readHistory(project: string, root: string, home: string): HistoryRead {
-  const storeDir = storePath(project, root, home);
+export function readStoreHistory(storeDir: string, home: string): HistoryRead {
   const stateRoot = storesFolder(home);
   const configDir = dirname(stateRoot);
   for (const level of [configDir, stateRoot, storeDir]) {
@@ -300,3 +300,47 @@ export function readHistory(project: string, root: string, home: string): Histor
   }
   return { ok: true, entries, path };
 }
+
+/**
+ * Reads the project's history log (`messages.jsonl.2`, `messages.jsonl.1`, `messages.jsonl`)
+ * in chronological order without following symbolic links.
+ */
+export function readHistory(project: string, root: string, home: string): HistoryRead {
+  return readStoreHistory(storePath(project, root, home), home);
+}
+
+const STORE_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{12}$/;
+
+/**
+ * Reads `messages.jsonl` across every project state folder under `<home>/.config/team`
+ * (never entering `lobby` or `lobbies`), sorted chronologically.
+ */
+export function readAllHistories(home: string): { ok: true; entries: HistoryEntry[] } | { ok: false; reason: string } {
+  const stateRoot = storesFolder(home);
+  const configDir = dirname(stateRoot);
+  for (const level of [configDir, stateRoot]) {
+    const problem = ladderProblem(level);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+  if (heldAt(stateRoot).kind === 'missing') return { ok: true, entries: [] };
+
+  let names: string[];
+  try {
+    names = readdirSync(stateRoot).sort();
+  } catch {
+    return { ok: false, reason: 'the state folder could not be read' };
+  }
+
+  const all: HistoryEntry[] = [];
+  for (const name of names) {
+    if (name === 'lobby' || name === 'lobbies') continue;
+    if (!STORE_DIR_NAME.test(name)) continue;
+    const dir = join(stateRoot, name);
+    const read = readStoreHistory(dir, home);
+    if (!read.ok) return read;
+    for (const entry of read.entries) all.push(entry);
+  }
+  all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  return { ok: true, entries: all };
+}
+

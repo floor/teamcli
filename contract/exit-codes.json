@@ -2391,6 +2391,13 @@
     {
       "code": 1,
       "command": "send",
+      "id": "send.held",
+      "meaning": "the message is on disk and the pane was left untouched",
+      "trigger": "team send worker hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
       "id": "send.refused",
       "meaning": "nothing was sent, on purpose",
       "trigger": "team send missing hello"
@@ -2987,7 +2994,7 @@
       "code": 1,
       "command": "watch",
       "id": "watch.watchdog",
-      "meaning": "only the recorded watchdog pane may read the file up recorded",
+      "meaning": "only the recorded watch may read the file up recorded",
       "trigger": "team watch --session acme"
     },
     {
