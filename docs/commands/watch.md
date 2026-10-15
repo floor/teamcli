@@ -125,7 +125,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | --- | --- |
 | `<seat> is in the file and is not running` | herdr lists no agent for a seat the file has, does not stop, and the watch has not seen running |
 | `<seat> was running and is gone (its pane closed, or its CLI ended)` | herdr lists no agent for a seat the watch had seen running; said at each disappearance |
-| `<seat> is no longer the process team launched (its session was restored, or its CLI was restarted)` | the process in the seat's pane is not the one recorded when `team` launched it: the pane runs no CLI, or one `team` did not launch |
+| `<seat> is no longer the process team launched (its session was restored, or its CLI was restarted)` | the process in the seat's pane is not the one recorded when `team` launched it: the pane runs no CLI, or a program `team` did not launch runs in it and the agent session herdr shows there is not the one stored at launch. A pane the stored session came back on is the seat again and is not reported; a seat with no record of its launch, or a pane herdr can't read, is not reported either |
 | `<seat> waits at a permission prompt: its owner's to answer` | a permission dialog or a trust question; only its owner answers those |
 | `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
 | `<seat> shows a vendor notice: its owner's to act on` | a screen the seat's profile captures as a vendor notice — today, Codex 0.157.0's update screen; `team` never answers one |
