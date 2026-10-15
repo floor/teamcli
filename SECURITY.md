@@ -25,6 +25,13 @@ never ignored.
 
 The latest release only.
 
+## What is in scope
+
+Everything this repository ships — the `team` command, its schema and its examples — and
+what a run of it does in a project: the team file and the grants it holds, the caller
+gate that reads them, the message files and drop files it writes, the local sockets it
+binds, and the behaviour its own documentation states.
+
 ## What is not a weakness in TeamCLI
 
 - TeamCLI protects against an agent's mistake, not against a hostile program running as
