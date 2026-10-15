@@ -99,7 +99,7 @@ A lab whose help or model list names none is left out of the file, and a vendor 
 accepts any effort.
 
 A word outside its lab's list is a warning, and the warning names the words that lab allows.
-It does not fail `team check`, `team approve` or `team up`. That is not a regression for a file
+It does not fail `team check` or `team up`. That is not a regression for a file
 that already loaded: an unknown field is refused, so no such file contains `effort`. Left out,
 the field is not stored on the seat, and the seat's approval key is unchanged. Adding it, in
 or out of the list, changes that key, because the word is part of the seat.
