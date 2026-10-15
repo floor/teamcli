@@ -126,11 +126,14 @@ untouched.
 | `team approve: unexpected "x"` (with the usage) | 2 |
 | `team approve: line <n>: <message>` / `team approve: <message>` | 2 |
 | `team approve: the approval store <store> is inside <folder>, where seats work` | 1 |
-| `team approve: only the owner approves a team file, from a terminal outside herdr; this call is <caller>` (no `delegates` section) | 1 |
+| `team approve: only the owner approves a team file, from a terminal outside herdr; this call is <caller>` (no `delegates` and no `grant` section) | 1 |
 | `team approve: only the owner or the approved delegate approves a team file; this call is <caller>` | 1 |
 | `team approve: this change needs the owner: <what changed>` (an owner section that is not `rules`) | 1 |
-| `team approve: --file is the owner's; the approved delegate cannot use it` | 1 |
+| `team approve: --file is the owner's; the approved delegate cannot use it` / `team approve: --file is the owner's; the granted seat cannot use it` | 1 |
 | `team approve: delegation needs a verified approval: <what is not in force>` / `delegation needs a readable approved copy: run \`team approve\`` / `delegation cannot verify its placement or seats: <why>` / `the approved delegate must be an external non-seat pane` / `the approved delegate <pane> may not run \`approve\`; its approved commands are <commands>` | 1 |
+| ``team approve: only the seat the grant names runs this: this call is <caller>`` / `` team approve: the grant does not list `approve` `` (a file that carries a `grant`, when the delegate gate did not take the run) | 1 |
+| ``team approve: a grant needs a verified approval: <what is not in force>`` / `` team approve: a grant needs a readable approved copy: run `team approve` `` / ``team approve: the approved file grants nothing`` / ``team approve: this change needs the owner: <what changed>`` (the grant gate's own reads) | 1 |
+| `` team approve: no pane is recorded for seat <seat> in this session: the owner stops that seat and runs `team up` `` / ``team approve: the state records pane <pane> for seat <seat> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`)`` (the grant gate's placement check) | 1 |
 | `team approve: input was waiting on the terminal: run \`team approve\` on its own line` | 1 |
 | `team approve: the terminal this call runs on could not be read to check for input waiting on it; nothing was written` | 1 |
 | `team approve: not approved; nothing was written` (`--confirm`) | 1 |
