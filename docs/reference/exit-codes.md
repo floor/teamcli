@@ -376,6 +376,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
+| `tempo.set` | `tempo` | 0 | the tempo was written | `team tempo urgent` |
+| `tempo.unchanged` | `tempo` | 0 | the tempo was already that word | `team tempo urgent` |
+| `tempo.detached` | `tempo` | 1 | a run with no terminal | `team tempo urgent` |
+| `tempo.not-owner` | `tempo` | 1 | not the owner | `team tempo urgent` |
+| `tempo.file` | `tempo` | 2 | the team file can't be read | `team tempo urgent` |
+| `tempo.invocation` | `tempo` | 2 | the invocation can't be read | `team tempo` |
+| `tempo.not-a-repo` | `tempo` | 2 | not inside a git repository | `team tempo urgent` |
+| `tempo.word` | `tempo` | 2 | the word is not a tempo | `team tempo faster` |
 | `unlock.released` | `unlock` | 0 | the lock was released | `team unlock heavy-run` |
 | `unlock.io` | `unlock` | 1 | the lock directory could not be removed | `team unlock heavy-run` |
 | `unlock.not-held` | `unlock` | 1 | the lock is not held | `team unlock heavy-run` |
@@ -432,7 +440,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `watch.file-owner` | `watch` | 1 | --file is the owner's | `team watch --file .agents/team.yaml` |
 | `watch.no-notify` | `watch` | 1 | a seat passed --no-notify | `team watch --no-notify` |
 | `watch.no-nudge` | `watch` | 1 | a seat passed --no-nudge | `team watch --no-nudge` |
-| `watch.watchdog` | `watch` | 1 | only the recorded watchdog pane may read the file up recorded | `team watch --session acme` |
+| `watch.watchdog` | `watch` | 1 | only the recorded watch may read the file up recorded | `team watch --session acme` |
 | `watch.file` | `watch` | 2 | the team file can't be read | `team watch --file missing.yaml` |
 | `watch.file-invalid` | `watch` | 2 | the team file can't be parsed | `team watch --file team.yaml` |
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |

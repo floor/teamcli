@@ -2593,6 +2593,62 @@
     },
     {
       "code": 0,
+      "command": "tempo",
+      "id": "tempo.set",
+      "meaning": "the tempo was written",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 0,
+      "command": "tempo",
+      "id": "tempo.unchanged",
+      "meaning": "the tempo was already that word",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 1,
+      "command": "tempo",
+      "id": "tempo.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 1,
+      "command": "tempo",
+      "id": "tempo.not-owner",
+      "meaning": "not the owner",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 2,
+      "command": "tempo",
+      "id": "tempo.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 2,
+      "command": "tempo",
+      "id": "tempo.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team tempo"
+    },
+    {
+      "code": 2,
+      "command": "tempo",
+      "id": "tempo.not-a-repo",
+      "meaning": "not inside a git repository",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 2,
+      "command": "tempo",
+      "id": "tempo.word",
+      "meaning": "the word is not a tempo",
+      "trigger": "team tempo faster"
+    },
+    {
+      "code": 0,
       "command": "unlock",
       "id": "unlock.released",
       "meaning": "the lock was released",
@@ -2987,7 +3043,7 @@
       "code": 1,
       "command": "watch",
       "id": "watch.watchdog",
-      "meaning": "only the recorded watchdog pane may read the file up recorded",
+      "meaning": "only the recorded watch may read the file up recorded",
       "trigger": "team watch --session acme"
     },
     {
