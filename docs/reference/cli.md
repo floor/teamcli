@@ -82,28 +82,6 @@ Literal: `trust`
 | --- | --- | --- |
 | `seat` | no | no |
 
-## `approve`
-
-Hidden: no
-
-Usage:
-
-    team approve [--show] [--confirm] [--file <path>]
-
-### Flags
-
-| Flag | Takes a value | Repeatable | Hidden |
-| --- | --- | --- | --- |
-| `--confirm` | no | no | no |
-| `--file` | yes | no | no |
-| `--help` | no | no | no |
-| `--show` | no | no | no |
-| `-h` | no | no | yes |
-
-### Positionals
-
-None.
-
 ## `ask-show`
 
 Hidden: no

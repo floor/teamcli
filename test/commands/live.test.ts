@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { realSources as downReal, runDown, stateOf, type DownLaunch, type DownSources } from '../../src/commands/down.ts';
 import { realSources as upReal, runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { delegateGate } from '../../src/delegate.ts';
@@ -1924,7 +1924,7 @@ describe('team up, live', () => {
     // and this call leaves the files as they were, so the log gains nothing.
     const seat = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1' });
     expect(await runUp(FILE, seat, sources({ machine: () => refusing }, world()))).toBe(1);
-    expect(seat.err).toContain('only the owner runs `up`');
+    expect(seat.err).toBe('deny\n');
     let log = existsSync(join(root, '.agents', 'team.log')) ? readFileSync(join(root, '.agents', 'team.log'), 'utf8') : '';
     expect(log).not.toContain('readings:');
     // A dry run decides nothing — its refused run exits as the real one, and it writes nothing.
@@ -4518,7 +4518,7 @@ describe('team up, delegated', () => {
     }, made));
     expect(code).toBe(1);
     expect(asked).toBe(0);
-    expect(io.err).toBe('team up: only the owner runs `up`, from a terminal outside herdr; this call is work\n');
+    expect(io.err).toBe('deny\n');
     expect(io.out).toBe('');
     expect(made.creates).toEqual([]);
   });
@@ -4538,7 +4538,7 @@ describe('team up, delegated', () => {
     expect(code).toBe(1);
     expect(asked).toBe(0);
     expect(caller.out).toBe('');
-    expect(caller.err).toBe('team up: only the owner runs `up`, from a terminal outside herdr; this call is work\n');
+    expect(caller.err).toBe('deny\n');
   });
 
   test('the owner\'s missing --file stays exit 2 even with a delegates section: gate never asked', async () => {

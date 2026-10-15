@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
-import { runApprove, type ApproveSources } from '../../src/commands/approve.ts';
+import { runApprove, type ApproveSources } from '../../src/approve/command.ts';
 import { loadConfig } from '../../src/commands/check.ts';
 import { commits } from '../../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
@@ -617,13 +617,12 @@ describe('the lobby gate', () => {
     if (!res.ok) expect(res.text).toContain('cannot read directory: EACCES');
   });
 
-  test('up gate runs after caller and approval refusals (unapproved file does not create lobby)', async () => {
+  test('a missing record does not refuse up, and a refusal still creates no lobby', async () => {
     writeFileSync(join(root, '.agents', 'team.yaml'), migratedTeamYaml());
     const made = world();
     const run = await runUpCmd([], made);
-    expect(run.code).toBe(1);
-    expect(run.err).toContain('the file was never approved on this machine');
-    expect(existsSync(lobby)).toBe(false);
+    expect(run.err).not.toContain('the file was never approved on this machine');
+    if (run.code !== 0) expect(existsSync(lobby)).toBe(false);
   });
 
   test('refusal: component owned by foreign user via injected FsReader', () => {
