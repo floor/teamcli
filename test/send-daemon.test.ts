@@ -614,13 +614,19 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
       },
     });
 
+    // Direct
+    const directIo = ownerIo(w.root);
+    expect(await runSend(['lead', 'single enter direct'], directIo, host)).toBe(1);
+    expect(host.enters.length).toBe(1);
+
+    // Daemon
     const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
     if (started.kind !== 'serving') throw new Error(started.kind);
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
     expect(await runSend(['lead', 'single enter test'], io, host)).toBe(1);
-    expect(host.enters.length).toBe(1);
+    expect(host.enters.length).toBe(2);
   });
 
   test('returns unreachable without typing when target pane is at a bare shell (both direct and daemon)', async () => {
