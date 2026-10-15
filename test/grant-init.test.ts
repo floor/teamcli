@@ -31,7 +31,7 @@ function teamFile(root: string, scope: string[] | null = ['init']): string {
     : `grant:\n  session: acme\n  seat: lead\n  scope:\n${scope.map((item) => `    - ${item}`).join('\n')}\n`;
   return `format: 1
 project: acme
-orchestrator: lead
+coordinator: lead
 operator: lead
 trust:
   - ~/.config/team/lobby
@@ -39,7 +39,7 @@ trust:
 workspace:
   mode: shared
 seats:
-  - role: orchestrator
+  - role: coordinator
     name: lead
     label: lead
     cli: claude-code
@@ -47,7 +47,6 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
-    leads: true
 ${grantBlock}`;
 }
 
