@@ -492,18 +492,18 @@ describe('a second watch', () => {
     });
 
     // A second watch — a process with no pane and not the recorded pid — types nothing and reads
-    // nothing: only the watch this session records may read the file up recorded.
-    const second = testIo(customDir);
+    // nothing: a run outside herdr with no terminal is the owner's to make, and this one is not.
+    const second = testIo(customDir, { kind: 'owner-no-tty' });
     const refused = await runWatch(['--session', SESSION], second, watchSources(home, { alive: () => true }));
     expect(refused).toBe(1);
-    expect(second.err).toContain('only the watch this session records may read the file up recorded');
+    expect(second.err).toContain('only the owner runs this, from a terminal outside herdr');
 
     // The recorded pid itself: no pane, no terminal, and the pid is the whole of its grant.
     updateState(customDir, (state) => {
       const session = state.sessions[SESSION];
       if (session?.watch) session.watch.pid = process.pid;
     });
-    const own = testIo(customDir);
+    const own = testIo(customDir, { kind: 'owner-no-tty' });
     const ran = await runWatch(['--session', SESSION], own, watchSources(home, { alive: () => true, pid: process.pid }));
     expect(ran, own.out + own.err).toBe(0);
     expect(own.out).toContain(`watching the session "${SESSION}"`);
