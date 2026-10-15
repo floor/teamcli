@@ -433,11 +433,10 @@ describe('team up, live', () => {
       expect(code).toBe(1);
       expect(seat?.stage).toBe('named');
       expect(seat?.rules).toBeUndefined();
-      // Same reading as the Codex case: the box still shows the line, unsent.
-      // Antigravity has no clearing key established (its trust dialog blocks the composer), so
-      // the advice names no key.
+      // Same reading as the Codex case: the box still shows the line, unsent. Enter was
+      // pressed, so the clearing key is named and not sent.
       expect(io.out).toContain('gemini-acme: left out: rules typed, not sent: its box still holds the line after Enter; '
-        + 'press Enter in its pane to send it, or clear the box, then run up again\n');
+        + 'press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again\n');
     } else {
       expect(code).toBe(1);
       expect(sent).toEqual([]);
@@ -5693,10 +5692,9 @@ describe('team down, live', () => {
     expect(io.out).toContain('deepseek-acme: its exit was not confirmed; the clearing key (ctrl+c) was not delivered; the text was left; left running (team down --abandon closes it)\n');
   });
 
-  test("a CLI with no clearing key names its leftover exit text and leaves it", async () => {
-    // Antigravity has no key that empties the box, so the seat cannot be asked again this run:
-    // the skip line says the box holds this CLI's own exit text, and the owner sends it or
-    // clears it in the pane.
+  test('a leftover exit text on Antigravity is cleared with the profile key, typed fresh, and stopped', async () => {
+    // The box already holds `/exit`. The profile's one key empties it, the exit is typed
+    // fresh, and the seat is stopped as on an empty box.
     writeFileSync(join(root, '.agents/team.yaml'), EXAMPLE.replace(
       /  - role: implementer\n    name: deepseek-acme[\s\S]*?count: 2[^\n]*\n/,
       ['  - role: implementer', '    name: gemini-acme', '    cli: antigravity', '    vendor: google',
@@ -5704,19 +5702,29 @@ describe('team down, live', () => {
     ));
     await approve();
     const exitTyped = readFileSync(new URL('../fixtures/antigravity/1.2.16/exit-typed.txt', import.meta.url), 'utf8');
+    const idle = readFileSync(new URL('../fixtures/antigravity/1.2.16/idle.txt', import.meta.url), 'utf8');
     const run = harness(readScreen('antigravity', exitTyped));
     run.setBox(exitTyped);
+    run.launch.sendKey = (_session, _pane, key) => {
+      run.keys.push(key);
+      run.setBox(idle);
+      return true;
+    };
+    run.launch.typeText = (_session, _pane, text) => {
+      run.typed.push(text);
+      run.setBox(exitTyped);
+      return true;
+    };
     const io = testIo(root, { kind: 'owner' });
     const code = await runDown(FILE, io, run.sourcesOf({
       agents: () => [agent('gemini-acme', 'w3:p1', 'idle')],
     }));
     expect(code).toBe(0);
-    expect(run.typed).toEqual([]);
-    expect(run.keys).toEqual([]);
-    expect(run.entered).toEqual([]);
-    expect(run.stopped).toEqual([]);
-    expect(io.out).toContain("gemini-acme: holds this CLI's exit text (/exit) unsent in its input box; left running (the owner sends it or clears it in its pane)\n");
-    expect(io.out).toContain('session acme-web: not stopped, 1 agent left in it\n');
+    expect(run.keys).toEqual(['ctrl+u']);
+    expect(run.typed).toEqual(['/exit']);
+    expect(run.entered).toEqual(['enter']);
+    expect(run.closed).toEqual(['w3']);
+    expect(io.out).toContain('gemini-acme: stopped\n');
   });
 
   // The refused shapes on the exit path, on both CLIs: the read-back before the Enter must
