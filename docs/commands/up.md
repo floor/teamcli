@@ -1,10 +1,10 @@
 # team up
 
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
-declares and this machine can run, and the watchdog pane. A fresh launch of the orchestrator or the
-operator starts in the project folder; every other seat starts in the team's lobby. A seat already
-running or ready is left as it is — its pane is not closed, moved or typed into — and its sidebar is
-rewritten from the file either way.
+declares and this machine can run, and starts the watch as a background process. A fresh launch of
+the orchestrator or the operator starts in the project folder; every other seat starts in the team's
+lobby. A seat already running or ready is left as it is — its pane is not closed, moved or typed
+into — and its sidebar is rewritten from the file either way.
 
 ## Synopsis
 
