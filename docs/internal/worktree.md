@@ -122,6 +122,8 @@ the same way.
 | `team worktree: "t" is recorded in session x, not in y; nothing was removed` | 1 |
 | `team worktree: seat <name> is recorded in this worktree; team remove <name> first` | 1 |
 | `team worktree: uncommitted or untracked files:` … the first twenty, one per line | 1 |
+| `team worktree: the recorded path "<recorded>" is not "<folder>"; nothing was removed` — the recorded path does not resolve to the folder the approved `workspace.path` yields | 1 |
+| `team worktree: the recorded branch "<recorded>" does not match "<pattern>" for "<task>"; nothing was removed` — the recorded branch is empty, is `workspace.base`, or does not fill the approved `workspace.branch` pattern | 1 |
 | `team worktree: commits on no remote branch:` … the first twenty, one per line | 1 |
 | `team worktree: the worktree was not removed: <first line of git's error>` | 1 |
 
