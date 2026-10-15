@@ -8,14 +8,15 @@ import type { CheckOutcome } from '../budgets/run.ts';
 import type { Seen } from '../budgets/readings.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { HerdrAgent } from '../herdr.ts';
-import type { SeatProcessVerdict } from '../launch/identity.ts';
+import type { ReplacedContinuity, SeatProcessVerdict } from '../launch/identity.ts';
 import type { QuotaFigure } from '../profiles/quota.ts';
 import type { Live } from '../status/compare.ts';
 import type { SessionState } from '../state.ts';
 import type { Machine } from './machine.ts';
 import type { Screen } from './screen.ts';
 
-// A report says what is, never what to do about it. `to` is who can act on it.
+// A report says what is. The model and launcher reports also name the restart; a report never
+// starts a seat. `to` is who can act on it.
 export type Report = { key: string; text: string; to: 'operator' | 'owner' };
 
 // The one exclusive reading of a seat's screen and herdr status: a seat at a permission prompt is
@@ -59,6 +60,12 @@ export type SeatObservation = {
   // one held by a process team did not launch, and `unknown` when herdr can't tell or the seat
   // was launched before the identity was recorded — treated as today everywhere.
   identity: SeatProcessVerdict;
+  // The launch line starts a program other than the CLI's own binary, or the file says the
+  // launcher chooses the model. A temporary seat has no launch line.
+  launcher: boolean;
+  // `restored` when a pid mismatch still carries the agent session stored at launch.
+  // The restored check stays quiet for it. `doubt` is a mismatch the session does not tie.
+  continuity: ReplacedContinuity;
   // Whether an agent answers for the seat. False: the seat's own checks never run.
   running: boolean;
   // The stage the session state records, when it records one. `named` and `ready` mean the

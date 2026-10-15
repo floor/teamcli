@@ -50,7 +50,7 @@ if (id === 'approve.placed') {
 
 const { approvalOf } = await import('../src/approve/approval.ts');
 const { runAdd } = await import('../src/commands/add.ts');
-const { runApprove } = await import('../src/commands/approve.ts');
+const { runApprove } = await import('../src/approve/command.ts');
 const { storePath, writeApproval } = await import('../src/store/store.ts');
 const { gitEnv, testIo } = await import('./helpers.ts');
 

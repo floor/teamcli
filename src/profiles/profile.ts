@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
+import { shippedEfforts } from './efforts.ts';
 import { WINDOWS, type QuotaPattern, type WindowName } from './quota.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
 import { trustAnswers, type TrustRecord } from './trust-answer.ts';
@@ -36,10 +37,12 @@ export interface Profile {
    *  key is established for this CLI: a seat that asks the question is one that could not be
    *  stopped by asking. */
   exitConfirm: string | null;
-  /** The exact relative paths of regular files this CLI may leave in its working folder, which
-   *  a shared lobby may therefore hold beside the seats. Empty when no capture has established
-   *  a path for this CLI: the lobby then holds nothing but the seats, as it always has. */
+  /** The exact relative paths of regular files this CLI may leave in its working folder.
+   *  Empty when no capture has established a path for this CLI. */
   lobbyFiles: readonly string[];
+  /** Paths this CLI reads at start in its working folder. A `directory` entry is every file
+   *  under that directory. Empty when a run showed this CLI reads none. */
+  startupReads: readonly { path: string; directory: boolean }[];
   /** Seconds to wait for the idle prompt after a launch. */
   idleTimeout: number;
   /** Seconds to wait for the pane's shell after the exit command. */
@@ -95,9 +98,153 @@ export function shellQuote(word: string): string {
  * them at launch, the rules.
  */
 export function launchCommand(profile: Profile, launch: string, rules: string): string {
-  const options = [...profile.unattended];
+  const words = new Set(launch.trim().split(/\s+/));
+  const options = profile.unattended.filter((option) => !words.has(option));
   if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
   return ['AGENT_UNATTENDED=1', launch.trim(), ...options.map(shellQuote)].join(' ');
+}
+
+/** True when the CLI accepts an effort override flag on its launch line. */
+export function supportsEffortLaunch(cli: string): boolean {
+  return cli === 'claude-code' || cli === 'antigravity' || cli === 'grok' || cli === 'codex';
+}
+
+/**
+ * Resolves a `--model` value against a CLI profile. Accepts either a CLI model id
+ * (`claude-sonnet-5-5`, `gpt-6-sol`, `gemini-3.1-pro`, `grok-4.7`, `composer-2.5`)
+ * or a display string (`Claude Sonnet 5.5`, `GPT Sol 6`, `Gemini Pro 3.1`, `Grok 4.7`).
+ */
+export function resolveModelOverride(
+  profile: Profile,
+  rawModel: string,
+  defaultVersion?: string,
+): { id: string; model: string; version: string } | null {
+  const trimmed = rawModel.trim();
+  if (!trimmed) return null;
+  const option = profile.modelFlag('', '').option;
+  if (!/\s/.test(trimmed)) {
+    const direct = profile.modelOf(`${option} ${trimmed}`);
+    if (direct) return { id: trimmed, model: direct.model, version: direct.version };
+    if (profile.cli === 'claude-code' && /^(opus|sonnet|haiku|fable)$/i.test(trimmed) && defaultVersion) {
+      const candidate = `claude-${trimmed.toLowerCase()}-${defaultVersion.replaceAll('.', '-')}`;
+      const hit = profile.modelOf(`${option} ${candidate}`);
+      if (hit) return { id: candidate, model: hit.model, version: hit.version };
+    }
+    return null;
+  }
+  const fastGrok = /^Grok\s+(\S+)\s+Fast$/i.exec(trimmed);
+  let modelName: string;
+  let version: string;
+  if (fastGrok && fastGrok[1]) {
+    version = fastGrok[1];
+    modelName = `Grok ${version} Fast`;
+  } else {
+    const at = trimmed.lastIndexOf(' ');
+    if (at <= 0) return null;
+    modelName = trimmed.slice(0, at).trim();
+    version = trimmed.slice(at + 1).trim();
+  }
+  const flagged = profile.modelFlag(modelName, version).id;
+  if (flagged) {
+    const hit = profile.modelOf(`${option} ${flagged}`);
+    if (hit) return { id: flagged, model: hit.model, version: hit.version };
+  }
+  const candidate = synthesizeModelId(profile.cli, modelName, version);
+  if (!candidate) return null;
+  const hit = profile.modelOf(`${option} ${candidate}`);
+  return hit ? { id: candidate, model: hit.model, version: hit.version } : null;
+}
+
+function synthesizeModelId(cli: string, modelName: string, version: string): string | null {
+  if (cli === 'claude-code') {
+    const match = /^Claude\s+(\S+)$/i.exec(modelName);
+    return match?.[1] ? `claude-${match[1].toLowerCase()}-${version.replaceAll('.', '-')}` : null;
+  }
+  if (cli === 'codex') {
+    const match = /^GPT\s+(\S+)$/i.exec(modelName);
+    return match?.[1] ? `gpt-${version}-${match[1].toLowerCase()}` : null;
+  }
+  if (cli === 'antigravity') {
+    const match = /^Gemini\s+(\S+)$/i.exec(modelName);
+    return match?.[1] ? `gemini-${version}-${match[1].toLowerCase()}` : null;
+  }
+  if (cli === 'grok') {
+    if (/Fast$/i.test(modelName)) return `grok-${version}-build-fast`;
+    if (/^Grok(?:\s+\S+)?$/i.test(modelName)) return `grok-${version}`;
+    return null;
+  }
+  if (cli === 'cursor') {
+    if (/^Grok$/i.test(modelName)) return `grok-${version}`;
+    if (/^GPT\s+Sol$/i.test(modelName)) return `gpt-${version}-sol`;
+    if (/^Gemini\s+Flash$/i.test(modelName)) return `gemini-${version}-flash`;
+    if (/^Composer$/i.test(modelName)) return `composer-${version}`;
+  }
+  return null;
+}
+
+/**
+ * Validates a `--effort` value against the seat's CLI and vendor vocabulary.
+ */
+export function resolveEffortOverride(
+  cli: string,
+  vendor: string,
+  rawEffort: string,
+): { effort: string } | { error: string } {
+  const trimmed = rawEffort.trim();
+  if (!trimmed || /\s/.test(trimmed)) {
+    return { error: 'effort must be a single word' };
+  }
+  if (!supportsEffortLaunch(cli)) {
+    return { error: `${cli} does not take an --effort flag on launch` };
+  }
+  const vocab = shippedEfforts();
+  if (vocab.ok) {
+    const allowed = vocab.labs[vendor];
+    if (allowed && allowed.length > 0 && !allowed.includes(trimmed)) {
+      return { error: `effort ${JSON.stringify(trimmed)} is not one of ${vendor}'s: ${allowed.join(', ')}` };
+    }
+  }
+  return { effort: trimmed };
+}
+
+/**
+ * Rewrites or appends the CLI's model and effort flags on a seat's launch line.
+ */
+export function withLaunchOverrides(
+  profile: Profile,
+  launch: string,
+  overrides: { modelId?: string; effort?: string },
+): string {
+  let next = launch.trim();
+  if (overrides.modelId) {
+    const option = profile.modelFlag('', '').option;
+    const modelPattern = profile.cli === 'codex' || profile.cli === 'grok'
+      ? /(^|\s)(--model|-m)(=|\s+)(\S+)/
+      : /(^|\s)(--model)(=|\s+)(\S+)/;
+    if (modelPattern.test(next)) {
+      next = next.replace(modelPattern, `$1$2$3${overrides.modelId}`);
+    } else {
+      next = `${next} ${option} ${overrides.modelId}`;
+    }
+  }
+  if (overrides.effort) {
+    if (profile.cli === 'codex') {
+      const codexEffort = /(^|\s)(-c|--config)(=|\s+)(['"]?model_reasoning_effort=[^'"\s]+['"]?)/;
+      if (codexEffort.test(next)) {
+        next = next.replace(codexEffort, `$1$2$3model_reasoning_effort=${overrides.effort}`);
+      } else {
+        next = `${next} -c model_reasoning_effort=${overrides.effort}`;
+      }
+    } else if (supportsEffortLaunch(profile.cli)) {
+      const effortPattern = /(^|\s)(--effort|--reasoning-effort)(=|\s+)(\S+)/;
+      if (effortPattern.test(next)) {
+        next = next.replace(effortPattern, `$1$2$3${overrides.effort}`);
+      } else {
+        next = `${next} --effort ${overrides.effort}`;
+      }
+    }
+  }
+  return next;
 }
 
 /**
@@ -122,7 +269,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok'] as const
 // without the first belongs to a CLI whose screen doesn't show its model; the second says the
 // CLI starts on its last-used model when a launch names none, and no shipped profile sets it.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'exit', 'timeouts', 'models'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['status_model', 'last_used_model', 'exit_clear', 'exit_confirm', 'lobby_files'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['status_model', 'last_used_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -190,6 +337,37 @@ function lobbyFilesOf(entry: YamlEntry): readonly string[] {
   return paths;
 }
 
+/**
+ * The value of `startup_reads`: paths this CLI reads at start. The grammar is `lobby_files`,
+ * plus a trailing `/` that names a directory and every file under it. A path the grammar
+ * refuses throws.
+ */
+function startupReadsOf(entry: YamlEntry): readonly { path: string; directory: boolean }[] {
+  if (entry.value.kind !== 'seq' || entry.value.items.length === 0) {
+    fail(entry.line, '"startup_reads" must be a non-empty list');
+  }
+  return entry.value.items.map((item) => {
+    const raw = stringOf(item);
+    if (!raw) fail(item.line, '"startup_reads" entries must be non-empty strings');
+    const directory = raw.endsWith('/');
+    const value = directory ? raw.slice(0, -1) : raw;
+    const parts = value.split('/');
+    if (!value || value.startsWith('/') || parts.some((part) => part === '' || part === '.' || part === '..')) {
+      fail(item.line, `"startup_reads" holds "${raw}": not a relative path inside the lobby`);
+    }
+    if (parts.some((part) => /[*?\[]/.test(part))) {
+      fail(item.line, `"startup_reads" holds "${raw}": a path is one exact name, not a pattern`);
+    }
+    return { path: value, directory };
+  });
+}
+
+/** The `startup_reads` a profile snippet names, by the loader's own rule: for tests. */
+export function startupReadsList(text: string): readonly { path: string; directory: boolean }[] {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'startup_reads');
+  return entry === undefined ? [] : startupReadsOf(entry);
+}
+
 /** The `lobby_files` a profile snippet names, by the loader's own rule: for tests. A path the
  *  grammar refuses throws; an absent key reads as the empty list, as an absent optional key
  *  reads as its default. */
@@ -210,12 +388,26 @@ export function profileFor(cli: string): Profile | null {
  *  whatever team runs; absent from the lobby, they cost nothing. */
 export const TOOL_LOBBY_FILES: readonly string[] = [REACH_ROSTER_FILE, REACH_ROSTER_TEMP];
 
-/** What a lobby may hold beside the seats: the `lobby_files` of every profile the tool ships,
- *  plus the tool's own files. The lobby is one folder per machine, shared by every team on it,
- *  so the set cannot depend on which seats a run starts nor on a team's file — a file another
- *  team's CLI left must not block a team with no seat of that CLI. Only a shipped profile can
- *  declare the key — the loader reads no profile from outside the tool — and `TOOL_LOBBY_FILES`
- *  is a constant, so nothing a user writes widens the set. */
+/** Paths a shipped CLI reads at start, one entry per path, `clis` in ship order. The lobby
+ *  gate refuses these at any depth. Only a shipped profile can declare the key. */
+export function shippedStartupReads(): readonly { path: string; directory: boolean; clis: readonly string[] }[] {
+  const byKey = new Map<string, { path: string; directory: boolean; clis: string[] }>();
+  for (const name of NAMES) {
+    const profile = SHIPPED[name]?.profile;
+    if (!profile) continue;
+    for (const read of profile.startupReads) {
+      const key = `${read.directory ? 'd' : 'f'}:${read.path}`;
+      const found = byKey.get(key) ?? { path: read.path, directory: read.directory, clis: [] };
+      if (!found.clis.includes(profile.cli)) found.clis.push(profile.cli);
+      byKey.set(key, found);
+    }
+  }
+  return [...byKey.values()];
+}
+
+/** What a CLI may write in the lobby: the `lobby_files` of every profile the tool ships,
+ *  plus the tool's own files. The set cannot depend on which seats a run starts. Only a
+ *  shipped profile can declare the key, and `TOOL_LOBBY_FILES` is a constant. */
 export function shippedLobbyFiles(): readonly string[] {
   const paths = new Set<string>();
   for (const shipped of Object.values(SHIPPED)) for (const path of shipped.profile.lobbyFiles) paths.add(path);
@@ -313,6 +505,7 @@ function launchOf(root: YamlNode): Shipped {
   const exitClearEntry = optional(entries, 'exit_clear');
   const exitConfirmEntry = optional(entries, 'exit_confirm');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
+  const startupReadsEntry = optional(entries, 'startup_reads');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
   const login = loginOf(required(entries, 'login', root.line).value);
   const timeouts = required(entries, 'timeouts', root.line).value;
@@ -331,6 +524,7 @@ function launchOf(root: YamlNode): Shipped {
       exitClear: exitClearEntry ? clearKeyOf(exitClearEntry) : null,
       exitConfirm: exitConfirmEntry ? confirmKeyOf(exitConfirmEntry) : null,
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
+      startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
       idleTimeout: seconds(timeouts, 'idle'),
       exitTimeout: seconds(timeouts, 'exit'),
       lastUsedModel: lastUsedEntry ? boolOf(lastUsedEntry.value, 'last_used_model') : false,

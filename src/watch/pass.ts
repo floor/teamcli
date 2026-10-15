@@ -5,16 +5,19 @@
 import { seatNamed } from '../approve/fingerprint.ts';
 import { observe, observeCheck, type Seen } from '../budgets/readings.ts';
 import type { CheckOutcome } from '../budgets/run.ts';
-import type { TeamFile } from '../file/types.ts';
+import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
-import { seatProcessVerdict } from '../launch/identity.ts';
+import { replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { usesLauncher } from '../launch/line.ts';
 import { profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
 import type { SessionState } from '../state.ts';
 import type { Live } from '../status/compare.ts';
+import { workspaceLabel } from '../file/sections/seats.ts';
 import { seatModel } from '../status/statusline.ts';
+import { liveDisplayAgent } from './seat-label.ts';
 import {
   ALWAYS_ON,
   type Attention,
@@ -66,10 +69,18 @@ export type Memory = {
   // same id. A restarted watch has none, so an old unacked record is said again; a receipt
   // takes the record off the list.
   mailboxTold: Set<string>;
+  // Sidebar lines this process has pushed, and the last effort word a screen showed. `title`
+  // and `line` are written only after herdr accepts the call. `effort` is the word last seen,
+  // which a screen that shows none does not clear. A restarted watch has none, so the first
+  // cycle paints every running seat again.
+  seatLabels: Record<string, { title?: string; line?: string; effort?: string }>;
 };
 
 export function newMemory(): Memory {
-  return { history: {}, slots: {}, active: new Set(), pending: [], pendingSince: null, ownNudge: null, mailboxTold: new Set() };
+  return {
+    history: {}, slots: {}, active: new Set(), pending: [], pendingSince: null, ownNudge: null, mailboxTold: new Set(),
+    seatLabels: {},
+  };
 }
 
 /** Whether a box, already read as unsent, holds this watch's own line: this process recorded
@@ -82,7 +93,7 @@ export function ownUnsent(memory: Memory, pane: string, text: string, cli: strin
 
 export type { Report } from './check.ts';
 
-// The one line the watch types into the operator's pane. Fixed, and free of report text: a dialog
+// The one line the watch types into an idle seat's pane. Fixed, and free of report text: a dialog
 // can open between the screen read and the typing, and a digit in the line would answer it. The
 // reports go to the log and to the desktop notification; the line only says where they are.
 export const NUDGE_TEXT = 'Team watch: reports are waiting in .agents/team.log';
@@ -104,9 +115,10 @@ export type MailboxWaiting = {
 
 export type PassResult = {
   reports: Report[];
-  // The one line to type into the operator's pane, when the operator is free. `pending` holds the
+  // The one line to type into an idle seat's pane, when one is free. `pending` holds the
   // report texts it stands for, so a delivery that fails puts them back rather than losing them.
-  nudge: { pane: string; text: string; pending: string[] } | null;
+  // `seat` is that seat's name and `cli` the CLI its screen is read with.
+  nudge: { pane: string; text: string; pending: string[]; seat: string; cli: string } | null;
   // What to notify instead, when a nudge has waited too long.
   fallback: string | null;
   // The one line to type when a message is waiting and this pass is not already typing a nudge.
@@ -115,6 +127,10 @@ export type PassResult = {
   mailboxNote: string | null;
   // The readings that count, to be saved: the project's, with this pass's figures folded in (§ 4.4).
   readings: Seen[];
+  // Sidebar lines to push for running file seats. The pass does not call herdr: the command
+  // does, and records `title` and `line` only after the call returns true. A seat with neither
+  // half changed is absent.
+  labels: { name: string; pane: string; workspace: string; title?: string; displayAgent?: string }[];
 };
 
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
@@ -191,7 +207,8 @@ export type PassInput = {
   readScreen?: (cli: string, screen: string | undefined) => Screen;
   /** Quota patterns in force, shipped plus the approved override. The shipped list, when omitted. */
   quotaFor?: (cli: string) => readonly QuotaPattern[];
-  /** The operator the nudge may type to. Omitted, the pass uses `team`. Null, it types nothing. */
+  /** Null types nothing: the approval in force does not verify. Any other value, including
+   *  omitted, types into an idle seat. The name here is not the pane. */
   nudgeOperator?: { name: string; cli: string } | null;
   /** Unacked messages already verified. Omitted, the pass rings nothing. */
   mailbox?: readonly MailboxWaiting[];
@@ -235,6 +252,7 @@ export function pass({
   const known = new Set<string>();
   const workers: { idle: boolean }[] = [];
   const observations: SeatObservation[] = [];
+  const labels: PassResult['labels'] = [];
 
   // A stopped seat is kept in the file and not started; should its owner start one by hand, herdr
   // shows it running, and the watch gives it a parked seat's treatment: attention (permission,
@@ -270,6 +288,7 @@ export function pass({
     const lead = name === team.orchestrator || name === team.operator;
     if (!agent) {
       delete memory.history[name];
+      delete memory.seatLabels[name];
       observations.push({
         name,
         seat,
@@ -281,6 +300,8 @@ export function pass({
         account,
         quota: [],
         identity: 'unknown',
+        launcher: false,
+        continuity: 'other',
         running: false,
         recorded: state.seats[name]?.stage,
         quiet: false,
@@ -315,6 +336,7 @@ export function pass({
       history.idleSince ??= now;
     }
 
+    const verdict = seatProcessVerdict(state.seats[name]?.launched, processes?.[agent.pane] ?? null);
     observations.push({
       name,
       seat,
@@ -325,7 +347,14 @@ export function pass({
       vendor,
       account,
       quota: quotaOf(cli, screen, pane, reportedLiveAgent(foreground?.[agent.pane] ?? null, profileFor(cli)?.processNames ?? []), patternsOf(cli)),
-      identity: seatProcessVerdict(state.seats[name]?.launched, processes?.[agent.pane] ?? null),
+      identity: verdict,
+      launcher: seat ? usesLauncher(seat) : false,
+      continuity: replacedSeat(verdict, {
+        asked: true,
+        namedOnPane: state.seats[name]?.pane === agent.pane,
+        recordedSession: state.seats[name]?.agent_session,
+        liveSession: agent.session,
+      }),
       running: true,
       recorded: state.seats[name]?.stage,
       quiet,
@@ -338,6 +367,7 @@ export function pass({
       model: seat ? seatModel(seat, live.screens[agent.pane]) : null,
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
     });
+    if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory));
   }
 
   // The figures this pass saw, folded into the readings the project keeps (§ 4.3, § 4.4). Only an
@@ -422,9 +452,9 @@ export function pass({
 
   memory.active = current;
 
-  // The nudge: kept until the operator is free — an empty idle prompt, or a box holding the line
+  // The nudge: kept until an idle seat is free — an empty idle prompt, or a box holding the line
   // this watch typed itself and never saw sent, which is sent rather than typed again — and
-  // typed into nothing else.
+  // typed into nothing else. The operator is not that seat: an idle operator never acts on it.
   for (const report of reports) {
     if (report.to === 'operator' && !memory.pending.includes(report.text)) {
       memory.pending.push(report.text);
@@ -434,31 +464,44 @@ export function pass({
   let fallback: string | null = null;
   if (memory.pending.length) {
     memory.pendingSince ??= now;
-    const chosen = nudgeOperator === undefined
-      ? { name: team.operator, cli: team.seats.find((seat) => seat.name === team.operator)?.cli ?? '' }
-      : nudgeOperator;
-    const named = chosen === null ? [] : live.agents.filter((agent) => agent.name === chosen.name);
-    const operator = named.length === 1 ? named[0] : undefined;
-    const cli = chosen?.cli ?? '';
-    const screen = operator ? read(cli, live.screens[operator.pane]) : null;
-    // The operator's box, read once more: an empty idle prompt is free to type into, and so is a
-    // box still holding the line this watch typed itself, recorded in memory at the typing. The
-    // line is one fixed public constant, so the text alone proves nothing: the same text typed
-    // by a person or an agent, or found by a restarted watch, is someone's text — never typed
-    // over, sent or cleared, and left to them or to the next stop.
-    const mine = operator !== undefined && screen?.kind === 'unsent'
-      && ownUnsent(memory, operator.pane, NUDGE_TEXT, cli, live.screens[operator.pane]);
-    const free = operator !== undefined && (operator.status === 'idle' || operator.status === 'done')
-      && (screen?.kind === 'idle' || mine);
-    if (operator && free) {
+    // Null is the unverified file: type nothing. Anything else picks a seat.
+    const choices: { pane: string; cli: string; seat: string; since: number }[] = [];
+    if (nudgeOperator !== null) {
+      for (const obs of observations) {
+        if (obs.lead || obs.parked || obs.stopped || !obs.seat || !obs.agent) continue;
+        const named = live.agents.filter((agent) => agent.name === obs.name);
+        if (named.length !== 1) continue;
+        const agent = named[0]!;
+        const raw = live.screens[agent.pane];
+        const screen = read(obs.cli, raw);
+        // An empty idle prompt is free to type into, and so is a box still holding the line
+        // this watch typed itself, recorded in memory at the typing. The line is one fixed
+        // public constant, so the text alone proves nothing: the same text typed by a person
+        // or an agent, or found by a restarted watch, is someone's text — never typed over,
+        // sent or cleared, and left to them or to the next stop.
+        const mine = screen.kind === 'unsent' && ownUnsent(memory, agent.pane, NUDGE_TEXT, obs.cli, raw);
+        const free = (agent.status === 'idle' || agent.status === 'done') && (screen.kind === 'idle' || mine);
+        if (!free) continue;
+        choices.push({
+          pane: agent.pane,
+          cli: obs.cli,
+          seat: obs.name,
+          since: obs.history.lastWorking ?? obs.history.idleSince ?? now,
+        });
+      }
+    }
+    choices.sort((a, b) => a.since - b.since || a.seat.localeCompare(b.seat));
+    const chosen = choices[0];
+    if (chosen) {
       nudge = {
-        pane: operator.pane,
+        pane: chosen.pane,
         text: NUDGE_TEXT,
         pending: memory.pending.slice(),
-        ...(nudgeOperator ? { cli: nudgeOperator.cli } : {}),
+        seat: chosen.seat,
+        cli: chosen.cli,
       };
     } else if (now - memory.pendingSince >= watch.nudgeWait * 1000) {
-      fallback = `the operator could not be nudged for ${minutes(now - memory.pendingSince)} minutes; ${memory.pending.length} report(s) wait: ${memory.pending.join('; ')}`;
+      fallback = `no idle seat could be nudged for ${minutes(now - memory.pendingSince)} minutes; ${memory.pending.length} report(s) wait: ${memory.pending.join('; ')}`;
     }
     if (nudge || fallback) {
       memory.pending = [];
@@ -486,5 +529,26 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  return { reports, nudge, fallback, ring, mailboxNote, readings };
+  return { reports, nudge, fallback, ring, mailboxNote, readings, labels };
+}
+
+/** The sidebar lines a running file seat needs this pass. The first cycle paints both lines
+ *  from the file, with a live model or effort in place of the file's when the screen shows
+ *  one. A later cycle paints only a line that changed. A temporary seat has no file seat and
+ *  is not passed here. */
+function labelOf(
+  seat: Seat,
+  pane: string,
+  workspace: string,
+  screen: string | undefined,
+  memory: Memory,
+): PassResult['labels'] {
+  const prior = memory.seatLabels[seat.name];
+  const live = liveDisplayAgent(seat, screen, prior?.effort);
+  if (live.effort) (memory.seatLabels[seat.name] ??= {}).effort = live.effort;
+  const title = workspaceLabel(seat);
+  const push: PassResult['labels'][number] = { name: seat.name, pane, workspace };
+  if (prior?.title !== title) push.title = title;
+  if (prior?.line !== live.line) push.displayAgent = live.line;
+  return push.title || push.displayAgent ? [push] : [];
 }

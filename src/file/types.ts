@@ -4,6 +4,17 @@ import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
+/** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation. */
+export const GRANT_SCOPES = ['up', 'down', 'approve', 'init'] as const;
+export type GrantScope = (typeof GRANT_SCOPES)[number];
+
+/**
+ * The orchestrator seat's grant, or null when the file has no `grant` section. `session` is the
+ * file's own session, `seat` is the orchestrator's name, and `scope` is the acts a later check
+ * may admit, in the order the file wrote them.
+ */
+export type Grant = { session: string; seat: string; scope: GrantScope[] } | null;
+
 export type Position = 'last-line' | 'trailer' | 'anywhere';
 export type Mode = 'worktree' | 'shared';
 
@@ -59,9 +70,14 @@ export type Seat = {
   cwd: string;
   /**
    * The file's label: written, or `<model> <version>` in lowercase. Hashed with the seat.
-   * It does not title the herdr workspace; `workspaceLabel` does, from `display` and `effort`.
+   * A written one is the workspace title; `workspaceLabel` uses the name and role when it was omitted.
    */
   label: string;
+  /**
+   * Set when the file wrote `label:`. Not hashed: the stored `label` string is what an approval
+   * seals, and this mark only tells a written label from the lowercase default.
+   */
+  labelWritten?: true;
   /**
    * The seat's effort word, when the file sets one. Absent otherwise, so a file that omits it
    * keeps the digest it had. A lab with a vocabulary warns when the word is outside it; the
@@ -174,6 +190,17 @@ export type TeamFile = {
         policy?: TaskPolicy;
       }
     | null;
+  /**
+   * How the watch's five waits are scaled: `relaxed` doubles them, `urgent` halves them, and
+   * `normal` leaves them as written. Omitted in the file reads as `normal`. An owner section.
+   */
+  tempo: 'relaxed' | 'normal' | 'urgent';
+  /**
+   * The orchestrator seat's grant, or null when the file has no `grant` section. An owner
+   * section: changing it needs a new approval. `approve` in `scope` is an ordinary approval;
+   * this section itself stays the owner's.
+   */
+  grant: Grant;
   /**
    * The panes outside the team's session that may run named operational commands, or null when
    * the file has no `delegates` section. An owner section: changing it needs a new approval.

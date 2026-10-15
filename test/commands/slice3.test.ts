@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
-import { runApprove, type Waiting } from '../../src/commands/approve.ts';
+import { runApprove, type Waiting } from '../../src/approve/command.ts';
 import { loadConfig } from '../../src/commands/check.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { rulesOf } from '../../src/launch/rules.ts';
@@ -500,7 +500,7 @@ describe('team doctor', () => {
       loggedIn: () => null,
     });
     expect(run.out).toContain(
-      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into\n',
+      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.299: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into\n',
     );
     expect(run.out).toContain('warn  herdr 0.6.9 is older than the tested 0.7.1\n');
     expect(run.out).toContain('--    claude-code: the login is not checked in this version\n');
@@ -665,10 +665,11 @@ async function up(argv: string[], caller: Caller, overrides: Partial<UpSources> 
 }
 
 describe('team up', () => {
-  test('refuses a file that was never approved, and launches nothing', async () => {
+  test('a missing record does not refuse, and a legacy file still launches nothing', async () => {
     const run = await up([], OWNER);
     expect(run.code).toBe(1);
-    expect(run.err).toContain('team up: the file was never approved on this machine: run `team approve`\n');
+    expect(run.err).not.toContain('never approved');
+    expect(run.err).toContain('the file is legacy:');
     expect(run.out).toBe('');
   });
 
@@ -681,7 +682,7 @@ describe('team up', () => {
     const lines = run.out.split('\n');
     expect(lines[0]).toContain(`! up would refuse: the file is legacy: migrate trust to absolute paths including the lobby ${home}/.config/team/lobby:`);
     expect(run.out).toContain(
-      `+ herdr --session acme-web workspace create --cwd ${root} --label 'Claude Opus 5.5' --no-focus\n`,
+      `+ herdr --session acme-web workspace create --cwd ${root} --label 'claude-coordinator-acme · project coordinator' --no-focus\n`,
     );
     expect(run.out).toContain(
       "+ herdr --session acme-web pane run <pane of claude-coordinator-acme> 'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt '\\''Rules for this session, from the team file:",
@@ -698,32 +699,19 @@ describe('team up', () => {
     expect(run.out).toContain('AGENT_UNATTENDED=1 codex -m gpt-6-sol -c model_reasoning_effort=high -a never -s danger-full-access');
     expect(run.out).toContain('pane send-text <pane of codex-acme>');
     expect(run.out).toContain('  skip grok-acme: stopped in the file; start it with `team add grok-acme`\n');
-    expect(run.out).toContain('pane run <pane of watchdog>');
+    expect(run.out).toContain('detached; the state records its pid');
     expect(run.out).toContain('watch --session acme-web');
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 
-  test('--dry-run names every refusal `up` would make, and still prints the plan', async () => {
+  test('a seat the file does not name is denied before the plan', async () => {
     const run = await up(['--dry-run'], WORKER, {
       sessionRunning: () => true,
       agents: () => [agent('stranger'), agent(null)],
     });
     expect(run.code).toBe(1);
-    expect(run.out).toStartWith(
-      [
-        '! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is deepseek-acme',
-        '! up would refuse: the file was never approved on this machine: run `team approve`',
-        "! up would refuse: session acme-web has 2 agents this file's state doesn't record: `up` never touches a running team",
-        `! up would refuse: the file is legacy: migrate trust to absolute paths including the lobby ${home}/.config/team/lobby:`,
-        'trust:',
-        '  - ~/.config/team/lobby',
-        `  - ${root}`,
-        `  - ${join(base, 'worktrees', 'acme-web')}`,
-        `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root, replacing "."; `
-          + `${join(base, 'worktrees', 'acme-web')} is the folder workspace.path "../worktrees/{repo}/{task}" places worktrees in, replacing "../worktrees/acme-web/*"`,
-        '+ herdr --session acme-web workspace create',
-      ].join('\n'),
-    );
+    expect(run.err).toBe('deny\n');
+    expect(run.out).toBe('');
   });
 
   test('--dry-run names an edited file and a silent herdr', async () => {
@@ -837,11 +825,15 @@ describe('team down', () => {
         },
       }),
     );
+    const state = readFileSync(join(root, '.agents/team.state.json'), 'utf8');
     const run = await down(['--dry-run'], OWNER, {
       agents: () => [agent('deepseek-acme-tmp-1'), agent('stranger'), agent(null), agent('codex-acme', 'blocked')],
     });
+    // None of these panes is recorded, so the plan must not claim a close. The first head
+    // printed the unnamed pane's leave-line in front of this text and closed nothing.
     expect(run.out).toStartWith(
       [
+        'pane x:p1: not recorded for a seat of this team; left as it is',
         'deepseek-acme-tmp-1: its record is not an approved seat; left running (the owner cleans it: team remove deepseek-acme-tmp-1 --abandon)',
         'stranger: its record is not an approved seat; left running (the owner cleans it: team remove stranger --abandon)',
         'watch: its pid is only in the state; left running',
@@ -849,7 +841,33 @@ describe('team down', () => {
         '  skip session acme-web: not stopped, 4 agents left in it',
       ].join('\n'),
     );
+    expect(run.out).not.toContain('workspace close');
     expect(run.out).not.toContain('+ kill');
+    expect(run.out).toContain('dry run: nothing was run\n');
+    expect(readFileSync(join(root, '.agents/team.state.json'), 'utf8')).toBe(state);
+  });
+
+  test('--dry-run says it would close a pane whose ids match a record, and touches nothing', async () => {
+    writeFileSync(
+      join(root, '.agents/team.state.json'),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: { 'deepseek-acme': { stage: 'launched', pane: 'seat-1:p1', workspace: 'seat-1' } },
+            worktrees: {},
+          },
+        },
+      }),
+    );
+    const state = readFileSync(join(root, '.agents/team.state.json'), 'utf8');
+    const run = await down(['--dry-run'], OWNER, {
+      agents: () => [agent(null, 'idle', 'seat-1')],
+    });
+    expect(run.code).toBe(0);
+    expect(run.out).toContain("+ herdr --session acme-web workspace close seat-1\n    (created for this seat and never named; closed without typing)\n");
+    expect(run.out).toContain('dry run: nothing was run\n');
+    expect(readFileSync(join(root, '.agents/team.state.json'), 'utf8')).toBe(state);
   });
 
   test('an idle status at a permission prompt is blocked, and unsent text stays unsent', async () => {

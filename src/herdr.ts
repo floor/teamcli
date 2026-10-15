@@ -12,6 +12,8 @@ export type HerdrAgent = {
   workspace: string;
   status: string;
   cwd: string | null;
+  /** Herdr's `agent_session`, when the integration reported one. Absent when it did not. */
+  session?: string;
 };
 
 export type HerdrRun = (args: string[], session?: string) => unknown;
@@ -31,14 +33,18 @@ function run(args: string[], session?: string): unknown {
 export function agentList(session?: string): HerdrAgent[] | null {
   try {
     const result = run(['agent', 'list'], session) as { agents?: Record<string, unknown>[] };
-    return (result.agents ?? []).map((agent) => ({
-      name: typeof agent.name === 'string' && agent.name ? agent.name : null,
-      agent: typeof agent.agent === 'string' ? agent.agent : null,
-      pane: String(agent.pane_id),
-      workspace: String(agent.workspace_id),
-      status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
-      cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
-    }));
+    return (result.agents ?? []).map((agent) => {
+      const session = typeof agent.agent_session === 'string' && agent.agent_session ? agent.agent_session : undefined;
+      return {
+        name: typeof agent.name === 'string' && agent.name ? agent.name : null,
+        agent: typeof agent.agent === 'string' ? agent.agent : null,
+        pane: String(agent.pane_id),
+        workspace: String(agent.workspace_id),
+        status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
+        cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
+        ...(session ? { session } : {}),
+      };
+    });
   } catch {
     return null;
   }
@@ -252,19 +258,26 @@ function capture(args: string[], session?: string): string | null {
   }
 }
 
-function parsed(out: string): { type?: string; result?: unknown } | null {
+export type HerdrEnvelope = { id?: string; type?: string; error?: unknown; result?: unknown };
+
+function parsed(out: string): HerdrEnvelope | null {
   try {
-    return JSON.parse(out) as { type?: string; result?: unknown };
+    return JSON.parse(out) as HerdrEnvelope;
   } catch {
     return null;
   }
+}
+
+export function isHerdrError(body: HerdrEnvelope | null): boolean {
+  if (!body) return false;
+  return body.type === 'error' || (body.error !== undefined && body.error !== null);
 }
 
 function resultOf(args: string[], session?: string): unknown | null {
   const out = capture(args, session);
   if (out === null) return null;
   const body = parsed(out);
-  if (!body || body.type === 'error') return null;
+  if (!body || isHerdrError(body)) return null;
   return body.result ?? null;
 }
 
@@ -290,6 +303,15 @@ export function startServer(session: string): boolean {
   }
 }
 
+// Sets a workspace's label, which herdr draws as sidebar line 1. `herdr workspace rename --help`
+// names the two arguments and no flags. False when herdr doesn't answer or reports an error.
+export function workspaceRename(workspace: string, label: string, session?: string): boolean {
+  const out = capture(['workspace', 'rename', workspace, label], session);
+  if (out === null) return false;
+  const body = parsed(out);
+  return body === null || !isHerdrError(body);
+}
+
 export function workspaceCreate(
   cwd: string,
   label: string,
@@ -311,7 +333,24 @@ export function paneRun(pane: string, command: string, session?: string): boolea
   const out = capture(['pane', 'run', pane, command], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body === null || body.type !== 'error';
+  return body === null || !isHerdrError(body);
+}
+
+// The id team reports a pane's display_agent under. Herdr 0.7.1 requires `--source`; nothing
+// else in this tree is a source id (`pane read --source visible` is the screen, not this).
+export const DISPLAY_AGENT_SOURCE = 'team';
+
+// Sets the pane's display_agent (sidebar line 2). Herdr 0.7.1, scratch session title-help-b1:
+// `pane report-metadata --help` exits 2 with `missing required --source`. The flags used here
+// are the ones `herdr pane --help` names for this call: `--source` and `--display-agent`.
+export function reportDisplayAgent(pane: string, text: string, session?: string): boolean {
+  const out = capture(
+    ['pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', text],
+    session,
+  );
+  if (out === null) return false;
+  const body = parsed(out);
+  return body === null || !isHerdrError(body);
 }
 
 // Not proof an agent is there: herdr answers with agent_info for a pane that has none.
@@ -319,7 +358,7 @@ export function agentRename(pane: string, name: string, session?: string): boole
   const out = capture(['agent', 'rename', pane, name], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body === null || body.type !== 'error';
+  return body === null || !isHerdrError(body);
 }
 
 // Brings an agent's pane to the owner's attention and changes nothing in it: no key, no text.
@@ -330,22 +369,27 @@ export function focusAgent(target: string, session?: string): boolean {
   const out = capture(['agent', 'focus', target], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body === null || body.type !== 'error';
+  return body === null || !isHerdrError(body);
 }
 
 export function workspaceClose(workspace: string, session?: string): boolean {
   const out = capture(['workspace', 'close', workspace], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body !== null && body.type !== 'error';
+  return body !== null && !isHerdrError(body);
 }
 
 // Stops a session, which herdr keeps listed as stopped.
 export function sessionStop(name: string): boolean {
   const out = capture(['session', 'stop', name]);
   if (out === null) return false;
-  const body = parsed(out);
-  return body === null || body.type !== 'error';
+  return sessionStopped(out, name);
+}
+
+// Herdr 0.7.1's answer when `session stop` worked, captured on a scratch session: stdout is
+// `stopped session <name>` and one newline, exit 0, and `session list` keeps it with running false.
+export function sessionStopped(stdout: string, name: string): boolean {
+  return stdout === `stopped session ${name}\n`;
 }
 
 // Clears a stopped session. `down` deletes the session it has itself just stopped, once herdr

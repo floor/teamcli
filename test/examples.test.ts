@@ -35,19 +35,17 @@ describe('the fictional example file', () => {
     ]);
   });
 
-  test('labels are derived from each seat\'s display, and a count shares one', () => {
-    // The example still writes `label:` on every seat — an accepted field, kept on the seat —
-    // but the workspace title is derived from the seat's own configuration: its display, never
-    // the written label, and no number under count (nothing keys two seats apart by their
-    // label; herdr shows the name).
+  test('a written label titles the workspace, and a count numbers the later instances', () => {
+    // The example writes `label:` on every seat. That is line 1. A count past the first
+    // appends `-<n>` so the three nimbus seats do not share a title.
     expect(team.seats.map((seat) => [seat.name, workspaceLabel(seat)])).toEqual([
-      ['codex-keeper', 'GPT-2 Compass'],
-      ['codex-signal', 'GPT-2 Compass'],
-      ['codex-beacon', 'GPT-3 Comet'],
-      ['cursor-beacon', 'Meridian 1'],
-      ['nimbus-beacon', 'Nimbus 1'],
-      ['nimbus-beacon-2', 'Nimbus 1'],
-      ['nimbus-beacon-3', 'Nimbus 1'],
+      ['codex-keeper', 'coordinator'],
+      ['codex-signal', 'operator'],
+      ['codex-beacon', 'codex'],
+      ['cursor-beacon', 'cursor'],
+      ['nimbus-beacon', 'nimbus'],
+      ['nimbus-beacon-2', 'nimbus-2'],
+      ['nimbus-beacon-3', 'nimbus-3'],
     ]);
     expect(team.seats[0]).toMatchObject({ declared: 'codex-keeper', count: 1, instance: 1 });
   });

@@ -17,6 +17,7 @@ import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
+import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
@@ -219,7 +220,7 @@ describe('team add', () => {
     const made = world();
     const io = testIo(project, owner);
     expect(await runAdd(['worker'], io, sources(made))).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
     expect(made.renames).toEqual(['worker']);
     const text = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
     expect(text).not.toMatch(/# the seat stays in this order\n    stopped: true/);
@@ -407,7 +408,7 @@ describe('team add', () => {
     expect(code).toBe(0);
     expect(io.err.split('  note worker: its launch line was not checked').length).toBe(2);
     expect(io.out).not.toContain('note worker');
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
     // the added seat is unstopped; the fixture's other stopped seat keeps its flag
     expect(readFileSync(join(project, '.agents/team.yaml'), 'utf8')).not.toMatch(/# the seat stays in this order\n    stopped: true/);
   });
@@ -601,6 +602,31 @@ describe('team add', () => {
     expect(gone.err).toContain("doesn't exist");
   });
 
+  test('refuses a result path that is absolute or contains ..', async () => {
+    const absolute = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:/tmp/out.md'], absolute, sources(world()))).toBe(1);
+    expect(absolute.err).toContain('relative to the project');
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+
+    // `../outside.md` is outside this project (home/acme). `notes/../../outside.md` contains
+    // `..` and lands in the same place. Neither may be stored, and no seat is recorded.
+    const escaped = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:../outside.md'], escaped, sources(world()))).toBe(1);
+    expect(escaped.err).toContain('relative to the project');
+    expect(existsSync(join(home, 'outside.md'))).toBe(false);
+    const nested = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/../../outside.md'], nested, sources(world()))).toBe(1);
+    expect(nested.err).toContain('relative to the project');
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+  });
+
+  test('refuses a merged branch that starts with a dash', async () => {
+    const io = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'merged:-not-a-branch'], io, sources(world()))).toBe(1);
+    expect(io.err).toContain('is not a branch name');
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+  });
+
   test('each start limit refuses with its figure before the file is edited', async () => {
     const cases: { machine: Machine; text: string }[] = [
       { machine: { ...fine, loadPerCore: 9 }, text: 'the load is 9.0 per core, above 3' },
@@ -672,7 +698,7 @@ describe('team add', () => {
     const made = world();
     const io = testIo(project, owner);
     expect(await runAdd(['worker'], io, sources(made, { machine: () => fine }))).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
   });
 
   test('names an unnamed agent already in the seat\'s workspace instead of launching another', async () => {
@@ -694,6 +720,78 @@ describe('team add', () => {
     expect(code).toBe(0);
     expect(made.creates).toEqual([]);
     expect(made.renames).toEqual(['lead']);
+  });
+
+  test('does not adopt an unnamed agent when another seat claims the workspace or the pane differs', async () => {
+    updateState(join(project, '.agents'), (state) => {
+      const session = state.sessions.acme ?? emptySession();
+      session.seats.lead = { stage: 'launched', workspace: 'ws-shared', pane: 'pane-lead' };
+      session.seats.worker = { stage: 'ready', workspace: 'ws-shared', pane: 'pane-worker' };
+      state.sessions.acme = session;
+    });
+    const made = world();
+    const stray: HerdrAgent = { name: null, agent: 'claude', pane: 'pane-other', workspace: 'ws-shared', status: 'idle', cwd: null };
+    const io = testIo(project, owner);
+    const code = await runAdd(['lead'], io, sources(made, {
+      sessionState: () => 'running',
+      agents: () => [stray],
+      workspaces: () => [{ id: 'ws-shared' }],
+    }));
+    expect(code).toBe(0);
+    expect(made.creates).toEqual(['lead']);
+  });
+
+  test('counts live undeclared agents against seat, temporary and vendor ceilings when removed from state', async () => {
+    const loaded = loadTeamFile(project, { home });
+    if (!loaded.ok) throw new Error('load');
+    const yaml = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
+    const baseApproval = approvalOf(loaded.team, loaded.root);
+    writeApproval(
+      storePath(loaded.team.project, loaded.root, home),
+      {
+        approval: {
+          ...baseApproval,
+          ceilings: { seats: 2, temporary: 1, vendors: { anthropic: 1, openai: 1 } },
+        },
+        file: yaml,
+      },
+      loaded.team.seats,
+      home,
+    );
+    const liveTemp: HerdrAgent = {
+      name: 'worker-tmp-1',
+      agent: 'claude',
+      pane: 'pane-temp',
+      workspace: 'ws-temp',
+      status: 'idle',
+      cwd: null,
+    };
+    const made = world();
+    const ioTemp = testIo(project, owner);
+    const tempCode = await runAdd(
+      ['--temporary', '--like', 'scribe', '--until', 'merged:fix/fresh'],
+      ioTemp,
+      sources(made, {
+        sessionState: () => 'running',
+        agents: () => [liveTemp],
+        workspaces: () => [{ id: 'ws-temp' }],
+      }),
+    );
+    expect(tempCode).toBe(1);
+    expect(ioTemp.err).toContain('the approval allows 1 temporary seats; 2 would be running');
+
+    const ioVendor = testIo(project, owner);
+    const vendorCode = await runAdd(
+      ['worker'],
+      ioVendor,
+      sources(made, {
+        sessionState: () => 'running',
+        agents: () => [liveTemp],
+        workspaces: () => [{ id: 'ws-temp' }],
+      }),
+    );
+    expect(vendorCode).toBe(1);
+    expect(ioVendor.err).toContain('the approval allows 1 anthropic seats; 2 would be running');
   });
 
   test('a new seat found at a dialog waits for its owner: nothing is closed, and it exits 1', async () => {
@@ -771,10 +869,9 @@ describe('team add', () => {
     expect(seat?.launched).toEqual({ shell: 200, cli: [201] });
   });
 
-  test('a replaced seat is closed without input and launched fresh, not refused as running', async () => {
-    // The recorded pane holds a CLI, and it is not the one team launched: the seat's name in
-    // herdr's list is not the seat. `add` does what `up` does — closes that workspace without a
-    // key or a text, clears the record, and launches fresh with the rules.
+  test('a replaced seat with no stored session is left, not closed and not launched', async () => {
+    // The recorded pane holds a CLI, and the record has no agent session to tie it to the launch.
+    // `add` does not close it and does not start another.
     updateState(join(project, '.agents'), (state) => {
       const session = state.sessions.acme ?? emptySession();
       session.seats.worker = { stage: 'launched', workspace: 'w9', pane: 'w9:p1', launched: { shell: 400, cli: [401] } };
@@ -799,20 +896,73 @@ describe('team add', () => {
       agents: () => [listed],
       workspaces: () => [{ id: 'w9' }],
     }));
-    expect(code).toBe(0);
-    expect(io.err).not.toContain('already running');
-    // The wrong process was typed into with nothing, and the workspace it sat in was closed; the
-    // seat was launched in a fresh one, its rules carried by the launch line.
+    expect(code).toBe(1);
+    expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
     expect(keys).toEqual([]);
-    expect(closes).toEqual(['w9']);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
-    expect(io.err).toContain('  its pane held a process team did not launch; closed without input and launched again\n');
+    expect(closes).toEqual([]);
+    expect(made.creates).toEqual([]);
     const seats = readState(join(project, '.agents')).sessions.acme?.seats ?? {};
-    expect(seats.worker?.stage).toBe('ready');
-    expect(seats.worker?.pane).toBe('w1:p1');
+    expect(seats.worker).toMatchObject({ stage: 'launched', pane: 'w9:p1', launched: { shell: 400, cli: [401] } });
   });
 
-  describe('add exits 1 when its repair is refused with a stale record that says ready', () => {
+  test('a matching agent session is rebased and not closed', async () => {
+    updateState(join(project, '.agents'), (state) => {
+      const session = state.sessions.acme ?? emptySession();
+      session.seats.worker = { stage: 'ready', workspace: 'w9', pane: 'w9:p1', launched: { shell: 400, cli: [401] }, agent_session: 'kept' };
+      state.sessions.acme = session;
+    });
+    const made = world();
+    const closes: string[] = [];
+    made.launch.closeWorkspace = (_session, workspace) => { closes.push(workspace); return true; };
+    made.launch.processInfo = () => ({ shell: 900, foreground: [901] });
+    const listed: HerdrAgent = { name: 'worker', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null, session: 'kept' };
+    made.launch.agents = () => [listed];
+    const io = testIo(project, owner);
+    const code = await runAdd(['worker'], io, sources(made, {
+      sessionState: () => 'running',
+      agents: () => [listed],
+      workspaces: () => [{ id: 'w9' }],
+    }));
+    expect(code).toBe(1);
+    expect(io.err).toContain('already running');
+    expect(closes).toEqual([]);
+    expect(made.creates).toEqual([]);
+    const seats = readState(join(project, '.agents')).sessions.acme?.seats ?? {};
+    expect(seats.worker).toMatchObject({ pane: 'w9:p1', launched: { shell: 900, cli: [901] }, agent_session: 'kept' });
+  });
+
+  test('a shell in front is still closed without input and launched fresh', async () => {
+    updateState(join(project, '.agents'), (state) => {
+      const session = state.sessions.acme ?? emptySession();
+      session.seats.worker = { stage: 'launched', workspace: 'w9', pane: 'w9:p1', launched: { shell: 400, cli: [401] }, agent_session: 'kept' };
+      state.sessions.acme = session;
+    });
+    const made = world();
+    const closes: string[] = [];
+    const keys: string[] = [];
+    made.launch.closeWorkspace = (_session, workspace) => { closes.push(workspace); return true; };
+    made.launch.processInfo = (_session, pane) => pane === 'w9:p1'
+      ? { shell: 400, foreground: [400] }
+      : { shell: 700, foreground: [700, 701] };
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const listed: HerdrAgent = { name: 'worker', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null, session: 'kept' };
+    made.launch.agents = () => [listed];
+    const text = made.launch.paneText;
+    made.launch.paneText = (session, pane) => (pane === 'w9:p1' ? IDLE : text(session, pane));
+    const io = testIo(project, owner);
+    const code = await runAdd(['worker'], io, sources(made, {
+      sessionState: () => 'running',
+      agents: () => [listed],
+      workspaces: () => [{ id: 'w9' }],
+    }));
+    expect(code).toBe(0);
+    expect(keys).toEqual([]);
+    expect(closes).toEqual(['w9']);
+    expect(io.err).toContain('  its pane held no CLI; closed without input and launched again\n');
+  });
+
+  describe('a replaced seat with no stored session is left before any close', () => {
     function setupReadySeat() {
       approve(WORKTREE_FILE);
       updateState(join(project, '.agents'), (state) => {
@@ -841,7 +991,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: herdr no longer shows this seat on its recorded pane; nothing closed; run team status\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -858,7 +1008,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: its workspace holds other panes; nothing closed (close its pane there, then run team up)\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -875,7 +1025,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: its pane could not be read; nothing closed\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -895,7 +1045,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: its pane could not be read; nothing closed\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -912,7 +1062,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: the process in its pane is working; nothing closed (stop it there, or run team remove worker)\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -930,7 +1080,7 @@ describe('team add', () => {
         workspaces: () => [{ id: 'w9' }],
       }));
       expect(code).toBe(1);
-      expect(io.out).toContain('worker: left out: the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove worker)\n');
+      expect(io.err).toContain('team add: worker: its pane holds a process this record cannot tie to the launch\n');
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -1162,7 +1312,7 @@ describe('team add delegated', () => {
     const io = testIo(project, pilot);
     const code = await runAdd(['lead'], io, sources(made, { delegateGate: () => passed }));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['lead']);
     expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toBe(before);
     expect(readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8')).toBe(record);
     // The audit line is the log's first line: the run is attributed before its effects.
@@ -1200,7 +1350,7 @@ describe('team add delegated', () => {
     const io = testIo(project, { kind: 'seat', name: 'lead', pane: 'w0:p1', session: 'acme' });
     const code = await runAdd(['worker'], io, sources(made, { delegateGate: THROWING_GATE }));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
     expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).not.toMatch(/# the seat stays in this order\n    stopped: true/);
     // The role path re-signed the seat digest, exactly as today, and no audit line was written:
     // the log holds the run's own records and no delegate attribution.
@@ -1218,7 +1368,7 @@ describe('team add delegated', () => {
     const before = readFileSync(join(store, 'approval.json'), 'utf8');
     const code = await runAdd(['worker'], testIo(project, owner), sources(made, { delegateGate: THROWING_GATE }));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
     expect(readFileSync(join(store, 'approval.json'), 'utf8')).not.toBe(before);
     expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).not.toContain('delegate [delegate]');
   });
@@ -1322,7 +1472,7 @@ describe('team add delegated', () => {
     const io = testIo(project, pilot);
     const code = await runAdd(['lead'], io, sources(made, { delegateGate: gateReading(false) }));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['lead']);
   });
 
   test('a delegated add with herdr not answering is the gate\'s refusal, and nothing is started', async () => {
@@ -1393,7 +1543,7 @@ describe('team add, the session mutator lock', () => {
     const made = world();
     const io = testIo(project, owner);
     expect(await runAdd(['worker'], io, sources(made))).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5']);
+    expect(made.creates).toEqual(['worker']);
     expect(existsSync(lockFile())).toBe(false);
   });
 
@@ -1429,3 +1579,123 @@ describe('team add, the session mutator lock', () => {
     expect(made.creates).toEqual([]);
   });
 });
+
+describe('team add --model and --effort', () => {
+  test('profile override helpers validate models, effort levels, and rewrite launch lines', () => {
+    const claudeProfile = profileFor('claude-code')!;
+    const codexProfile = profileFor('codex')!;
+
+    expect(resolveModelOverride(claudeProfile, 'claude-sonnet-5-5')).toEqual({
+      id: 'claude-sonnet-5-5',
+      model: 'Claude Sonnet',
+      version: '5.5',
+    });
+    expect(resolveModelOverride(claudeProfile, 'Claude Sonnet 5.5')).toEqual({
+      id: 'claude-sonnet-5-5',
+      model: 'Claude Sonnet',
+      version: '5.5',
+    });
+    expect(resolveModelOverride(claudeProfile, 'unknown-model')).toBeNull();
+
+    expect(resolveEffortOverride('claude-code', 'anthropic', 'high')).toEqual({ effort: 'high' });
+    expect(resolveEffortOverride('codex', 'openai', 'xhigh')).toEqual({ effort: 'xhigh' });
+    expect(resolveEffortOverride('claude-code', 'anthropic', 'extreme')).toEqual({
+      error: 'effort "extreme" is not one of anthropic\'s: low, medium, high, xhigh, max',
+    });
+    expect(resolveEffortOverride('cursor', 'cursor', 'high')).toEqual({
+      error: 'cursor does not take an --effort flag on launch',
+    });
+
+    expect(
+      withLaunchOverrides(claudeProfile, 'claude --model claude-opus-5-5', {
+        modelId: 'claude-sonnet-5-5',
+        effort: 'high',
+      }),
+    ).toBe('claude --model claude-sonnet-5-5 --effort high');
+
+    expect(
+      withLaunchOverrides(codexProfile, 'codex -m gpt-6-sol -c model_reasoning_effort=high', {
+        modelId: 'gpt-6-terra',
+        effort: 'xhigh',
+      }),
+    ).toBe('codex -m gpt-6-terra -c model_reasoning_effort=xhigh');
+  });
+
+  test('owner overrides model and effort on a declared seat without breaking approval', async () => {
+    const made = world();
+    const typed: string[] = [];
+    const baseRun = made.launch.paneRun;
+    made.launch.paneRun = (session, pane, command) => {
+      typed.push(command);
+      return baseRun(session, pane, command);
+    };
+    made.launch.paneText = () => IDLE.replace('Opus 5.5', 'Sonnet 5.5');
+
+    const io = testIo(project, owner);
+    expect(await runAdd(['worker', '--model', 'claude-sonnet-5-5', '--effort', 'high'], io, sources(made))).toBe(0);
+    expect(typed).toHaveLength(1);
+    expect(typed[0]).toContain('claude --model claude-sonnet-5-5 --effort high');
+
+    const recorded = readState(join(project, '.agents')).sessions.acme?.seats.worker;
+    expect(recorded?.id).toMatch(/^seat_[0-9a-f]{12}$/);
+    expect(recorded?.model).toBe('Claude Sonnet');
+    expect(recorded?.version).toBe('5.5');
+    expect(recorded?.effort).toBe('high');
+    expect(recorded?.launch_line).toBe('claude --model claude-sonnet-5-5 --effort high');
+
+    const loaded = loadTeamFile(project, { home });
+    expect(loaded.ok && approvalDifferences(loaded.team, project, home)).toEqual([]);
+  });
+
+  test('overrides model and effort on a temporary --like seat', async () => {
+    const made = world();
+    const typed: string[] = [];
+    const baseRun = made.launch.paneRun;
+    made.launch.paneRun = (session, pane, command) => {
+      typed.push(command);
+      return baseRun(session, pane, command);
+    };
+    made.launch.paneText = () => IDLE.replace('Opus 5.5', 'Sonnet 5.5');
+
+    const io = testIo(project, owner);
+    const code = await runAdd(
+      ['--temporary', '--like', 'worker', '--until', 'merged:fix/fresh', '--model', 'claude-sonnet-5-5', '--effort', 'medium'],
+      io,
+      sources(made),
+    );
+    expect(code).toBe(0);
+    expect(typed).toHaveLength(1);
+    expect(typed[0]).toContain('claude --model claude-sonnet-5-5 --effort medium');
+
+    const recorded = readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1'];
+    expect(recorded?.id).toMatch(/^seat_[0-9a-f]{12}$/);
+    expect(recorded?.model).toBe('Claude Sonnet');
+    expect(recorded?.version).toBe('5.5');
+    expect(recorded?.effort).toBe('medium');
+    expect(recorded?.launch_line).toBe('claude --model claude-sonnet-5-5 --effort medium');
+  });
+
+  test('refuses non-owner --model or --effort on a declared seat, and refuses unknown model or effort', async () => {
+    const leadPane = ['w0', 'p1'].join(':');
+    updateState(join(project, '.agents'), (state) => {
+      const session = state.sessions.acme ?? emptySession();
+      session.seats.lead = { stage: 'ready', pane: leadPane };
+      state.sessions.acme = session;
+    });
+    const leadCaller = { kind: 'seat' as const, name: 'lead', pane: leadPane, session: 'acme' };
+    const nonOwnerIo = testIo(project, leadCaller);
+    expect(await runAdd(['worker', '--model', 'claude-sonnet-5-5'], nonOwnerIo, sources(world()))).toBe(1);
+    expect(nonOwnerIo.err).toBe(
+      "team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat\n",
+    );
+
+    const badModelIo = testIo(project, owner);
+    expect(await runAdd(['worker', '--model', 'nope'], badModelIo, sources(world()))).toBe(2);
+    expect(badModelIo.err).toBe('team add: worker: unknown model "nope" for claude-code\n');
+
+    const badEffortIo = testIo(project, owner);
+    expect(await runAdd(['worker', '--effort', 'extreme'], badEffortIo, sources(world()))).toBe(2);
+    expect(badEffortIo.err).toBe("team add: worker: effort \"extreme\" is not one of anthropic's: low, medium, high, xhigh, max\n");
+  });
+});
+

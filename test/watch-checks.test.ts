@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalDifferences, watchInForce } from '../src/approve/approval.ts';
 import { compare, describe as describeDifference, fingerprints, OWNER_SECTIONS, WATCH_CHECKS_CHANGED } from '../src/approve/fingerprint.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -235,7 +235,7 @@ describe('a pass with checks turned off', () => {
     now.screens['w1:p1'] = busy.replace('Opus 5.5', 'Fable 5.1');
     const reported = texts(pass({ team: smuggled, watch: smuggled.watch, state: emptySession(), live: now, machine: fine, now: 0, memory: newMemory(), approval: ['`rules` changed'] }));
     expect(reported).toContain('deepseek-acme-2 is in the file and is not running');
-    expect(reported).toContain('claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model');
+    expect(reported).toContain('claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)');
     expect(reported).toContain("deepseek-acme waits at a permission prompt: its owner's to answer");
     expect(reported).toContain('the file differs from the approved one: `rules` changed');
   });
@@ -382,5 +382,18 @@ describe('a seat stopped on a provider error or a rate limit', () => {
     expect(run(memory, 0, limit)).toContain('deepseek-acme is at a rate limit: usage limit, resets at 11:00');
     expect(run(memory, 11 * 60_000, idle).some((line) => line.includes('rate limit'))).toBe(false);
     expect(run(memory, 12 * 60_000, limit)).toContain('deepseek-acme is at a rate limit: usage limit, resets at 11:00');
+  });
+});
+
+describe('a label change is not a check', () => {
+  test('a screen that would change the label still produces only the model-drift report', () => {
+    const screen = readFileSync(new URL('./fixtures/codex/0.157.0/working.txt', import.meta.url), 'utf8');
+    const scene = live({ 'codex-acme': { status: 'working', screen } });
+    const result = pass({ team: teamFile(), watch: teamFile().watch, state: emptySession(), live: scene, machine: fine, now: 0, memory: newMemory() });
+    expect(result.reports.map((report) => report.text)).toEqual([
+      'codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol: it signs with the wrong model — team remove codex-acme --keep, then team add codex-acme',
+    ]);
+    expect(result.labels.find((label) => label.name === 'codex-acme')?.displayAgent).toBe('GPT Terra 5.6 medium');
+    expect(result.reports.some((report) => report.text.includes('display'))).toBe(false);
   });
 });

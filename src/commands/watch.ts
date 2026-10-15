@@ -1,13 +1,14 @@
 import { readArgs } from '../args.ts';
 import { approvalCase, budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
-import { callerOf, describeCaller, fileOwnerRefusal, isOwner } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } from '../caller.ts';
 import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { homedir } from 'node:os';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
+import { join } from 'node:path';
+import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, pressEnter, reportDisplayAgent, typeText, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState } from '../state.ts';
@@ -67,11 +68,15 @@ export type WatchSources = {
   /** This process's pane, `'gone'` when herdr answered and none has it, null when herdr can't say. */
   ownPane?(session: string, pid: number): { pane: string; workspace: string } | 'gone' | null;
   /** How an end is read. The real watch uses git and the filesystem. */
-  readEnd?(root: string, until: string, base: string | null, ownBefore: boolean): EndView;
+  readEnd?(root: string, until: string, base: string | null, ownBefore: boolean, seat?: string): EndView;
   /** Stops one free seat. The real watch uses the same steps as `remove`. */
   stopSeat?(session: string, seat: DownSeat): Promise<boolean>;
   /** Removes one merged worktree. The real watch calls `worktree remove`. */
   removeWorktree?(task: string): number;
+  /** Sidebar line 1. False is one line and the next pass tries the same title again. */
+  renameWorkspace?(session: string, workspace: string, label: string): boolean;
+  /** Sidebar line 2. False is one line and the next pass tries the same text again. */
+  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** The home whose store holds the override file. Absent in a test that does not set one. */
   home?: string;
 };
@@ -105,6 +110,8 @@ export const realWatchSources: WatchSources = {
   pid: process.pid,
   ownPane: ownWatchPane,
   home: homedir(),
+  renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, session === 'default' ? undefined : session),
+  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, session === 'default' ? undefined : session),
 };
 
 export const watch: Command = (argv, io) => runWatch(argv, io, realWatchSources);
@@ -112,22 +119,61 @@ export default watch;
 
 export const USAGE = 'Usage: team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]\n';
 
-/** The file `up` recorded for this session's watchdog pane, or a refusal for any other non-owner.
- *  Absent when this folder records no watchdog: a flagless watch then reads what it always did. */
+/** The file `up` recorded for this session's watch, or a refusal for any other non-owner.
+ *  Absent when this folder records none: a flagless watch then reads what it always did.
+ *  `'wait'` is a file recorded and a pid not written yet: the process `up` just spawned. */
 function watchdogGrant(
   cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
-): { file: string } | { refuse: string } | undefined {
-  const recorded = recordedWatchdog(cwd, session ?? 'default');
+): { file: string } | { refuse: string } | { wait: true } | undefined {
+  const name = session ?? 'default';
+  const recorded = recordedWatchdog(cwd, name);
   if (!recorded) return undefined;
-  if (caller.kind === 'pane' && caller.pane === recorded.pane) return { file: recorded.file };
+  if (recorded.pane && caller.kind === 'pane' && caller.pane === recorded.pane) return { file: recorded.file };
   if (isOwner(caller)) return undefined;
+  const watchPid = readState(cwd).sessions[name]?.watch?.pid;
+  if (watchPid === process.pid) return { file: recorded.file };
+  if (watchPid === undefined && !recorded.pane) return { wait: true };
   return {
-    refuse: `only the watchdog pane this session records may read the file up recorded; this call is ${describeCaller(caller)}`,
+    refuse: `only the watch this session records may read the file up recorded; this call is ${describeCaller(caller)}`,
   };
 }
 
-function recordedWatchdog(cwd: string, session: string): { file: string; pane: string } | undefined {
+function recordedWatchdog(cwd: string, session: string): { file: string; pane?: string } | undefined {
   return readState(cwd).sessions[session]?.watchdog;
+}
+
+/** The grant, waiting out the moment between spawn and the pid landing in the state. */
+async function admittedWatchdog(
+  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
+): Promise<{ file: string } | { refuse: string } | undefined> {
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    const grant = watchdogGrant(cwd, session, caller);
+    if (!grant || !('wait' in grant)) return grant;
+    if (Date.now() >= deadline) {
+      return {
+        refuse: `only the watch this session records may read the file up recorded; this call is ${describeCaller(caller)}`,
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+/** Whether this process is the detached watch `up` recorded for this folder's session. */
+function isSpawnedWatchPid(cwd: string, session: string | undefined): boolean {
+  for (const dir of [join(cwd, '.agents'), cwd]) {
+    try {
+      const sessions = readState(dir).sessions;
+      if (session !== undefined) {
+        if (sessions[session]?.watch?.pid === process.pid) return true;
+      } else if (Object.values(sessions).some((entry) => entry?.watch?.pid === process.pid)) {
+        return true;
+      }
+    } catch {
+      // An unreadable state file does not admit a detached caller.
+    }
+  }
+  return false;
 }
 
 // How often the watch writes the machine's readings to the log, in seconds. Not the pass rate:
@@ -142,12 +188,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     // exit: watch.invocation
     return 2;
   }
+  const detached = detachedRefusal(callerOf(io));
   // The `--file` check is the walk's too, and it runs before `currentTeam` reads that file or
   // writes beside it: a non-owner aiming `--file` must not make this command read and validate
   // another project's team file, nor leave its `last_valid`, its log line or its heartbeat in
   // that project's state. The one place every command whose `--file` is the owner's decides it is
-  // `fileOwnerRefusal` (caller.ts). The watch `up` starts carries no `--file`: a non-owner pane
-  // would be refused. The file is recorded on the session instead, and only that pane may read it.
+  // `fileOwnerRefusal` (caller.ts). The watch `up` starts carries no `--file`: a detached
+  // process is not an owner at a terminal. The file is recorded on the session instead, and
+  // only that process — or a pane an older run recorded — may read it.
   const fileRefusal = fileOwnerRefusal(io, args.values.file);
   if (fileRefusal !== undefined) {
     io.stderr(`team watch: ${fileRefusal}\n`);
@@ -155,7 +203,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     return 1;
   }
   const caller = callerOf(io, args.values.session);
-  const grant = args.values.file ? undefined : watchdogGrant(io.cwd, args.values.session, caller);
+  const grant = args.values.file ? undefined : await admittedWatchdog(io.cwd, args.values.session, caller);
+  if (detached !== undefined && !(grant && 'file' in grant) && !isSpawnedWatchPid(io.cwd, args.values.session)) {
+    io.stderr(`team watch: ${detached}\n`);
+    // exit: watch.caller
+    return 1;
+  }
   if (grant && 'refuse' in grant) {
     io.stderr(`team watch: ${grant.refuse}\n`);
     // exit: watch.watchdog
@@ -267,7 +320,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       }
 
       // The values in force, from the pass's own snapshot: until the owner approves an edit to
-      // `watch`, the watch keeps running with what was approved, or with the defaults.
+      // `watch` or `tempo`, the watch keeps the waits that were approved, or the defaults.
       const inForce = watchInForceOf(standing, team);
       // The budget values in force, from the same snapshot: an unapproved edit to the marks, the
       // accounts or the cadence silences nothing here until the owner approves it.
@@ -278,7 +331,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         silent = true;
       } else {
         silent = false;
-        noteWorked(dir, session, live);
+        noteWorked(dir, session, live, sources.now());
         const state = readState(dir).sessions[session] ?? emptySession();
         const now = sources.now().getTime();
         // The check commands run here, outside the pass, at most every `check_every` (§ 5): the
@@ -345,6 +398,17 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             return { readings: folded.readings, value: folded };
           });
         for (const report of result.reports) tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
+        for (const label of result.labels) {
+          const slot = (memory.seatLabels[label.name] ??= {});
+          if (label.title && sources.renameWorkspace) {
+            if (sources.renameWorkspace(session, label.workspace, label.title)) slot.title = label.title;
+            else say(`${label.name}: its title was not reported`, false);
+          }
+          if (label.displayAgent && sources.reportDisplayAgent) {
+            if (sources.reportDisplayAgent(session, label.pane, label.displayAgent)) slot.line = label.displayAgent;
+            else say(`${label.name}: its display was not reported`, false);
+          }
+        }
         if (result.nudge) {
           if (args.flags.has('no-nudge')) say(`nudge not typed (--no-nudge): ${result.nudge.text}`, false);
           else await deliver(result.nudge, team, session, sources, memory, say, tell, told);
@@ -382,7 +446,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   return 0;
 }
 
-/** The operator the nudge may type to: the approved copy's, and only while that copy verifies. */
+/** The verified file's gate for the nudge. Null types nothing. The seat it names is not the pane. */
 function approvedOperator(standing: Standing): { name: string; cli: string } | null {
   if (standing.kind !== 'verified') return null;
   const approved = validateTeamFile(standing.record.file);
@@ -406,7 +470,7 @@ function spendOf(outcomes: readonly CheckOutcome[]): SpendReading[] {
   return list;
 }
 
-// Types the nudge, after reading the operator's screen once more: the pass saw it free, and a
+// Types the nudge, after reading the seat's screen once more: the pass saw it free, and a
 // prompt may have appeared since. An empty idle prompt is typed into; a box still holding the
 // line this same process typed itself and never sent is sent instead of typed into; anything
 // else — another person's or agent's text, or the same text found after a restart — stays.
@@ -428,11 +492,12 @@ function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string):
 }
 
 async function deliver(
-  nudge: { pane: string; text: string; pending: string[]; cli?: string; ring?: { to: string } }, team: TeamFile, session: string, sources: WatchSources,
+  nudge: { pane: string; text: string; pending: string[]; cli?: string; seat?: string; ring?: { to: string } }, team: TeamFile, session: string, sources: WatchSources,
   memory: ReturnType<typeof newMemory>, say: (text: string, desktop: boolean) => void,
   tell: (text: string, notify: boolean) => void, told: Set<string>,
 ): Promise<void> {
-  const cli = nudge.cli ?? team.seats.find((seat) => seat.name === team.operator)?.cli ?? '';
+  const who = nudge.ring?.to ?? nudge.seat ?? 'the seat';
+  const cli = nudge.cli ?? team.seats.find((seat) => seat.name === who)?.cli ?? '';
   const look = () => readScreen(cli, sources.screen(nudge.pane, session) ?? undefined).kind;
   const holds = () => boxHoldsText(cli, nudge.text, sources.screen(nudge.pane, session) ?? undefined);
   const status = sources.status(nudge.pane, session);
@@ -447,7 +512,7 @@ async function deliver(
   const live = () => reportedLiveAgent(sources.foreground(nudge.pane, session), names);
   const noAgent = 'nudge:no-agent';
   if (!live()) {
-    tellOnce(told, noAgent, 'a nudge was not typed: no live agent in the operator\'s pane', tell);
+    tellOnce(told, noAgent, `a nudge was not typed: no live agent in ${who}'s pane`, tell);
     keep();
     return;
   }
@@ -474,7 +539,7 @@ async function deliver(
   // The text is in the box. The agent is read again before Enter: it may have exited
   // since the text was typed, and an unframed line is not a box to send.
   if (!live()) {
-    tellOnce(told, noAgent, 'a nudge was not typed: no live agent in the operator\'s pane', tell);
+    tellOnce(told, noAgent, `a nudge was not typed: no live agent in ${who}'s pane`, tell);
     keep();
     return;
   }
@@ -493,13 +558,13 @@ async function deliver(
       }
       const currentStatus = sources.status(nudge.pane, session);
       if (currentStatus !== 'idle' && currentStatus !== 'done') {
-        tell('a nudge was typed and not sent: the operator was not free when the box was read back', true);
+        tell(`a nudge was typed and not sent: ${who} was not free when the box was read back`, true);
         keep();
         return;
       }
       const kind = look();
       if (kind !== 'idle' && kind !== 'unsent') {
-        tell('a nudge was typed and not sent: the operator\'s box does not hold it', true);
+        tell(`a nudge was typed and not sent: ${who}'s box does not hold it`, true);
         keep();
         return;
       }
@@ -515,18 +580,18 @@ async function deliver(
   // can have a key sent into it. The status read at the top of this function is not reused: it
   // predates the wait, and a turn that began under it must fail closed.
   if (!live()) {
-    tellOnce(told, noAgent, 'a nudge was not typed: no live agent in the operator\'s pane', tell);
+    tellOnce(told, noAgent, `a nudge was not typed: no live agent in ${who}'s pane`, tell);
     keep();
     return;
   }
   if (!drawn) {
-    tell('a nudge was typed and not sent: the operator\'s box does not hold it', true);
+    tell(`a nudge was typed and not sent: ${who}'s box does not hold it`, true);
     keep();
     return;
   }
   const free = sources.status(nudge.pane, session);
   if (free !== 'idle' && free !== 'done') {
-    tell('a nudge was typed and not sent: the operator was not free when the box was read back', true);
+    tell(`a nudge was typed and not sent: ${who} was not free when the box was read back`, true);
     keep();
     return;
   }
@@ -536,8 +601,8 @@ async function deliver(
     say(nudge.ring
       ? `rang ${nudge.ring.to}: ${nudge.text}`
       : mine
-        ? `nudged the operator (its own unsent line was already in its box): ${nudge.text}`
-        : `nudged the operator: ${nudge.text}`, false);
+        ? `nudged ${who} (its own unsent line was already in its box): ${nudge.text}`
+        : `nudged ${who}: ${nudge.text}`, false);
   } else keep();
 }
 
@@ -547,19 +612,23 @@ function tellOnce(told: Set<string>, key: string, text: string, tell: (text: str
   tell(text, true);
 }
 
-function noteWorked(dir: string, session: string, live: Live): void {
+function noteWorked(dir: string, session: string, live: Live, now: Date): void {
   const recorded = readState(dir).sessions[session];
   if (!recorded) return;
   const due = live.agents.some((agent) => {
     const seat = agent.name ? recorded.seats[agent.name] : undefined;
-    return seat?.temporary && seat.stage === 'ready' && !seat.worked && agent.status === 'working';
+    return seat && seat.stage === 'ready' && agent.status === 'working';
   });
   if (!due) return;
+  const activeAt = now.toISOString();
   updateState(dir, (file) => {
     const seats = (file.sessions[session] ??= emptySession()).seats;
     for (const agent of live.agents) {
       const seat = agent.name ? seats[agent.name] : undefined;
-      if (seat?.temporary && seat.stage === 'ready' && agent.status === 'working') seat.worked = true;
+      if (seat && seat.stage === 'ready' && agent.status === 'working') {
+        if (seat.temporary) seat.worked = true;
+        seat.last_active = activeAt;
+      }
     }
   });
 }
@@ -592,7 +661,7 @@ async function closeEnded(input: {
     const task = temporary.task;
     const work = task ? state.worktrees[task] : undefined;
     const ownBefore = work ? work.own_commits === true : temporary.own_commits === true;
-    const end = endOf(root, temporary.until, team.workspace.base, ownBefore);
+    const end = endOf(root, temporary.until, team.workspace.base, ownBefore, name);
     const agent = live.agents.find((item) => item.name === name);
     const cli = team.seats.find((seat) => seat.name === temporary.like)?.cli ?? '';
     const free = agent

@@ -167,10 +167,9 @@ export interface VerifyLobbyOptions {
   create?: boolean;
   getuid?: () => number;
   fs?: FsReader;
-  /** The exact relative paths of regular files the lobby may hold, from the profiles the tool
-   *  ships. Absent, no path is tolerated: the lobby holds nothing but the seats, as it
-   *  always has. */
-  files?: readonly string[];
+  /** Paths a shipped CLI reads at start. A `directory` entry matches itself and everything
+   *  under it, at any depth. Absent, nothing in the tree is refused for being read. */
+  reads?: readonly LobbyRead[];
   /** The resolved lobby the team operates on (`resolveLobby`). Absent, the machine-global lobby
    *  is used — the backward-compatible default for a team that sets neither `entity` nor
    *  `lobby`. The ancestor chain the gate verifies runs from the home down to this path. */
@@ -181,58 +180,61 @@ type CompCheck = { ok: true; stat: FsStats } | { ok: false; problem: string; tex
 
 type TreeCheck = { ok: true; files: LobbyFileSeen[] } | { ok: false; problem: string; text: string; words: string };
 
-/** The lobby's tree, closed around the declared files. Every folder the declarations run
- *  through is walked: it may hold nothing but its own declared children. An entry nothing
- *  declared is the not-empty lobby of today, in today's words; a declared path may be absent
- *  — a clean lobby passes — but what is there must be the running user's, no link anywhere,
- *  a real folder on the way and a real regular file at the end. The gate only ever lists and
- *  stats: it opens none of these files, and never follows a name that might be a link. */
-function checkClosedTree(lobby: string, declared: readonly string[], fs: FsReader, myUid: number): TreeCheck {
-  // The name each declared parent may hold, keyed by the parent's own relative path: the
-  // lobby itself is "", and its set exists even when nothing is declared — the lobby is
-  // always listed, so an undeclared entry is refused with or without declarations. A name
-  // with children is a folder on the way; a name with none is a file. The profile loader
-  // has already refused one path running through another, so no name is both.
-  const allowedAt = new Map<string, Set<string>>([['', new Set<string>()]]);
-  for (const one of declared) {
-    const parts = one.split('/');
-    for (let i = 0; i < parts.length; i++) {
-      const parent = parts.slice(0, i).join('/');
-      const child = parts[i] as string;
-      const set = allowedAt.get(parent) ?? new Set<string>();
-      set.add(child);
-      allowedAt.set(parent, set);
-    }
-  }
+/** A path a shipped CLI reads at start. `directory` matches that directory and everything
+ *  under it. `clis` is the profile `cli` names, in ship order. */
+export interface LobbyRead {
+  path: string;
+  directory: boolean;
+  clis: readonly string[];
+}
 
-  const files: LobbyFileSeen[] = [];
+function cliList(clis: readonly string[]): string {
+  if (clis.length <= 1) return clis[0] ?? '';
+  if (clis.length === 2) return `${clis[0]} and ${clis[1]}`;
+  return `${clis.slice(0, -1).join(', ')} and ${clis[clis.length - 1]}`;
+}
+
+function readBy(rel: string, reads: readonly LobbyRead[]): readonly string[] {
+  const clis: string[] = [];
+  for (const read of reads) {
+    const hit = read.directory
+      ? rel === read.path || rel.startsWith(`${read.path}/`) || rel.endsWith(`/${read.path}`) || rel.includes(`/${read.path}/`)
+      : rel === read.path || rel.endsWith(`/${read.path}`);
+    if (!hit) continue;
+    for (const cli of read.clis) if (!clis.includes(cli)) clis.push(cli);
+  }
+  return clis;
+}
+
+/** The lobby's whole tree. A symbolic link or a file owned by someone else is refused
+ *  wherever it sits. A path a shipped CLI reads at start is refused at any depth, naming
+ *  the file and those CLIs. Everything else passes. The gate only ever lists and stats:
+ *  it opens none of these files, and never follows a name that might be a link. */
+function checkClosedTree(lobby: string, reads: readonly LobbyRead[], fs: FsReader, myUid: number): TreeCheck {
+  const refuseRead = (rel: string, clis: readonly string[]): TreeCheck => ({
+    ok: false, problem: 'startup-read',
+    text: `the lobby ${lobby}: ${rel} is read at start by ${cliList(clis)}`,
+    words: `the lobby: ${rel} is read at start by ${cliList(clis)}`,
+  });
 
   const walk = (rel: string): TreeCheck | null => {
-    const allowed = allowedAt.get(rel);
-    if (!allowed) return null;
     let entries: string[];
     try {
       entries = fs.readdir(rel === '' ? lobby : join(lobby, rel));
     } catch (err) {
       return {
-        ok: false, problem: 'not-empty',
+        ok: false, problem: 'read-error',
         text: `the lobby ${lobby}: cannot read directory: ${codeOf(err)}`,
         words: 'the lobby: it cannot be listed',
       };
     }
     for (const name of entries) {
-      if (!allowed.has(name)) {
-        return { ok: false, problem: 'not-empty', text: `the lobby ${lobby}: is not empty`, words: 'the lobby: it is not empty' };
-      }
-    }
-    for (const name of allowed) {
       const childRel = rel === '' ? name : `${rel}/${name}`;
       const full = join(lobby, childRel);
       let stat: FsStats;
       try {
         stat = fs.lstat(full);
       } catch (err) {
-        if (codeOf(err) === 'ENOENT') continue; // declared and not there yet: a clean lobby passes
         return {
           ok: false, problem: 'read-error',
           text: `the lobby ${lobby}: cannot read ${full}: ${codeOf(err)}`,
@@ -253,56 +255,21 @@ function checkClosedTree(lobby: string, declared: readonly string[], fs: FsReade
           words: `the lobby: ${childRel} is not owned by you`,
         };
       }
-      const children = allowedAt.get(childRel);
-      if (children) {
-        if (!stat.isDirectory()) {
-          return {
-            ok: false, problem: 'not-directory',
-            text: `the lobby ${lobby}: ${full} is not a directory`,
-            words: `the lobby: ${childRel} is not a directory`,
-          };
-        }
+      // A directory is walked first, so a file under a read directory is named itself.
+      // An empty directory that is itself a read is named after the walk finds nothing.
+      if (stat.isDirectory()) {
         const down = walk(childRel);
         if (down !== null) return down;
-      } else if (stat.isFile()) {
-        let identity: FileIdentity;
-        try {
-          identity = fs.lstatIdentity(full);
-        } catch (err) {
-          return {
-            ok: false, problem: 'read-error',
-            text: `the lobby ${lobby}: cannot read ${full}: ${codeOf(err)}`,
-            words: `the lobby: ${childRel} cannot be read`,
-          };
-        }
-        files.push({
-          path: childRel,
-          dev: stat.dev,
-          ino: stat.ino,
-          size: identity.size,
-          ctimeNs: identity.ctimeNs,
-          birthtimeNs: identity.birthtimeNs,
-        });
-      } else if (stat.isDirectory()) {
-        return {
-          ok: false, problem: 'not-file',
-          text: `the lobby ${lobby}: ${childRel} is a folder, not a file`,
-          words: `the lobby: ${childRel} is a folder, not a file`,
-        };
-      } else {
-        return {
-          ok: false, problem: 'not-file',
-          text: `the lobby ${lobby}: ${childRel} is neither a file nor a folder`,
-          words: `the lobby: ${childRel} is neither a file nor a folder`,
-        };
       }
+      const clis = readBy(childRel, reads);
+      if (clis.length) return refuseRead(childRel, clis);
     }
     return null;
   };
 
   const refused = walk('');
   if (refused !== null) return refused;
-  return { ok: true, files };
+  return { ok: true, files: [] };
 }
 
 /**
@@ -316,12 +283,9 @@ function checkClosedTree(lobby: string, declared: readonly string[], fs: FsReade
  * the lobby returned. A read-only check of a lobby that is simply absent — including when
  * `~/.config` or `team` is not there yet — is `{ missing: true }`, not a failure.
  *
- * With `files`, the exact relative paths the profiles the tool ships declare, the
- * lobby's tree is closed around them: nothing undeclared may remain, and each declared file
- * that is there must be the running user's regular file, no link anywhere on its path. The
- * successful result records each one's full identity — device and inode, size, inode change
- * time and birth time — for the recheck, through `lstat` alone: the gate never opens a
- * declared file. Without `files` the lobby holds nothing but the seats, as it always has.
+ * With `reads`, a path a shipped CLI reads at start is refused at any depth. A link or a
+ * wrong owner is refused anywhere in the tree. Every other file and directory passes.
+ * The gate never opens a file.
  */
 export function verifyLobby(home: string, options?: VerifyLobbyOptions): LobbyGateResult {
   const lobby = options?.lobby ?? lobbyDir(home);
@@ -523,7 +487,7 @@ export function verifyLobby(home: string, options?: VerifyLobbyOptions): LobbyGa
     };
   }
 
-  const tree = checkClosedTree(lobby, options?.files ?? [], fs, myUid);
+  const tree = checkClosedTree(lobby, options?.reads ?? [], fs, myUid);
   if (!tree.ok) return tree;
 
   const logicalRepo = searchRepo(lobby, fs);
@@ -602,9 +566,9 @@ export type LobbyRefusal = { reason: string; detail: string };
 export function recheckLobby(
   home: string,
   seen: LobbySeen,
-  options?: { getuid?: () => number; fs?: FsReader; files?: readonly string[]; lobby?: string },
+  options?: { getuid?: () => number; fs?: FsReader; reads?: readonly LobbyRead[]; lobby?: string },
 ): LobbyRefusal | null {
-  const again = verifyLobby(home, { create: false, getuid: options?.getuid, fs: options?.fs, files: options?.files, lobby: options?.lobby });
+  const again = verifyLobby(home, { create: false, getuid: options?.getuid, fs: options?.fs, reads: options?.reads, lobby: options?.lobby });
   if (!again.ok) return { reason: again.words, detail: again.text };
   if (!('path' in again)) {
     return { reason: 'the lobby: it is not there any more', detail: `the lobby ${seen.path}: it is not there any more` };

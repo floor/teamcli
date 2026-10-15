@@ -477,9 +477,9 @@ describe('a record with a signed number past the safe range is refused, never a 
 
 // What makes a standing that is not verified safe is the ordering, not the values it
 // yields: the default budgets name no account, and `seatBudget` reads them `clear` —
-// permissive as a value. Safe because `up` and `add` refuse every standing that is not
-// verified before any budget is consulted, and no command reaches a standalone wrapper
-// after its gate. The count is the pin: zero calls, for each of the three standings.
+// permissive as a value. A legacy or refused record still refuses before any budget is
+// consulted. A missing record is the live file: `up` reaches herdr without asking the
+// budget, and `add` may ask it on the defaults. The count is the pin for the two refusals.
 describe('the ordering is the guard: a standing that is not verified refuses before any budget is consulted', () => {
   const refused: Standing = {
     kind: 'refused',
@@ -505,7 +505,12 @@ describe('the ordering is the guard: a standing that is not verified refuses bef
       } satisfies Partial<UpSources> as UpSources);
       expect(code).toBe(1);
       expect(consulted).toBe(0);
-      expect(io.err).toContain(`team up: ${notInForce(standing)}`);
+      if (standing.kind === 'none') {
+        expect(io.err).toBe('team up: this call has no way to reach herdr\n');
+        expect(io.err).not.toContain('never approved');
+      } else {
+        expect(io.err).toContain(`team up: ${notInForce(standing)}`);
+      }
     }
   });
 
@@ -539,12 +544,22 @@ describe('the ordering is the guard: a standing that is not verified refuses bef
         standing: () => standing,
         seatBudget: () => {
           consulted += 1;
+          if (standing.kind === 'none') return { kind: 'clear' };
           throw new Error('the budget gate was consulted');
         },
       } satisfies AddSources);
-      expect(code).toBe(1);
-      expect(consulted).toBe(0);
-      expect(io.err).toContain(`team add: ${notInForce(standing)}`);
+      if (standing.kind === 'none') {
+        // The stub launch cannot make a workspace. The pin is the missing record: the
+        // never-approved miss is gone, and the default budget is the one that is asked.
+        expect(code).toBe(1);
+        expect(consulted).toBe(1);
+        expect(io.err + io.out).not.toContain('never approved');
+        expect(io.out).toContain('worker: left out: its workspace was not created; left at launched\n');
+      } else {
+        expect(code).toBe(1);
+        expect(consulted).toBe(0);
+        expect(io.err).toContain(`team add: ${notInForce(standing)}`);
+      }
     }
   });
 });

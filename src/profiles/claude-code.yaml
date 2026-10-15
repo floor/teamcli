@@ -8,7 +8,7 @@ process_names:
   - claude
 tested:
   from: '2.1.288'
-  to: '2.1.288'
+  to: '2.1.299'
 unattended:
   - --dangerously-skip-permissions
 rules:
@@ -33,14 +33,18 @@ exit_confirm: enter
 # stayed empty through the start, the trust dialog, an answered prompt and five idle
 # minutes; one scheduler call (CronCreate) made the folder ".claude" and, inside it, the
 # regular file below — the scheduler's one lock — and at /exit the CLI deleted the lock
-# and left the empty folder. The lobby may hold exactly these paths for this CLI.
-# Why no shipped CLI reads the file as configuration or instructions when started in the
-# lobby: it is the scheduler's lock alone — written by one call, deleted at exit, never
-# read back — and no shipped profile names a file its CLI reads at start in its working
-# folder. This CLI's instructions travel as the `--append-system-prompt` launch option
-# and the others' as a first message, so a seat of any CLI obeys nothing it finds there.
+# and left the empty folder. The lock is written by that call and deleted at exit.
+# A later run of each shipped CLI in a fresh working folder showed that claude-code,
+# codex, cursor, antigravity and grok read instruction or settings files there at start.
+# Those paths are `startup_reads` on each profile. This list is only what the CLI writes.
 lobby_files:
   - .claude/scheduled_tasks.lock
+startup_reads:
+  - CLAUDE.md
+  - CLAUDE.local.md
+  - .claude/CLAUDE.md
+  - .claude/rules/
+  - .claude/settings.json
 timeouts:
   idle: 90s
   exit: 30s
@@ -62,6 +66,9 @@ status_model:
     yields: [Claude Opus, Claude Sonnet, Claude Haiku, Claude Fable]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
 screen:
+  # The shell after `/exit` on 2.1.299: `Resume this session with:` and `claude --resume`.
+  unknown:
+    - any: ['Resume this session with:']
   trust:
     - all:
         - match: '(?:Do you trust (?:this|the) folder\?|One you trust\?)'
@@ -70,6 +77,14 @@ screen:
     - all:
         - '^\s*[❯›>]?\s*Yes, I trust this folder\b'
       footer: 'Enter to confirm · Esc to cancel'
+    # 2.1.299 (`claude-code/2.1.299/trust.txt`): a "Quick safety check" whose marked
+    # row is `No, exit` and whose second row is `Yes, I trust this folder`. Enter
+    # confirms the marked row. The footer is the one the earlier dialog already uses.
+    - all:
+        - 'Quick safety check:'
+        - '^\s*❯\s*No, exit\s*$'
+        - '^\s*Yes, I trust this folder\s*$'
+        - 'Enter to confirm · Esc to cancel'
   # A quoted question above the composer's rule is not a dialog. The footer is the
   # captured last line and needs the question. A Yes/No choice below the last rule
   # is the other shape; the mark is optional, as on an unmarked "2. No".
@@ -208,7 +223,7 @@ screen:
     rule: '^[─━]{8,}$'
     footers:
       - '^\s{2,}.*·.*(?:Opus|Sonnet|Haiku|Fable)\s+[0-9]+.*$'
-      - '^\s{2,}(?:⏵⏵\s+)?bypass permissions\b.*$'
+      - '^\s{2,}(?:(?:⏵⏵\s+)?bypass permissions|⏸\s+manual mode)\b.*$'
     # Claude Code greys every suggestion it shows — "Try …", "Resume briefly.", any other —
     # with faint styling, while typed text carries none. The list below stays the fallback
     # for a source without styling.

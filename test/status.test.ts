@@ -531,7 +531,7 @@ describe('team status', () => {
     live = null;
     expect(await status()).toMatchObject({ code: 2, err: expect.stringContaining('herdr doesn\'t answer') });
     expect(await status('--fix')).toMatchObject({ code: 2, err: expect.stringContaining('unknown option --fix') });
-    expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--json]\n');
+    expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n');
   });
 
   test('--json: pins the stable format 1 shape on a clean team', async () => {
@@ -771,6 +771,34 @@ describe('team status', () => {
     expect(readable.out).toMatch(/codex-acme-tmp-1\s+done, temporary/);
   });
 
+  test('a seat waiting at a permission or trust prompt is a difference for the owner', async () => {
+    const codexPane = built().agents.find((one) => one.name === 'codex-acme')?.pane ?? '';
+    const permScreen = codexScreen('permission');
+    live = {
+      ...built(),
+      screens: { ...built().screens, [codexPane]: permScreen },
+    };
+    const permRes = await status();
+    expect(permRes.code).toBe(1);
+    expect(permRes.out).toContain(
+      "difference: codex-acme waits at a permission prompt: its owner's to answer\n" +
+        '  repair: the owner answers it in the pane\n',
+    );
+    expect(permRes.out).toContain('1 difference(s), 1 for the owner\n');
+
+    const trustScreen = codexScreen('trust-folder');
+    live = {
+      ...built(),
+      screens: { ...built().screens, [codexPane]: trustScreen },
+    };
+    const trustRes = await status();
+    expect(trustRes.code).toBe(1);
+    expect(trustRes.out).toContain(
+      "difference: codex-acme waits at a permission prompt: its owner's to answer\n" +
+        '  repair: the owner answers it in the pane\n',
+    );
+  });
+
   test('D: summary line: with and without an owner repair', async () => {
     // 1. Without an owner repair: only a missing seat (repair: team add <seat>)
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
@@ -839,7 +867,11 @@ describe('a pane that no longer holds the process team launched', () => {
     const readable = await status();
     expect(readable.code).toBe(1);
     expect(readable.out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
-    expect(readable.out).toContain('note: codex-acme: its pane runs GPT Terra 5.6; that process is not the one team launched');
+    expect(readable.out).toContain(
+      'difference: codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol; the process in its pane is not the one team launched\n' +
+        '  repair: team remove codex-acme --keep, then team add codex-acme\n',
+    );
+    expect(readable.out).not.toContain('note: codex-acme: its pane runs');
     expect(readable.out).not.toMatch(/codex-acme\s+restored, not launched by team\s+GPT/);
     live = { ...built(), processes: { 'w2:p1': { shell: 400, foreground: [500] } } };
     const unread = await status();
@@ -857,9 +889,10 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
     expect(out).not.toMatch(/codex-acme\s+idle/);
     expect(out).toContain(
-      'difference: codex-acme: the process in its pane is not the one team launched; nothing checks its model, account or rules\n' +
-        GONE_REPAIR,
+      'difference: codex-acme: its pane holds a process this record cannot tie to the launch\n' +
+        '  repair: look at the pane\n',
     );
+    expect(out).not.toContain('difference: codex-acme: the process in its pane is not the one team launched');
     const doc = JSON.parse((await status('--json')).out);
     expect(doc.rows.find((row: { name: string }) => row.name === 'codex-acme')).toEqual({
       name: 'codex-acme',
@@ -867,6 +900,68 @@ describe('a pane that no longer holds the process team launched', () => {
       model: '-',
       pane: 'w2:p1',
     });
+  });
+
+  test('a matching agent session is the seat, not a repair that names team up', async () => {
+    recordCodex({ agent_session: 'kept' });
+    const agents = built().agents.map((one) => one.name === 'codex-acme' ? { ...one, session: 'kept' } : one);
+    live = { ...built(), agents, processes: { 'w2:p1': { shell: 500, foreground: [501] } } };
+    const { out } = await status();
+    expect(out).not.toMatch(/codex-acme\s+restored, not launched by team/);
+    expect(out).not.toContain('codex-acme: its pane holds a process this record cannot tie to the launch');
+    expect(out).not.toContain('difference: codex-acme');
+    expect(out).toMatch(/codex-acme\s+idle/);
+  });
+
+  test('a restored launcher is named, and nothing starts the seat', async () => {
+    updateState(join(dir, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.seats['deepseek-acme'] = {
+        stage: 'ready',
+        pane: 'w3:p1',
+        workspace: 'w3',
+        launched: { shell: 400, cli: [401] },
+        agent_session: 'kept',
+      };
+    });
+    const agents = built().agents.map((one) => one.name === 'deepseek-acme' ? { ...one, session: 'kept' } : one);
+    live = { ...built(), agents, processes: { 'w3:p1': { shell: 500, foreground: [501] } } };
+    const { code, out } = await status();
+    expect(code).toBe(1);
+    expect(out).not.toMatch(/deepseek-acme\s+restored, not launched by team/);
+    expect(out).toContain(
+      'difference: deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n' +
+        '  repair: team remove deepseek-acme --keep, then team add deepseek-acme\n',
+    );
+    expect(out).not.toContain('repair: the owner runs team up\n');
+  });
+
+  test('a launcher the record cannot tie names the model and the restart', async () => {
+    updateState(join(dir, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.seats['deepseek-acme'] = {
+        stage: 'ready',
+        pane: 'w3:p1',
+        workspace: 'w3',
+        launched: { shell: 400, cli: [401] },
+      };
+    });
+    live = {
+      ...built(),
+      processes: { 'w3:p1': { shell: 400, foreground: [500] } },
+      screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') },
+    };
+    const { out } = await status();
+    expect(out).toMatch(/deepseek-acme\s+restored, not launched by team\s+-\s+w3:p1/);
+    // Claude Code's status line cannot name this seat's model, so the screen is not a difference.
+    // The launch line is: it starts a launcher, and this process is not the one team launched.
+    expect(out).toContain(
+      'difference: deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n' +
+        '  repair: team remove deepseek-acme --keep, then team add deepseek-acme\n',
+    );
+    expect(out).not.toContain('deepseek-acme runs');
+    expect(out).not.toContain('repair: look at the pane\n');
+    expect(out).not.toContain('repair: the owner runs team up\n');
   });
 
   test('gone with no agent listed: its pane is read, not called a missing seat', async () => {
@@ -903,9 +998,10 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(code).toBe(1);
     expect(out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
     expect(out).toContain(
-      'difference: codex-acme: the process in its pane is not the one team launched; nothing checks its model, account or rules\n' +
-        GONE_REPAIR,
+      'difference: codex-acme: its pane holds a process this record cannot tie to the launch\n' +
+        '  repair: look at the pane\n',
     );
+    expect(out).not.toContain('repair: the owner runs team up\n');
     expect(out).not.toContain('is named "stranger"');
     expect(out).not.toContain('agent rename');
   });

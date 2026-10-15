@@ -1750,19 +1750,22 @@ describe('the credential never crosses to the seat', () => {
     record();
     let fetched = false;
     const world = tracker(issuesAnswer([]));
-    // The owner's own run with no terminal: past the caller gate — the owner-no-tty caller is
-    // not a seat — and refused by the facility's own sentence, which stays reachable exactly here.
     const io = testIo(root, { kind: 'owner-no-tty' });
+    let read = false;
     const code = await runBroker([], io, {
       home,
-      keyReader: async () => ({ ok: false, reason: 'the run is not interactive' }),
+      keyReader: async () => {
+        read = true;
+        return { ok: false, reason: 'the run is not interactive' };
+      },
       fetch: (url, request) => {
         fetched = true;
         return world.fetch(url, request);
       },
     });
     expect(code).toBe(1);
-    expect(io.err).toBe('team broker: the run is not interactive\n');
+    expect(read).toBe(false);
+    expect(io.err).toBe('team broker: only the owner runs this, from a terminal outside herdr\n');
     expect(fetched).toBe(false);
     expect(existsSync(brokerSocket(root))).toBe(false);
   });
