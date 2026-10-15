@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../../src/approve/approval.ts';
 import { main } from '../../src/cli.ts';
-import { runList, type ListSources } from '../../src/commands/list.ts';
+import { activeSeatsOf, formatActiveSeats, runList, type ListSeatsRow, type ListSources } from '../../src/commands/list.ts';
 import { formatRelativeTime, runSeats, USAGE, type SeatsJson, type SeatsSources } from '../../src/commands/seats.ts';
 import { runStatus, type StatusJson, type StatusSources } from '../../src/commands/status.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
@@ -209,6 +209,20 @@ describe('team seats', () => {
     });
   });
 
+  test('two seats recorded under one handle are not both shown as that handle', async () => {
+    updateState(join(dir, '.agents'), (state) => {
+      state.sessions['acme-web']!.seats['codex-acme'] = {
+        ...state.sessions['acme-web']!.seats['codex-acme']!,
+        id: 'seat_111111111111',
+      };
+    });
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], io, statusSources)).toBe(0);
+    const doc = JSON.parse(io.out) as SeatsJson;
+    const shown = doc.seats.map((row) => row.id).filter((id): id is string => id !== null);
+    expect(new Set(shown).size).toBe(shown.length);
+  });
+
   test('--watch refreshes until wait returns false and refuses --json', async () => {
     const ioBad = testIo(dir, { kind: 'owner' });
     expect(await runSeats(['--file', file, '--watch', '--json'], ioBad, statusSources)).toBe(2);
@@ -271,7 +285,7 @@ describe('team status --all', () => {
   });
 });
 
-describe('team list --watch', () => {
+describe('team list --watch and --seats', () => {
   test('refreshes until wait returns false and refuses --json', async () => {
     const listSources: ListSources = {
       sessions: () => [{ name: 'acme', running: true }],
@@ -298,4 +312,63 @@ describe('team list --watch', () => {
     expect(ioWatch.out.split('\x1b[2J\x1b[H').length - 1).toBe(2);
     expect(ioWatch.out).toContain('acme');
   });
+
+  test('--seats shows ready / working / waiting / stopped counts and per-seat rows across projects', async () => {
+    const listSources: ListSources = {
+      sessions: () => [
+        { name: 'acme', running: true },
+        { name: 'beacon', running: false },
+      ],
+      roster(session) {
+        if (session === 'acme') {
+          return [
+            { name: 'lead', id: 'seat_111111111111', status: 'ready', cli: 'claude-code', model: 'Claude Opus 5.5', pane: 'pane-1' },
+            { name: 'builder', id: 'seat_222222222222', status: 'working', cli: 'codex', model: 'GPT Sol 6', pane: 'pane-2' },
+            { name: 'reviewer', id: 'seat_333333333333', status: 'waiting', cli: 'claude-code', model: 'Claude Sonnet 5.5', pane: 'pane-3' },
+          ];
+        }
+        return [];
+      },
+      team(session) {
+        if (session === 'acme') return { project: 'acme', root: '/work/acme', seats: 4, unreadable: false };
+        if (session === 'beacon') return { project: 'beacon', root: '/work/beacon', seats: 2, unreadable: false };
+        return null;
+      },
+    };
+
+    const summary = activeSeatsOf(listSources.roster('acme'), 4, true);
+    expect(summary).toEqual({ ready: 1, working: 1, waiting: 1, stopped: 1 });
+    expect(formatActiveSeats(summary)).toBe('1 ready / 1 working / 1 waiting / 1 stopped');
+
+    const ioTable = testIo(dir, { kind: 'owner' });
+    expect(await runList(['--all', '--seats'], ioTable, listSources)).toBe(0);
+    expect(ioTable.out).toContain('1 ready / 1 working / 1 waiting / 1 stopped');
+    expect(ioTable.out).toContain('0 ready / 0 working / 0 waiting / 2 stopped');
+    expect(ioTable.out).toContain('  lead      seat_111111111111  ready    claude-code  Claude Opus 5.5    pane-1');
+    expect(ioTable.out).toContain('  builder   seat_222222222222  working  codex        GPT Sol 6          pane-2');
+    expect(ioTable.out).toContain('  reviewer  seat_333333333333  waiting  claude-code  Claude Sonnet 5.5  pane-3');
+
+    const ioJson = testIo(dir, { kind: 'owner' });
+    expect(await runList(['--all', '--seats', '--json'], ioJson, listSources)).toBe(0);
+    const parsed = JSON.parse(ioJson.out) as ListSeatsRow[];
+    expect(parsed[0]).toMatchObject({
+      team: 'acme',
+      project: 'acme',
+      status: 'running',
+      seats: '4',
+      activity: '1 ready / 1 working / 1 waiting / 1 stopped',
+      active: { ready: 1, working: 1, waiting: 1, stopped: 1 },
+    });
+    expect(parsed[0]?.roster).toHaveLength(3);
+    expect(parsed[1]).toMatchObject({
+      team: 'beacon',
+      project: 'beacon',
+      status: 'stopped',
+      seats: '2',
+      activity: '0 ready / 0 working / 0 waiting / 2 stopped',
+      active: { ready: 0, working: 0, waiting: 0, stopped: 2 },
+      roster: [],
+    });
+  });
 });
+

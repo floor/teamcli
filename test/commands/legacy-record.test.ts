@@ -245,7 +245,7 @@ describe('a legacy record, with the team\'s seats running', () => {
     expect(io.out).toContain('the watch of "acme-web" stopped');
   });
 
-  test('down stops nobody while the file was never approved', async () => {
+  test('down dry-run with no approval record still prints the plan', async () => {
     const io = testIo(root, OWNER);
     const code = await runDown(['--dry-run', ...FILE], io, {
       sessionRunning: () => true,
@@ -258,9 +258,10 @@ describe('a legacy record, with the team\'s seats running', () => {
       now: () => NOW,
       home,
     });
-    expect(code).toBe(1);
-    expect(io.err).toBe('team down: the file was never approved on this machine: run `team approve`\n');
-    expect(io.out).toBe('');
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).not.toContain('never approved');
+    expect(io.out).toContain('dry run: nothing was run');
   });
 
   test('down stops nobody while the record is legacy', async () => {

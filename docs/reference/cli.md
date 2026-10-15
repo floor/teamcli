@@ -82,28 +82,6 @@ Literal: `trust`
 | --- | --- | --- |
 | `seat` | no | no |
 
-## `approve`
-
-Hidden: no
-
-Usage:
-
-    team approve [--show] [--confirm] [--file <path>]
-
-### Flags
-
-| Flag | Takes a value | Repeatable | Hidden |
-| --- | --- | --- | --- |
-| `--confirm` | no | no | no |
-| `--file` | yes | no | no |
-| `--help` | no | no | no |
-| `--show` | no | no | no |
-| `-h` | no | no | yes |
-
-### Positionals
-
-None.
-
 ## `ask-show`
 
 Hidden: no
@@ -281,12 +259,15 @@ Hidden: no
 
 Usage:
 
-    team feed [--seat <name>] [--limit <n>] [--follow] [--json]
+    team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--audit` | yes | no | no |
+| `--briefs` | yes | no | no |
 | `--follow` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
@@ -359,7 +340,7 @@ Hidden: no
 
 Usage:
 
-    team list [--all] [--watch] [--json]
+    team list [--all] [--seats] [--watch] [--json]
 
 ### Flags
 
@@ -368,6 +349,7 @@ Usage:
 | `--all` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--seats` | no | no | no |
 | `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -703,6 +685,27 @@ Usage:
 
 None.
 
+## `tempo`
+
+Hidden: no
+
+Usage:
+
+    team tempo <word>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `word` | no | no |
+
 ## `unlock`
 
 Hidden: no
@@ -730,7 +733,7 @@ Hidden: no
 
 Usage:
 
-    team up [--dry-run] [--session <name>] [--file <path>]
+    team up [--dry-run] [--serial] [--session <name>] [--file <path>]
 
 ### Flags
 
@@ -739,6 +742,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--serial` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

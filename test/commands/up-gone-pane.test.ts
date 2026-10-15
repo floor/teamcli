@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { type HerdrAgent } from '../../src/herdr.ts';
 import { readState, type SeatState } from '../../src/state.ts';
@@ -381,11 +381,11 @@ describe('team up, two runs and the watchdog', () => {
     const first = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, first, sources({}, made));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'watchdog']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
     expect(first.err).toContain('watch: started\n');
-    // `up` starts the watchdog; the watch process records its own pid. This run plays it.
+    // `up` starts the watch and records its pid. This run plays that pid as still alive.
     const after = stateOf();
-    expect(after.sessions['acme-web']?.watch).toBeUndefined();
+    expect(after.sessions['acme-web']?.watch?.pid).toBe(4242);
     const seeded = JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'));
     seeded.sessions['acme-web'].watch = { pid: 4242, heartbeat: '2026-10-03T14:01:30Z' };
     writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify(seeded));
@@ -403,8 +403,8 @@ describe('team up, two runs and the watchdog', () => {
       agents: named,
     }, made));
     expect(code2).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'watchdog']);
-    expect(made.runs.filter((run) => run.command.includes('watch'))).toHaveLength(1);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
+    expect(made.runs.filter((run) => run.command.includes('watch'))).toHaveLength(0);
     expect(second.err).not.toContain('watch: started');
     expect(`${second.out}${second.err}`).not.toContain('was gone and was replaced');
     // Nothing moved: the whole session record is the same down to its JSON.
@@ -423,11 +423,11 @@ describe('team up, two runs and the watchdog', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'watchdog']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
     expect(stateOf().sessions['acme-web']?.watchdog).toEqual({
       file: join(root, '.agents/team.yaml'),
-      pane: 'w4:p1',
     });
+    expect(stateOf().sessions['acme-web']?.watch?.pid).toBe(4242);
 
     const seeded = JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'));
     seeded.sessions['acme-web'].watch = { pid: 4242, heartbeat: '2026-10-03T14:01:30Z' };
@@ -445,10 +445,9 @@ describe('team up, two runs and the watchdog', () => {
       agents: named,
     }, made));
     expect(code2).toBe(0);
-    expect(made.creates).toHaveLength(4);
+    expect(made.creates).toHaveLength(3);
     expect(stateOf().sessions['acme-web']?.watchdog).toEqual({
       file: join(root, '.agents/team.yaml'),
-      pane: 'w4:p1',
     });
   });
 
@@ -479,9 +478,8 @@ describe('team up, two runs and the watchdog', () => {
       watchCommand: () => 'team watch',
     }, made));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['watchdog']);
-    const watch = made.runs.find((run) => run.command === 'team watch');
-    expect(watch?.pane).toBe('w1:p1');
+    expect(made.creates).toEqual([]);
+    expect(made.runs.find((run) => run.command === 'team watch')).toBeUndefined();
     expect(io.err).toContain('watch: started\n');
     expect(made.renames).toEqual([]);
     const seats = stateOf().sessions['acme-web']?.seats ?? {};

@@ -169,7 +169,7 @@ describe('a shared label', () => {
     expect(out.differences.some((item) => item.what.startsWith('coordinator:') && item.what.includes('unnamed'))).toBe(false);
   });
 
-  test('the watch nudges the operator\'s pane, not the other seat that shares its label', () => {
+  test('the watch nudges the idle seat\'s pane, not the operator that shares its label', () => {
     const team = valid(SHARED);
     const idle = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n`;
     const live = {
@@ -191,7 +191,7 @@ describe('a shared label', () => {
     const result = pass({
       team, state: emptySession(), live, machine: fine, now: 0, memory, approval: [], watch: team.watch,
     });
-    expect(result.nudge?.pane).toBe('w1:p1');
+    expect(result.nudge?.pane).toBe(live.agents[1]?.pane);
   });
 });
 
