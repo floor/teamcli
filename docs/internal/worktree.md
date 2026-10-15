@@ -108,6 +108,7 @@ the same way.
 | `team worktree: --kind is required: the branch pattern is "{kind}/{task}"` | 1 |
 | `team worktree: --kind has nowhere to go: the branch pattern is "{task}"` | 1 |
 | `team worktree: <folder> is outside the approved trust paths` | 1 |
+| `team worktree: <folder> follows a symlink to <real>, which is outside the approved trust paths` — the folder is a link and its real path is outside them | 1 |
 | ``team worktree: seat <name> is not in the approved file: run `team approve` `` — a seat the file declares and the approved copy does not | 1 |
 | `team worktree: --seat "x" names no declared seat` | 1 |
 | `team worktree: "t" is already recorded` / `"t" is already recorded in session x` | 1 |
@@ -115,6 +116,7 @@ the same way.
 | `team worktree: <folder> already exists` / `branch <b> already exists` / `<remote>/<b> already exists` | 1 |
 | `team worktree: "b" is not a branch name` | 1 |
 | `team worktree: workspace.base "main" is not a branch here; nothing was created` | 1 |
+| `team worktree: base <base> tracks "<remote>", which isn't a remote branch; nothing was created` — the base's upstream names no remote to fetch | 1 |
 | `team worktree: couldn't fetch <remote>: <first line>. Nothing was created.` | 1 |
 | `team worktree: the worktree was not created: <first line of git's error>` | 1 |
 | `team worktree: setup failed on command <n> of <m>; the worktree is kept and recorded as setup: failed` | 1 |
