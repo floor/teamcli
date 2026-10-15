@@ -572,21 +572,37 @@ function restartNote(
 /** Doctor's never-approved line. The other two non-verified cases share `notInForce`'s text. */
 const NEVER_APPROVED_DOCTOR = 'run `team approve`: this file was never approved on this machine';
 
-/** Pulls the two dev-mode warnings out of `refusals` and joins them into the one line. */
+/** Pulls the dev-mode warnings out of `refusals` and joins them into the one line. */
 function devWarningLine(refusals: string[], standing: Standing, caller: Caller): string {
   const placement = `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+  const mismatches = new Set(
+    refusals.map(approvedCopyMismatch).filter((inner): inner is string => inner !== null),
+  );
   const kept: string[] = [];
   const warnings: string[] = [];
   for (const line of refusals) {
-    if (devModeWarning(line, standing, placement)) warnings.push(line);
+    if (devModeWarning(line, standing, placement, mismatches)) warnings.push(line);
     else kept.push(line);
   }
   refusals.splice(0, refusals.length, ...kept);
   return [...new Set(warnings)].join('; ');
 }
 
-function devModeWarning(line: string, standing: Standing, placement: string): boolean {
+/** The approved-copy mismatch `up` itself says. A grant or a delegation says the same words
+ *  after its own prefix, and those stay refusals. The returned text is the parenthetical. */
+function approvedCopyMismatch(line: string): string | null {
+  const prefix = 'the file is not the approved one (';
+  const suffix = '): run `team approve`';
+  if (!line.startsWith(prefix) || !line.endsWith(suffix)) return null;
+  return line.slice(prefix.length, line.length - suffix.length);
+}
+
+function devModeWarning(line: string, standing: Standing, placement: string, mismatches: ReadonlySet<string>): boolean {
   if (line === placement) return true;
+  if (approvedCopyMismatch(line) !== null) return true;
+  // Doctor says the same mismatch as `run \`team approve\`: <differences>`, and that miss
+  // blocks the launch on its own. It joins the warning; it is not a second refusal.
+  if (standing.kind === 'verified' && mismatches.has(line.slice('run `team approve`: '.length))) return true;
   if (standing.kind === 'verified') return false;
   if (line === notInForce(standing)) return true;
   return standing.kind === 'none' && line === NEVER_APPROVED_DOCTOR;
