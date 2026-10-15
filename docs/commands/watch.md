@@ -510,9 +510,9 @@ exit 1
 ```
 
 The four that can't be turned off — `attention`, `missing`, `model-drift` and `approval` — are
-refused by the schema itself, with the line, and so is a name that is no check. `team approve`
-refuses such a file the same way, and the watch keeps the last copy that validated, with the
-checks as the owner approved them.
+refused by the schema itself, with the line, and so is a name that is no check. A command that
+reads such a file refuses it the same way, and the watch keeps the last copy that validated, with
+the checks as the owner approved them.
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -550,8 +550,8 @@ seats:
 ```
 
 ```console
-$ team approve ; echo "exit $?"
-team approve: line 9: watch.checks can't turn off attention: attention, missing, model-drift, approval always run
-team approve: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, attention, provider-error, unsent, idle, extra, team-idle, approval, load, memory, disk, swap-free, swap-growth, budget
+$ team up ; echo "exit $?"
+team up: line 9: watch.checks can't turn off attention: attention, missing, model-drift, approval always run
+team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, attention, provider-error, unsent, idle, extra, team-idle, approval, load, memory, disk, swap-free, swap-growth, budget
 exit 2
 ```
