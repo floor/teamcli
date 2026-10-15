@@ -132,12 +132,10 @@ grant:
   empty list is `grant.scope must name at least one of: up, down, approve, init`. A repeated act
   is `grant.scope names "<act>" twice`. Any other word is `grant.scope must name up, down,
   approve, init: "<word>" is not one`.
-- `approve` in `scope` is an ordinary approval: the roster and `rules`. A change to `grant`
-  itself, and a change to any other owner section, stays the owner's to approve. `team approve`
-  admits the orchestrator's seat for that class when the approved grant lists `approve`. The
-  run is this folder's own file, `--file` is refused, and the first approval of a team stays
-  the owner's. A roster edit that moves the derived ceiling — a file that declares no `limits`
-  — stays the owner's too.
+- `approve` in `scope` still parses — a file that names it is read like any other — and no
+  command in this build consults it. A change to `grant` itself, and a change to any other owner
+  section, stays the owner's to approve. A roster edit that moves the derived ceiling — a file
+  that declares no `limits` — stays the owner's too.
 - Any other key, including `path`, is an unknown field.
 - `team up` admits the orchestrator's seat when the approved grant lists `up`. The run is this
   folder's own file: `--session` and `--file` are refused, and the run does not relaunch or close
