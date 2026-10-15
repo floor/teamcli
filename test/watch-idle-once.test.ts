@@ -212,41 +212,30 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     }
   });
 
-  test('undelivered report is kept pending and does not duplicate in pending list', () => {
+  test('an idle seat is nudged on the pass that reports it, and a repeat does not duplicate pending', () => {
     const brisk = valid(defaultExample.replace('  idle_first: 10m', '  idle_first: 1m\n  idle_repeat: 2m'));
     const memory = newMemory();
-    // Operator is busy throughout:
     const live = liveScene({
       'claude-operator-acme': { status: 'working', screen: workingScreen },
       'deepseek-acme': { status: 'idle', screen: idleScreen },
     });
 
-    // 0m: start watch
     pass({ team: brisk, watch: brisk.watch, state: emptySession(), live, machine: fine, now: 0, memory });
 
-    // 1m: first report lands, operator busy -> added to pending
     const p1 = pass({ team: brisk, watch: brisk.watch, state: emptySession(), live, machine: fine, now: 1 * MIN, memory });
     expect(p1.reports.map((r) => r.text)).toEqual(['deepseek-acme has been idle since the watch started']);
-    expect(p1.nudge).toBeNull();
-    expect(memory.pending).toEqual(['deepseek-acme has been idle since the watch started']);
-
-    // 3m: idle_repeat fires while report is STILL undelivered in pending list (before nudge_wait 10m)
-    const p3 = pass({ team: brisk, watch: brisk.watch, state: emptySession(), live, machine: fine, now: 3 * MIN, memory });
-    expect(p3.reports.map((r) => r.text)).toEqual(['deepseek-acme has been idle since the watch started']);
-    // Report is undelivered, so pending list must NOT hold duplicates:
-    expect(memory.pending).toEqual(['deepseek-acme has been idle since the watch started']);
-
-    // Operator becomes free at 4m:
-    const freeLive = liveScene({
-      'claude-operator-acme': { status: 'idle', screen: idleScreen },
-      'deepseek-acme': { status: 'idle', screen: idleScreen },
-    });
-    const p4 = pass({ team: brisk, watch: brisk.watch, state: emptySession(), live: freeLive, machine: fine, now: 4 * MIN, memory });
-    expect(p4.nudge).toEqual({
-      pane: 'w0:p1',
+    expect(p1.nudge).toEqual({
+      pane: 'w3:p1',
+      seat: 'deepseek-acme',
+      cli: 'claude-code',
       text: NUDGE_TEXT,
       pending: ['deepseek-acme has been idle since the watch started'],
     });
+    expect(memory.pending).toEqual([]);
+
+    const p3 = pass({ team: brisk, watch: brisk.watch, state: emptySession(), live, machine: fine, now: 3 * MIN, memory });
+    expect(p3.reports.map((r) => r.text)).toEqual(['deepseek-acme has been idle since the watch started']);
+    expect(p3.nudge?.pending).toEqual(['deepseek-acme has been idle since the watch started']);
     expect(memory.pending).toEqual([]);
   });
 
@@ -261,8 +250,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     const memory = newMemory();
     const nudgeBox = `${RULE}\n❯ ${NUDGE_TEXT}\n${RULE}\n${STATUS}\n`;
     const live = liveScene({
-      'claude-operator-acme': { status: 'idle', screen: nudgeBox },
-      'deepseek-acme': { status: 'idle', screen: idleScreen },
+      'deepseek-acme': { status: 'idle', screen: nudgeBox },
     });
     pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 0, memory });
     const p1 = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 1 * MIN, memory });
@@ -277,16 +265,17 @@ describe('watch idle reports (once per period by default, repeat on request)', (
       .replace('  idle_first: 10m', '  idle_first: 1m\n  idle_repeat: 2m')
       .replace('  unsent_after: 1m', '  unsent_after: 1h'));
     const memory = newMemory();
-    memory.ownNudge = { pane: 'w0:p1', text: NUDGE_TEXT };
+    memory.ownNudge = { pane: 'w3:p1', text: NUDGE_TEXT };
     const nudgeBox = `${RULE}\n❯ ${NUDGE_TEXT}\n${RULE}\n${STATUS}\n`;
     const live = liveScene({
-      'claude-operator-acme': { status: 'idle', screen: nudgeBox },
-      'deepseek-acme': { status: 'idle', screen: idleScreen },
+      'deepseek-acme': { status: 'idle', screen: nudgeBox },
     });
     pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 0, memory });
     const p1 = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 1 * MIN, memory });
     expect(p1.nudge).toEqual({
-      pane: 'w0:p1',
+      pane: 'w3:p1',
+      seat: 'deepseek-acme',
+      cli: 'claude-code',
       text: NUDGE_TEXT,
       pending: ['deepseek-acme has been idle since the watch started'],
     });
@@ -299,8 +288,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     const memory = newMemory();
     const otherBox = `${RULE}\n❯ Brief: take the next task from the queue\n${RULE}\n${STATUS}\n`;
     const live = liveScene({
-      'claude-operator-acme': { status: 'idle', screen: otherBox },
-      'deepseek-acme': { status: 'idle', screen: idleScreen },
+      'deepseek-acme': { status: 'idle', screen: otherBox },
     });
     pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 0, memory });
     const p1 = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 1 * MIN, memory });

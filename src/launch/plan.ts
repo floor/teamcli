@@ -87,7 +87,7 @@ export type Op =
        *  is working and nothing is closed. */
       drift?: { model: string; version: string; way: string };
     }
-  | { do: 'watch'; label: string; command: string; file?: string }
+  | { do: 'spawn-watch'; command: string; cwd: string; file?: string }
   | {
       do: 'type';
       seat: string;
@@ -254,14 +254,14 @@ export interface UpInput {
   seats: readonly UpSeat[];
   /** The watch's pid is alive, so no second watch is started. */
   watchAlive?: boolean;
-  /** When false, no watchdog workspace is created: a flagless watch started in `root` would
+  /** When false, no watch is started: a flagless watch started in `root` would
    *  not read the file this plan was built from. Absent means start one, as before. */
   startWatch?: boolean;
-  /** The command the watchdog pane runs. Defaults to `team watch`. */
+  /** The command the detached watch runs. Defaults to `team watch`. */
   watchLine?: string;
   /**
-   * The team file a flagless watch in `root` would not read. Recorded for the watchdog pane
-   * before its command runs. Absent when that flagless watch already reads the file.
+   * The team file a flagless watch in `root` would not read. Recorded before the process
+   * is spawned. Absent when that flagless watch already reads the file.
    */
   watchFile?: string;
 }
@@ -633,14 +633,14 @@ export function upPlan(input: UpInput): Step[] {
   const watchLine = input.watchLine ?? `team watch${watchArguments}`;
   steps.push({
     kind: 'run',
-    argv: herdr(session, 'workspace', 'create', '--cwd', input.root, '--label', 'watchdog', '--no-focus'),
-    do: { do: 'create', label: 'watchdog', cwd: input.root },
-  });
-  steps.push({
-    kind: 'run',
-    argv: herdr(session, 'pane', 'run', paneOf('watchdog'), watchLine),
-    note: 'a desktop notification follows when the watch exits',
-    do: { do: 'watch', label: 'watchdog', command: watchLine, ...(input.watchFile ? { file: input.watchFile } : {}) },
+    argv: [watchLine],
+    note: 'detached; the state records its pid',
+    do: {
+      do: 'spawn-watch',
+      command: watchLine,
+      cwd: input.root,
+      ...(input.watchFile ? { file: input.watchFile } : {}),
+    },
   });
   return steps;
 }

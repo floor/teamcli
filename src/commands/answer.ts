@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { approvalDifferencesOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { trustPolicy } from '../file/dialogs.ts';
 import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -91,6 +91,12 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   if (args.error || args.rest.length !== 2 || !seatName || dialog !== 'trust') {
     const message = args.error ?? (dialog && dialog !== 'trust' ? `unknown dialog "${dialog}"` : 'a seat and trust are required');
     return usage(io, json, message);
+  }
+  const detached = detachedRefusal(walkCaller(io));
+  if (detached !== undefined) {
+    io.stderr(`team answer: ${detached}\n`);
+    // exit: answer.detached
+    return 1;
   }
 
   // The `--file` check is the walk's, and it runs before that file is read: a non-owner aiming

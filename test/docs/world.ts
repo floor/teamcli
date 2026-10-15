@@ -416,6 +416,15 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     sessionUp: action.sessionUp,
     createWorkspace: action.createWorkspace,
     paneRun: action.paneRun,
+    spawnWatch(command: string) {
+      did.runs.push(command);
+      watchPid = WATCH_PID;
+      updateState(dir, (state) => {
+        const record = (state.sessions[session] ??= emptySession());
+        record.watch = { pid: WATCH_PID, heartbeat: now().toISOString() };
+      });
+      return WATCH_PID;
+    },
     renameAgent: action.renameAgent,
     closeWorkspace: action.closeWorkspace,
     agentPanes: action.agentPanes,

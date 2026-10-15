@@ -26,10 +26,13 @@ line in `.agents/team.log`. The record is signed, and signing moves this project
 
 ## Who may run it
 
-The owner, from a terminal outside herdr, approves anything. The approved delegate may approve
+The owner, from a terminal outside herdr, approves anything. A run with no terminal is refused before the token is read: `team approve: only the owner runs this, from a terminal outside herdr`. The approved delegate may approve
 too: the pane a `delegates` entry names, with `approve` among its commands, placed exactly where
 the approved file puts it — the gate reads the pane, never the name a seat is given, and every
-other caller is refused with `only the owner or the approved delegate approves a team file`.
+other caller is refused: by the `grant` gate's own line when the file carries a `grant`, by the
+delegate list's `only the owner or the approved delegate approves a team file; this call is
+<caller>` when it names delegates and no `grant`, and by the not-owner sentence when it names
+neither (Refusals, below).
 
 A delegate's approval is for ordinary changes: the roster — seats and the launch lines that place
 them — and `rules`. The guard is an allowlist, and it is fail-closed: `rules` is the only owner
@@ -87,7 +90,9 @@ new approval is a change to an owner section
 (`trust`, `limits`, `machine`, `rules`, `identity`, `workspace`, `orchestrator`, `operator`,
 `session`, `visibility`, `tools`, `budgets`, `watch` — its timings included, down to `watch.checks`,
 whose turn-offs are their own line — and `delegates`, its entries, their panes and their command
-lists included) or to a seat's own fields. A seat taken out does not.
+lists included) or to a seat's own fields. A seat taken out does not, where the file declares its
+ceiling; where it declares no `limits`, the default counts the seats, so taking one out moves
+`limits` with it, above.
 Parking or stopping one does, except that `remove --keep` and `add` record the new digest
 themselves, so those commands do not send the owner back to `approve`. Until an edit is
 approved its section changes nothing: the watch, the budget reports, the check cadence, `up`'s and
@@ -190,7 +195,7 @@ Each signing moves the project's counter, and the line after the seat names name
 signing key's short fingerprint: `approval #4 for this project; the last one was on 2026-10-04;
 key fe21ef6293de.` The fingerprint is the first twelve hex digits of the key's public half;
 `team doctor` and `team status` show the same three — the number, its date, the key. An
-amendment — `add` starting a stopped seat, `remove --keep` parking one — is a signing too, and
+amendment — `add` starting a stopped seat, `remove --keep` stopping one — is a signing too, and
 moves the counter like an approval.
 
 Approvals guard against mistakes, not against a hostile process running as the owner. The
@@ -269,7 +274,7 @@ team approve: warning, line 3: `coordinator:` is now `leads: true` on the lead's
 Ceilings this approval fixes: 3 seats at most, 2 temporary.
 Seats: 1 (claude-keeper).
 approval #1 for this project; key fe21ef6293de.
-Owner-authorization fingerprint: fc98695495d2e351b35bf6aa14d4b0276f3ca401c61a662ad20121d7ae842e20
+Owner-authorization fingerprint: 4d72c10c02a010e7edf90c95317f2236802f1951b4d8d3f43fbcdf4c11277b6d
 exit 0
 ```
 
@@ -305,7 +310,7 @@ team approve: warning, line 3: `coordinator:` is now `leads: true` on the lead's
 Ceilings this approval fixes: 3 seats at most, 2 temporary.
 Seats: 1 (claude-keeper).
 approval #1 for this project; key fe21ef6293de.
-Owner-authorization fingerprint: fc98695495d2e351b35bf6aa14d4b0276f3ca401c61a662ad20121d7ae842e20
+Owner-authorization fingerprint: 4d72c10c02a010e7edf90c95317f2236802f1951b4d8d3f43fbcdf4c11277b6d
 Approved. The record is in ~/.config/team/beacon-<hash>; signed with key fe21ef6293de; check the rest with `team doctor`.
 ```
 
@@ -321,7 +326,7 @@ Nothing in it needs a new approval.
 Ceilings this approval fixes: 3 seats at most, 2 temporary.
 Seats: 1 (claude-keeper).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: fc98695495d2e351b35bf6aa14d4b0276f3ca401c61a662ad20121d7ae842e20
+Owner-authorization fingerprint: 4d72c10c02a010e7edf90c95317f2236802f1951b4d8d3f43fbcdf4c11277b6d
 team approve: only the owner approves a team file, from a terminal outside herdr; this call is claude-keeper
 exit 1
 ```
@@ -364,11 +369,12 @@ Needs a new approval: `trust` changed.
 Ceilings this approval fixes: 3 seats at most, 2 temporary.
 Seats: 1 (claude-keeper).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 7ad4da2e4116793b69477ec6d99fe04bb755622c17dbc466cc7a462a430ad8eb
+Owner-authorization fingerprint: 8cd9f8b6c145b912717ea320a1efd28e4b9c496dde0c9674bbcc6e2c7362ddd0
 exit 0
 ```
 
-A new seat needs one too — a seat already approved may be taken out without bothering the owner.
+A new seat needs one too — a seat already approved may be taken out without bothering the owner,
+unless the file declares no `limits`: its default ceiling moves with the count (above).
 Parking or stopping one needs an approval, unless `remove --keep` or `add` wrote the mark and
 recorded the digest. A seat the file never had is not approved:
 
@@ -427,7 +433,7 @@ Ceilings approved: 3 seats at most, 2 temporary.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 3f39910e27b989d8c59443083985481f4cb7c691239170061274aad38cb55a61
+Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
 
 Type the number of seats (2) to approve this file, and its commands and rules, to run: 1
 team approve: not approved; nothing was written
@@ -457,7 +463,7 @@ Ceilings approved: 3 seats at most, 2 temporary.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 3f39910e27b989d8c59443083985481f4cb7c691239170061274aad38cb55a61
+Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
 team approve: input was waiting on the terminal: run `team approve` on its own line
 exit 1
 ```
@@ -484,7 +490,7 @@ Ceilings approved: 3 seats at most, 2 temporary.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 3f39910e27b989d8c59443083985481f4cb7c691239170061274aad38cb55a61
+Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
 team approve: the terminal this call runs on could not be read to check for input waiting on it; nothing was written
 exit 1
 ```
@@ -511,7 +517,7 @@ Ceilings approved: 3 seats at most, 2 temporary.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 3f39910e27b989d8c59443083985481f4cb7c691239170061274aad38cb55a61
+Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
 
 Type the number of seats (2) to approve this file, and its commands and rules, to run: 2
 Approved. The record is in ~/.config/team/beacon-<hash>; signed with key fe21ef6293de; check the rest with `team doctor`.
@@ -528,7 +534,7 @@ Nothing in it needs a new approval.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #3 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 3f39910e27b989d8c59443083985481f4cb7c691239170061274aad38cb55a61
+Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
 exit 0
 ```
 
@@ -583,6 +589,6 @@ Needs a new approval: `overrides` changed.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #3 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 3f39910e27b989d8c59443083985481f4cb7c691239170061274aad38cb55a61
+Owner-authorization fingerprint: 5d59b3e9b25cc131d0200014782f1aa2d84bdfe701655b8a4115d844a603593c
 exit 0
 ```

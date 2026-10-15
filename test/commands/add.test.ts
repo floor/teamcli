@@ -17,6 +17,7 @@ import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
+import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
@@ -1506,3 +1507,123 @@ describe('team add, the session mutator lock', () => {
     expect(made.creates).toEqual([]);
   });
 });
+
+describe('team add --model and --effort', () => {
+  test('profile override helpers validate models, effort levels, and rewrite launch lines', () => {
+    const claudeProfile = profileFor('claude-code')!;
+    const codexProfile = profileFor('codex')!;
+
+    expect(resolveModelOverride(claudeProfile, 'claude-sonnet-5-5')).toEqual({
+      id: 'claude-sonnet-5-5',
+      model: 'Claude Sonnet',
+      version: '5.5',
+    });
+    expect(resolveModelOverride(claudeProfile, 'Claude Sonnet 5.5')).toEqual({
+      id: 'claude-sonnet-5-5',
+      model: 'Claude Sonnet',
+      version: '5.5',
+    });
+    expect(resolveModelOverride(claudeProfile, 'unknown-model')).toBeNull();
+
+    expect(resolveEffortOverride('claude-code', 'anthropic', 'high')).toEqual({ effort: 'high' });
+    expect(resolveEffortOverride('codex', 'openai', 'xhigh')).toEqual({ effort: 'xhigh' });
+    expect(resolveEffortOverride('claude-code', 'anthropic', 'extreme')).toEqual({
+      error: 'effort "extreme" is not one of anthropic\'s: low, medium, high, xhigh, max',
+    });
+    expect(resolveEffortOverride('cursor', 'cursor', 'high')).toEqual({
+      error: 'cursor does not take an --effort flag on launch',
+    });
+
+    expect(
+      withLaunchOverrides(claudeProfile, 'claude --model claude-opus-5-5', {
+        modelId: 'claude-sonnet-5-5',
+        effort: 'high',
+      }),
+    ).toBe('claude --model claude-sonnet-5-5 --effort high');
+
+    expect(
+      withLaunchOverrides(codexProfile, 'codex -m gpt-6-sol -c model_reasoning_effort=high', {
+        modelId: 'gpt-6-terra',
+        effort: 'xhigh',
+      }),
+    ).toBe('codex -m gpt-6-terra -c model_reasoning_effort=xhigh');
+  });
+
+  test('owner overrides model and effort on a declared seat without breaking approval', async () => {
+    const made = world();
+    const typed: string[] = [];
+    const baseRun = made.launch.paneRun;
+    made.launch.paneRun = (session, pane, command) => {
+      typed.push(command);
+      return baseRun(session, pane, command);
+    };
+    made.launch.paneText = () => IDLE.replace('Opus 5.5', 'Sonnet 5.5');
+
+    const io = testIo(project, owner);
+    expect(await runAdd(['worker', '--model', 'claude-sonnet-5-5', '--effort', 'high'], io, sources(made))).toBe(0);
+    expect(typed).toHaveLength(1);
+    expect(typed[0]).toContain('claude --model claude-sonnet-5-5 --effort high');
+
+    const recorded = readState(join(project, '.agents')).sessions.acme?.seats.worker;
+    expect(recorded?.id).toMatch(/^seat_[0-9a-f]{12}$/);
+    expect(recorded?.model).toBe('Claude Sonnet');
+    expect(recorded?.version).toBe('5.5');
+    expect(recorded?.effort).toBe('high');
+    expect(recorded?.launch_line).toBe('claude --model claude-sonnet-5-5 --effort high');
+
+    const loaded = loadTeamFile(project, { home });
+    expect(loaded.ok && approvalDifferences(loaded.team, project, home)).toEqual([]);
+  });
+
+  test('overrides model and effort on a temporary --like seat', async () => {
+    const made = world();
+    const typed: string[] = [];
+    const baseRun = made.launch.paneRun;
+    made.launch.paneRun = (session, pane, command) => {
+      typed.push(command);
+      return baseRun(session, pane, command);
+    };
+    made.launch.paneText = () => IDLE.replace('Opus 5.5', 'Sonnet 5.5');
+
+    const io = testIo(project, owner);
+    const code = await runAdd(
+      ['--temporary', '--like', 'worker', '--until', 'merged:fix/fresh', '--model', 'claude-sonnet-5-5', '--effort', 'medium'],
+      io,
+      sources(made),
+    );
+    expect(code).toBe(0);
+    expect(typed).toHaveLength(1);
+    expect(typed[0]).toContain('claude --model claude-sonnet-5-5 --effort medium');
+
+    const recorded = readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1'];
+    expect(recorded?.id).toMatch(/^seat_[0-9a-f]{12}$/);
+    expect(recorded?.model).toBe('Claude Sonnet');
+    expect(recorded?.version).toBe('5.5');
+    expect(recorded?.effort).toBe('medium');
+    expect(recorded?.launch_line).toBe('claude --model claude-sonnet-5-5 --effort medium');
+  });
+
+  test('refuses non-owner --model or --effort on a declared seat, and refuses unknown model or effort', async () => {
+    const leadPane = ['w0', 'p1'].join(':');
+    updateState(join(project, '.agents'), (state) => {
+      const session = state.sessions.acme ?? emptySession();
+      session.seats.lead = { stage: 'ready', pane: leadPane };
+      state.sessions.acme = session;
+    });
+    const leadCaller = { kind: 'seat' as const, name: 'lead', pane: leadPane, session: 'acme' };
+    const nonOwnerIo = testIo(project, leadCaller);
+    expect(await runAdd(['worker', '--model', 'claude-sonnet-5-5'], nonOwnerIo, sources(world()))).toBe(1);
+    expect(nonOwnerIo.err).toBe(
+      "team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat\n",
+    );
+
+    const badModelIo = testIo(project, owner);
+    expect(await runAdd(['worker', '--model', 'nope'], badModelIo, sources(world()))).toBe(2);
+    expect(badModelIo.err).toBe('team add: worker: unknown model "nope" for claude-code\n');
+
+    const badEffortIo = testIo(project, owner);
+    expect(await runAdd(['worker', '--effort', 'extreme'], badEffortIo, sources(world()))).toBe(2);
+    expect(badEffortIo.err).toBe("team add: worker: effort \"extreme\" is not one of anthropic's: low, medium, high, xhigh, max\n");
+  });
+});
+
