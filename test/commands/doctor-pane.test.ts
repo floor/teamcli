@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { blocksLaunch, processComm, runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { setHerdrRun, type HerdrAgent } from '../../src/herdr.ts';

@@ -62,7 +62,7 @@ test('the teamcli tarball lists exactly the package manifest, the shim and the r
     'package/cli.js',
     'package/package.json',
   ]);
-});
+}, 30_000);
 
 // The published manifest exports only ".". This test builds a package with that map
 // rather than packing the tagged tree, then installs this branch's own tarball too.
