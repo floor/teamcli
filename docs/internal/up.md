@@ -17,8 +17,10 @@ started from the beginning. A stopped session the state does not record is refus
 (`session <name> is stopped`); that line names no herdr command. A recorded session that does
 not clear is refused too (`session <name> is stopped and did not clear`).
 
-Every seat, shared and worktree-mode alike, starts in `~/.config/team/lobby`. It is shared
-by all projects on the machine. Before creating anything, `team` verifies the lobby gate:
+Every seat, shared and worktree-mode alike, starts in `~/.config/team/lobby`, with one exception: a
+lead, the seat the file names orchestrator or operator, starts in the project folder itself. The
+lobby is shared by all projects on the machine. Before creating anything, `team` verifies the
+lobby gate:
 ownership by the invoking user, no symbolic links anywhere in the chain, directory mode exactly
 `0700`, nothing but the files the profiles the tool ships declare (claude-code declares
 `.claude/scheduled_tasks.lock`), and not inside a git repository or worktree. The set is the
@@ -129,7 +131,9 @@ machine lobby, is left as it is too — only a relaunch repairs either — and i
 `  already ready; left as it is; a relaunch records its process: team remove <seat> --keep, then
 team add <seat> (or team down, then team up, for the whole team)`, or the same words saying `a
 relaunch moves it into the lobby`. For a seat the file names as orchestrator or operator, the detail
-offers only `team down, then team up (to restart the whole team)`.
+offers only `team down, then team up (to restart the whole team)`; and a lead whose process the
+state records, started in the project folder itself, is left with no relaunch note at all — the
+project folder is home for a lead too.
 
 A ready seat whose recorded process is still in its pane, and that pane is still named as the
 seat, is read once while the plan is built. The model is taken the way `status` takes it. When
@@ -564,13 +568,14 @@ A team file that is not `.agents/team.yaml` in the folder the watch starts in is
 `up` records the resolved path for the watch and starts `watch` with no `--file`. That
 process reads the recorded file. Any other non-owner is refused.
 
-## The examples the page keeps
+## The examples, moved off the page
 
 The fixture and the examples below are the page's own, moved here whole. They run in the order they
 stand in, and the `fixture` line is theirs: the two seats are up, the third is stopped in the file,
-and this session has no watch running. The first example is also on [the `team up`
-page](../commands/up.md); the rest stand only here and are not executed by any test —
-`test/docs.test.ts` reads `docs/commands/` alone.
+and this session has no watch running. The first example was also on [the `team up`
+page](../commands/up.md) until its one-glance cut; none of them is on the page now — it keeps one
+five-line refusal scene of its own — and none is executed by any test: `test/docs.test.ts` reads
+`docs/commands/` alone.
 
 ```yaml file=.agents/team.yaml
 format: 1
