@@ -1198,6 +1198,35 @@
         }
       ],
       "hidden": false,
+      "name": "tempo",
+      "positionals": [
+        {
+          "name": "word",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team tempo <word>"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
       "name": "unlock",
       "positionals": [
         {

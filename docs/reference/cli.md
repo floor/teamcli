@@ -704,6 +704,27 @@ Usage:
 
 None.
 
+## `tempo`
+
+Hidden: no
+
+Usage:
+
+    team tempo <word>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `word` | no | no |
+
 ## `unlock`
 
 Hidden: no
