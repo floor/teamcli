@@ -1,11 +1,13 @@
 import { trustPolicy } from '../file/dialogs.ts';
 import { declaredModel } from '../file/model.ts';
+import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
+import { workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
-import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
+import { plainLine } from '../launch/plain.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { readScreen } from '../watch/screen.ts';
 import { modelDiffers, seatModel } from './statusline.ts';
@@ -251,6 +253,18 @@ export function compare(
           what: `${seat.name}: its rules were not delivered`,
           repair: `team remove ${seat.name} --keep, then team add ${seat.name}`,
           needs: 'approve',
+        });
+      }
+      const liveLabel = labels.get(agent.workspace);
+      const expectedLabel = workspaceLabel(declared);
+      const labelDrifted = liveLabel !== undefined
+        && liveLabel !== ''
+        && liveLabel !== expectedLabel
+        && (declared.labelWritten === true || (liveLabel !== declared.label && liveLabel !== declared.name));
+      if (labelDrifted) {
+        differences.push({
+          what: `${seat.name}: its workspace is titled "${plainLine(liveLabel)}"; the file says "${plainLine(expectedLabel)}"`,
+          repair: herdrCommand(session, 'workspace', 'rename', agent.workspace, expectedLabel),
         });
       }
       continue;
