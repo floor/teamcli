@@ -720,6 +720,10 @@ describe('a team whose owner ran up --file', () => {
         lines.push(command);
         return true;
       },
+      spawnWatch: (command) => {
+        lines.push(command);
+        return 4242;
+      },
       renameAgent: () => true,
       closeWorkspace: () => true,
       agentPanes: () => [],
