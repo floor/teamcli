@@ -173,7 +173,7 @@ empty again. Nothing writes a lab's config or an `AGENTS.md`. `/exit` is sent on
 seat. Update and workspace-trust screens are reported and closed without input; the owner
 handles them before relaunching. Other unrecognised layouts stay unknown.
 
-The Antigravity profile is tested with CLI 1.2.16 (`agy`). It adds `--dangerously-skip-permissions`
+The Antigravity profile is tested with CLI 1.2.16 to 1.3.5 (`agy`). It adds `--dangerously-skip-permissions`
 for unattended execution, and checks authentication with `agy models`. Rules go as a first message
 only at an empty idle prompt; delivery is recorded after the CLI starts working with the composer
 empty again. Nothing writes a lab's config or an `AGENTS.md`. `/exit` is sent only to a free
