@@ -107,9 +107,13 @@ One record per seat, in the file's order, is the run's whole account of that sea
 A seat that reaches its idle prompt with its rules delivered prints `<seat>: ready`. A seat left out
 prints `<seat>: left out: <what stopped it>` — a classification (`trust`, `permission`, `question`,
 `vendor notice`, `login`, `unknown`, `unsent`, `timeout`) or the reason in the seat's own words, in
-the table below. On a terminal the line is drawn before the seat's workspace is created, as
-`<seat>: launching`, and rewritten in place as the seat advances — `waiting for its prompt`,
-`naming`, `sending its rules` — until its one final record ends the line with a newline. A
+the table below. When the machine has load, memory and swap headroom, `up` launches seats and waits
+on their idle prompts, renames and rules concurrently within the machine's capacity (`--serial`
+forces one seat at a time, and a machine near its start limits falls back to one at a time on its
+own). Whether seats run concurrently or one at a time, on a terminal the provisional line is drawn
+as `<seat>: launching` and rewritten in place as seats advance — `waiting for its prompt`,
+`naming`, `sending its rules` — and the final records, their stderr details and `.agents/team.log`
+are emitted in `.agents/team.yaml` file order. A
 redirected stdout receives the final records only: one newline-terminated line per seat, nothing
 provisional, no escape sequence. Everything else a run says about a seat — the indented detail
 under the record, the `skip` line for a seat stopped in the file, a note, a timeout's last reading
