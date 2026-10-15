@@ -540,6 +540,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       : []),
   ]) {
     if (blocksLaunch(finding)) {
+      // A missing approval record is the live file, the same way `up` reads it. The doctor's
+      // never-approved miss is that record's absence, and it does not stop this add.
+      if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
       // A file a CLI reads at start is said here and refused later, only when this seat is
       // about to start in the lobby. Other misses still stop the run here.
       if (finding.text.includes(' is read at start by ')) {

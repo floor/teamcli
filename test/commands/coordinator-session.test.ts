@@ -586,10 +586,10 @@ for (const command of COMMANDS) {
         return;
       }
       if (command.name === 'add') {
-        // A missing record is the live file. This file's trust is still legacy, so that is the refusal.
+        // probe-seat is not in the file. That refusal comes before trust or the approval record.
         expect(run.code).toBe(1);
         expect(run.out).toBe('');
-        expect(run.err).toContain('the file is legacy:');
+        expect(run.err).toBe('team add: the approved file has no seat "probe-seat"\n');
         expect(run.err).not.toContain('never approved');
         expect(readFileSync(file, 'utf8')).toBe(run.before);
         return;
@@ -606,7 +606,8 @@ for (const command of COMMANDS) {
       }
       if (command.name === 'add') {
         expect(run.code).toBe(1);
-        expect(run.err).toContain('the file is legacy:');
+        expect(run.out).toBe('');
+        expect(run.err).toBe('team add: the approved file has no seat "probe-seat"\n');
         expect(run.err).not.toContain('never approved');
         return;
       }

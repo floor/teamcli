@@ -18,7 +18,7 @@ import { LINK_NOT_FOLLOWED, loadTeamFile, NOT_A_REPO } from '../../src/file/load
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval, type Standing } from '../../src/store/store.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
 const SESSION = 'acme-web';
@@ -90,7 +90,7 @@ seats:
 `;
 }
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 function approve(cwd: string, file: string, home: string, text: string): void {
   mkdirSync(dirname(file), { recursive: true });
@@ -252,15 +252,15 @@ while [ "$1" = "--session" ]; do
   shift 2
 done
 if [ "$1" = agent ] && [ "$2" = list ]; then
-  printf '%s\\n' '{"result":{"agents":[]}}'
+  printf '%s\\n' '{"id":"cli:agent:list","result":{"agents":[],"type":"agent_list"}}'
   exit 0
 fi
 if [ "$1" = pane ] && [ "$2" = process-info ]; then
-  printf '%s\\n' "{\\"result\\":{\\"process_info\\":{\\"shell_pid\\":$PANE_ROOT_PID}}}"
+  printf '%s\\n' "{\\"id\\":\\"cli:pane:process_info\\",\\"result\\":{\\"process_info\\":{\\"foreground_processes\\":[{\\"argv0\\":\\"-zsh\\",\\"name\\":\\"zsh\\",\\"pid\\":$PANE_ROOT_PID,\\"ppid\\":1,\\"start_epoch\\":1776221303,\\"start_lstart\\":\\"Wed Apr 15 04:48:23 2026\\"}],\\"pane_id\\":\\"\${HERDR_PANE_ID:-}\\",\\"shell_name\\":\\"zsh\\",\\"shell_pid\\":$PANE_ROOT_PID,\\"shell_start_epoch\\":1776221303,\\"shell_start_lstart\\":\\"Wed Apr 15 04:48:23 2026\\",\\"tty\\":\\"ttys015\\"},\\"type\\":\\"pane_process_info\\"}}"
   exit 0
 fi
 if [ "$1" = session ] && [ "$2" = list ]; then
-  printf '%s\\n' '{"sessions":[]}'
+  printf '%s\\n' '{"default":"default","sessions":[{"attached_clients":0,"created_at":1776221303,"id":"s1","name":"default","pid":51289,"socket":"/Users/shared/herdr-default.sock","status":"running","version":"0.7.1","workspaces":1}]}'
   exit 0
 fi
 exit 1
@@ -420,12 +420,6 @@ describe('a folder with no git repository', () => {
     const root = join(base, 'acme');
     mkdirSync(join(root, '.agents'), { recursive: true });
     writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
-    const owner = testIo(root, { kind: 'owner' });
-    const added = await runAdd(['claude-coordinator-acme'], owner, addSources(home));
-    expect(added).toBe(1);
-    expect(owner.err).toContain('the file is legacy:');
-    expect(owner.err).not.toContain('never approved');
-    expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
 
     const seat = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'w9:p1', session: 'elsewhere' });
     const refused = await runAdd(['claude-coordinator-acme'], seat, addSources(home));
@@ -449,6 +443,13 @@ describe('a folder with no git repository', () => {
     expect(watched).toBe(0);
     expect(watching.err).not.toContain('not inside a git repository');
     expect(watching.out).toContain('the file was never approved on this machine');
+
+    // The owner adds a seat the file already names. A missing record does not refuse that.
+    const owner = testIo(root, { kind: 'owner' });
+    const added = await runAdd(['claude-coordinator-acme'], owner, addSources(home));
+    expect(added, owner.err + owner.out).toBe(0);
+    expect(owner.err).not.toContain('never approved');
+    expect(owner.out).toContain('claude-coordinator-acme: ready\n');
   });
 });
 
