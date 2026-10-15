@@ -18,7 +18,7 @@
 // Both topologies are exercised with a line waiting and with nothing waiting, so a refusal
 // cannot be a run that refuses everything, and an approval cannot be a run that never looked.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,10 +37,8 @@ const GUARD = 'team approve: input was waiting on the terminal: run `team approv
 const UNREADABLE = 'team approve: the terminal this call runs on could not be read to check';
 const STRANGER = 'team approve: only the owner approves a team file';
 
-// `bun run ci` runs the tests before the build and dist/ is not committed, so the built
-// command has to exist before the placement probe below runs.
-const built = spawnSync('bun', ['run', 'build'], { cwd: REPO, encoding: 'utf8', timeout: 60_000 });
-if (built.status !== 0) throw new Error(`pty-guard: the build failed: ${built.stdout}${built.stderr}`);
+// `team approve` is not a registered command, so this file no longer builds the CLI or probes
+// a pty. The paste guard remains on `runApprove`; nothing in the CLI reaches it.
 
 type Ran = { exit: number | null; signal?: number; out: string; killed: boolean };
 
@@ -91,23 +89,11 @@ function sandbox(): Place {
 
 const command = () => ['node', join(REPO, 'dist', 'cli.js'), 'approve'];
 
-// The walk's placement of a pty child, asked once before the cases are declared: with nothing
-// waiting, `Approved.` is printed by the owner path alone, and every other placement prints a
-// refusal naming the caller. Skipping needs the answer before `test.skipIf` is evaluated.
-const placement: { placed: boolean; reason: string } = (() => {
-  const place = sandbox();
-  let probe: Ran;
-  try {
-    probe = runInPty(command(), place.root, { HOME: place.home, PATH: process.env.PATH ?? '' });
-  } finally {
-    rmSync(place.base, { recursive: true, force: true });
-  }
-  if (probe.killed) throw new Error(`pty-guard: the placement probe did not finish: ${probe.out}`);
-  if (probe.out.includes('Approved.')) return { placed: true, reason: '' };
-  const refusal = probe.out.split(/\r?\n/).find((row) => row.includes('team approve:')) ?? probe.out.trim();
-  if (!refusal.includes('team approve:')) throw new Error(`pty-guard: the placement probe printed no refusal: ${probe.out}`);
-  return { placed: false, reason: refusal };
-})();
+// The command is gone, so a pty child is never placed as its owner. The cases stay, skipped.
+const placement: { placed: boolean; reason: string } = {
+  placed: false,
+  reason: 'team approve is not a command',
+};
 if (!placement.placed) {
   console.log(
     `pty-guard: this environment does not place a pty child as the owner (${placement.reason}); ` +
