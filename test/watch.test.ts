@@ -1312,7 +1312,7 @@ describe('team watch', () => {
     // have. The nudge is typed, and not sent.
     const rows = wordWrap(NUDGE_TEXT, 24);
     const [firstRow = '', ...rest] = rows;
-    const rule = '─'.repeat(40);
+    const [rule = ''] = claudeBox('').split('\n');
     const wrapped = claudeBox([firstRow, ...rest].join('\n')).replace(`\n${rule}\n`, `\n\n${rule}\n`);
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {

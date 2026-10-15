@@ -45,7 +45,7 @@ const CLAUDE_COMPOSER_LINES = (() => {
   const lines = CLAUDE_IDLE.split('\n');
   const open = lines.findIndex((line) => line.startsWith('─'));
   if (open < 0) throw new Error('the claude-code idle capture has no opening rule');
-  return lines.slice(open);
+  return [lines[open]!, lines[open + 1]!, lines[open + 2]!, ...lines.slice(open + 4)];
 })();
 
 /** A Claude Code pane with `text` in its composer: the composer slice of the captured 2.1.289
