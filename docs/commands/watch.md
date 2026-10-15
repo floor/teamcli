@@ -234,6 +234,7 @@ a first sight, which the launch gate calls `first sight only, not yet counted`, 
 | --- | --- |
 | `team watch: a watch already runs for the session "<session>" (pid <pid>)` | 1 |
 | `team watch: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
+| `team watch: --no-nudge and --no-notify are the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team watch: unknown option --x` / `team watch: unexpected "x"` (each with the usage) | 2 |
 | `team watch: team.yaml line <n>: <message>` / `team watch: <message>` | 2 |
 
@@ -241,8 +242,8 @@ a first sight, which the launch gate calls `first sight only, not yet counted`, 
 
 - `0` — the watch ran, and stopped on Ctrl-C, a stop signal, or the end of its work. A seat that
   misbehaves is a report, not a failure; neither is herdr not answering.
-- `1` — a watch already runs for the session. Or `--file` was aimed by a caller that is not the
-  owner.
+- `1` — a watch already runs for the session. Or a caller that is not the owner aimed `--file`,
+  or passed `--no-nudge` or `--no-notify`.
 - `2` — the invocation, the team file or the state can't be read.
 
 ## Examples
