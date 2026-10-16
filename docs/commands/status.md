@@ -24,7 +24,7 @@ It writes nothing but the owner's `last_valid` copy; other runs write nothing.
 | the owner, from a terminal outside herdr | read the team, and aim the read with `--file` and `--session` |
 | a seat of the team, placed in the file's session, on the pane the state records for it | read the team; a seat the state records no pane for, or records on another pane, fails closed |
 | a pane outside the team that the live file names in its `delegates` entries | read the team; a pane newly named by the live file also passes |
-| anyone else, an owner's run without a terminal included | nothing: the fixed sentence `team status: this team is not yours to read` on stderr, stdout empty, exit 2 |
+| anyone else, an owner's run without a terminal included | nothing: the fixed sentence `team status: this team is not yours to read` on stderr, stdout empty, exit 2. `--file` and `--session` aimed by anyone else are refused before any file or session is read — `--file is the owner's, from a terminal outside herdr; this call is …`, or `only the owner runs this, from a terminal outside herdr` for a run with no terminal — and exit 1. |
 
 ## What a row says
 
