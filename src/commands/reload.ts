@@ -29,6 +29,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
+import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { readScreen } from '../watch/screen.ts';
 import type { Launch } from './up.ts';
 
@@ -256,6 +257,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           const seats = file.sessions[session]?.seats;
           if (seats) delete seats[next];
         });
+        // The registry: a reload whose seat was dropped leaves its agent stopped.
+        if (next === seat.name && sources.home) {
+          const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, next, 'stopped');
+          if (ended) logLine(dir, 'reload', describeCaller(caller), ended.note, now());
+        }
       },
       record(next, patch) {
         updateState(dir, (file) => {
@@ -269,6 +275,17 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           else if (effort !== undefined) stored.effort = effort;
           current.seats[next] = stored;
         });
+        // The registry: the relaunched seat keeps its agent, re-pointed to the new pane with the
+        // model and effort the file now declares.
+        if (patch.pane && next === seat.name && sources.home) {
+          const made = registerLaunch(
+            { home: sources.home, team, root, by: describeCaller(caller), session },
+            seat,
+            patch.pane,
+            readState(dir).sessions[session]?.seats[next]?.id,
+          );
+          if ('note' in made) logLine(dir, 'reload', describeCaller(caller), made.note, now());
+        }
       },
       say: () => {},
       final: () => {},

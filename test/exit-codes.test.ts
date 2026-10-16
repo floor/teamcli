@@ -2981,6 +2981,8 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
   const sockets = join(place.base, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
   if (over.socket !== false) writeFileSync(join(sockets, '400.sock'), '');
+  // The seat's own evidence for this line: idle until the Enter, working after it.
+  let working = false;
   const host: SendHost & { frames: string[] } = {
     frames: [],
     agents: () => (over.agents === false ? null : [{ name: 'lead', pane: 'w1:p1' }]),
@@ -2997,8 +2999,11 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
     },
     native: {
       typeText: () => true,
-      pressEnter: () => true,
-      status: () => 'working',
+      pressEnter: () => {
+        working = true;
+        return true;
+      },
+      status: () => (working ? 'working' : 'idle'),
       wait: async () => {},
     },
     now: () => NOW,
@@ -3069,6 +3074,12 @@ scene('send.held', async (place) => {
 scene('send.unreachable', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { agents: false })), 'unreachable');
+});
+scene('send.not-submitted', async (place) => {
+  write(place, TEAM);
+  const host = sendHost(place);
+  host.native.status = () => 'idle';
+  return show(await sent(place, ['lead', 'hello'], owner, host), 'not-submitted');
 });
 scene('send.delivered', async (place) => {
   write(place, TEAM);
