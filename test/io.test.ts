@@ -168,7 +168,7 @@ describe('doctor and status cleaning', () => {
       expect(io.out).toContain('difference: stray agent (pane-b) is running and is not in the file');
       expect(io.out).toContain('difference: the protected checkout "." is on "feat/dirty branch", not on "main"');
       const rowLine = io.out.split('\n').find((line) => line.includes('claude-coordinator-acme')) ?? '';
-      expect(rowLine).toBe('  claude-coordinator-acme  working  Claude Opus 5.5      pane-a');
+      expect(rowLine).toBe('  claude-coordinator-acme  working  Claude Opus 5.5      pane-a  typed');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -344,6 +344,10 @@ describe('every owner-gated command refuses the run with no terminal, through th
   });
 
   const throwingRemove: RemoveSources = {
+    // The create-grant read is the one store lookup the refusal below is allowed, and a record it
+    // finds is what asks the clock: the empty home names no store, so the scene never reaches the
+    // machine's real grants and the order it pins is the order it always sees.
+    home: '',
     sessionRunning: boom('the session'),
     agents: boom('the agent list'),
     alive: boom('a pid'),
@@ -595,21 +599,25 @@ describe('the owner at a terminal outside herdr still passes', () => {
 });
 
 describe('the one sentence is the no-terminal placement\'s alone', () => {
-  test('a run that kept AGENT_UNATTENDED is denied, not the one sentence', async () => {
+  test('a run that kept AGENT_UNATTENDED is refused in its own words, not the one sentence', async () => {
     const io = sceneIo(ORPHANED, { env: { AGENT_UNATTENDED: '1' } });
     const code = await runUp(['--dry-run'], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW });
     expect(code).toBe(1);
-    expect(io.err).toBe('deny\n');
-    expect(io.out).toBe('');
+    expect(io.err).toBe('');
+    expect(io.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
+    expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(io.out).toEndWith('dry run: nothing was run\n');
     expect(io.out + io.err).not.toContain(DETACHED_REFUSAL);
   });
 
-  test('a run whose seat\'s CLI is still an ancestor is denied, not the one sentence', async () => {
+  test('a run whose seat\'s CLI is still an ancestor is refused in its own words, not the one sentence', async () => {
     const io = sceneIo(UNDER_A_CLI);
     const code = await runUp(['--dry-run'], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW });
     expect(code).toBe(1);
-    expect(io.err).toBe('deny\n');
-    expect(io.out).toBe('');
+    expect(io.err).toBe('');
+    expect(io.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
+    expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(io.out).toEndWith('dry run: nothing was run\n');
     expect(io.out + io.err).not.toContain(DETACHED_REFUSAL);
   });
 

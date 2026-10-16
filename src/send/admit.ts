@@ -44,8 +44,18 @@ export type SendGrantRecord = { name: string; from: string; to: string; expires:
  */
 export type SendSeat = { seat: string; team: string; role?: string };
 
-/** Either side of a send: the registry's own record, or a resolved seat. */
-export type SendSide = Agent | SendSeat;
+/**
+ * A sender the registry holds no record for yet: the seat the live team file declares, placed by
+ * herdr. Admission judges it by the declared seat's own name, team and role, so the rules that
+ * stay inside that team reach it — the one case the bootstrap loop needs — and the header says the
+ * record is missing, so a receiver reads why the agent id is absent. It is never granted: a grant
+ * names a record's identity, and this sender has none yet.
+ */
+export type DeclaredSender = SendSeat & { declared: true };
+
+/** Either side of a send: the registry's own record, or a resolved seat — a declared one when
+ *  the sender has no record yet. */
+export type SendSide = Agent | SendSeat | DeclaredSender;
 
 /** The rules, in the order they are asked. Named once, so a refusal, a caller that has no
  *  identity to judge by, and the docs all read alike. */
@@ -170,6 +180,11 @@ function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
  */
 export function senderHeader(caller: SendSide | 'owner', rule: string): string {
   if (caller === 'owner') return `from the owner — admitted by: ${rule}\n`;
+  // A declared seat: the id the receiver would judge by is the one the registry has not written
+  // yet, so the header says whose seat it is instead of an id.
+  if ('declared' in caller && caller.declared) {
+    return `from the file's seat ${caller.seat} (no registry record yet) — admitted by: ${rule}\n`;
+  }
   const id = 'reach' in caller ? caller.id : '';
   const name = 'reach' in caller ? caller.name : caller.seat;
   const who = id === '' ? `${name}, ${seatAt(caller)}` : `${id} (${name}, ${seatAt(caller)})`;
@@ -182,7 +197,7 @@ function seatOf(side: SendSide): string {
 }
 
 /** The team a side sits in. */
-function teamOf(side: SendSide): string {
+export function teamOf(side: SendSide): string {
   return 'reach' in side ? side.reach.team : side.team;
 }
 

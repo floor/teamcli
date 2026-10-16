@@ -389,6 +389,9 @@ function render(
       state: plainLine(row.state),
       model: plainLine(row.model),
       pane: plainLine(row.pane),
+      // How a send would reach the seat: the socket its session answers at, else the typed
+      // delivery. The JSON row keeps its published shape; this is the plain table's word.
+      reach: row.reach ?? 'typed',
     }));
     const widths = [0, 0, 0];
     for (const row of rows) {
@@ -397,7 +400,7 @@ function render(
       widths[2] = Math.max(widths[2] as number, row.model.length);
     }
     for (const row of rows) {
-      lines.push(`  ${row.name.padEnd(widths[0] as number)}  ${row.state.padEnd(widths[1] as number)}  ${row.model.padEnd(widths[2] as number)}  ${row.pane}`.trimEnd());
+      lines.push(`  ${row.name.padEnd(widths[0] as number)}  ${row.state.padEnd(widths[1] as number)}  ${row.model.padEnd(widths[2] as number)}  ${row.pane.padEnd(4)}  ${row.reach}`.trimEnd());
     }
   }
   if (budgets.length) {
