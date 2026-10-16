@@ -73,10 +73,13 @@ and open nothing: the target is the file the caller's own place finds.
   sibling at all. A check with no home reads no registry;
 - the seat's own reading, the pair [`team seats`](../commands/seats.md) prints as STATE and SOURCE
   (`src/labels/state.ts`): the word and where it came from, best source first — the pane's screen,
-  herdr's word, the seat's newest trace, its process. A seat blind — `unknown` past the blind
-  threshold, 30m shipped — counts as not working: one difference, the owner's,
-  `<seat>: unknown for over 30m — blind, and it counts as not working`, repaired with the owner's
-  look at the pane;
+  herdr's word, the seat's newest trace, its process — save one exception: a trace inside the window
+  (`state_trace_window_seconds`, 2m shipped) beats an idle word, from the screen or from herdr, so a
+  seat whose last commit, ack or command is that fresh reads `working` while its prompt shows; a
+  working screen, a blocked screen and the certainties (`held`, `unreachable`, `done`) never yield
+  to it. A seat blind — `unknown` past the blind threshold, 30m shipped — counts as not working:
+  one difference, the owner's, `<seat>: unknown for over 30m — blind, and it counts as not working`,
+  repaired with the owner's look at the pane;
 - the agent registry (`<home>/.config/team/agents/`), one read of each seat's record for the
   signing triple the commit gate checks ([the registries](../concepts/registry.md)). A seat
   whose record signs as another model than its pane runs is a difference — `signs as X, runs Y`,
