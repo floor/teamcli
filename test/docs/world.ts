@@ -682,6 +682,8 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         },
         foreground: () => ['claude'],
         paneText: (_session, pane) => action.paneText('', pane),
+        // The address a register records: the fixture runs no sockets, so the stub answers null.
+        refreshAddress: () => ({ address: null }),
         now,
       };
     },

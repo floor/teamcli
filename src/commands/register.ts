@@ -28,6 +28,7 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { registerLaunch } from '../registry/sync.ts';
+import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
@@ -52,6 +53,9 @@ export type RegisterSources = {
   screen?: (cli: string, text: string | undefined) => Screen;
   delegateGate?: typeof delegateGate;
   grantGate?: typeof grantGate;
+  /** The seat's live session socket, recorded on the agent after the registry write, as a
+   *  launch records it. Left out, the real read runs over herdr. */
+  refreshAddress?: typeof refreshAgentAddress;
   now: () => Date;
 };
 
@@ -384,6 +388,12 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
 
   const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session }, seat, found.pane, id);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);
+  else {
+    // The address: the live session socket this seat answers at, recorded on the agent the way a
+    // launch records it — the pane above is the one herdr showed, read again as `add` reads it.
+    const refreshed = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, id, found.pane, session);
+    if (refreshed.note) logLine(dir, 'register', callerLabel(walked), refreshed.note, now);
+  }
   noteLaunchedPane(sources.home, path, found.pane, session);
   // The audit line a delegated act writes, naming the authority (`up`) it was run under; a
   // granted seat writes the grant's own line.

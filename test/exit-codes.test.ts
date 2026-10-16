@@ -3563,6 +3563,8 @@ function registerSources(place: Place, over: Partial<RegisterSources> = {}): Reg
     processInfo: () => ({ shell: 400, foreground: [401] }),
     // The process herdr reports is the one the seat's profile names (`claude-code`).
     foreground: () => ['claude'],
+    // The address a register records for the seat: the scene runs no sockets.
+    refreshAddress: () => ({ address: null }),
     paneText: () => IDLE,
     now: () => NOW,
     ...over,

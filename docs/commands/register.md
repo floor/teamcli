@@ -40,7 +40,9 @@ and its agents), the pane's processes, and the pane's text through the seat's ow
 Writes `.agents/team.state.json` — the seat's record: its id, `stage: ready`, the CLI, the pane, the
 workspace, the process identity read from the pane, the agent session herdr reports, and the
 session's launched-file pointer — `.agents/team.log`, the launched-pane pointer under the home
-directory, and the registry's agent and roster for the seat. A record that names another pane, or
+directory, and the registry's agent and roster for the seat, the address a cross-session send
+reaches it at included: the pane's live session socket, read and recorded the way a launch records
+it. A record that names another pane, or
 no pane at all, is never overwritten from here: stopping the team and starting it again is the
 owner's own act.
 
