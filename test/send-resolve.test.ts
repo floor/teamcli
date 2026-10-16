@@ -396,6 +396,7 @@ describe('the whole command on a registry-resolved spec', () => {
 
     expect(code).toBe(1);
     expect(io.err).toContain('lead: no agent record on this machine, so no rule admits the send');
+    expect(io.err).toContain('`team up` registers a seat it leaves standing');
     expect(chiefPane.typed).toEqual([]);
     expect(AGENT_ID.test(chief.id)).toBe(true);
   });

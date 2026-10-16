@@ -302,6 +302,7 @@ describe('team send: refused', () => {
 
     expect(code).toBe(1);
     expect(io.err).toContain('drifter: no agent record on this machine, so no rule admits the send');
+    expect(io.err).toContain('`team up` registers a seat it leaves standing');
     expect(host.frames).toEqual([]);
   });
 
