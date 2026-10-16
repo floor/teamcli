@@ -764,7 +764,7 @@ function socketPathFor(host: SendHost, to: Aim, pane: string): { path: string; r
 }
 
 /** The caller class the caller check returned, as the log's bracket: `answer`'s own. */
-function logWho(caller: Caller, team: TeamFile): string {
+export function logWho(caller: Caller, team: TeamFile): string {
   if (caller.kind === 'owner' || caller.kind === 'owner-no-tty') return 'owner';
   if (caller.kind === 'unplaced') return 'unplaced';
   if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
@@ -804,7 +804,7 @@ function declaredPlacementProblem(caller: Caller, name: string, at: SeatStanding
 }
 
 /** Why the send is admitted, and the rule that admitted it — or why it is not. */
-type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'owner' } | { ok: false; why: string };
+export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'owner' } | { ok: false; why: string };
 
 /**
  * The authority rule for this send: `admitSend`, over the registry's own records, default deny.
@@ -829,7 +829,7 @@ type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'own
  * record and this receiver (`sendGrantFor`); a grant for another pair is not a grant here, so
  * nothing looser than the pair reaches `admitSend`.
  */
-function admissionOf(
+export function admissionOf(
   caller: Caller,
   team: TeamFile,
   target: Target | null,

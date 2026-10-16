@@ -2691,6 +2691,55 @@
     },
     {
       "code": 0,
+      "command": "route",
+      "id": "route.dry-run",
+      "meaning": "the pair is admitted; the address is answered and nothing was written",
+      "trigger": "team route builder-2 --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "route",
+      "id": "route.routed",
+      "meaning": "the pair is admitted and the recipient's address is answered and recorded",
+      "trigger": "team route builder-2"
+    },
+    {
+      "code": 1,
+      "command": "route",
+      "id": "route.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team route builder-2"
+    },
+    {
+      "code": 1,
+      "command": "route",
+      "id": "route.refused",
+      "meaning": "no address was answered, on purpose",
+      "trigger": "team route builder-2"
+    },
+    {
+      "code": 1,
+      "command": "route",
+      "id": "route.unrecorded",
+      "meaning": "the pair is admitted and the route record could not be written",
+      "trigger": "team route builder-2"
+    },
+    {
+      "code": 2,
+      "command": "route",
+      "id": "route.configuration",
+      "meaning": "the team file cannot be read",
+      "trigger": "team route builder-2"
+    },
+    {
+      "code": 2,
+      "command": "route",
+      "id": "route.usage",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team route"
+    },
+    {
+      "code": 0,
       "command": "seats",
       "id": "seats.shown",
       "meaning": "the seats table was printed",
