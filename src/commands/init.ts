@@ -154,12 +154,6 @@ export async function runInit(
     return 2;
   }
   const caller = callerOf(io);
-  const detached = detachedRefusal(caller);
-  if (detached !== undefined) {
-    io.stderr(`team init: ${detached}\n`);
-    // exit: init.detached
-    return 1;
-  }
   let foundRoot: string | null | undefined;
   const rootOf = () => (foundRoot === undefined ? (foundRoot = findRoot(io.cwd)) : foundRoot);
   const createGranted =
@@ -170,6 +164,14 @@ export async function runInit(
       const candidateRoot = rootOf();
       return candidateRoot !== null && entityGrantAdmits(candidateRoot, io, { home, now: sources.now?.(), cwd: io.cwd });
     })();
+  // A detached run is refused unless a create-grant admits it: the grant holder's own runner
+  // outside herdr is the one detached caller the grant may name.
+  const detached = detachedRefusal(caller);
+  if (detached !== undefined && !createGranted) {
+    io.stderr(`team init: ${detached}\n`);
+    // exit: init.detached
+    return 1;
+  }
   if (!isOwner(caller) && !createGranted) {
     io.stderr(`team init: only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
     // exit: init.not-owner

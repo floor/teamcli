@@ -85,6 +85,12 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
 // it might stand in — naming that seat would mean reading a session, and the refusal of a
 // non-owner's `--session` must come before any session is read. The same walk as `placeCaller`'s
 // first half, byte for byte on every case a session would not have decided.
+/** The caller's parent processes, nearest first, from the same source `walkCaller` reads; null when they can't be read. */
+export function callerAncestors(io: Pick<Io, 'callerSources'>): Process[] | null {
+  const sources = io.callerSources?.(undefined);
+  return sources ? sources.ancestors() : readAncestors();
+}
+
 export function walkCaller(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>): Caller {
   if (io.caller !== undefined) return io.caller;
   const sources = io.callerSources?.(undefined);

@@ -10,6 +10,7 @@ import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../c
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
+import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { emptySession, readState, type SessionState } from '../state.ts';
@@ -163,7 +164,16 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
 
   const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
   if (!owner) {
-    if (!current.ok || !mayReadTeam(current, io, sources)) {
+    const read = current.ok && mayReadTeam(current, io, sources);
+    // A create-grant admits its holder's runner to the read, for a team whose root is under the
+    // granted paths: the same record `init` and `up` consult. It buys the read alone — `--file`
+    // and `--session` above stay the owner's, and this run keeps no `last_valid` copy. Asked only
+    // where the read gate has refused, and only when a record exists, so a seat's own reading
+    // reads no clock for it.
+    const granted = current.ok && !read
+      && readEntityCreateGrants(sources.home ?? homedir()).length > 0
+      && entityGrantAdmits(current.root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
+    if (!current.ok || (!read && !granted)) {
       out.stderr('team status: this team is not yours to read\n');
       // exit: status.not-yours
       return 2;
@@ -219,7 +229,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ...protectedCheckouts(team, root, sources),
     ...approvalDrift(approvalCase(standing, team)),
     ...overrideDrift(overrides),
-    // The approved file's own rules files, only when there is an approval to write them.
+    // The file's own rules files, only when there is an approval to write them.
     ...rulesFileDifferences(standing, team, root, sources.home),
   ]);
 
@@ -274,13 +284,14 @@ export function overrideDrift(report: OverrideForce): Difference[] {
   ];
 }
 
-// A file that was never approved, or was changed since, runs nothing until the owner approves it.
-// A legacy or refused record is the whole case and its repair in one line of its own.
+// A file that was never approved runs nothing until the owner approves it; a file that changed
+// since the last approval is only said — the commands read it as it stands. A legacy or refused
+// record is the whole case and its repair in one line of its own.
 export function approvalDrift(approval: { differences: string[] | null; reason: string | null }): Difference[] {
   const withApproval = (what: string): Difference => ({ what, repair: APPROVAL_REPAIR, approval: true, owner: true });
   if (approval.reason !== null) return [withApproval(approval.reason)];
   if (approval.differences === null) return [withApproval('the file was never approved on this machine')];
-  return approval.differences.map((line) => withApproval(`the file differs from the approved one: ${line}`));
+  return approval.differences.map((line) => withApproval(`the file has changed since the last approval: ${line}`));
 }
 
 
