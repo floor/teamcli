@@ -771,6 +771,26 @@ describe('team status', () => {
     expect(readable.out).toMatch(/codex-acme-tmp-1\s+done, temporary/);
   });
 
+  test('C4: a workspace whose live title has drifted from the file is reported with its rename repair', async () => {
+    // 1. A seat with an explicit label in team.yaml whose workspace still carries the old title.
+    writeFileSync(file, example.replace('    name: codex-acme\n', '    name: codex-acme\n    label: builder-1\n'));
+    approveOnDisk();
+    live = built();
+    const explicit = await status();
+    expect(explicit.code).toBe(1);
+    expect(explicit.out).toContain('difference: codex-acme: its workspace is titled "gpt sol 6"; the file says "builder-1"');
+    expect(explicit.out).toContain('repair: herdr --session acme-web workspace rename w2 builder-1');
+
+    // 2. Once the workspace carries the new title, the difference clears.
+    live = {
+      ...built(),
+      workspaces: built().workspaces.map((w) => (w.id === 'w2' ? { ...w, label: 'builder-1' } : w)),
+    };
+    const synced = await status();
+    expect(synced.code).toBe(0);
+    expect(synced.out).not.toContain('its workspace is titled');
+  });
+
   test('a seat waiting at a permission or trust prompt is a difference for the owner', async () => {
     const codexPane = built().agents.find((one) => one.name === 'codex-acme')?.pane ?? '';
     const permScreen = codexScreen('permission');
