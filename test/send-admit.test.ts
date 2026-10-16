@@ -125,6 +125,75 @@ describe('send admission: the rules that admit', () => {
   });
 });
 
+// The shapes `up` and `add` register: a team record whose lead seat carries the file's own role
+// word — `coordinator` — and no lead field of its own. The roster is what names the team's lead,
+// and the acceptance scenes send over exactly these records.
+describe('send admission: the lead seat a file names itself', () => {
+  const fileTeams: AdmitTeams = {
+    aaa111aaa111: {
+      project: 'floor',
+      entity: 'floor',
+      roster: [
+        { agent: 'agt_00000000000a', seat: 'main-coordinator', role: 'coordinator' },
+        { agent: 'agt_00000000000b', seat: 'agy-seat', role: 'implementer' },
+        { agent: 'agt_00000000000e', seat: 'second-seat', role: 'implementer' },
+      ],
+    },
+    bbb222bbb222: {
+      project: 'alpha',
+      entity: 'alpha-ent',
+      roster: [{ agent: 'agt_00000000000c', seat: 'lead', role: 'coordinator' }],
+    },
+    ccc333ccc333: {
+      project: 'beta',
+      entity: 'beta-ent',
+      roster: [{ agent: 'agt_00000000000d', seat: 'lead', role: 'coordinator' }],
+    },
+  };
+  const agy = agent('agt_00000000000b', 'agy-seat', 'aaa111aaa111');
+  const second = agent('agt_00000000000e', 'second-seat', 'aaa111aaa111');
+  const coordinator = agent('agt_00000000000a', 'main-coordinator', 'aaa111aaa111');
+  const alphaLead = agent('agt_00000000000c', 'lead', 'bbb222bbb222');
+  const betaLead = agent('agt_00000000000d', 'lead', 'ccc333ccc333');
+
+  test('a seat reaches the coordinator its roster names, with no lead field to read', () => {
+    expect(admitSend(agy, coordinator, fileTeams)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
+    // The coordinator's own reach is the lead's: any seat of its team, and no other team's.
+    expect(admitSend(coordinator, second, fileTeams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
+    expect(admitSend(coordinator, betaLead, fileTeams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
+  });
+
+  test('two coordinators of different teams are orchestrators to each other', () => {
+    expect(admitSend(alphaLead, betaLead, fileTeams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
+  });
+
+  test('the file word names only the lead: seat to seat still has no rule', () => {
+    expect(admitSend(agy, second, fileTeams)).toEqual({
+      ok: false,
+      why: "agy-seat@aaa111aaa111 may not send to second-seat@aaa111aaa111: no rule admits it (the owner; an orchestrator to a seat of its own team; an orchestrator to another orchestrator; an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
+    });
+  });
+
+  test('a roster naming both lead words keeps the registry\'s own first', () => {
+    const both: AdmitTeams = {
+      ddd444ddd444: {
+        project: 'both',
+        entity: 'both',
+        roster: [
+          { agent: 'agt_000000000011', seat: 'coord', role: 'coordinator' },
+          { agent: 'agt_000000000012', seat: 'orch', role: 'orchestrator' },
+          { agent: 'agt_000000000013', seat: 'worker', role: 'builder' },
+        ],
+      },
+    };
+    const worker = agent('agt_000000000013', 'worker', 'ddd444ddd444');
+    const orch = agent('agt_000000000012', 'orch', 'ddd444ddd444');
+    const coord = agent('agt_000000000011', 'coord', 'ddd444ddd444');
+    expect(admitSend(worker, orch, both)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
+    expect(admitSend(worker, coord, both).ok).toBe(false);
+  });
+});
+
 describe('send admission: default deny', () => {
   const everyone: { name: string; caller: Agent | 'owner' }[] = [
     { name: 'owner', caller: owner },

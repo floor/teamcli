@@ -127,11 +127,13 @@ function roleOf(caller: SendSide, team: AdmitTeam | undefined): string | null {
   return caller.role ?? null;
 }
 
-/** The lead seat of a team: the record's own field, else the roster, else the seat named for it. */
+/** The lead seat of a team: the record's own field, else the roster's lead role — the registry's
+ *  `orchestrator`, or the `coordinator` a live file's own seats carry — else the seat named for it. */
 function orchestratorSeat(team: AdmitTeam | undefined): string | null {
   if (!team) return null;
   if (team.orchestrator) return team.orchestrator;
-  const byRole = team.roster.find((entry) => entry.role === 'orchestrator');
+  const byRole =
+    team.roster.find((entry) => entry.role === 'orchestrator') ?? team.roster.find((entry) => entry.role === 'coordinator');
   if (byRole) return byRole.seat;
   return team.roster.find((entry) => entry.seat === 'orchestrator')?.seat ?? null;
 }

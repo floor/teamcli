@@ -12,6 +12,7 @@ import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
+import { readTeams } from '../registry/teams.ts';
 import { admitSend, RULE_SUMMARY, senderHeader, type AdmitTeam, type AdmitTeams } from '../send/admit.ts';
 import { appendHistory } from '../send/history.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
@@ -607,8 +608,10 @@ function recordFor(home: string, session: string, seat: string): Agent | null {
   return found;
 }
 
-/** One team's admission record: the live file's project, entity and lead, with the roster the
- *  store holds for that team and the file's own seats behind it. */
+/** The admission records a send is judged against: every registered team — so a target in another
+ *  team is judged by that team's own record — and, over it, this run's team from the live file,
+ *  which is the seed the registry projects. The file's project, entity and lead, with the roster
+ *  the store holds for that team and the file's own seats behind it. */
 function admitRecordsOf(home: string, team: TeamFile, teamId: string): AdmitTeams {
   const roster: AdmitTeam['roster'] = [];
   for (const agent of readAgents(home)) {
@@ -618,7 +621,10 @@ function admitRecordsOf(home: string, team: TeamFile, teamId: string): AdmitTeam
   for (const seat of team.seats) {
     if (!roster.some((entry) => entry.seat === seat.name)) roster.push({ agent: '', seat: seat.name, role: seat.role });
   }
-  return { [teamId]: { project: team.project, entity: team.entity, orchestrator: team.orchestrator, roster } };
+  return {
+    ...readTeams(home),
+    [teamId]: { project: team.project, entity: team.entity, orchestrator: team.orchestrator, roster },
+  };
 }
 
 function seatList(team: TeamFile): string {
