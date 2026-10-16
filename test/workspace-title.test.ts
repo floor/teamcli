@@ -285,10 +285,13 @@ describe('the live line', () => {
     expect(liveDisplayAgent(opus, 'Sonnet 4.5\n').line).toBe('Claude Sonnet 4.5 default');
   });
 
-  test('an unreadable screen keeps the file display, including a grok footer', () => {
+  test('a grok footer names the model, and a screen without one keeps the file display', () => {
     const grok = { cli: 'grok', model: 'Grok', version: '4.7', display: 'Grok 4.7' };
-    expect(liveDisplayAgent(grok, 'Grok 4.6 (xhigh) · always-approve').line).toBe('Grok 4.7 xhigh');
+    expect(liveDisplayAgent(grok, 'Grok 4.7 (xhigh) · always-approve').line).toBe('Grok 4.7 xhigh');
+    expect(liveDisplayAgent(grok, 'Grok 4.6 (xhigh) · always-approve').line).toBe('Grok 4.6 xhigh');
+    expect(liveDisplayAgent(grok, 'Grok 4.7 Fast (xhigh) · always-approve').line).toBe('Grok Fast 4.7 xhigh');
     expect(liveDisplayAgent(grok, 'Grok 4.6 (xhigh) · always-approve').line.startsWith('grok')).toBe(false);
+    expect(liveDisplayAgent(grok, 'Waiting on answers\n').line).toBe('Grok 4.7 default');
     expect(liveDisplayAgent(grok, undefined).line).toBe('Grok 4.7 default');
   });
 

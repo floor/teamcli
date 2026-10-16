@@ -147,7 +147,7 @@ describe('team worktree new', () => {
     rmSync(home, { recursive: true, force: true });
     const missing = await run(['new', 'select-width', '--kind', 'fix']);
     expect(missing.code).toBe(1);
-    expect(missing.err).toBe('team worktree: the file was never approved on this machine: run `team approve`\n');
+    expect(missing.err).toBe('team worktree: the file was never approved on this machine\n');
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 
@@ -339,7 +339,7 @@ describe('team worktree remove', () => {
 });
 
 describe('team worktree and the approved copy', () => {
-  const note = 'team worktree: using the approved workspace settings; the file has unapproved changes: run `team approve`\n';
+  const note = 'team worktree: using the stored workspace settings; the file has changed since that copy was stored\n';
 
   function edit(text: string): void {
     writeFileSync(join(project, '.agents', 'team.yaml'), text);
@@ -426,7 +426,7 @@ describe('team worktree and the approved copy', () => {
       .replace('\nseats:\n', '\nseats:\n  - role: implementer\n    name: ghost\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n'));
     const added = await run(['new', 'select-width', '--kind', 'fix', '--seat', 'ghost']);
     expect(added.code).toBe(1);
-    expect(added.err).toBe(`${note}team worktree: seat ghost is not in the approved file: run \`team approve\`\n`);
+    expect(added.err).toBe(`${note}team worktree: seat ghost is not in the stored copy\n`);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
     const kept = await run(['new', 'select-width', '--kind', 'fix', '--seat', 'lead']);
     expect(kept.code).toBe(0);
@@ -453,7 +453,7 @@ describe('team worktree and the approved copy', () => {
     writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(1);
-    expect(io.err).toBe('team worktree: the record does not carry a valid signature: it was changed after approval, or written without the key: run `team approve` once\n');
+    expect(io.err).toBe('team worktree: the record does not carry a valid signature: it was changed after approval, or written without the key\n');
   });
 
   test('a legacy record refuses with the one-line repair, unchanged', async () => {
@@ -465,7 +465,7 @@ describe('team worktree and the approved copy', () => {
     writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(1);
-    expect(io.err).toBe('team worktree: approved before records were signed: run `team approve` once\n');
+    expect(io.err).toBe('team worktree: approved before records were signed\n');
   });
 
   test('an approved copy this version cannot read refuses before anything is created', async () => {
@@ -483,7 +483,7 @@ describe('team worktree and the approved copy', () => {
       standing: () => ({ ...real, record: { ...real.record, file: 'nope: [[[' } }),
     });
     expect(io.code).toBe(1);
-    expect(io.err).toBe('team worktree: the approved copy can\'t be read: run `team approve`\n');
+    expect(io.err).toBe('team worktree: the stored copy can\'t be read\n');
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 
@@ -721,7 +721,7 @@ seats:
     );
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(1);
-    expect(io.err).toBe('team worktree: the approved copy can\'t be read: run `team approve`\n');
+    expect(io.err).toBe('team worktree: the stored copy can\'t be read\n');
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 
@@ -736,7 +736,7 @@ seats:
     );
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(1);
-    expect(io.err).toBe('team worktree: the approved copy can\'t be read: run `team approve`\n');
+    expect(io.err).toBe('team worktree: the stored copy can\'t be read\n');
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 
@@ -749,8 +749,7 @@ seats:
     expect(io.code).toBe(1);
     expect(io.err).toContain('the approval record cannot be read');
     expect(io.err).toContain('"file" is not a string');
-    expect(io.err).toContain('run `team approve` once');
-    expect(io.err).not.toContain("the approved copy can't be read");
+    expect(io.err).not.toContain("the stored copy can't be read");
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 
