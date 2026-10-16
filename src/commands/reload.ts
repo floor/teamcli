@@ -105,9 +105,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       out.stderr(`team reload: ${said.text}\n`);
       // exit: reload.grant-another-pane
       // exit: reload.grant-approval
-      // exit: reload.grant-approved-copy
       // exit: reload.grant-caller
-      // exit: reload.grant-drift
       // exit: reload.grant-file
       // exit: reload.grant-no-pane
       // exit: reload.grant-omitted

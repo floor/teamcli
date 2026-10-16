@@ -1,3 +1,4 @@
+import { machineAccountsOf } from '../information/machine-accounts.ts';
 import { randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
 import { budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
@@ -5,6 +6,7 @@ import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } 
 import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
+import { saveMachineReadings } from '../information/machine-readings.ts';
 import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -386,7 +388,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           logLine(dir, 'watch', 'watch', `readings: ${readingsText(machine)}`, sources.now());
         }
         const queueDepths = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
+        const machineAccounts = sources.home === undefined ? [] : machineAccountsOf(sources.home);
         const run = (stored: readonly Seen[]) => pass({
+          machineAccounts,
           team, state, live, machine, now, memory,
           queueDepths,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce, outcomes, budgets: budget,
@@ -406,6 +410,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             const folded = run(stored);
             return { readings: folded.readings, value: folded };
           });
+        if (!foreign && sources.home) saveMachineReadings(sources.home, result.machineReadings, now);
         if (queueDelivery.pending?.key !== result.queueSummary?.key) {
           queueDelivery.pending = null;
           queueMemory.ownNudge = null;

@@ -2,10 +2,11 @@
 // runs the registered checks in the order it owns, applies the report-once rule, and dials the
 // nudge. A check never reads herdr, a screen or the file itself — only the observation it is
 // handed (RFC 0002 § 4.2).
-import { seatNamed } from '../approve/fingerprint.ts';
 import { observe, observeCheck, type Seen } from '../budgets/readings.ts';
 import type { CheckOutcome } from '../budgets/run.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
+import { payingAccountOf, payingPoolOf } from '../information/machine-accounts.ts';
+import type { MachineFigure } from '../information/machine-readings.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
@@ -133,6 +134,7 @@ export type PassResult = {
   mailboxNote: string | null;
   // The readings that count, to be saved: the project's, with this pass's figures folded in (§ 4.4).
   readings: Seen[];
+  machineReadings: MachineFigure[];
   // Sidebar lines to push for running file seats. The pass does not call herdr: the command
   // does, and records `title` and `line` only after the call returns true. A seat with neither
   // half changed is absent.
@@ -178,9 +180,9 @@ function quotaOf(cli: string, screen: Screen, pane: string | undefined, runs: bo
 
 // What one pass is handed: the file, the session, the observed world, the clock, the watch's
 // memory, and what the caller knows that the world does not. `approval` is how the file differs
-// from the approved one: [] when it doesn't, null when it was never approved, undefined when that
-// wasn't looked at. `watch` and `budgets` are the sections in force — the approved ones, or the
-// defaults while the file's own are not approved — and the checks read those, never the file's.
+// from the last approval: [] when it doesn't, null when it was never approved, undefined when that
+// wasn't looked at. `watch` and `budgets` are the sections in force — the live file's under a
+// verified standing, the defaults under none — and the checks read those, never the file's.
 // `outcomes` is what the accounts' check commands read outside the pass, when the watch last ran
 // them. `readings` is the project's stored cache, recalled by the caller; this pass folds its
 // figures into it, whatever session they were seen in (§ 4.4). `foreground` is herdr's
@@ -204,6 +206,8 @@ export type PassInput = {
   outcomes?: readonly CheckOutcome[];
   budgets?: TeamFile['budgets'];
   readings?: readonly Seen[];
+  /** Machine subscriptions observed without adding a launch budget. */
+  machineAccounts?: readonly string[];
   foreground?: Readonly<Record<string, readonly string[] | null>>;
   // Each pane's process identity, by pane id, as the caller read it — null where herdr can't
   // tell, and absent for a pane it wasn't read for. A seat's recorded identity is compared with
@@ -236,6 +240,7 @@ export function pass({
   outcomes = [],
   budgets = team.budgets,
   readings: stored = [],
+  machineAccounts = [],
   foreground,
   processes,
   readScreen: read = readScreen,
@@ -385,24 +390,25 @@ export function pass({
   // keep two buckets — while a figure on another account (a launcher showing the vendor it really
   // runs on) stays that account's, whichever seat's screen showed it.
   //
-  // A seat the approval lists as changed — or as not in the approved file — is drift, and its
-  // figures are read as they are but none is folded: an unapproved edit to its `account:` must
-  // not move its figure into another account's bucket, where `up` and `add` would count it.
-  // Nothing is saved for that seat until the owner approves.
-  const drift = new Set(
-    (Array.isArray(approval) ? approval : []).map(seatNamed).filter((name): name is string => name !== null),
-  );
-  for (const [name, recorded] of Object.entries(state.seats)) {
-    if (recorded.temporary && drift.has(recorded.temporary.like)) {
-      drift.add(name);
-    }
-  }
+  // The live file is the record: a seat's figures fold under the account the file names now,
+  // and a change since the last approval holds no seat's figures back. A running seat's figure
+  // is also folded into the machine's own observations, under the account that pays for it.
+  const machineReadings: MachineFigure[] = [];
   let readings = stored.slice();
   for (const seat of observations) {
-    if (!seat.running || drift.has(seat.name)) continue;
+    if (!seat.running) continue;
+    const declared = team.seats.find((one) => one.name === seat.name)
+      ?? team.seats.find((one) => one.name === state.seats[seat.name]?.temporary?.like);
     for (const figure of seat.quota) {
-      const account = figure.account === seat.vendor ? seat.account : figure.account;
-      if (budgets.accounts[account]?.sources.includes('status_line')) {
+      if (declared && seat.identity !== 'gone' && seat.identity !== 'replaced') {
+        const pool = payingPoolOf(declared);
+        machineReadings.push({ ...figure, account: payingAccountOf(declared), ...(pool ? { pool } : {}) });
+      }
+      const payer = declared === undefined ? seat.account : payingAccountOf(declared);
+      const backing = declared === undefined ? seat.vendor : payingAccountOf({ ...declared, account: undefined });
+      const account = figure.account === backing ? payer : figure.account === seat.vendor ? seat.account : figure.account;
+      const entry = budgets.accounts[account];
+      if (entry !== undefined ? entry.sources.includes('status_line') : machineAccounts.includes(account) && (figure.account === backing || figure.account === payer)) {
         readings = observe(readings, { ...figure, account }, seat.name, now);
       }
     }
@@ -535,7 +541,7 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  return { reports, ...(queueDepths ? { queueSummary: enabled('team-idle') ? idleQueueSummary(teamObservation) : null } : {}), nudge, work: workDrops(team, live, observations, watch, now, memory, read), fallback, ring, mailboxNote, readings, labels };
+  return { reports, ...(queueDepths ? { queueSummary: enabled('team-idle') ? idleQueueSummary(teamObservation) : null } : {}), nudge, work: workDrops(team, live, observations, watch, now, memory, read), fallback, ring, mailboxNote, readings, machineReadings, labels };
 }
 
 /** Idle workers due a work drop this pass. Leads, parked and stopped seats, a dialog and a
