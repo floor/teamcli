@@ -95,9 +95,11 @@ message.
 ## Who may send to whom
 
 Send is denied by default: a caller reaches exactly the targets below, and anything else is
-refused before the seat is looked up. A run with no terminal is refused before `--list` as well:
-`team send: only the owner runs this, from a terminal outside herdr`. For every other caller,
-`--list` prints the file's roster and sends nothing, so it needs no caller check.
+refused before the seat is looked up. A seat the registry holds no record for has no identity to
+admit by, and is refused; `up` and `add` register a seat when they first launch it. A run with no
+terminal is refused before `--list` as well: `team send: only the owner runs this, from a terminal
+outside herdr`. For every other caller, `--list` prints the file's roster and sends nothing, so it
+needs no caller check.
 
 | Caller | May send to |
 | --- | --- |
