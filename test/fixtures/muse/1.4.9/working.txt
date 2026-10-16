@@ -1,0 +1,23 @@
+│                                                   │
+│  SESSION        <session-id>                      │
+│  ACTIVITY       no tasks                          │
+│                 0 terminals · inbox clear         │
+│                                                   │
+│  BILLING        Subscription · Muse Code Power U… │
+└───────────────────────────────────────────────────┘
+
+❯ /Users/example/.local/bin/muse --no-session-log --tru
+st-workspace --provider echo --echo-delay-ms 6000
+
+  Muse Code 1.4.9
+
+  Skills: 53 loaded · 2 warnings (ctrl+o to expand)
+
+❯ Hello
+
+◇ Thinking (1s · esc to interrupt)
+
+── Voice input (⌥ + v to start) ─────────────────────
+❯
+─────────────────────────────────────────────────────
+  echo · ~/.g/a/b/1/scratch/muse-ws · Auto-review

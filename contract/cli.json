@@ -1481,6 +1481,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -1503,7 +1509,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team usage [--json]"
+        "team usage [--json] [--all]"
       ]
     },
     {
