@@ -58,11 +58,16 @@ export function triggerLine(path: string): string | null {
 /**
  * Whether the samples show the seat took the trigger.
  *
- * `working` is enough on its own. `done` and `blocked` count only when they differ from the
- * status read before Enter: a codex seat sits at `done` after the previous turn, so that same
- * status is not a new submission.
+ * `working` is enough on its own when the seat was not working before Enter. `done` and `blocked`
+ * count only when they differ from the status read before Enter: a codex seat sits at `done` after
+ * the previous turn, so that same status is not a new submission. A seat that was already working
+ * before Enter proves nothing by its status at all.
  */
 export function sawSubmission(before: string | null, samples: readonly string[]): boolean {
+  // A seat that was already working before Enter says nothing about this line: `working` after
+  // Enter is the turn it was in, and a `done` after it is that turn ending. Only the transcript
+  // can show such a seat took the trigger.
+  if (before === 'working') return false;
   for (const sample of samples) {
     if (sample === 'working') return true;
     if ((sample === 'done' || sample === 'blocked') && sample !== before) return true;

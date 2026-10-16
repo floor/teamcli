@@ -67,6 +67,7 @@ import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
+import { registerRun } from '../registry/sync.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
@@ -1526,6 +1527,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const projectionNote = reachProjectionNote(writeReachProjection(team, sources.home));
     if (projectionNote) logLine(dir, 'up', callerLabel(caller), projectionNote, now());
     const afterwards = readState(dir).sessions[session]?.seats ?? {};
+    // The registry follows the state this run left: a ready seat is registered, or re-pointed to
+    // its pane when it was relaunched; a seat the file stops, or one not ready, is stopped.
+    for (const note of registerRun(
+      { home: sources.home, team, root, by: callerLabel(caller), session },
+      team.seats.map((seat) => ({
+        seat,
+        pane: afterwards[seat.name]?.stage === 'ready' ? (afterwards[seat.name]?.pane ?? null) : null,
+        ...(afterwards[seat.name]?.id ? { handle: afterwards[seat.name]?.id } : {}),
+      })),
+    )) logLine(dir, 'up', callerLabel(caller), note, now());
     const pending = team.seats.filter((seat) => {
       if (seat.stopped || !profileFor(seat.cli)) return false;
       return afterwards[seat.name]?.stage !== 'ready';

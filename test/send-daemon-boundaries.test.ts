@@ -30,6 +30,7 @@ import {
 import { historyPath, readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
 import { LOG_FILE } from '../src/state.ts';
+import { filed } from './send-native-fixtures.ts';
 import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T17:00:00.000Z');
@@ -182,7 +183,7 @@ describe('the send daemon\'s boundaries', () => {
 
     const history = readHistory('acme', world.root, world.home);
     expect(history.ok && history.entries).toEqual([
-      { ts: NOW.toISOString(), from: 'owner', to: 'helper', body: 'you serve another session', id: expect.any(String), outcome: 'unreachable' },
+      { ts: NOW.toISOString(), from: 'owner', to: 'helper', body: filed('you serve another session'), id: expect.any(String), outcome: 'unreachable' },
     ]);
   });
 
@@ -236,7 +237,7 @@ describe('the send daemon\'s boundaries', () => {
     const directDrops = join(world.dir, 'send-drops', 'acme', 'lead');
     const directFiles = readdirSync(directDrops);
     expect(directFiles.length).toBe(1);
-    expect(readFileSync(join(directDrops, directFiles[0]!), 'utf8')).toBe(longBrief);
+    expect(readFileSync(join(directDrops, directFiles[0]!), 'utf8')).toBe(filed(longBrief));
 
     // 2. Direct send when composer shows a paste chip instead of the trigger
     typedOnce = false;
@@ -312,7 +313,7 @@ describe('the send daemon\'s boundaries', () => {
     if (line === null) throw new Error('the fixture path makes a trigger line the native gate would refuse');
     expect(host.typed[0]?.text).toBe(line);
     expect(host.typed[0]?.text.includes(body)).toBe(false);
-    expect(readFileSync(dropPath, 'utf8')).toBe(body);
+    expect(readFileSync(dropPath, 'utf8')).toBe(filed(body));
     expect(lstatSync(dropPath).mode & 0o777).toBe(0o600);
 
     const history = readHistory('acme', world.root, world.home);
