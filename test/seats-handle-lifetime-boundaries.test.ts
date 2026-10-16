@@ -23,10 +23,10 @@ import { SEAT_ID_PATTERN, emptySession, readState, updateState } from '../src/st
 import { storePath, writeApproval } from '../src/store/store.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-15T12:30:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const AMPLE: Machine = {
   loadPerCore: 0.3, memoryFree: 60, diskFree: 200e9, swapTotal: 10e9, swapFree: 9e9, swapUsed: 1e9,
 };
@@ -230,7 +230,7 @@ function removeSources(agents: HerdrAgent[]): RemoveSources {
 // One screen per recorded pane and a clock that moves when the command sleeps: the exit
 // flow polls, and a pane leaves when its Enter lands.
 function downSources(): DownSources {
-  const IDLE_BOX = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+  const IDLE_BOX = CLAUDE_IDLE;
   const boxes = new Map<string, string>();
   const gone = new Set<string>();
   let clock = NOW.getTime();

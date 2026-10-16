@@ -20,7 +20,7 @@ import { SEAT_ID_PATTERN, STATE_FILE, emptySession, readState, updateState } fro
 import type { Live } from '../src/status/compare.ts';
 import type { Standing } from '../src/store/store.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -282,7 +282,7 @@ ${seatBlock('worker', 'implementer', ['    count: 1'])}
     const closed: string[] = [];
     // The panes that already run show the model they run; a pane this run creates shows the
     // model the file declares for the seat it launches.
-    const running = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+    const running = CLAUDE_IDLE;
     const screen = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · ${screenModel}\n`;
     let n = 0;
     let clock = NOW.getTime();

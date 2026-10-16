@@ -14,14 +14,14 @@ import type { Terminal } from '../../src/launch/terminal.ts';
 import { readState } from '../../src/state.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-16T10:00:00Z');
 const FUTURE = '2026-12-31T23:59:59Z';
 const PAST = '2026-10-16T09:59:59Z';
 const EXACT_NOW = '2026-10-16T10:00:00Z';
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const AMPLE: Machine = {
   loadPerCore: 0.2,
   memoryFree: 80,

@@ -23,11 +23,11 @@ import { loadTeamFile } from '../src/file/load.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-15T11:30:00Z');
 const OLD = new Date('2026-09-01T09:00:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 // Machine headroom the parallel launch reads as room for every seat at once.
 const AMPLE: Machine = {
   loadPerCore: 0.3, memoryFree: 60, diskFree: 200e9, swapTotal: 10e9, swapFree: 9e9, swapUsed: 1e9,
@@ -399,7 +399,7 @@ describe('the everyday commands with an old approval record on disk', () => {
     record({ lead: 'lead-pane', 'builder-1': 'b1-pane', 'builder-2': 'b2-pane', 'tester-1': 't1-pane', 'tester-2': 't2-pane' });
     // One screen per pane, and a clock that moves when the command sleeps: the exit
     // flow polls, and a pane leaves when its Enter lands.
-    const IDLE_BOX = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+    const IDLE_BOX = CLAUDE_IDLE;
     const boxes = new Map<string, string>();
     const gone = new Set<string>();
     let clock = NOW.getTime();

@@ -10,13 +10,13 @@ import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { setHerdrRun, type HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8');
 const NOW = new Date('2026-10-03T14:02:00Z');
 const FILE = ['--file', '.agents/team.yaml'];
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 let base: string;
 let root: string;
