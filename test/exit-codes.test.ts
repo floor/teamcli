@@ -31,6 +31,9 @@ import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
 import { runUnlock } from '../src/commands/unlock.ts';
 import { runTempo } from '../src/commands/tempo.ts';
+import { runGrant } from '../src/commands/grant.ts';
+import { runDelegate } from '../src/commands/delegate.ts';
+import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
@@ -3472,6 +3475,36 @@ scene('restart.ready', async (place) => {
   approve(place, ACTIVE_TWO);
   return show(await restarted(place, ['lead'], owner), 'restarted lead');
 });
+
+// Authority management shares the owner-only editor; each public wrapper owns its exits.
+for (const [name, command, args, invalidArgs] of [
+  ['grant', runGrant, ['lead', '--scope', 'up,down'], ['lead', '--scope', 'trust']],
+  ['delegate', runDelegate, ['outside/control', '--commands', 'up,down'], ['outside/control', '--commands', 'grant']],
+  ['revoke', runRevoke, ['grant'], ['delegate', 'malformed']],
+] as const) {
+  async function managed(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await command([...argv], io, { home: place.home }), out: io.out, err: io.err };
+  }
+  scene(`${name}.invocation`, async (place) => show(await managed(place, ['--unknown']), 'unknown option'));
+  scene(`${name}.refused`, async (place) => {
+    // The missing file is deliberate: caller refusal precedes its first read.
+    return show(await managed(place, args, detachedCaller), 'only the owner runs this');
+  });
+  scene(`${name}.invalid`, async (place) => {
+    write(place, TEAM);
+    return show(await managed(place, invalidArgs), `team ${name}:`);
+  });
+  scene(`${name}.done`, async (place) => {
+    const original = name === 'revoke' ? `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope: [up]\n` : TEAM;
+    write(place, original);
+    const preview = await managed(place, [...args, '--dry-run']);
+    expect(preview.code).toBe(0);
+    expect(preview.out).toBe(`${name}: would change\n`);
+    expect(readFileSync(place.file, 'utf8')).toBe(original);
+    return show(await managed(place, args), `${name}: updated`);
+  });
+}
 
 const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
 
