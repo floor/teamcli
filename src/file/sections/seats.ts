@@ -55,6 +55,7 @@ export const seats: Section = {
         parked: { type: 'boolean' },
         stopped: { type: 'boolean' },
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
+        assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
         count: { type: 'integer', minimum: 1 },
         reach: {
           type: 'object',
@@ -92,10 +93,11 @@ function readSeats(
     return [];
   }
   const seats: DraftSeat[] = [];
+  const assistants: { name: string; line: number }[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'reach',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'reach',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -138,7 +140,17 @@ function readSeats(
     const leadsField = fields.get('leads');
     const leads = check.flag(leadsField, `${at}: leads`);
     if (leads && name && leadsField) marks.push({ name, line: leadsField.value.line });
+    // The entity's assistant, unlike the lead, is a field of the built seat: there is no second
+    // spelling of it to equate a marked file with, and it admits a send, so it belongs in the
+    // seat's digest — granting it is a change the owner approves. At most one seat carries it,
+    // and never a seat with a count: the slot names one seat, and admission reads its name.
+    const assistantField = fields.get('assistant');
+    const assistant = check.flag(assistantField, `${at}: assistant`);
+    if (assistant && name && assistantField) assistants.push({ name, line: assistantField.value.line });
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
+    if (assistant && count > 1) {
+      check.fail(assistantField?.value.line ?? line, `\`assistant\` on "${name}" can't be a seat with count`);
+    }
     const label = check.text(fields.get('label'), `${at}: label`);
     const effort = readEffort(fields.get('effort'), at, vendor, check);
     // The written label, or the lowercase model and version, stays on the seat: `seatDigest`
@@ -164,6 +176,8 @@ function readSeats(
         ...(account ? { account } : {}),
         // Omitted when the file has no effort, so `seatDigest` hashes the same fields as before.
         ...(effort ? { effort } : {}),
+        // Omitted when the file marks no assistant, so every file that writes none keeps its digest.
+        ...(assistant && count <= 1 ? { assistant: true as const } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
         ...(reach ? { reach } : {}),
@@ -172,6 +186,11 @@ function readSeats(
   }
   reportCollisions(seats, 'name', check);
   reportReach(seats, check);
+  // Refused at the second mark's line, the one that makes it more than one — the lead's own
+  // refusal, one seat over: the entity's assistant is one seat, and admission reads its name.
+  if (assistants.length > 1) {
+    check.fail(assistants[1]!.line, '`assistant` is on more than one seat: a team has one assistant');
+  }
   return seats;
 }
 
