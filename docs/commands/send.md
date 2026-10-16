@@ -86,10 +86,10 @@ agents. A plain send writes `.agents/send-drops/<session>/<seat>/<id>` (the file
 types one trigger line into that seat's pane, reads the pane back before Enter to check the
 composer holds that line, and reads it again after Enter. `send-drops`, the session directory,
 and the seat directory are each mode 0700. This command never deletes a delivered drop file;
-the owner removes `.agents/send-drops` when those messages are no longer needed. A send to a Claude Code seat reads the registry's recorded address for the seat's session when
-the registry holds one, else the processes of the seat's pane, and the socket file's presence in
-the sockets folder — this Mac's Claude Code can write its sockets to `/tmp/cc-socks` instead, so
-discovery reads that folder too — before any drop file is written. The socket is the first of the
+the owner removes `.agents/send-drops` when those messages are no longer needed. A send to a Claude Code seat reads the registry's recorded address while it is still live — its
+pid among the pane's, its socket present — and the processes of the seat's pane otherwise, with
+the socket file's presence in the sockets folder — this Mac's Claude Code can write its sockets
+to `/tmp/cc-socks` instead, so discovery reads that folder too — before any drop file is written. The socket is the first of the
 pane's processes — the foreground processes first, then the shell — with a file at
 `<sockets dir>/<pid>.sock`.
 The command holds the seat's lock (`<state dir>/seat-locks/<session>/<seat>`) around the write,
