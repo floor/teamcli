@@ -23,7 +23,7 @@ The fixture's commits are authored by `agent@example.test`, or by `jane@acme.exa
 | --- | --- |
 | `console` | a transcript: `$ ` lines are run, the lines under each is its expected output |
 | `yaml file=<path>` | a file the fixture gets at that point of the page, read as YAML by the commands. `file=overrides.yaml` is written into the fixture's approval store, beside the approval |
-| `file file=<path>` | the same, for a file that isn't YAML (a log, a PR body) |
+| `file file=<path>` | the same, for a file that isn't YAML (a log, a PR body); `exec=1` makes it runnable, as a check script has to be |
 | `commit` (`email=…`) | one commit of the fixture's history; the block's text is its message |
 | `git` | git commands run in the fixture, one per line |
 | `fixture` | the world the page's examples run in |
@@ -37,6 +37,7 @@ A `console` fence may carry:
 | `caller=<owner\|a seat's name\|agent>` | who runs the block's commands; a `fixture` fence sets it for the whole page |
 | `answer="<text>"` | what the owner types at `team approve --confirm`'s question, for this block |
 | `waiting="1"` | the terminal has a line of input already waiting when `team approve` would write, for this block |
+| `reply="<text>"` | what the seat answers a waited `team send` in this block: with it, the wait prints the reply; without it, the seat stays silent and the wait times out |
 | `screens="<seat>=<screen>[,…]"` | what those seats' panes show for this block: `idle`, `working`, `permission`, `trust`, `question`, `unsent`, `unknown` |
 | `machine=<calm\|tight\|small-swap>` | the machine's load, free memory, free disk and swap, for this block (`small-swap`: a 1GB swap in total, under the default check) |
 | `tools="<cli>=<state>[,…]"` | one CLI's install and login state for this block: `fine`, `missing`, `old`, `logged-out`, `unread` |
