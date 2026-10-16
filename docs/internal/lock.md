@@ -61,10 +61,16 @@ A seat does not remove a lock it did not take.
 
 ## Examples, moved here whole
 
-The two runs below stood on the page before its one-glance cut, in the order they stood in, and
-they stand there no longer: a seat that is not the holder is refused, and the owner releases the
-lock before a name that leaves the lock root is turned away. Neither is executed by any test —
-`test/docs.test.ts` reads `docs/commands/` alone — and both run against the page's own team file:
+The runs below stood on the page before its one-glance cut and they stand there no longer: a second
+take is refused, a seat that is not the holder is refused, and the owner releases the lock before a
+name that leaves the lock root is turned away. None of them is executed by any test —
+`test/docs.test.ts` reads `docs/commands/` alone — and all run against the page's own team file:
+
+```console
+$ team lock heavy-run ; echo "exit $?"
+heavy-run: held since 2026-10-04T09:00:00Z by owner (beacon) — release CI, for 0s
+exit 1
+```
 
 ```console caller=claude-keeper
 $ team unlock heavy-run ; echo "exit $?"

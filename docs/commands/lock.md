@@ -1,8 +1,8 @@
 # team lock
 
-Takes a named lock on this machine, so one heavy run holds it at a time. The lock is a directory,
-`<home>/.config/team/locks/<name>.lock`, and the run that took it is written in a `who` file inside
-it. A second take is refused and writes nothing.
+Takes a named lock on this machine, so one heavy run holds it at a time: a directory under
+`~/.config/team/locks/` holding a `who` file that names the run. A second take is refused and writes
+nothing.
 
 ## Synopsis
 
@@ -19,11 +19,11 @@ it. A second take is refused and writes nothing.
 
 ## Who may run it
 
-Anyone who can write their own home, from a folder whose team file loads. A folder with no team
-file is refused before the lock is touched: the holder has to name a project. The caller is the
-project in the current folder and who is running — the owner at a terminal, or the seat's name —
-and [`team unlock`](unlock.md) releases the lock only when that same pair is in `who`: a seat does
-not remove a lock it did not take.
+Anyone who can write their own home, from a folder whose team file loads: a folder with no team file
+is refused before the lock is touched, since the holder has to name a project. The caller is the
+project in the current folder and who is running — the owner at a terminal, or the seat's name — and
+[`team unlock`](unlock.md) releases the lock only when that same pair is in `who`: a seat does not
+remove a lock it did not take.
 
 ## Refusals
 
@@ -40,34 +40,10 @@ not remove a lock it did not take.
 | `<name>: held; its holder file cannot be read` | 1 |
 | `<name>: held; its lock is not a directory` | 1 |
 
-A held lock is never removed by this command. A holder file that is missing or unreadable is
-still a held lock: nothing is cleared and nobody is guessed.
-
-The wait does not break the lock. When `--wait` ends, the same refusal is printed.
-
-## When the holder is gone
-
-A run that finished the take and never unlocked leaves a holder file, and every later take is
-refused — with or without `--wait`:
-
-    heavy-run: held since 2026-10-04T09:00:00Z by owner (beacon) — release CI, for 3h
-
-When that caller is not coming back, no `team` command clears the lock. The owner checks that
-nothing is still running under that holder, then removes the directory by hand:
-
-    ~/.config/team/locks/<name>.lock
-
-A take that died between the directory and its `who` file, a holder that cannot be read, and a
-lock that is not a directory, refuse every caller, `team unlock` included. The owner checks that
-nothing is still creating the lock, then removes the same directory by hand.
-
-## Exit codes
-
-| Exit | When |
-| --- | --- |
-| 0 | the lock was taken |
-| 1 | the lock is held, or the directory could not be written |
-| 2 | the invocation can't be read, or the team file can't |
+A held lock is never removed by this command. A holder file that is missing or unreadable is still a
+held lock: nothing is cleared and nobody is guessed. The wait does not break the lock. When `--wait`
+ends, the same refusal is printed. Exit 0 is the take, 1 a held lock, 2 an invocation or team file
+that cannot be read.
 
 ## Example
 
@@ -107,14 +83,6 @@ team: beacon
 run: release CI
 by: owner
 at: 2026-10-04T09:00:00Z
-```
-
-A second take is refused. The holder file is unchanged, and the age is how long it has been held:
-
-```console
-$ team lock heavy-run ; echo "exit $?"
-heavy-run: held since 2026-10-04T09:00:00Z by owner (beacon) — release CI, for 0s
-exit 1
 ```
 
 Rationale, behaviour, refusals and known limits: [docs/internal/lock.md](../internal/lock.md).
