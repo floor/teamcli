@@ -25,7 +25,8 @@ folder: an archive is never overwritten.
 Written under `--out` — `~/.config/team/archive` by default — as
 `<project>-<root hash>-<UTC stamp>/`: the user store's folder name, one segment deeper, with the
 moment the snapshot was taken. The hash is the project path's, so two checkouts of one project
-archive side by side, and the stamp is to the second, so two runs never share a folder.
+archive side by side, and the stamp is to the second, so two runs of one second name the same
+folder, which is refused, never overwritten.
 
 ```text
 beacon-5e46a02374b3-20261004T090000Z/
@@ -57,9 +58,9 @@ already exists is refused, never merged into.
 | --- | --- | --- |
 | the snapshot was written, and the stop ran | `archived <folder>:` and one line per entry, then the stop's own output | the stop's own exit, 0 when it stops the team |
 | `--keep-running` | the lines above, then `--keep-running: the stop is skipped.` | 0 |
-| `--dry-run` | `would archive to <folder>:`, its entries, `dry run: nothing was archived`, then the stop's plan | 0 |
+| `--dry-run` | `would archive to <folder>:`, its entries, `dry run: nothing was archived`, then the stop's plan | the stop's own dry-run exit: the refusal's own exit, else 0 |
 | the folder exists already | `team archive: <folder> exists already: an archive is never overwritten` | 1 |
-| the caller, `--out`, `--file` or the team file is refused | `team archive: <reason>` | 1 |
+| the caller, `--out` or `--file` is refused | `team archive: <reason>` | 1 |
 | the invocation or the team file can't be read | `team archive: <problem>`, with the usage for a bad option | 2 |
 
 ## Example
