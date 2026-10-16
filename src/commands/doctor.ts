@@ -577,7 +577,8 @@ export function doctorFindings(
   warnings: { line: number; message: string }[],
   /** The one read of the approval store, done by the caller — `runDoctor`, `up` or `add`. */
   standing: Standing,
-  /** The file as approved. `add` hands the team about to run, whose `stopped` mark is already cleared. */
+  /** The file whose seats are judged — the live file, or for `add` the team about to run, whose
+   *  `stopped` mark is already cleared. */
   approved: TeamFile = team,
   /** The budget-check lines, which only the report runs: `up` and `add` scan, they never run a check. */
   budgetChecks: Finding[] = [],
@@ -601,15 +602,15 @@ export function doctorFindings(
   // that differs is warned about, never rewritten here. A stopped seat is not checked: its
   // file is written at the launch that starts it again. The file is written at a delivery,
   // and a delivery happens only at a launch — which `up` skips for a ready seat, so the line
-  // names the relaunch that performs one. The check runs only once a record exists, so a
-  // file that was never approved does not grow a warning for a file no launch has written.
+  // names `team reload`, which closes a ready seat and launches the file's line. The check
+  // runs only once a record exists, so a folder no launch has delivered to grows no warning.
   if (standing.kind === 'verified') {
     for (const seat of approved.seats) {
       if (seat.stopped || profileFor(seat.cli)?.rulesOption != null) continue;
       const path = rulesFilePath(approved.project, root, sources.home, seat.name);
       if (path === null) continue;
       const check = checkRulesFile(path, rulesOf(approved, seat, root));
-      if (!check.ok) findings.push({ level: 'warn', text: `${seat.name}: ${check.what}; run ${relaunch(team, seat.name)}` });
+      if (!check.ok) findings.push({ level: 'warn', text: `${seat.name}: ${check.what}; run team reload ${seat.name}` });
     }
   }
 
