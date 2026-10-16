@@ -8,7 +8,7 @@ import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
-import { grantGate, logGranted } from '../grant.ts';
+import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -32,6 +32,7 @@ import {
   sessionStop,
   typeText,
   pressEnter,
+  sendKey,
   sessionRunning,
   sessionState,
   startServer,
@@ -137,6 +138,8 @@ export type Launch = {
   paneText(session: string, pane: string): string | null;
   typeText?(session: string, pane: string, text: string): boolean;
   pressEnter?(session: string, pane: string): boolean;
+  /** The profile's one clearing key. Absent: a failed rules read-back leaves the line. */
+  sendKey?(session: string, pane: string, key: string): boolean;
   agentStatus?(session: string, pane: string): string | null;
   /** Foreground argv0 names, or null when the pane can't be read. */
   foreground(session: string, pane: string): string[] | null;
@@ -216,6 +219,7 @@ const realLaunch: Launch = {
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
   pressEnter: (session, pane) => pressEnter(pane, aim(session)),
+  sendKey: (session, pane, key) => sendKey(pane, key, aim(session)),
   agentStatus: (session, pane) => agentStatus(pane, aim(session)),
   foreground: (session, pane) => paneForeground(pane, aim(session)),
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
@@ -786,14 +790,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     upFp !== undefined &&
     ownerAuthorized(io.env, upFp);
 
-  // The owner, or the seat the live file names for `up`. A missing approval record does not refuse.
+  const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
+  // The owner, the seat the live file names for `up`, or an agent with an active entity create-grant.
   const named =
     mayLaunchSeats(caller) ||
     ownerToken ||
     grantedSeat !== null ||
     delegated !== null ||
     grantAdmitsUp(team, io, dir) ||
-    delegateNamedFor(team, 'up', io);
+    delegateNamedFor(team, 'up', io) ||
+    createGranted;
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
@@ -841,7 +847,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // decision. Written only when this call is one that may run `up` — the refusals above
       // accumulate rather than return, so a caller the caller gate refused must leave every
       // file as it was — and not on a dry run, which decides nothing.
-      if (!dry && (mayLaunchSeats(caller) || delegated !== null || grantedSeat !== null || ownerToken)) {
+      if (!dry && (mayLaunchSeats(caller) || delegated !== null || grantedSeat !== null || createGranted || ownerToken)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
       refusals.push(problem);
@@ -961,7 +967,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // A passed delegation is not the owner, pane or seat. Every other caller keeps today's
       // reading: anyone but a seat.
       delegated === null && caller.kind !== 'seat',
-      dev,
+      dev || (createGranted && standing.kind === 'none'),
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
@@ -1268,7 +1274,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           file.text,
           rulesFileHash(file.text),
           undefined,
-          dev && standing.kind !== 'verified' ? team.project : undefined,
+          (dev || createGranted) && standing.kind !== 'verified' ? team.project : undefined,
         );
         if (!written.ok) return fileRefusalOf(written);
         // The plan already refused a path that can't be typed; this is the same check again, so a
@@ -1284,6 +1290,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           status: () => launch.agentStatus?.(session, pane) ?? null,
           type: (value) => launch.typeText?.(session, pane, value) ?? false,
           enter: () => launch.pressEnter?.(session, pane) ?? false,
+          ...(launch.sendKey
+            ? { key: (name: string) => launch.sendKey!(session, pane, name) }
+            : {}),
           // The last look before Enter: the file, read without following a link, must still hold
           // the text whose hash the line names.
           file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),

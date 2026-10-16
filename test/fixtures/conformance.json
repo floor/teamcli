@@ -1394,6 +1394,13 @@
       "provenance": "capture"
     },
     {
+      "file": "antigravity/1.3.5/rules-line.txt",
+      "cli": "antigravity",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "antigravity/1.3.5/trust.txt",
       "cli": "antigravity",
       "classify": "trust",
