@@ -62,6 +62,7 @@ export const MARKER_LINE = 'release: material@3.0.2';
 export const URLS = {
   npm: 'https://registry.npmjs.org/material/3.0.2',
   attest: 'https://registry.npmjs.org/-/npm/v1/attestations/material%403.0.2',
+  tags: 'https://registry.npmjs.org/-/package/material/dist-tags',
   repo: 'https://api.github.com/repos/floor/material',
   ref: 'https://api.github.com/repos/floor/material/git/ref/tags/v3.0.2',
   tagObject: `https://api.github.com/repos/floor/material/git/tags/${TAG_OBJECT}`,
@@ -72,10 +73,12 @@ export const URLS = {
   linear: 'https://api.linear.app/graphql',
 };
 
-/** Every read of one passing run for material@3.0.2, trusted publishing declared. */
+/** Every read of one passing run for material@3.0.2, trusted publishing declared. The dist-tags
+ *  document is well formed with `next` level with `latest`: the warning's own tests change it. */
 export function happy(trusted = true): Answers {
   const answers: Answers = new Map([
     [URLS.npm, json(fixture('npm-version.json'))],
+    [URLS.tags, json({ latest: '3.0.2', next: '3.0.2' })],
     [URLS.repo, json(fixture('github-repo.json'))],
     [URLS.ref, json(fixture('github-tag-ref-lightweight.json'))],
     [URLS.compare, json(fixture('github-compare.json'))],
