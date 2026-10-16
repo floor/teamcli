@@ -33,6 +33,27 @@ and pane.
 | LAST ACTIVE | `now` when working, relative age (`2m ago`), or `-` |
 | PANE | the herdr pane, or `-` when not running |
 
+The handle belongs to the seat, not to one run of it. It is minted on the seat's first launch or
+`team add`, and parked in the state's `retained_seats` when the record goes away: `team down` and
+`team remove <seat> --keep` park it, and the next `team up` or `team add <seat>` records the same
+handle again — so a seat that is stopped and started again comes back as itself. A plain
+`team remove <seat>` drops the handle with the record, and the name starts over at its next launch.
+
+## Who may run it
+
+| Caller | May |
+| --- | --- |
+| the owner, from a terminal outside herdr | read the team, and aim the read with `--file` and `--session` |
+| a seat of the team, placed in the file's session, on the pane the state records for it | read the team; a seat the state records no pane for, or records on another pane, fails closed |
+| a pane outside the team that the approved file names in its `delegates` entries | read the team |
+| anyone else | nothing: `team seats: this team is not yours to read`, exit 2 |
+
+`--file` and `--session` aimed by anyone else are refused before any file or session is read, and
+exit 1:
+
+    team seats: --file is the owner's, from a terminal outside herdr; this call is claude-keeper
+    team seats: --session is the owner's, from a terminal outside herdr; this call is claude-keeper
+
 ## Exit codes
 
 | Exit | When |
