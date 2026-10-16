@@ -101,7 +101,14 @@ function registered(
 function teamRecord(
   home: string,
   id: string,
-  team: { project: string; session: string; root: string; roster: { agent: string; seat: string; role: string }[] },
+  team: {
+    project: string;
+    session: string;
+    root: string;
+    // `leads` rides on the entry as the file writes it; a scene that says nothing reads as not
+    // leading, the way a line written before the field existed does.
+    roster: { agent: string; seat: string; role: string; leads?: boolean }[];
+  },
 ): void {
   upsertTeam(home, id, {
     project: team.project,
@@ -109,7 +116,7 @@ function teamRecord(
     session: team.session,
     root: team.root,
     lobby: lobbyDir(home),
-    roster: team.roster,
+    roster: team.roster.map((entry) => ({ ...entry, leads: entry.leads ?? false })),
     lifecycle: 'running',
   });
 }
