@@ -34,7 +34,12 @@ through herdr: the workspace, the launch, and the name.
 
 ## Who may run it
 
-The owner, the orchestrator's seat and the operator's seat. A run with no terminal is refused before the file is read: `team add: only the owner runs this, from a terminal outside herdr`. The seat is that name's, in a session
+The owner, the orchestrator's seat and the operator's seat, and a caller outside herdr whose
+ancestry names a create-grant's `runner` — the record [`team init`](init.md) describes — on a file
+whose root and this call's folder both sit under the paths that record covers, before it expires. A
+run with no terminal is refused before the file is read, unless that record names the caller:
+`team add: only the owner runs this, from a terminal outside herdr`. A seat that leads is not
+granted: the second half of a swap, `add <lead>`, stays the owner's. The seat is that name's, in a session
 this project's state records — the file's session, or one the state records the caller's pane in —
 on the pane the state records for that name in that session: a seat of another session, or a pane
 merely renamed to the orchestrator's or the operator's name, is refused — and so is a seat the state
@@ -163,7 +168,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | ``team add: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team add: <name>: its pane holds a process this record cannot tie to the launch` — the record holds the pane's own shell pid and the CLI's pids, read when the seat was launched; the pane is running neither, and the agent session herdr shows there is not the stored one. Nothing is closed and no second CLI is started in it | 1 |
 | ``team add: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify. A missing record is not a refusal, and neither is a file that differs from a stored copy | 1 |
-| `team add: the approved file has no seat "<name>"` | 1 |
+| `team add: the file has no seat "<name>"` | 1 |
 | `team add: <name> is already running`. When that seat's screen is one the profile does not recognise, the owner is also told `team remove <name> --abandon closes its workspace without typing`; anyone else is told `the owner runs team remove <name> --abandon, which closes its workspace without typing` | 1 |
 | `team add: no launch profile for \`<cli>\` in this version` | 1 |
 | `team add: the approval allows <n> seats; <m> would be running` / `… <n> temporary seats; …` / `… <n> <vendor> seats; …` | 1 |
@@ -302,12 +307,12 @@ claude-beacon-tmp-1: ready
 exit 0
 ```
 
-The seat's name must be one the approved file has, so a name that is not is refused before herdr is
+The seat's name must be one the live file has, so a name that is not is refused before herdr is
 asked anything:
 
 ```console
 $ team add scratch ; echo "exit $?"
-team add: the approved file has no seat "scratch"
+team add: the file has no seat "scratch"
 exit 1
 $ team add --temporary --like claude-beacon --until later ; echo "exit $?"
 team add: --until is result:<path> or merged:<branch>

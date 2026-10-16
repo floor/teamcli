@@ -470,7 +470,8 @@
               "cursor",
               "grok",
               "antigravity",
-              "gemini"
+              "gemini",
+              "muse"
             ]
           },
           "vendor": {

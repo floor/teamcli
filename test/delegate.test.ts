@@ -84,7 +84,6 @@ type Scene = {
   team?: TeamFile;
   file?: string;
   standing?: Standing;
-  copy?: string | null;
   state?: State | null;
   stateError?: string;
   agents?: (session: string) => HerdrAgent[] | null;
@@ -121,7 +120,6 @@ function gate(scene: Scene = {}): DelegateVerdict {
     io: { env: {}, stdinIsTTY: scene.stdinIsTTY ?? true },
     sources: {
       standing: () => standing,
-      approvedCopy: () => (scene.copy === undefined ? file : scene.copy),
       state: () => {
         if (scene.stateError) throw new Error(scene.stateError);
         return scene.state === undefined ? empty : scene.state;
@@ -256,11 +254,11 @@ describe('refusal priority', () => {
   };
 
   test('each earlier refusal wins, and an unlisted command wins over a prohibited flag', () => {
-    expect(refused({ standing: { kind: 'none' }, copy: null, team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-approval');
-    // An unreadable copy and a fingerprint difference are not refusals for `up`. Unreadable
+    expect(refused({ standing: { kind: 'none' }, team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-approval');
+    // A fingerprint difference is not a refusal for `up`: the live file is the record. Unreadable
     // evidence still is, and a prohibited flag still is, after the live file is read.
-    expect(gate({ copy: null, team: drifted })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
-    expect(refused({ copy: null, team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-evidence');
+    expect(gate({ team: drifted })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(refused({ team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-evidence');
     const approved = verified(base, yaml);
     expect(gate({ team: drifted, standing: approved })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
     expect(refused({ team: drifted, standing: approved, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-evidence');
@@ -291,8 +289,6 @@ describe('refusal priority', () => {
   test('the standing text is notInForce, and up reads the live file', () => {
     expect(refused({ standing: { kind: 'none' } }).text).toBe(`delegation needs a verified approval: ${notInForce({ kind: 'none' })}`);
     expect(refused({ standing: { kind: 'legacy' } }).text).toContain(LEGACY_LINE);
-    expect(gate({ copy: 'not a team file' })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
-    expect(refused({ command: 'approve', copy: 'not a team file' }).text).toBe('delegation needs a readable approved copy: run `team approve`');
     expect(gate({ team: drifted, standing: verified(base, yaml) })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
     const delegated = { ...base, delegates: [{ pane: 'other/w1:p1', commands: ['up'] as DelegateCommand[] }] };
     expect(refused({ command: 'approve', team: delegated, standing: verified(base, yaml) }).text).toContain('this change needs the owner');
@@ -421,7 +417,7 @@ describe('commands and flags', () => {
   test('every preflight id of the four commands', () => {
     for (const command of commands) {
       expect(refused({ command, standing: { kind: 'none' } }).id).toBe(`${command}.delegate-approval`);
-      expect(gate({ command, copy: null })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+      expect(gate({ command })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
       const drifted = { ...base, rules: ['changed'] };
       expect(gate({ command, team: drifted, standing: verified(base, yaml) })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
       expect(refused({ command, state: null }).id).toBe(`${command}.delegate-evidence`);
@@ -522,10 +518,10 @@ describe('the approval home', () => {
 
 describe('the exit ids', () => {
   test('lists every refusal of the five commands, the delegated approval\'s own guard included', () => {
-    expect(DELEGATE_EXIT_IDS).toHaveLength(41);
+    expect(DELEGATE_EXIT_IDS).toHaveLength(32);
     expect(DELEGATE_EXIT_IDS).toContain('approve.delegate-not-ordinary');
     expect(DELEGATE_EXIT_IDS).not.toContain('approve.delegate-drift');
-    expect(new Set(DELEGATE_EXIT_IDS).size).toBe(41);
+    expect(new Set(DELEGATE_EXIT_IDS).size).toBe(32);
   });
 });
 

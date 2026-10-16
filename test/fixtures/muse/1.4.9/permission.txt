@@ -1,0 +1,23 @@
+    h, web_search, work_list, work_status, work_stop,
+     workflow, write_file, write_todos
+
+❯ Touch file
+
+◆ Ran 16 commands · ✗ 16 failed · 0s · ctrl+o
+
+◆ Test session
+
+❯ Create file
+
+◇ Calling tools (22s · esc to interrupt)
+
+── Voice input (⌥ + v to start) ─────────────────────
+Would you like to run the following command?
+
+  $ touch .agents/test.txt
+
+⟩ 1. Yes, proceed (y)
+  2. No, and tell Muse Code what to do differently (e
+Change approval defaults in /permissions
+─────────────────────────────────────────────────────
+  muse-wonder-1.0 · high · …/muse-ws · Ask me

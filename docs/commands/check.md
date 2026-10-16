@@ -5,7 +5,12 @@ It reads the team file, the approval, the state and herdr, and changes nothing â
 needed, so it answers as well in a plain folder as in a repository. Where [`team status`](status.md)
 says what the team is, the check says what to act on: the differences alone, each with its repair.
 It is also the old name of [`team commits check`](commits.md) and [`team pr check`](pr.md), still
-read through 0.3.3.
+read through 0.3.3. A `<ref>` (a range when it holds `..`, passed to git as given, otherwise that
+one commit) runs that older reading, as do `--pr <file>` (check a pull request's body as well;
+`-` reads standard input) and `--since <ref>` (skip that commit and everything reachable from
+it). `--file` is read by both readings; `--session` is this one's alone, and the older one meets
+it with `team check: unknown option --session` and exit 2. A run of the older reading says once
+on stderr which command now holds it, and `--pr` adds its own line.
 
 ## Synopsis
 
@@ -24,7 +29,7 @@ read through 0.3.3.
 | --- | --- |
 | the owner, from a terminal outside herdr | check the team; an owner without a terminal is not this caller |
 | a seat of the team being checked | the same answer, placed in the file's session, on the pane the state records for it |
-| a pane outside the team that the approved file names in its `delegates` entries | the same gate the changing commands use, minus the command list and the audit line: the check is a read, not an act |
+| a pane outside the team that the live file names in its `delegates` entries | the same gate the changing commands use, minus the command list and the audit line: the check is a read, not an act |
 | anyone else | nothing: the fixed sentence `team check: this team is not yours to check`, whatever failed underneath |
 
 Aimed by a caller that passes the gate but is not the owner, `--file` and `--session` meet the

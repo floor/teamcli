@@ -8,7 +8,7 @@ import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/iden
 import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { usesLauncher } from '../launch/line.ts';
 import type { SeatState, SessionState } from '../state.ts';
-import { readScreen } from '../watch/screen.ts';
+import { readScreen, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
@@ -24,7 +24,7 @@ export type Live = {
 
 export type Row = { name: string; id?: string; state: string; model: string; pane: string; stored?: string; start_cwd?: string };
 
-/** The repair of the one precondition `status` knows: the file is not the approved one. The
+/** The repair of the one precondition `status` knows: the file's approval is not in force. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
 export const APPROVAL_REPAIR = 'the live file is what the commands read';
 
@@ -32,7 +32,7 @@ export const APPROVAL_REPAIR = 'the live file is what the commands read';
  * One disagreement, with the two facts about its repair that the renderer needs and must not
  * re-derive from the repair's wording, both set where the difference is created:
  *
- * - `needs`: the repair names a command that refuses while the file is not the approved one.
+ * - `needs`: the repair names a command that refuses while no approval is in force.
  *   Confirmed from the commands themselves: `team up` (`up.ts`), `team add` (`add.ts`), and
  *   `team worktree` (`worktree.ts`) each refuse on the standing before they do anything. Such a
  *   repair waits for `APPROVAL_REPAIR`, and is printed with `(after: …)` while the approval
@@ -102,8 +102,27 @@ export function orderAndAnnotateDifferences(differences: Difference[]): Differen
   return [...approval, ...rest];
 }
 
+/** The account a seat's budget counts against: its own `account:`, its vendor when it names
+ *  none — the resolution every counting rule uses (RFC 0003 § 3b). Null when neither says, and a
+ *  mark then leaves the pool out. */
+function accountOf(seat: Seat | undefined): string | null {
+  const account = seat?.account ?? seat?.vendor ?? '';
+  return account === '' ? null : account;
+}
+
+/** The mark a quiet seat's screen earns for a usage limit: the CLI's own limit screen, named for
+ *  the pool the seat spends and the reset time the screen gives, when it gives one. Null for
+ *  every other screen. */
+function limitMark(seat: Seat | undefined, screen: Screen): string | null {
+  if (screen.kind !== 'rate limit') return null;
+  const account = accountOf(seat);
+  const on = account === null ? '' : ` on ${account}`;
+  return screen.reset === null ? ` (rate limit${on})` : ` (rate limit${on}, resets at ${screen.reset})`;
+}
+
 // Compares the file and the state with the live session. Pure: every input is handed in.
-// `watch` is the watch values in force — the approved ones — so an unapproved edit can't move a verdict.
+// `watch` is the watch values in force — the live file's under a verified standing, the defaults
+// under none — so the verdict reads one object.
 export function compare(
   team: TeamFile,
   session: string,
@@ -215,7 +234,8 @@ export function compare(
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
-      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : '';
+      const limit = quiet ? limitMark(seat, screen) : null;
+      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : limit ?? '';
       const stateText = `${agent.status}${mark}${seat.parked ? ', parked' : ''}`;
       rows.push({
         name: seat.name,
@@ -403,10 +423,12 @@ export function compare(
       const quiet = agent.status === 'idle' || agent.status === 'done';
       const tempScreen = readScreen(likeCli, live.screens[agent.pane]);
       const unread = quiet && tempScreen.kind === 'unknown';
+      // The pool a temporary seat spends is the like-seat's, as its cli and model string are.
+      const limit = quiet ? limitMark(likeSeat, tempScreen) : null;
       rows.push({
         name,
         ...idField,
-        state: `${agent.status}${unread ? ' (screen not recognised)' : ''}, temporary`,
+        state: `${agent.status}${unread ? ' (screen not recognised)' : limit ?? ''}, temporary`,
         model: tempModel,
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),

@@ -99,7 +99,7 @@ export type TeamObservation = {
   known: Set<string>;
   // The seats that count as the team's workers (not the leads, not parked), and their idle flag.
   workers: { idle: boolean }[];
-  // How the file differs from the approved one: [] none, null never approved, undefined unlooked.
+  // How the file differs from the last approval: [] none, null never approved, undefined unlooked.
   approval: string[] | null | undefined;
   // The one-line case when no verified approval is in force and the record says why — a legacy
   // record, or one the verification refused. The watch itself has said it; the check stays silent.
@@ -163,7 +163,8 @@ export const CHECK_NAMES = [
 ] as const;
 
 // The checks the file cannot turn off (RFC 0002 § 4.2): the four whose condition is the one thing
-// the watch exists for. The schema refuses them in `watch.checks`, and so does `team approve`.
+// the watch exists for. The schema refuses them in `watch.checks`, and the pass runs them
+// whatever the list says.
 export const ALWAYS_ON: readonly string[] = ['attention', 'missing', 'model-drift', 'approval'];
 
 /** A duration in whole minutes, as the report texts write it. */

@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { budgetsInForce, watchInForce } from '../../src/approve/approval.ts';
 import { standingSource } from '../../src/commands/status.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
-import { approvedCopy } from '../../src/store/store.ts';
 import type { AddSources } from '../../src/commands/add.ts';
 import type { CheckSources } from '../../src/check/team.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
@@ -123,6 +122,12 @@ const RELEASE_ANSWERS: Record<string, Attempt> = {
     kind: 'http',
     status: 200,
     body: JSON.stringify({ attestations: [{ predicateType: 'https://slsa.dev/provenance/v1' }] }),
+  },
+  // The page's material example warns: its `next` tag is a patch behind `latest`.
+  'https://registry.npmjs.org/-/package/material/dist-tags': {
+    kind: 'http',
+    status: 200,
+    body: JSON.stringify({ latest: '3.0.2', next: '3.0.1' }),
   },
   'https://api.github.com/repos/floor/material': { kind: 'http', status: 200, body: JSON.stringify({ full_name: 'floor/material', default_branch: 'main' }) },
   'https://api.github.com/repos/floor/material/git/ref/tags/v3.0.2': {
@@ -704,7 +709,6 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         // real herdr or a real store.
         gate: {
           standing: standingSource(home),
-          approvedCopy: (root) => approvedCopy(root, home),
           state: (dir) => readState(dir),
           agents: () => (herdr === 'running' ? agents() : []),
           sessionRunning: () => (herdr === 'none' ? null : herdr === 'running'),

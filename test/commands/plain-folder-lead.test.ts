@@ -16,7 +16,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { readState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-12T21:00:00Z');
 const SESSION = 'acme-web';
@@ -84,7 +84,7 @@ seats:
 `;
 }
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 function approve(home: string, root: string, text: string): string {
   const file = join(root, '.agents', 'team.yaml');

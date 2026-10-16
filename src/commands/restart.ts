@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
-import { approvalDifferencesOf, budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
+import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -24,7 +24,6 @@ import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
-import { validateTeamFile } from '../file/validate.ts';
 import {
   agentList,
   agentRename,
@@ -60,6 +59,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
+import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -181,25 +181,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
     return callerRefused(out, notInForce(standing));
   }
-  let approvedTeam: TeamFile;
-  let ceilings: Ceilings;
-  if (standing.kind === 'none') {
-    approvedTeam = team;
-    ceilings = ceilingsOf(team);
-  } else {
-    const differences = approvalDifferencesOf(standing, team);
-    if (differences.length > 0 && caller.kind !== 'owner') {
-      return callerRefused(out, `the file is not the approved one (${differences.join('; ')}): the owner runs team up`);
-    }
-    const parsedApproved = validateTeamFile(standing.record.file, { home: sources.home, root });
-    if (!parsedApproved.ok) {
-      return callerRefused(out, 'the approved copy can\'t be read');
-    }
-    approvedTeam = caller.kind === 'owner' ? team : parsedApproved.team;
-    ceilings = standing.record.approval.ceilings;
-  }
+  // The live file is the record: the roster, the ceilings and the grant all read from it, and a
+  // file that changed since the last approval is not a refusal.
+  const ceilings = ceilingsOf(team);
 
-  const mayChange = mayChangeTeamVerdict(caller, approvedTeam, standingOf(dir, session, caller));
+  const mayChange = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
   if (mayChange.kind === 'no-pane') return callerRefused(out, noPaneRefusal(mayChange.name));
   if (mayChange.kind === 'another-pane') return callerRefused(out, anotherPaneRefusal(mayChange.name, mayChange.recordedPane));
   if (mayChange.kind === 'refused') {
@@ -212,14 +198,14 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     return selfRefused(out, caller.name);
   }
 
-  const declared = approvedTeam.seats.find((seat) => seat.name === name);
+  const declared = team.seats.find((seat) => seat.name === name);
   if (recordedSeat?.temporary && !declared) {
     return temporaryRefused(out, name, recordedSeat.temporary.like);
   }
   if (!declared) {
     return unknownRefused(out, name);
   }
-  if (abandon && caller.kind !== 'owner' && (name === approvedTeam.orchestrator || name === approvedTeam.operator)) {
+  if (abandon && caller.kind !== 'owner' && (name === team.orchestrator || name === team.operator)) {
     return leadRefused(out, describeCaller(caller));
   }
   if (declared.stopped) {
@@ -246,15 +232,15 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (!profile) {
     return notReadyRefused(out, `no launch profile for \`${plainLine(declared.cli)}\` in this version`);
   }
-  for (const problem of placedProblems(approvedTeam, root, sources.home)) {
+  for (const problem of placedProblems(team, root, sources.home)) {
     return notReadyRefused(out, problem.message);
   }
-  const start = seatStart(approvedTeam, declared, root, sources.home);
+  const start = seatStart(team, declared, root, sources.home);
   if ('problem' in start) {
     return notReadyRefused(out, start.problem);
   }
-  const doctorTeam = { ...approvedTeam, seats: [declared] };
-  for (const finding of doctorFindings(doctorTeam, root, dir, session, sources.doctor, [], standing, approvedTeam)) {
+  const doctorTeam = { ...team, seats: [declared] };
+  for (const finding of doctorFindings(doctorTeam, root, dir, session, sources.doctor, [], standing, team)) {
     if (blocksLaunch(finding)) {
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
       if (finding.text.includes(' is read at start by ')) continue;
@@ -263,15 +249,15 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   }
   const samples: SwapSample[] = [];
   const machineNow = sources.machine?.(root);
-  const machineProblem = machineNow ? launchLimit(machineNow, approvedTeam.machine, samples, sources.now().getTime()) : null;
+  const machineProblem = machineNow ? launchLimit(machineNow, team.machine, samples, sources.now().getTime()) : null;
   if (machineProblem) return notReadyRefused(out, machineProblem);
 
   const remainingAgents = agents.filter((agent) => agent.name !== name);
-  const runningSeats = runningOf(remainingAgents, approvedTeam, recordedSession);
+  const runningSeats = runningOf(remainingAgents, team, recordedSession);
   const room = ceilingProblem(ceilings, runningSeats, declared);
   if (room) return notReadyRefused(out, room);
 
-  const budgets = budgetsInForceOf(standing, approvedTeam);
+  const budgets = budgetsInForceOf(standing, team);
   const budgetDecision = (sources.seatBudget ?? seatBudget)(
     budgets,
     loadReadings(dir),
@@ -284,7 +270,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   }
 
   const liveRules = standing.kind !== 'verified' || caller.kind === 'owner';
-  const planSeat = buildUpSeat(standing, approvedTeam, declared, start, root, sources.home, liveRules);
+  const planSeat = buildUpSeat(standing, team, declared, start, root, sources.home, liveRules);
   if (dry) {
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
@@ -364,6 +350,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         delete current.seats[name];
       });
       if (priorPane) forgetLaunchedPane(sources.home, priorPane, session);
+      // The old pane is closed: the seat's agent is stopped until the relaunch below re-points it.
+      const ended = registerEnd({ home: sources.home, team, root, by: who, session }, name, 'stopped');
+      if (ended) logLine(dir, 'restart', who, ended.note, sources.now());
     }
 
     const records = progressWriter({ stdout: io.stdout, stderr: io.stderr, isTTY: io.stdoutIsTTY ?? false });
@@ -377,7 +366,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const host = hostOf({
       dir,
       session,
-      team: approvedTeam,
+      team: team,
       root,
       home: sources.home,
       ceilings,
@@ -388,7 +377,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       launch: sources.upLaunch,
       readMachine: sources.machine,
       samples,
-      limits: approvedTeam.machine,
+      limits: team.machine,
       io: out,
       standing,
       teamFile: path,
@@ -522,12 +511,12 @@ function runningOf(agents: readonly HerdrAgent[], team: TeamFile, state: Session
 function ceilingProblem(ceilings: Ceilings, running: readonly Running[], seat: Seat): string | null {
   if (running.some((item) => item.name === seat.name)) return null;
   if (running.length + 1 > ceilings.seats) {
-    return `the approval allows ${ceilings.seats} seats; ${running.length + 1} would be running`;
+    return `the file allows ${ceilings.seats} seats; ${running.length + 1} would be running`;
   }
   const cap = ceilings.vendors[seat.vendor];
   if (cap !== undefined) {
     const vendors = running.filter((item) => item.vendor === seat.vendor || item.vendor === 'unknown').length + 1;
-    if (vendors > cap) return `the approval allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
+    if (vendors > cap) return `the file allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
   }
   return null;
 }
@@ -704,6 +693,16 @@ function hostOf(input: {
       if (patch.pane) {
         if (replaced) forgetLaunchedPane(input.home, replaced, session);
         noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
+        // The registry: a relaunch keeps the seat's agent and re-points it to the new pane.
+        if (name === seat.name) {
+          const made = registerLaunch(
+            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
+            seat,
+            patch.pane,
+            readState(dir).sessions[session]?.seats[name]?.id,
+          );
+          if ('note' in made) logLine(dir, 'restart', input.caller, made.note, input.now());
+        }
       }
     },
     running(name) {
@@ -727,6 +726,10 @@ function hostOf(input: {
         delete current.seats[name];
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
+      if (name === seat.name) {
+        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, 'stopped');
+        if (ended) logLine(dir, 'restart', input.caller, ended.note, input.now());
+      }
     },
     say: (line) => input.io.stderr(plainText(line)),
     progress: (name, state) => records.progress(name, state),

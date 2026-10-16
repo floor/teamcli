@@ -10,7 +10,7 @@ writes nothing.
 
     team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]
     team worktree list [--session <name>] [--file <path>]
-    team worktree remove <task> [--session <name>] [--file <path>]
+    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]
 
     Ignored files in the worktree are deleted with it.
 
@@ -21,11 +21,12 @@ writes nothing.
 | `<task>` | — | one path segment: letters, digits, `.`, `_`, `-`, starting with a letter or a digit |
 | `--kind` | `<kind>` | fills `{kind}` in `workspace.branch`; required when the pattern holds it, refused when it doesn't |
 | `--seat` | `<name>` | records a declared seat in the worktree's record |
+| `--branch` | `<name>` | `remove` only: the branch the worktree must be on; any other is refused |
 | `--session` | `<name>` | the session the caller is judged in, instead of the team's own; `new` and `remove` read and write that session; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
-`remove` takes no `--kind` and no `--seat`. `list` takes no task, no `--kind` and no `--seat`.
+`remove` takes no `--kind` and no `--seat`. `new` and `list` take no `--branch`. `list` takes no task, no `--kind` and no `--seat`.
 
 ## Who may run it
 
@@ -41,7 +42,7 @@ writes nothing.
 | --- | --- | --- |
 | the worktree was created | its folder, on stdout | 0 |
 | the recorded worktrees were listed | `<n> open, limit <limit> (workspace.limit)`, then one line per record: `<task> session <session> seat <seat> <path> folder exists`. No seat when the record has none. A missing folder ends the line `folder gone; team worktree remove <task>` | 0 |
-| the worktree was removed | `removed <task>; the branch <branch> is kept` | 0 |
+| the worktree was removed | `removed <task>; the branch <branch> is kept`, the branch the worktree is on — read from git, not from the state record | 0 |
 | `new` created the worktree and `workspace.setup` failed | its folder, then `team worktree: setup failed on command <n> of <m>; the worktree is kept and recorded as setup: failed` | 1 |
 | the run was refused | `team worktree: <reason>` | 1 |
 | the invocation can't be read | `team worktree: <problem>` and the usage | 2 |

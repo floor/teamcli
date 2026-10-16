@@ -17,13 +17,13 @@ import type { Key } from '../../src/launch/terminal.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { defaultFs } from '../../src/lobby/gate.ts';
 import { readScreen, type Screen } from '../../src/watch/screen.ts';
-import { agyMismatchedFrame, claudeBox, testIo } from '../helpers.ts';
+import { agyMismatchedFrame, CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 const FILE = ['--file', '.agents/team.yaml'];
 const NOW = new Date('2026-10-03T14:02:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 // The captured Codex home names Terra 5.6. The example file says GPT Sol 6, so a launch test
 // that should get past the model check shows the file's model on that same status row.
@@ -1846,22 +1846,39 @@ describe('team up, live', () => {
     expect(io.err).not.toContain('herdr session delete');
   });
 
-  test("the approval's ceilings are enforced, not the file's limits", async () => {
-    await approve();
-    // The approval fixed fewer seats than the file allows: the record is written again, signed,
-    // with its own ceilings — as the owner's earlier approval of a smaller team reads today.
-    const record = readApproval(store());
-    if (!record) throw new Error('approval');
-    writeApproval(store(), {
-      approval: { ...record.approval, ceilings: { ...record.approval.ceilings, seats: 1 } },
-      file: record.file,
-    }, [], home);
+  test.each([
+    { name: 'a lower seat limit', stored: { seats: 6, vendor: 3 }, live: { seats: 1, vendor: 3 }, count: 1, refusal: 'the file allows 1 seats; 2 would be running' },
+    { name: 'a higher seat limit', stored: { seats: 1, vendor: 3 }, live: { seats: 6, vendor: 3 }, count: 3, refusal: null },
+    { name: 'a seat limit without a record', stored: null, live: { seats: 1, vendor: 3 }, count: 1, refusal: 'the file allows 1 seats; 2 would be running' },
+    { name: 'a lower vendor limit', stored: { seats: 6, vendor: 3 }, live: { seats: 6, vendor: 1 }, count: 2, refusal: 'the file allows 1 deepseek seats; 2 would be running' },
+    { name: 'a higher vendor limit', stored: { seats: 6, vendor: 1 }, live: { seats: 6, vendor: 3 }, count: 3, refusal: null },
+    { name: 'a vendor limit without a record', stored: null, live: { seats: 6, vendor: 1 }, count: 2, refusal: 'the file allows 1 deepseek seats; 2 would be running' },
+  ])('up follows the live file: $name', async ({ stored, live, count, refusal }) => {
+    const path = join(root, '.agents/team.yaml');
+    const fileWith = (limits: { seats: number; vendor: number }) => makeExample(base, root)
+      .replace('~/.config/team/lobby', join(home, '.config/team/lobby'))
+      .replace('  seats: 6 ', `  seats: ${limits.seats} `)
+      .replace('deepseek: 3', `deepseek: ${limits.vendor}`);
+    if (stored) {
+      writeFileSync(path, fileWith(stored));
+      await approve();
+    }
+    writeFileSync(path, fileWith(live));
+    const before = readApproval(store());
     const made = world();
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
-    expect(code).toBe(1);
-    expect(made.creates.filter((label) => label !== 'watchdog')).toEqual(['claude-coordinator-acme · project coordinator']);
-    expect(io.out).toContain('the approval allows 1 seats; 2 would be running');
+    expect(code, io.err + io.out).toBe(refusal ? 1 : 0);
+    const names = ['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2'];
+    const labels = ['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer'];
+    expect(made.creates.filter((label) => label !== 'watchdog')).toEqual(labels.slice(0, count));
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+    for (const name of names.slice(0, count)) expect(seats[name]?.stage, name).toBe('ready');
+    for (const name of names.slice(count)) expect(seats[name]?.stage, name).not.toBe('ready');
+    if (refusal) expect(io.out).toContain(refusal);
+    else expect(io.out).not.toContain('the file allows');
+    expect(readFileSync(path, 'utf8')).toBe(fileWith(live));
+    expect(readApproval(store())).toEqual(before);
   });
 
   test('a machine past the file refuses before any server starts', async () => {

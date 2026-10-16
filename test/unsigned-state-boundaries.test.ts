@@ -19,12 +19,12 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo, type TestIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, type TestIo } from './helpers.ts';
 import type { Machine } from '../src/watch/machine.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const owner = { kind: 'owner' } as const;
 
 let base: string;
@@ -308,7 +308,7 @@ describe('a live agent the file does not declare', () => {
       workspaces: () => [{ id: 'w1' }, { id: 'w2' }],
     }));
     expect(code).toBe(1);
-    expect(io.err).toContain('the approval allows 2 seats; 3 would be running');
+    expect(io.err).toContain('the file allows 2 seats; 3 would be running');
   });
 });
 
@@ -326,24 +326,21 @@ describe('worktree remove and the recorded branch', () => {
     approveWorktree();
   });
 
-  test('a branch that does not fill the approved pattern removes nothing', async () => {
+  test('a recorded branch that fills no pattern is a hint: the branch read from git is the one named', async () => {
     expect((await run(['new', 'select-width', '--kind', 'fix'])).code).toBe(0);
     git(project, 'push', '-q', 'origin', 'fix/select-width');
     const dir = join(project, '.agents');
     // The project root sits inside `home`, so the approved `../worktrees/{repo}/{task}` resolves
     // beside it there.
     const folder = join(home, 'worktrees', 'acme', 'select-width');
-    // The kinds, in order: not a slug, empty, and one that belongs to another task.
-    for (const branch of ['-fix/select-width', '/select-width', 'fix/other-task']) {
-      updateState(dir, (state) => {
-        const work = state.sessions.acme?.worktrees['select-width'];
-        if (work) work.branch = branch;
-      });
-      const io = await run(['remove', 'select-width']);
-      expect(io.code).toBe(1);
-      expect(io.err).toContain(`the recorded branch "${branch}" does not match "{kind}/{task}" for "select-width"`);
-      expect(existsSync(folder)).toBe(true);
-    }
-    expect(readState(dir).sessions.acme?.worktrees['select-width']?.branch).toBe('fix/other-task');
+    updateState(dir, (state) => {
+      const work = state.sessions.acme?.worktrees['select-width'];
+      if (work) work.branch = '/select-width';
+    });
+    const io = await run(['remove', 'select-width']);
+    expect(io.code).toBe(0);
+    expect(io.out).toContain('removed select-width; the branch fix/select-width is kept');
+    expect(existsSync(folder)).toBe(false);
+    expect(readState(dir).sessions.acme?.worktrees['select-width']).toBeUndefined();
   });
 });

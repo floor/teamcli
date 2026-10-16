@@ -14,7 +14,9 @@ export const USAGE = `Usage: team release check <package@version> [--json] [--fi
 
 Checks the public npm and GitHub records of one release: the exact version and
 its checksums (with provenance when the file declares trusted publishing), the
-tag, the release, and the changelog entry. With the file's linear pair, the
+tag, the release, and the changelog entry. Warns when npm's next dist-tag points
+at a version older than latest, naming the npm command that catches it up and
+running nothing itself. With the file's linear pair, the
 Linear milestone and a qualifying status update (one read-only request, its key
 read from the Keychain and sent in one header, nowhere else); with the activity
 pair, the release marker in the public activity file.
@@ -110,13 +112,15 @@ function present(result: ReleaseResult): (keyof ReleaseResult)[] {
   return ORDER.filter((check) => result[check] !== undefined);
 }
 
-// One JSON object and nothing else: the three keys in order, each check on one line.
+// One JSON object and nothing else: the three keys in order, each check on one line, and the
+// one warning as a fourth key when the run has one.
 function jsonResult(name: string, version: string, result: ReleaseResult): string {
   const lines = present(result).map((check) => {
     const { status, detail } = result[check] as Outcome;
     return `    ${JSON.stringify(check)}: { "status": ${JSON.stringify(status)}, "detail": ${JSON.stringify(detail)} }`;
   });
-  return `{\n  "package": ${JSON.stringify(name)},\n  "version": ${JSON.stringify(version)},\n  "checks": {\n${lines.join(',\n')}\n  }\n}\n`;
+  const warning = result.warning === undefined ? '' : `,\n  "warning": ${JSON.stringify(result.warning)}`;
+  return `{\n  "package": ${JSON.stringify(name)},\n  "version": ${JSON.stringify(version)},\n  "checks": {\n${lines.join(',\n')}\n  }${warning}\n}\n`;
 }
 
 function table(result: ReleaseResult): string {
@@ -129,5 +133,6 @@ function table(result: ReleaseResult): string {
   ];
   const first = Math.max(...rows.map((row) => (row[0] as string).length));
   const second = Math.max(...rows.map((row) => (row[1] as string).length));
-  return `${rows.map((row) => `${(row[0] as string).padEnd(first)}  ${(row[1] as string).padEnd(second)}  ${row[2]}`).join('\n')}\n`;
+  const warning = result.warning === undefined ? '' : `warn  ${result.warning}\n`;
+  return `${rows.map((row) => `${(row[0] as string).padEnd(first)}  ${(row[1] as string).padEnd(second)}  ${row[2]}`).join('\n')}\n${warning}`;
 }

@@ -24,7 +24,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { claudeBox, testIo, type TestIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, testIo, type TestIo } from '../helpers.ts';
 
 const SESSION = 'acme-web';
 const OTHER = 'other-web';
@@ -589,7 +589,7 @@ for (const command of COMMANDS) {
         // probe-seat is not in the file. That refusal comes before trust or the approval record.
         expect(run.code).toBe(1);
         expect(run.out).toBe('');
-        expect(run.err).toBe('team add: the approved file has no seat "probe-seat"\n');
+        expect(run.err).toBe('team add: the file has no seat "probe-seat"\n');
         expect(run.err).not.toContain('never approved');
         expect(readFileSync(file, 'utf8')).toBe(run.before);
         return;
@@ -607,7 +607,7 @@ for (const command of COMMANDS) {
       if (command.name === 'add') {
         expect(run.code).toBe(1);
         expect(run.out).toBe('');
-        expect(run.err).toBe('team add: the approved file has no seat "probe-seat"\n');
+        expect(run.err).toBe('team add: the file has no seat "probe-seat"\n');
         expect(run.err).not.toContain('never approved');
         return;
       }
@@ -1188,7 +1188,7 @@ describe('remove and a record that is not in force', () => {
 // The idle screen a launched seat shows: what `up` reads to call it ready. Each CLI's own —
 // `readScreen` classifies by the seat's CLI, so the codex seat gets the codex fixture, with its
 // composer line naming the model and version the team file declares.
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const CODEX_IDLE = readFileSync(new URL('../fixtures/codex/0.157.0/idle.txt', import.meta.url), 'utf8').replace(
   'GPT-5.6-Terra medium ·',
   'GPT-6-Sol medium ·',
