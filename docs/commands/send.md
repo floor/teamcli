@@ -109,12 +109,13 @@ needs no caller check.
 | --- | --- |
 | the owner | any agent |
 | an orchestrator | an orchestrator, in any team |
+| a team's orchestrator or operator | any seat of its own team |
 | an assistant seat | its entity's main coordinator |
 | any seat | its own team's orchestrator |
 | a caller an owner-signed grant names for `send` | what the grant names |
 
-An orchestrator has no other reach: a send to a seat of its own team is refused like any other
-pair the table does not list, and needs an owner-signed grant naming it.
+A team's leads brief its own seats directly; another team's seats are reached through that team's
+orchestrator, or by an owner-signed grant naming the pair.
 
 An owner-signed grant is a record in the owner's grants folder (`~/.config/team/grants/`, the
 same folder the standing create-grants live in), naming the pair it admits and when it stops:

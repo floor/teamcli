@@ -52,6 +52,7 @@ export type SendSide = Agent | SendSeat;
 export const RULE_SUMMARY = [
   'the owner',
   'an orchestrator to another orchestrator',
+  "an orchestrator or operator to a seat of its own team",
   "an assistant seat to its entity's coordinator",
   "a seat to its own team's orchestrator",
   'an owner-signed grant naming send',
@@ -72,10 +73,15 @@ export function admitSend(caller: SendSide | 'owner', target: SendSide, teams: A
   const targetOrchestrator = orchestratorSeat(targetTeam);
 
   // An orchestrator writes to an orchestrator, in any team: the pair that carries work between
-  // teams. The design admits no other orchestrator-to-seat reach — a seat of the caller's own
-  // team included — so nothing here names one.
+  // teams.
   if (seatOf(caller) === orchestratorSeat(callerTeam) && seatOf(target) === targetOrchestrator) {
     return { ok: true, rule: 'an orchestrator to another orchestrator' };
+  }
+  // The team's own leads brief its seats: the orchestrator, or the operator, to any seat of the
+  // same team. Never across teams: another team's seats are reached through its orchestrator.
+  const leadsOwnTeam = seatOf(caller) === orchestratorSeat(callerTeam) || roleOf(caller, callerTeam) === 'operator';
+  if (callerTeam !== undefined && targetTeam === callerTeam && leadsOwnTeam) {
+    return { ok: true, rule: 'an orchestrator or operator to a seat of its own team' };
   }
   // An assistant writes to the coordinator of its own entity: the seat above the entity's teams.
   if (roleOf(caller, callerTeam) === 'assistant' && onMainCoordinator(target, callerTeam?.entity, teams)) {
