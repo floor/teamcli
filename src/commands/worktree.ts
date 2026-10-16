@@ -36,7 +36,7 @@ type Run = { code: number; stdout: string; stderr: string };
 
 export const USAGE = `Usage: team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]
        team worktree list [--session <name>] [--file <path>]
-       team worktree remove <task> [--session <name>] [--file <path>]
+       team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]
 Ignored files in the worktree are deleted with it.
 `;
 
@@ -44,7 +44,7 @@ export const worktree: Command = (argv, io) => runWorktree(argv, io, realSources
 export default worktree;
 
 export async function runWorktree(argv: string[], io: Io, sources: WorktreeSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['kind', 'seat', 'session', 'file'], []);
+  const args = readArgs(argv, ['kind', 'seat', 'session', 'file', 'branch'], []);
   const sub = args.rest[0];
   const task = args.rest[1];
   if (args.error) {
@@ -76,6 +76,11 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   if ((sub === 'remove' || sub === 'list') && (args.values.kind || args.values.seat)) {
     io.stderr(`team worktree: ${sub} takes no --kind or --seat\n${USAGE}`);
     // exit: worktree.remove-flags
+    return 2;
+  }
+  if (sub !== 'remove' && args.values.branch !== undefined) {
+    io.stderr(`team worktree: ${sub} takes no --branch\n${USAGE}`);
+    // exit: worktree.branch-flags
     return 2;
   }
 
@@ -174,7 +179,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   // `list` is the only subcommand that arrives without a task; the gate above already returned.
   const named = task ?? '';
   if (sub === 'new') return create(io, sources, reading, root, dir, session, named, args.values.kind, args.values.seat, who);
-  return removeWorktree(io, sources, reading, root, dir, session, named, who);
+  return removeWorktree(io, sources, reading, root, dir, session, named, args.values.branch, who);
 }
 
 // The counted entries, and nothing else: no lock, no state write, no log line. The same rows
@@ -344,7 +349,8 @@ function create(
 }
 
 export function removeWorktree(
-  io: Io, sources: WorktreeSources, team: TeamFile, root: string, dir: string, session: string, task: string, who: string,
+  io: Io, sources: WorktreeSources, team: TeamFile, root: string, dir: string, session: string, task: string,
+  branch: string | undefined, who: string,
 ): number {
   const named = taskProblem(task);
   if (named) {
@@ -392,11 +398,17 @@ export function removeWorktree(
       refused = `the recorded path ${JSON.stringify(record.path)} is not ${JSON.stringify(expectedFolder)}; nothing was removed`;
       return false;
     }
-    if (!matchesBranchPattern(team.workspace.branch, task, record.branch, team.workspace.base)) {
-      refused = `the recorded branch ${JSON.stringify(record.branch)} does not match ${JSON.stringify(team.workspace.branch)} for ${JSON.stringify(task)}; nothing was removed`;
+    // The branch the worktree itself is on, read from git's own list — not derived from
+    // `workspace.branch`: a branch renamed in place is still the one that must hold nothing
+    // unpublished, and the one the message names as kept. The list has no branch for a detached
+    // HEAD, and none at all for a folder it does not name; the record's branch stands for it
+    // then, as it always did. `--branch` asserts the name and refuses on any other.
+    const real = listedBranch(root, absolute) ?? record.branch;
+    if (branch !== undefined && branch !== real) {
+      refused = `--branch ${JSON.stringify(branch)} does not name the branch this worktree is on (${JSON.stringify(real)}); nothing was removed`;
       return false;
     }
-    const unpublished = commitsOnNoRemote(root, absolute, record.branch, team.workspace.base);
+    const unpublished = commitsOnNoRemote(root, absolute, real, team.workspace.base);
     if (unpublished.length) {
       refused = `commits on no remote branch:\n${list(unpublished)}`;
       return false;
@@ -408,7 +420,7 @@ export function removeWorktree(
     }
     delete found.session.worktrees[task];
     writeAtomic(join(dir, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`);
-    return record.branch;
+    return real;
   });
   if (refused || removed === false) {
     io.stderr(`team worktree: ${refused ?? 'nothing was removed'}\n`);
@@ -417,6 +429,7 @@ export function removeWorktree(
     // exit: worktree.occupied
     // exit: worktree.unreadable
     // exit: worktree.dirty
+    // exit: worktree.remove-branch
     // exit: worktree.unpublished
     // exit: worktree.remove-failed
     return 1;
@@ -514,31 +527,37 @@ function startPoint(root: string, base: string): { ref: string; note?: string } 
   return { ref: remote };
 }
 
-function matchesBranchPattern(pattern: string, task: string, branch: string, base: string | null): boolean {
-  if (!branch || (base !== null && branch === base)) return false;
-  if (!pattern.includes('{kind}')) {
-    const expected = fillPattern(pattern, { task });
-    return expected !== null && branch === expected;
+// The branch a worktree is on, as git's own list answers it: the entry whose folder is this one,
+// and its ref. `null` is the list's answer that the folder's HEAD is detached, `undefined` that
+// the list does not name the folder; the caller falls back to the record's branch for both.
+function listedBranch(root: string, absolute: string): string | null | undefined {
+  const listed = git(root, ['worktree', 'list', '--porcelain']);
+  if (listed.code !== 0) return undefined;
+  const want = realPath(absolute);
+  for (const block of listed.stdout.split('\n\n')) {
+    const lines = block.split('\n').filter((line) => line !== '');
+    const head = lines[0] ?? '';
+    if (!head.startsWith('worktree ') || realPath(head.slice('worktree '.length)) !== want) continue;
+    const ref = lines.find((line) => line.startsWith('branch '));
+    if (!ref) return null;
+    const name = ref.slice('branch '.length);
+    return name.startsWith('refs/heads/') ? name.slice('refs/heads/'.length) : null;
   }
-  const token = '\0';
-  const templated = fillPattern(pattern, { task, kind: token });
-  if (templated === null) return false;
-  const parts = templated.split(token);
-  const first = parts[0] ?? '';
-  const last = parts[parts.length - 1] ?? '';
-  if (!branch.startsWith(first) || !branch.endsWith(last) || branch.length <= first.length + last.length) {
-    return false;
-  }
-  const rest = branch.slice(first.length, branch.length - last.length);
-  const kind = parts.length === 2 ? rest : rest.split(parts[1] ?? '')[0] ?? '';
-  if (taskProblem(kind) !== null) return false;
-  return fillPattern(pattern, { task, kind }) === branch;
+  return undefined;
 }
 
-// The recorded branch and whatever HEAD the worktree has checked out. A detached HEAD, or
-// another branch, is not the recorded branch; removing the folder drops that reflog, so a commit
-// that lives only there is named and the folder stays. With no remote-tracking refs, unpublished
-// means not in the base.
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+// The worktree's branch and whatever HEAD it has checked out. A detached HEAD, or another
+// branch, is not that branch; removing the folder drops that reflog, so a commit that lives
+// only there is named and the folder stays. With no remote-tracking refs, unpublished means
+// not in the base.
 function commitsOnNoRemote(root: string, worktree: string, branch: string, base: string | null): string[] {
   const remotes = git(root, ['for-each-ref', '--format=%(refname)', 'refs/remotes']);
   const args = remotes.stdout.trim()

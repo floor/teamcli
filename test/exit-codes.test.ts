@@ -1969,6 +1969,7 @@ scene('worktree.subcommand', async (place) => show(await worktree(place, []), 'a
 scene('worktree.task-required', async (place) => show(await worktree(place, ['new']), 'a task name is required'));
 scene('worktree.extra', async (place) => show(await worktree(place, ['new', 'task', 'extra']), 'unexpected'));
 scene('worktree.remove-flags', async (place) => show(await worktree(place, ['remove', 'task', '--kind', 'fix']), 'remove takes no'));
+scene('worktree.branch-flags', async (place) => show(await worktree(place, ['new', 'task', '--branch', 'fix/task']), 'takes no --branch'));
 scene('worktree.not-a-repo', async (place) => show(await worktree(place, ['new', 'task']), 'not inside a git repository'), false);
 scene('worktree.file', async (place) => show(await worktree(place, ['new', 'task', '--file', 'missing.yaml']), 'no team file'));
 scene('worktree.file-invalid', async (place) => {
@@ -2220,6 +2221,12 @@ scene('worktree.removed', async (place) => {
   approve(place, worktreeText());
   expect((await worktree(place, ['new', 'task', '--kind', 'fix'])).code).toBe(0);
   return show(await worktree(place, ['remove', 'task']), 'the branch fix/task is kept');
+});
+scene('worktree.remove-branch', async (place) => {
+  publish(place);
+  approve(place, worktreeText());
+  expect((await worktree(place, ['new', 'task', '--kind', 'fix'])).code).toBe(0);
+  return show(await worktree(place, ['remove', 'task', '--branch', 'fix/other']), 'does not name the branch');
 });
 
 scene('team.help', async (place) => show(await entry(['--help'], testIo(place.root, owner)), 'Usage:'));
