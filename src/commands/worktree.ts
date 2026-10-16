@@ -132,7 +132,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   // until the owner approves it. With nothing verified the file's own values are read, exactly
   // as before, so the refusals are still main's. `project` on the snapshot is the live file's.
   if (standing === null || inForce === null) {
-    io.stderr('team worktree: the approved copy can\'t be read: run `team approve`\n');
+    io.stderr('team worktree: the stored copy can\'t be read\n');
     // exit: worktree.approved-copy
     return 1;
   }
@@ -177,7 +177,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   // One note, before the folder or anything else the command prints: the run goes on with the
   // approved settings, and the owner is told the file asks for more than that.
   if (inForce.differs) {
-    io.stderr('team worktree: using the approved workspace settings; the file has unapproved changes: run `team approve`\n');
+    io.stderr('team worktree: using the stored workspace settings; the file has changed since that copy was stored\n');
   }
 
   const who = describeCaller(caller);
@@ -199,8 +199,8 @@ function listWorktrees(io: Io, team: TeamFile, root: string, dir: string): numbe
 }
 
 // `team` is the approved copy for a verified standing, or the live file when nothing is verified;
-// every value below is read from it. `file` is the live file, read for one thing only: telling a
-// seat the file added — which must not be used until `team approve` — from one no section declares.
+// every value below is read from it. `file` is the live file, read for one thing only: a seat
+// the live file names and the stored copy does not.
 function create(
   io: Io, sources: WorktreeSources, team: TeamFile, file: TeamFile, root: string, dir: string, session: string, task: string,
   kind: string | undefined, seatName: string | undefined, who: string,
@@ -273,7 +273,7 @@ function create(
   }
   if (seatName !== undefined && !team.seats.some((seat) => seat.name === seatName)) {
     if (file.seats.some((seat) => seat.name === seatName)) {
-      io.stderr(`team worktree: seat ${seatName} is not in the approved file: run \`team approve\`\n`);
+      io.stderr(`team worktree: seat ${seatName} is not in the stored copy\n`);
       // exit: worktree.seat-unapproved
       return 1;
     }
@@ -405,6 +405,15 @@ export function removeWorktree(
       refused = `uncommitted or untracked files:\n${list(dirty)}`;
       return false;
     }
+    const expectedFolder = team.workspace.path ? fillPattern(team.workspace.path, { repo: team.project, task }) : null;
+    if (expectedFolder && absolute !== resolve(root, expectedFolder)) {
+      refused = `the recorded path ${JSON.stringify(record.path)} is not ${JSON.stringify(expectedFolder)}; nothing was removed`;
+      return false;
+    }
+    if (!matchesBranchPattern(team.workspace.branch, task, record.branch, team.workspace.base)) {
+      refused = `the recorded branch ${JSON.stringify(record.branch)} does not match ${JSON.stringify(team.workspace.branch)} for ${JSON.stringify(task)}; nothing was removed`;
+      return false;
+    }
     const unpublished = commitsOnNoRemote(root, absolute, record.branch, team.workspace.base);
     if (unpublished.length) {
       refused = `commits on no remote branch:\n${list(unpublished)}`;
@@ -521,6 +530,27 @@ function startPoint(root: string, base: string): { ref: string; note?: string } 
     return { error: `couldn't fetch ${remote}: ${firstLine(fetched.stderr || fetched.stdout) || 'fetch failed'}. Nothing was created.` };
   }
   return { ref: remote };
+}
+
+function matchesBranchPattern(pattern: string, task: string, branch: string, base: string | null): boolean {
+  if (!branch || (base !== null && branch === base)) return false;
+  if (!pattern.includes('{kind}')) {
+    const expected = fillPattern(pattern, { task });
+    return expected !== null && branch === expected;
+  }
+  const token = '\0';
+  const templated = fillPattern(pattern, { task, kind: token });
+  if (templated === null) return false;
+  const parts = templated.split(token);
+  const first = parts[0] ?? '';
+  const last = parts[parts.length - 1] ?? '';
+  if (!branch.startsWith(first) || !branch.endsWith(last) || branch.length <= first.length + last.length) {
+    return false;
+  }
+  const rest = branch.slice(first.length, branch.length - last.length);
+  const kind = parts.length === 2 ? rest : rest.split(parts[1] ?? '')[0] ?? '';
+  if (taskProblem(kind) !== null) return false;
+  return fillPattern(pattern, { task, kind }) === branch;
 }
 
 // The recorded branch and whatever HEAD the worktree has checked out. A detached HEAD, or

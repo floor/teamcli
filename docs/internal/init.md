@@ -56,7 +56,7 @@ named. A run with no terminal is refused with one sentence, before the repositor
 | `team init: .agents/team.yaml is tracked by git, and a team file is private. Untrack it, keeping the file:` … | 1 |
 | `team init: .agents/team.yaml exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.` | 1 |
 | `team init: nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.` | 1 |
-| `team init: nothing was restored: the record for this folder was approved before records were signed: run `team approve` once.` — the record was written by an earlier `team`; the same shape, with the case, for a record that does not verify | 1 |
+| `team init: nothing was restored: the record for this folder was approved before records were signed.` — the record was written by an earlier `team`; the same shape, with the case, for a record that does not verify | 1 |
 | `team init: unknown option --<name>` (with the usage) | 2 |
 
 The tracked-file message names the repair:
@@ -92,7 +92,7 @@ team file knows nothing about yet:
 
 ```console
 $ team init
-Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run team approve.
+Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.
 
 The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or

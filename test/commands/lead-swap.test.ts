@@ -201,7 +201,7 @@ describe('swapping a lead seat', () => {
     listed(made, 'lead', 'w0:p1', 'w0');
     const io = testIo(dir, op);
     expect(await runRemove(['lead', '--keep'], io, made.sources)).toBe(1);
-    expect(io.err).toBe("team remove: only the owner, the granted seat or an approved delegate swaps the orchestrator's or the operator's seat: the approved file grants nothing\n");
+    expect(io.err).toBe("team remove: only the owner, the granted seat or an approved delegate swaps the orchestrator's or the operator's seat: the file grants nothing\n");
     expect(made.typed).toEqual([]);
   });
 

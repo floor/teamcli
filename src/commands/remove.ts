@@ -10,7 +10,7 @@ import { grantGate, logGranted } from '../grant.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { markStopped, takeOut } from '../file/lines.ts';
-import type { Problem } from '../file/types.ts';
+import type { Problem, Seat } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { writeTeamFile } from '../file/write.ts';
@@ -243,9 +243,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   const abandon = args.flags.has('abandon');
   if (abandon && caller.kind !== 'owner') {
-    io.stderr('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
-    // exit: remove.abandon
-    return 1;
+    // Set to exactly `1`. Dev mode says the owner-only line once, as a warning, and the abandon continues.
+    if (io.env.TEAMCLI_DEV_MODE !== '1') {
+      io.stderr('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
+      // exit: remove.abandon
+      return 1;
+    }
+    io.stderr('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
   }
   // A lead is taken out of the file by the owner alone. Its swap — `--keep` — is the owner's,
   // the granted seat's when the grant lists `swap`, or an approved delegate's whose entry lists
@@ -301,18 +305,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // not carry is left, unless the owner abandons it.
   const home = sources.home ?? homedir();
   const standing = sources.standing?.(root) ?? approvalStanding(root, home);
-  if (standing.kind !== 'verified') {
+  if (standing.kind !== 'verified' && standing.kind !== 'none') {
     io.stderr(`team remove: ${notInForce(standing)}\n`);
     // exit: remove.never-approved
     return 1;
   }
-  const approved = validateTeamFile(standing.record.file);
-  if (!approved.ok) {
-    io.stderr('team remove: the approved copy of the team file cannot be read\n');
-    // exit: remove.approved-copy
-    return 1;
-  }
-  const copySeat = approved.team.seats.find((seat) => seat.name === name);
+  // The live file names the seat. A stored copy is not a second roster.
+  const copySeat = team.seats.find((seat) => seat.name === name);
   const temporary = Boolean(recorded?.temporary) && copySeat === undefined;
   if (args.flags.has('keep') && temporary) {
     io.stderr('team remove: a temporary seat is not in the file; there is nothing to keep\n');
@@ -520,7 +519,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       const parsed = validateTeamFile(kept);
       // A delegated remove never re-signs the approval: `--keep` is the gate's to refuse, and the
       // signing itself stays the owner's for a delegate whatever reached here.
-      if (parsed.ok && delegatePane === null) recordSeatDigestOf(standing, parsed.team, root, name, home);
+      if (parsed.ok && standing.kind === 'verified' && delegatePane === null) recordSeatDigestOf(standing, parsed.team, root, name, home);
     }
     const hadRetained = Boolean(readState(dir).sessions[session]?.retained_seats?.[name]);
     if ((recorded && (!agent || leave)) || (!args.flags.has('keep') && hadRetained)) {
@@ -550,9 +549,9 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // A temporary seat's rules file goes with the seat: nothing of it is left in the state
     // folder. A declared seat's stays — a stopped seat comes back to its own file. No home set
     // is a test that stands in for no store at all. The remover builds the path itself, from the
-    // approval in force and the seat's name, and walks the writer's checked chain.
+    // live project and the seat's name, and walks the writer's checked chain.
     if (temporary && sources.home) {
-      removeRulesFile(sources.standing?.(root) ?? approvalStanding(root, sources.home), name, root, sources.home);
+      removeRulesFile(sources.standing?.(root) ?? approvalStanding(root, sources.home), name, root, sources.home, team.project);
     }
     // The leave's last act: rename the agent out of the seat's name, best effort, so the pane no
     // longer answers a `remove` or a stray-name report as this seat. One attempt on a name the

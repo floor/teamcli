@@ -17,8 +17,10 @@ started from the beginning. A stopped session the state does not record is refus
 (`session <name> is stopped`); that line names no herdr command. A recorded session that does
 not clear is refused too (`session <name> is stopped and did not clear`).
 
-Every seat, shared and worktree-mode alike, starts in `~/.config/team/lobby`. It is shared
-by all projects on the machine. Before creating anything, `team` verifies the lobby gate:
+Every seat, shared and worktree-mode alike, starts in `~/.config/team/lobby`, with one exception: a
+lead, the seat the file names orchestrator or operator, starts in the project folder itself. The
+lobby is shared by all projects on the machine. Before creating anything, `team` verifies the
+lobby gate:
 ownership by the invoking user, no symbolic links anywhere in the chain, directory mode exactly
 `0700`, nothing but the files the profiles the tool ships declare (claude-code declares
 `.claude/scheduled_tasks.lock`), and not inside a git repository or worktree. The set is the
@@ -107,9 +109,13 @@ One record per seat, in the file's order, is the run's whole account of that sea
 A seat that reaches its idle prompt with its rules delivered prints `<seat>: ready`. A seat left out
 prints `<seat>: left out: <what stopped it>` — a classification (`trust`, `permission`, `question`,
 `vendor notice`, `login`, `unknown`, `unsent`, `timeout`) or the reason in the seat's own words, in
-the table below. On a terminal the line is drawn before the seat's workspace is created, as
-`<seat>: launching`, and rewritten in place as the seat advances — `waiting for its prompt`,
-`naming`, `sending its rules` — until its one final record ends the line with a newline. A
+the table below. When the machine has load, memory and swap headroom, `up` launches seats and waits
+on their idle prompts, renames and rules concurrently within the machine's capacity (`--serial`
+forces one seat at a time, and a machine near its start limits falls back to one at a time on its
+own). Whether seats run concurrently or one at a time, on a terminal the provisional line is drawn
+as `<seat>: launching` and rewritten in place as seats advance — `waiting for its prompt`,
+`naming`, `sending its rules` — and the final records, their stderr details and `.agents/team.log`
+are emitted in `.agents/team.yaml` file order. A
 redirected stdout receives the final records only: one newline-terminated line per seat, nothing
 provisional, no escape sequence. Everything else a run says about a seat — the indented detail
 under the record, the `skip` line for a seat stopped in the file, a note, a timeout's last reading
@@ -125,7 +131,9 @@ machine lobby, is left as it is too — only a relaunch repairs either — and i
 `  already ready; left as it is; a relaunch records its process: team remove <seat> --keep, then
 team add <seat> (or team down, then team up, for the whole team)`, or the same words saying `a
 relaunch moves it into the lobby`. For a seat the file names as orchestrator or operator, the detail
-offers only `team down, then team up (to restart the whole team)`.
+offers only `team down, then team up (to restart the whole team)`; and a lead whose process the
+state records, started in the project folder itself, is left with no relaunch note at all — the
+project folder is home for a lead too.
 
 A ready seat whose recorded process is still in its pane, and that pane is still named as the
 seat, is read once while the plan is built. The model is taken the way `status` takes it. When
@@ -457,7 +465,7 @@ record it belongs to, as its meaning says.
 | `<seat>: its recorded pane <pane> was gone and was replaced` / `<seat>: its recorded pane <pane> was gone and was replaced; its workspace <workspace> was left` | a later `up` found the seat recorded waiting and the host no longer lists that pane: a fresh workspace was made and the seat launched. The second line is that same line when the host still lists the recorded workspace: the workspace is named and not closed. A pane the host still lists is never this line |
 | `<seat>: left out: its waiting pane is gone` / `<seat>: left out: its waiting pane holds another process` | a later `up` found the seat recorded waiting and the host still lists that pane but no agent of the seat's name, or the pane no longer holds the recorded process: nothing was created, nothing closed, the record kept; the repair under the record on stderr is the team file's own for this seat — `team down` then `team up` (to restart the whole team) for an orchestrator or operator, `team remove <seat> --keep` then `team add <seat>` (or the whole team) for any other — and the owner answers or closes by hand first when the seat sits at a dialog, or its pane holds an agent `team` cannot name (above) |
 | `<seat>: left out: <reading>; its workspace did not close; left as it is` | the close of that workspace failed, with `<reading>` one of `trust`, `permission`, `question` or `vendor notice` — a run without a terminal closing it, or the pause's own close at the prompt: nothing claims it was closed, and the seat is left exactly as it was, its state kept — a later `up` resumes it |
-| `<seat>: left out: runs <model> <version>; the file says <model> <version>; left at launched, not named. Add <flag> <id> to its launch, or correct the file's model and version and run team approve` | the idle screen shows a different model than the file. The seat is not renamed and gets no rules; its pane stays open. The flag is that CLI's model flag, and the id is the one the profile maps to the file's model. When the profile knows no id, the line says `<id>` |
+| `<seat>: left out: runs <model> <version>; the file says <model> <version>; left at launched, not named. Add <flag> <id> to its launch, or correct the file's model and version` | the idle screen shows a different model than the file. The seat is not renamed and gets no rules; its pane stays open. The flag is that CLI's model flag, and the id is the one the profile maps to the file's model. When the profile knows no id, the line says `<id>` |
 | `<seat>: left out: its pane has been back at its shell for <n> s and shows no CLI prompt; left at launched` | herdr's process info says the pane's foreground program is back at its shell through three full polls on end, four readings, the screen matches no CLI shape, and the launch line's own echo is visible on the screen. A pane read before the line arrived, one whose echo scrolled away, one whose program is slow to draw, or a herdr that can't say (no shell process info), is waited out to the deadline — the end is never inferred from the screen's text, and a single reading can never reach the three polls. The workspace is kept, and the pane's last lines follow on stderr, under the record |
 | `<seat>: left out: timeout` | the prompt never came within the profile's own time limit; the detail under the record, on stderr, says after how long it waited, the screen it last read, the pane's last lines, and that `team up` again resumes it |
 | `<seat>: left out: timeout (no terminal for owner)` | a delegated run's idle wait ran out: for it the timeout is a dialog like any other stop, so the workspace is closed without input — the same proof as every close above — and the seat left out. The owner at a terminal is asked instead (the pause, above), and the owner without one keeps the plain `timeout` record above |
@@ -470,7 +478,10 @@ record it belongs to, as its meaning says.
 | `<seat>: left out: rules not typed: the CLI never appeared as its pane's foreground process (the screen read <kind>); check the seat's launch line — the wrapper it starts through, or the command itself — then run up again` | within the profile's own time limit the pane's foreground process was never the CLI — a wrapper's shell still in front of it, or a launch line that exited. A CLI that starts through a wrapper is waited out, its first frame included; nothing is typed into the wrapper's shell |
 | `<seat>: left out: rules not confirmed: the seat is working; run up again when it is idle` | the seat is mid-turn; nothing was typed |
 | `<seat>: left out: rules not typed: <what stopped it>; <what to do>` | nothing was typed: the screen was not an empty idle prompt, or the box already held text that is not the rules line. A box that already holds exactly this CLI's exit text — an earlier `down` typed it and never confirmed it — is its own line: the text is named and the owner is told the one key that empties it (`press Ctrl+U in its pane to clear it, then run up again`), or, on a CLI with no such key, to clear the box in its pane |
-| `<seat>: left out: rules typed, not sent: the read-back didn't match; the line sits in its box, unsent: <what to do>` | the line was typed and its box did not read back as the line; `up` does not clear it. When the box drew a row that is not the line's own, the first such row is written under the record on stderr, stripped of control characters and cut to 200 characters |
+| `<seat>: left out: rules typed, not sent: the read-back didn't match; the line sits in its box, unsent: <what to do>` | the line was typed and its box did not read back as the line, and this run did not clear it: the delivery has no clearing key, the line was already in the box when this run started, the screen was not the unsent composer, the seat was not idle, or the CLI was not the pane's foreground. `<what to do>` names the profile's one key when the CLI has one. When the box drew a row that is not the line's own, the first such row is written under the record on stderr, stripped of control characters and cut to 200 characters |
+| `<seat>: left out: rules typed, not sent: the read-back didn't match; the line team typed was cleared (<key>); run up again` | this run typed the line, the read-back failed, and the profile's one key restored the idle prompt. `<key>` is the one the profile names, spelled as its pane spells it |
+| `<seat>: left out: rules typed, not sent: the read-back didn't match; the clearing key (<key>) was not delivered; the line sits in its box, unsent: <what to do>` | the pane did not take the clearing key. The line stays unsent |
+| `<seat>: left out: rules typed, not sent: the read-back didn't match; the clearing key (<key>) left the screen reading <kind>; the line sits in its box, unsent: <what to do>` | the key was sent and the screen did not come back to an idle prompt. `<kind>` is the reading after the key, and the line stays unsent |
 | `<seat>: left out: rules typed, not sent: the rules file changed after it was written` | the line read back, but the file — read again without following a link, directly before Enter — no longer held the text whose hash the line names. Enter was not pressed; the line sits in the box, unsent, and the owner checks the project state folder before running `up` again |
 | `<seat>: left out: rules typed, not sent: its box still holds the line after Enter; <what to do>` | Enter was pressed and the box still shows the line: the key did not take, and nothing was sent |
 | `<seat>: left out: the seat did not come back to its idle prompt (<reading>); <what to do>` | the line was submitted and the seat never came back to its idle prompt — a running turn, or a dialog to answer |
@@ -533,11 +544,10 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | ``only the owner runs this, from a terminal outside herdr`` — a run with no terminal. ``only the owner runs `up`, from a terminal outside herdr; this call is <caller>`` — any other caller the ordinary rule refuses. With a `delegates` section in the file, that other refusal is the delegate gate's to say, in its own words below |
 | ``only the owner or the approved delegate runs `up`; this call is <caller>`` — the delegate gate: the file's `delegates` section names panes, and this caller is none of them |
 | ``--<flag> is the owner's; the approved delegate cannot use it`` — the delegate gate, for `--session` and `--file` on a delegated run, refused before the file or the session the flag names is read |
-| the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the approved copy unreadable, the live file drifted from the approved copy, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |
-| ``the file was never approved on this machine: run `team approve` `` |
-| ``approved before records were signed: run `team approve` once`` — the record was written by an earlier `team` |
-| ``the record <case>: run `team approve` once`` — a signed record that does not verify |
-| ``the file is not the approved one (<differences>): run `team approve` `` |
+| the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |
+| ``the file was never approved on this machine `` — dev mode only, as a warning; a missing record is not a refusal |
+| ``approved before records were signed`` — the record was written by an earlier `team` |
+| the case a refused record names — a signed record that does not verify |
 | a `MISS` finding from [team doctor](../commands/doctor.md) — herdr or a CLI not installed, or a CLI not logged in. A launch that names another model than the file, or that names none, is a warning, so `up` still starts the seat; a seat's own launch line is not this — it leaves that seat out alone, in the lines above. After the idle wait, a screen that shows a different model leaves that seat at launched, not named |
 | `the load is 1.2 per core, above 1` / `free memory is 8%, below 25%` / `free disk is 3.0 GB, below 10.0 GB` / `free swap is 1.0 GB, below 2.0 GB` |
 | `herdr doesn't answer` |
@@ -560,13 +570,14 @@ A team file that is not `.agents/team.yaml` in the folder the watch starts in is
 `up` records the resolved path for the watch and starts `watch` with no `--file`. That
 process reads the recorded file. Any other non-owner is refused.
 
-## The examples the page keeps
+## The examples, moved off the page
 
 The fixture and the examples below are the page's own, moved here whole. They run in the order they
 stand in, and the `fixture` line is theirs: the two seats are up, the third is stopped in the file,
-and this session has no watch running. The first example is also on [the `team up`
-page](../commands/up.md); the rest stand only here and are not executed by any test —
-`test/docs.test.ts` reads `docs/commands/` alone.
+and this session has no watch running. The first example was also on [the `team up`
+page](../commands/up.md) until its one-glance cut; none of them is on the page now — it keeps one
+five-line refusal scene of its own — and none is executed by any test: `test/docs.test.ts` reads
+`docs/commands/` alone.
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -672,7 +683,7 @@ claude-beacon: ready
 exit 0
 ```
 
-An owner section changed in the file needs a new approval, and the plan says so before the run:
+An owner section changed in the file is what the commands read. The plan is the live file's:
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -722,8 +733,6 @@ seats:
 
 ```console
 $ team up --dry-run ; echo "exit $?"
-! up would refuse: the file is not the approved one (`limits` changed): run `team approve`
-! up would refuse: run `team approve`: `limits` changed
 + herdr --session beacon workspace rename w1 coordinator
 + herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
@@ -732,14 +741,7 @@ $ team up --dry-run ; echo "exit $?"
   skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 dry run: nothing was run
-exit 1
+exit 0
 ```
 
-The real run goes no further than the refusal — it never touches a team the file doesn't match:
-
-```console
-$ team up ; echo "exit $?"
-team up: the file is not the approved one (`limits` changed): run `team approve`
-team up: run `team approve`: `limits` changed
-exit 1
-```
+The real run follows that plan. A live edit of an owner section is not a refusal.

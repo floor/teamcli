@@ -119,6 +119,10 @@ export type PassResult = {
   // report texts it stands for, so a delivery that fails puts them back rather than losing them.
   // `seat` is that seat's name and `cli` the CLI its screen is read with.
   nudge: { pane: string; text: string; pending: string[]; seat: string; cli: string } | null;
+  // One drop per idle worker that has reached `idle_first`, and again every `idle_repeat`
+  // when that is set. `body` is `watch.nudge`, or the report line when the file omits it.
+  // The command writes the drop and types the short trigger; this pass types nothing.
+  work: { pane: string; seat: string; cli: string; body: string }[];
   // What to notify instead, when a nudge has waited too long.
   fallback: string | null;
   // The one line to type when a message is waiting and this pass is not already typing a nudge.
@@ -207,8 +211,8 @@ export type PassInput = {
   readScreen?: (cli: string, screen: string | undefined) => Screen;
   /** Quota patterns in force, shipped plus the approved override. The shipped list, when omitted. */
   quotaFor?: (cli: string) => readonly QuotaPattern[];
-  /** Null types nothing: the approval in force does not verify. Any other value, including
-   *  omitted, types into an idle seat. The name here is not the pane. */
+  /** Kept so a caller can still pass it. The nudge does not read it: a missing approval
+   *  types the report line and still sends the work drop. The name here is not the pane. */
   nudgeOperator?: { name: string; cli: string } | null;
   /** Unacked messages already verified. Omitted, the pass rings nothing. */
   mailbox?: readonly MailboxWaiting[];
@@ -232,7 +236,6 @@ export function pass({
   processes,
   readScreen: read = readScreen,
   quotaFor: patternsOf = shippedQuota,
-  nudgeOperator,
   mailbox = [],
 }: PassInput): PassResult {
   const reports: Report[] = [];
@@ -464,31 +467,29 @@ export function pass({
   let fallback: string | null = null;
   if (memory.pending.length) {
     memory.pendingSince ??= now;
-    // Null is the unverified file: type nothing. Anything else picks a seat.
+    // A missing approval does not stop this. The operator and the orchestrator are not choices.
     const choices: { pane: string; cli: string; seat: string; since: number }[] = [];
-    if (nudgeOperator !== null) {
-      for (const obs of observations) {
-        if (obs.lead || obs.parked || obs.stopped || !obs.seat || !obs.agent) continue;
-        const named = live.agents.filter((agent) => agent.name === obs.name);
-        if (named.length !== 1) continue;
-        const agent = named[0]!;
-        const raw = live.screens[agent.pane];
-        const screen = read(obs.cli, raw);
-        // An empty idle prompt is free to type into, and so is a box still holding the line
-        // this watch typed itself, recorded in memory at the typing. The line is one fixed
-        // public constant, so the text alone proves nothing: the same text typed by a person
-        // or an agent, or found by a restarted watch, is someone's text — never typed over,
-        // sent or cleared, and left to them or to the next stop.
-        const mine = screen.kind === 'unsent' && ownUnsent(memory, agent.pane, NUDGE_TEXT, obs.cli, raw);
-        const free = (agent.status === 'idle' || agent.status === 'done') && (screen.kind === 'idle' || mine);
-        if (!free) continue;
-        choices.push({
-          pane: agent.pane,
-          cli: obs.cli,
-          seat: obs.name,
-          since: obs.history.lastWorking ?? obs.history.idleSince ?? now,
-        });
-      }
+    for (const obs of observations) {
+      if (obs.lead || obs.parked || obs.stopped || !obs.seat || !obs.agent) continue;
+      const named = live.agents.filter((agent) => agent.name === obs.name);
+      if (named.length !== 1) continue;
+      const agent = named[0]!;
+      const raw = live.screens[agent.pane];
+      const screen = read(obs.cli, raw);
+      // An empty idle prompt is free to type into, and so is a box still holding the line
+      // this watch typed itself, recorded in memory at the typing. The line is one fixed
+      // public constant, so the text alone proves nothing: the same text typed by a person
+      // or an agent, or found by a restarted watch, is someone's text — never typed over,
+      // sent or cleared, and left to them or to the next stop.
+      const mine = screen.kind === 'unsent' && ownUnsent(memory, agent.pane, NUDGE_TEXT, obs.cli, raw);
+      const free = (agent.status === 'idle' || agent.status === 'done') && (screen.kind === 'idle' || mine);
+      if (!free) continue;
+      choices.push({
+        pane: agent.pane,
+        cli: obs.cli,
+        seat: obs.name,
+        since: obs.history.lastWorking ?? obs.history.idleSince ?? now,
+      });
     }
     choices.sort((a, b) => a.since - b.since || a.seat.localeCompare(b.seat));
     const chosen = choices[0];
@@ -529,7 +530,52 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  return { reports, nudge, fallback, ring, mailboxNote, readings, labels };
+  return { reports, nudge, work: workDrops(team, live, observations, watch, now, memory, read), fallback, ring, mailboxNote, readings, labels };
+}
+
+/** Idle workers due a work drop this pass. Leads, parked and stopped seats, a dialog and a
+ *  box that already holds text are not due. The stamp lives in this process: a restart starts
+ *  the idle clock again. A seat seen working clears its stamp, so the next quiet stretch waits
+ *  `idle_first` once more. */
+function workDrops(
+  team: TeamFile,
+  live: Live,
+  observations: SeatObservation[],
+  watch: TeamFile['watch'],
+  now: number,
+  memory: Memory,
+  read: (cli: string, screen: string | undefined) => Screen,
+): PassResult['work'] {
+  const sent = (memory.slots['work-nudge'] ??= {}) as Record<string, number>;
+  const body = team.watch.nudge ?? NUDGE_TEXT;
+  const due: PassResult['work'] = [];
+  for (const obs of observations) {
+    if (obs.lead || obs.parked || obs.stopped || !obs.seat || !obs.agent) {
+      delete sent[obs.name];
+      continue;
+    }
+    if (live.agents.filter((agent) => agent.name === obs.name).length !== 1) {
+      delete sent[obs.name];
+      continue;
+    }
+    const quiet = (obs.agent.status === 'idle' || obs.agent.status === 'done') && !obs.working && !obs.prompt;
+    if (!quiet) {
+      delete sent[obs.name];
+      continue;
+    }
+    const since = now - (obs.history.lastWorking ?? obs.history.idleSince ?? now);
+    const at = sent[obs.name];
+    const waiting = since >= watch.idleFirst * 1000
+      && (at === undefined || (watch.idleRepeat !== undefined && now - at >= watch.idleRepeat * 1000));
+    if (!waiting) continue;
+    const screen = read(obs.cli, live.screens[obs.agent.pane]);
+    // A dialog or unsent text stays the seat's. The stamp is not set, so a later empty prompt
+    // in this same stretch still gets the drop.
+    if (screen.kind !== 'idle') continue;
+    sent[obs.name] = now;
+    due.push({ pane: obs.agent.pane, seat: obs.name, cli: obs.cli, body });
+  }
+  return due;
 }
 
 /** The sidebar lines a running file seat needs this pass. The first cycle paints both lines

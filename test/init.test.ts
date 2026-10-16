@@ -46,7 +46,7 @@ describe('team init', () => {
     const loaded = loadTeamFile(project);
     expect(loaded).toMatchObject({ ok: true, team: { project: 'acme', orchestrator: 'orchestrator' } });
     expect(io.out).toContain('private to this clone');
-    expect(io.out).toContain('team approve');
+    expect(io.out).toContain('Edit it, then run the seats.');
     expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).toMatch(/ init \[owner\] wrote a skeleton as \.agents\/team\.yaml/);
   });
 

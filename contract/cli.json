@@ -138,47 +138,6 @@
       "flags": [
         {
           "hidden": false,
-          "name": "--confirm",
-          "repeatable": false,
-          "takesValue": false
-        },
-        {
-          "hidden": false,
-          "name": "--file",
-          "repeatable": false,
-          "takesValue": true
-        },
-        {
-          "hidden": false,
-          "name": "--help",
-          "repeatable": false,
-          "takesValue": false
-        },
-        {
-          "hidden": false,
-          "name": "--show",
-          "repeatable": false,
-          "takesValue": false
-        },
-        {
-          "hidden": true,
-          "name": "-h",
-          "repeatable": false,
-          "takesValue": false
-        }
-      ],
-      "hidden": false,
-      "name": "approve",
-      "positionals": [],
-      "subcommands": [],
-      "usage": [
-        "team approve [--show] [--confirm] [--file <path>]"
-      ]
-    },
-    {
-      "flags": [
-        {
-          "hidden": false,
           "name": "--ask",
           "repeatable": false,
           "takesValue": true
@@ -979,6 +938,41 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "reload",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team reload <seat> [--file <path>]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--abandon",
           "repeatable": false,
           "takesValue": false
@@ -1026,6 +1020,59 @@
       "subcommands": [],
       "usage": [
         "team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--abandon",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "restart",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>]"
       ]
     },
     {
@@ -1280,6 +1327,12 @@
         },
         {
           "hidden": false,
+          "name": "--serial",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -1296,7 +1349,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team up [--dry-run] [--session <name>] [--file <path>]"
+        "team up [--dry-run] [--serial] [--session <name>] [--file <path>]"
       ]
     },
     {
