@@ -4,7 +4,6 @@ import { basename, dirname, join } from 'node:path';
 import { storePath, type Standing } from '../store/store.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { SEAT_NAME } from '../file/sections/seats.ts';
-import { notInForce } from '../approve/approval.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { profileFor } from '../profiles/index.ts';
 import { rulesOf } from './rules.ts';
@@ -169,12 +168,12 @@ export type RulesFileWrite =
   | { ok: false; why: 'folder'; what: string }
   | { ok: false; why: 'place'; what: string };
 
-/** Writes the seat's rules to its file as the approval's equal: nothing is followed, nothing
- *  the writer did not make is replaced. The path is built here, from the approval in force and
- *  the seat's name — a caller hands back no path of its own, so no `..` or swapped folder can
- *  be fed to the write — and a seat that has no path (no approval in force, a copy that can't
- *  be read, a name the rule refuses) is `not-written`. Every folder from `team`'s per-user
- *  state root down to `rules/` is checked with `lstat` — a real directory of this user's, not a
+/** Writes the seat's rules to its file: nothing is followed, nothing the writer did not make
+ *  is replaced. The path is built here, from the live project when the caller names one, and
+ *  otherwise from the approval in force — a caller hands back no path of its own, so no `..`
+ *  or swapped folder can be fed to the write — and a seat that has no path (no project to
+ *  name, a name the rule refuses) is `not-written`. Every folder from `team`'s per-user state
+ *  root down to `rules/` is checked with `lstat` — a real directory of this user's, not a
  *  link, `rules/` and the project folder exactly `0700` (a looser folder is refused, never
  *  `chmod`'d) — and a missing level is made one level at a time with an explicit mode, never by
  *  a recursive create that could walk through a link. The final name, if it holds anything,
@@ -192,12 +191,14 @@ export function writeRulesFile(
   text: string,
   hash12: string,
   random: () => string = () => randomBytes(10).toString('hex'),
-  /** The live project, only when `up` is mounting without an approval. The path is still built
-   *  here. Absent on every ordinary write, which keeps resolving the approved copy alone. */
-  devProject?: string,
+  /** The live project. The path is still built here. A delivery of the live file passes it,
+   *  so the file, the typed line and the checks name one folder. Absent, the path is the
+   *  approval in force. */
+  liveProject?: string,
 ): RulesFileWrite {
-  const built = rulesFilePathOf(standing, seat, root, home)
-    ?? (devProject !== undefined ? rulesFilePath(devProject, root, home, seat) : null);
+  const built = liveProject !== undefined
+    ? rulesFilePath(liveProject, root, home, seat)
+    : rulesFilePathOf(standing, seat, root, home);
   if (built === null) return { ok: false, why: 'not-written' };
   const path = built;
   // The ladder, top down: team's per-user state root (`<home>/.config/team`), the project state
@@ -281,16 +282,24 @@ export function rulesFileHolds(path: string, hash12: string): boolean {
 }
 
 /** Removes a seat's rules file — a temporary seat's, with the seat. The path is built here,
- *  like the writer's, from the approval in force and the seat's name, and the writer's own
- *  checked chain is walked again before the unlink: every folder from the state root down to
- *  `rules/` must still be a real directory of this user's at the mode the writer keeps, so a
- *  `rules/` swapped for a symbolic link after the write is refused, never unlinked through.
- *  The final name must be this user's `0600` regular file — only what the writer itself would
- *  have made is taken. A seat with no path, a level of the chain missing (nothing was ever
- *  written), a chain that is not the writer's, a file that is not there: each leaves
- *  everything alone, nothing to complain about. */
-export function removeRulesFile(standing: Standing, seat: string, root: string, home: string): void {
-  const path = rulesFilePathOf(standing, seat, root, home);
+ *  like the writer's, from the live project when the caller names one and otherwise from the
+ *  approval in force, and the writer's own checked chain is walked again before the unlink:
+ *  every folder from the state root down to `rules/` must still be a real directory of this
+ *  user's at the mode the writer keeps, so a `rules/` swapped for a symbolic link after the
+ *  write is refused, never unlinked through. The final name must be this user's `0600`
+ *  regular file — only what the writer itself would have made is taken. A seat with no path,
+ *  a level of the chain missing (nothing was ever written), a chain that is not the writer's,
+ *  a file that is not there: each leaves everything alone, nothing to complain about. */
+export function removeRulesFile(
+  standing: Standing,
+  seat: string,
+  root: string,
+  home: string,
+  liveProject?: string,
+): void {
+  const path = liveProject !== undefined
+    ? rulesFilePath(liveProject, root, home, seat)
+    : rulesFilePathOf(standing, seat, root, home);
   if (path === null) return;
   const ladder: Array<{ at: string; mode: number | null }> = [
     { at: dirname(dirname(dirname(path))), mode: null },
@@ -337,18 +346,10 @@ export function checkRulesFile(path: string, approvedText: string): RulesFileChe
 }
 
 /** One message-rules seat's delivery: the file its rules are written to, the text that goes in
- *  it, and the one line typed in its pane. A standing that is not an approval in force — no
- *  record, a legacy one, a record the verification refused — is refused here, with the same
- *  line the commands print: the function decides what text a seat is told to obey, so it does
- *  not lean on a caller's gate to check the approval first. The text and the folder are the
- *  **approved** ones — read from the copy of the team file the approval record stored, the
- *  seat looked up by name in that copy so its own signature lines are the approved ones too,
- *  the path resolved through `rulesFilePathOf` like every other reader of this file. The live
- *  `team` is deliberately not read here, not even for its project name: `up` and `add` refuse
- *  a file that differs from the approval, so on a normal run both texts are equal, and the
- *  invariant does not depend on that gate. `live` is the one exception, a dev-mode mount with
- *  no approval in force: the text and the folder are the live file's, and nothing is signed.
- *  A path that can't be typed safely is a refusal — before anything is written or typed. */
+ *  it, and the one line typed in its pane. The text and the folder are the **live** file's.
+ *  A stored copy is not what a seat is told to obey, whether or not an approval is in force.
+ *  `standing` and `live` stay in the signature so a caller does not have to change; both are
+ *  ignored. A path that can't be typed safely is a refusal — before anything is written or typed. */
 export function rulesDeliveryOf(
   standing: Standing,
   team: TeamFile,
@@ -357,25 +358,14 @@ export function rulesDeliveryOf(
   home: string,
   live = false,
 ): { text: string; path: string; line: string } | { refusal: string } {
+  void standing;
+  void live;
   if (profileFor(seat.cli)?.rulesOption != null) return { refusal: 'its rules travel as a launch option' };
-  if (standing.kind !== 'verified') {
-    if (!live) return { refusal: notInForce(standing) };
-    const path = rulesFilePath(team.project, root, home, seat.name);
-    if (path === null || !typeablePath(path)) {
-      return { refusal: "its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -" };
-    }
-    const text = rulesOf(team, seat, root);
-    return { text, path, line: rulesLine(path, rulesFileHash(text)) };
-  }
-  const copy = validateTeamFile(standing.record.file);
-  if (!copy.ok) return { refusal: "the approved copy of the team file can't be read" };
-  const path = rulesFilePathOf(standing, seat.name, root, home);
+  const path = rulesFilePath(team.project, root, home, seat.name);
   if (path === null || !typeablePath(path)) {
     return { refusal: "its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -" };
   }
-  const held = copy.team.seats.find((item) => item.name === seat.name);
-  if (held === undefined) return { refusal: 'its rules are not in the approved copy of the team file' };
-  const text = rulesOf(copy.team, held, root);
+  const text = rulesOf(team, seat, root);
   return { text, path, line: rulesLine(path, rulesFileHash(text)) };
 }
 

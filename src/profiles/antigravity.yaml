@@ -16,6 +16,10 @@ login:
     - models
   hint: agy
 exit: /exit
+# One ctrl+u empties the composer. On 1.3.5, with the rules line unsent,
+# one ctrl+u restored the idle prompt and the shortcuts footer, and the
+# CLI stayed up (herdr 0.7.1, pane send-keys, stty size 23 53).
+exit_clear: ctrl+u
 timeouts:
   idle: 90s
   exit: 30s

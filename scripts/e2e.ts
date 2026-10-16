@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { standingSource } from '../src/commands/status.ts';
 import { realSources as addReal, runAdd, type AddSources } from '../src/commands/add.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import { realSources as downReal, runDown } from '../src/commands/down.ts';
 import { realSources as removeReal, runRemove } from '../src/commands/remove.ts';
 import { realSources as statusReal, runStatus } from '../src/commands/status.ts';

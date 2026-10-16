@@ -33,6 +33,12 @@ and pane.
 | LAST ACTIVE | `now` when working, relative age (`2m ago`), or `-` |
 | PANE | the herdr pane, or `-` when not running |
 
+The handle belongs to the seat, not to one run of it. It is minted on the seat's first launch or
+`team add`, and parked in the state's `retained_seats` when the record goes away: `team down` and
+`team remove <seat> --keep` park it, and the next `team up` or `team add <seat>` records the same
+handle again — so a seat that is stopped and started again comes back as itself. A plain
+`team remove <seat>` drops the handle with the record, and the name starts over at its next launch.
+
 ## Exit codes
 
 | Exit | When |

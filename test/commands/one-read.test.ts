@@ -208,13 +208,13 @@ describe('one read of the approval store per command', () => {
     expect(gate.reads()).toBe(1);
   });
 
-  test('doctor: one gate, and the ok line names the gate record', async () => {
+  test('doctor reads the gate once and does not ask to approve', async () => {
     const gate = gateThenPoison();
     const io = testIo(project, owner);
     const code = await runDoctor(['--file', file], io, { ...doctorSources(), standing: gate.standing });
     expect(code).toBe(0);
-    expect(io.out).toContain('the file is the one the owner approved (approval #1, 2026-10-04');
-    expect(io.out).not.toContain('does not verify');
+    expect(io.out).not.toContain('team approve');
+    expect(io.out).not.toContain('the file is the one the owner approved');
     expect(gate.reads()).toBe(1);
   });
 
@@ -290,7 +290,7 @@ describe('one read of the approval store per command', () => {
     // read refuses, and the seat is left in the file.
     expect(code).toBe(1);
     expect(io.err).toContain('team remove: ');
-    expect(io.err).toContain('run `team approve`');
+    expect(io.err).toContain('the approval record cannot be read');
     expect(readFileSync(file, 'utf8')).toContain('name: worker');
   });
 
@@ -386,7 +386,6 @@ describe('a record with a signed number past the safe range is refused, never a 
     expect(up).toBe(1);
     expect(upIo.out).toContain('! up would refuse: the approval record cannot be read');
     expect(upIo.out).toContain(named);
-    expect(upIo.out).toContain('run `team approve` once');
 
     const launch: Launch = {
       sessionState: () => 'running',
@@ -420,7 +419,6 @@ describe('a record with a signed number past the safe range is refused, never a 
     const doctorIo = testIo(project, owner);
     const doctor = await runDoctor(['--file', file], doctorIo, doctorSources());
     expect(doctorIo.out + doctorIo.err).toContain(named);
-    expect(doctorIo.out + doctorIo.err).toContain('run `team approve` once');
 
     const statusIo = testIo(project, owner);
     const status = await runStatus(['--file', file, '--json'], statusIo, {
@@ -477,13 +475,13 @@ describe('a record with a signed number past the safe range is refused, never a 
 
 // What makes a standing that is not verified safe is the ordering, not the values it
 // yields: the default budgets name no account, and `seatBudget` reads them `clear` —
-// permissive as a value. Safe because `up` and `add` refuse every standing that is not
-// verified before any budget is consulted, and no command reaches a standalone wrapper
-// after its gate. The count is the pin: zero calls, for each of the three standings.
+// permissive as a value. A legacy or refused record still refuses before any budget is
+// consulted. A missing record is the live file: `up` reaches herdr without asking the
+// budget, and `add` may ask it on the defaults. The count is the pin for the two refusals.
 describe('the ordering is the guard: a standing that is not verified refuses before any budget is consulted', () => {
   const refused: Standing = {
     kind: 'refused',
-    why: 'the record does not carry a valid signature: it was changed after approval, or written without the key: run `team approve` once',
+    why: 'the record does not carry a valid signature: it was changed after approval, or written without the key',
   };
   const notVerified: NotVerified[] = [{ kind: 'none' }, { kind: 'legacy' }, refused];
 
@@ -505,7 +503,12 @@ describe('the ordering is the guard: a standing that is not verified refuses bef
       } satisfies Partial<UpSources> as UpSources);
       expect(code).toBe(1);
       expect(consulted).toBe(0);
-      expect(io.err).toContain(`team up: ${notInForce(standing)}`);
+      if (standing.kind === 'none') {
+        expect(io.err).toBe('team up: this call has no way to reach herdr\n');
+        expect(io.err).not.toContain('never approved');
+      } else {
+        expect(io.err).toContain(`team up: ${notInForce(standing)}`);
+      }
     }
   });
 
@@ -539,12 +542,22 @@ describe('the ordering is the guard: a standing that is not verified refuses bef
         standing: () => standing,
         seatBudget: () => {
           consulted += 1;
+          if (standing.kind === 'none') return { kind: 'clear' };
           throw new Error('the budget gate was consulted');
         },
       } satisfies AddSources);
-      expect(code).toBe(1);
-      expect(consulted).toBe(0);
-      expect(io.err).toContain(`team add: ${notInForce(standing)}`);
+      if (standing.kind === 'none') {
+        // The stub launch cannot make a workspace. The pin is the missing record: the
+        // never-approved miss is gone, and the default budget is the one that is asked.
+        expect(code).toBe(1);
+        expect(consulted).toBe(1);
+        expect(io.err + io.out).not.toContain('never approved');
+        expect(io.out).toContain('worker: left out: its workspace was not created; left at launched\n');
+      } else {
+        expect(code).toBe(1);
+        expect(consulted).toBe(0);
+        expect(io.err).toContain(`team add: ${notInForce(standing)}`);
+      }
     }
   });
 });

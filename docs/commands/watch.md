@@ -3,11 +3,17 @@
 Watches a running team. Every `watch.interval` seconds it reads the session — the seats, their
 screens, the file, the approval, the machine — prints what is wrong, and removes a merged worktree
 whose end holds. A temporary seat is left as it is: the owner removes it. When a report is
-waiting, and an approval is in force, it types one fixed line into an idle seat — the nudge —
-so that seat reads the log. The operator is not that seat. A file that was never
-approved, a legacy record, and a refused record type nothing. It types nothing into a
+waiting, it types one fixed line into an idle seat — the nudge —
+so that seat reads the log. The operator is not that seat. A missing approval does not
+stop that line. It types nothing into a
 screen it can't read as an empty idle prompt, so a permission dialog and a half-typed sentence are
-left alone. A box that already holds the nudge's own line is sent, not typed into twice — and only
+left alone. `watch.nudge`, when the file sets it, is sent to each idle worker once
+`idle_first` has passed and again every `idle_repeat` when that is set. The body goes to the
+same drop file `team send` uses, and the pane receives one short line naming that file.
+When `watch.nudge` is omitted, that body is the report line. The text is taken from the
+live file, so it does not wait for an approval. The operator, the orchestrator, and the
+pane the watch itself is running in are never the target, and neither is a pane that is in
+a dialog or already holds unsent text. A box that already holds the nudge's own line is sent, not typed into twice — and only
 by the watch process that typed it: the same text from anyone else, or found after a restart, is
 its owner's, and is never sent or cleared. A screen hatch is an escape hatch for a CLI whose
 screens the data primitives cannot express. The guarantees cover what a hatch returns and what load
@@ -95,7 +101,7 @@ it and run `team up`.
 | --- | --- |
 | `--session <name>` | the herdr session to watch, instead of `team.session` |
 | `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
-| `--no-nudge` | the owner's. Type nothing into any pane: no report nudge and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
+| `--no-nudge` | the owner's. Type nothing into any pane: no report nudge, no work prompt and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
 | `--no-notify` | the owner's. No desktop notification for a report addressed to the operator. A report addressed to the owner is still notified, still written to the log, and still visible in `team status` |
 | `--help`, `-h` | the usage, and exit 0 |
 
@@ -125,7 +131,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | --- | --- |
 | `<seat> is in the file and is not running` | herdr lists no agent for a seat the file has, does not stop, and the watch has not seen running |
 | `<seat> was running and is gone (its pane closed, or its CLI ended)` | herdr lists no agent for a seat the watch had seen running; said at each disappearance |
-| `<seat> is no longer the process team launched (its session was restored, or its CLI was restarted)` | the process in the seat's pane is not the one recorded when `team` launched it: the pane runs no CLI, or one `team` did not launch. A pane whose stored agent session is still the live one stays quiet on this line |
+| `<seat> is no longer the process team launched (its session was restored, or its CLI was restarted)` | the process in the seat's pane is not the one recorded when `team` launched it: the pane runs no CLI, or a program `team` did not launch runs in it and the agent session herdr shows there is not the one stored at launch. A pane the stored session came back on is the seat again and is not reported; a seat with no record of its launch, or a pane herdr can't read, is not reported either |
 | `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched — <repair>` | that pane holds a process `team` did not launch, and the launch line starts a program other than the CLI's own binary, or the file says the launcher chooses the model. A pane back at its shell is not this report. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
 | `<seat> waits at a permission prompt: its owner's to answer` | a permission dialog or a trust question; only its owner answers those |
 | `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
@@ -142,9 +148,8 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model — <repair>` (`<declared>` is the seat's `display` spelling) | the running model or version is not the file's. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
 | `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, a workspace labelled watchdog aside |
 | `the file was never approved on this machine` | there is no approval record for this project |
-| `approved before records were signed: run \`team approve\` once` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
+| `approved before records were signed` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
 | `<why the record was refused>` | a signed record that does not verify (changed after approval, another root, a replayed or rolled-back generation): said once, and the watch keeps watching |
-| `the file differs from the approved one: <differences>` | the file is not the approved one; the differences read as `team status` prints them |
 | `the load is <n> per core, above <n>` | over `machine.load_max` |
 | `free memory is <n>%, below <n>%` | under `machine.memory_min` |
 | `free disk is <n> GB, below <n> GB` | under `machine.disk_min` |
@@ -355,8 +360,8 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-The file is part of the same pass. A `trust` line changed since the owner approved it is reported at
-the next one, and the team keeps running until the owner approves it again:
+The file is part of the same pass. The live file is the record, so a `trust` line changed since the
+owner approved it logs no difference, and the team keeps running:
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -395,7 +400,6 @@ seats:
 ```console
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the file differs from the approved one: `trust` changed
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
 ```
@@ -403,7 +407,9 @@ exit 0
 The watch's own timings are the owner's too: `interval`, `idle_first`, `idle_repeat`, `team_idle`,
 `nudge_wait` and `unsent_after` are approved with the file, and an edit to one of them changes
 nothing until the owner approves it — the passes keep running with the values of the approved copy,
-or with the defaults when nothing was approved, and the difference is reported.
+or with the defaults when nothing was approved.
+`watch.nudge` is read from the live file on each pass, including while those timings are still
+the approved copy or the defaults.
 By default an idle seat is reported once per idle period (`idle_repeat` is off). A team that wants
 repeated idle reports turns them on by setting `watch.idle_repeat` to the repeat interval (such as
 `idle_repeat: 20m`), repeating every 20 minutes while the seat stays quiet.
@@ -412,7 +418,7 @@ A check the team doesn't want is turned off in `watch.checks` — a section only
 so it is approved like the rest of them. While that edit is unapproved, the approved list stays
 in force: nothing new is turned off, and a check the approved file turned off stays off. The
 machine below sits at 8% free memory, and this file turns that report off. The approved list left
-it on, so the report still comes, with the difference beside it.
+it on, so the report still comes.
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -455,7 +461,6 @@ seats:
 ```console machine=tight
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the file differs from the approved one: `watch.checks` changed
 2026-10-04T09:00:00.000Z free memory is 8%, below 15%
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
