@@ -302,6 +302,11 @@ screen:
     # read scans up from the status line and anchors this pattern to the captured column.
     prompt: '^ {2}→'
     strip_suffix: '\s*ctrl\+c to stop\s*$'
+    # Cursor greys its placeholder with faint styling and draws its cursor as one inverse cell on
+    # the placeholder's first character, while typed text carries neither
+    # (exit-typing/cursor-idle-ansi.txt, cursor-unsent-ansi.txt). The list stays the fallback for
+    # a source without styling.
+    placeholder_style: dim
     placeholders:
       - equals: ''
       - equals: Plan, search, build anything

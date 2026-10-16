@@ -217,6 +217,11 @@ screen:
     # fallback may call idle or unsent. An empty list is a declared one: a screen with no
     # status row stays unknown.
     fallback: []
+    # Codex greys its placeholder — `Ask Codex to do anything` here, other words in other
+    # sessions — with faint styling after a bold prompt, while typed text carries none
+    # (exit-typing/codex-idle-ansi.txt, codex-unsent-ansi.txt). The list stays the fallback for
+    # a source without styling.
+    placeholder_style: dim
     placeholders:
       - equals: ''
       - equals: Ask Codex to do anything

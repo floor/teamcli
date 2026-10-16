@@ -1082,8 +1082,8 @@ function boxToRule(lines: string[], styled: string[], composer: Extract<ScreenDa
     from = input;
   }
   const rows = lines.slice(input + 1, close);
-  for (let i = input + 1; i < close; i++) {
-    if ((lines[i] ?? '').trim()) return { kind: 'unsent', from, input, rows };
+  if (rows.some((line) => line.trim()) && !rowsAreDim(composer, rows, styled.slice(input + 1, close))) {
+    return { kind: 'unsent', from, input, rows };
   }
   const typed = (lines[input] ?? '').replace(composer.prompt, '').trim();
   return { kind: placeholder(typed, composer, lines[input] ?? '', styled[input]) ? 'idle' : 'unsent', from, input, rows };
@@ -1197,12 +1197,16 @@ function statusLast(
   // non-blank row there is.
   const own = 'ownRows' in composer ? composer.ownRows ?? [] : [];
   const rows: string[] = [];
+  const styledRows: (string | undefined)[] = [];
   for (let i = input + 1; i < end; i++) {
     const line = lines[i] ?? '';
     if (own.some((pattern) => pattern.test(line))) continue;
     rows.push(line);
+    styledRows.push(styled[i]);
   }
-  for (const line of rows) if (line.trim()) return { kind: 'unsent', from: input, input, rows };
+  if (rows.some((line) => line.trim()) && !rowsAreDim(composer, rows, styledRows)) {
+    return { kind: 'unsent', from: input, input, rows };
+  }
   return { kind: placeholder(stripTyped(lines[input] ?? '', composer), composer, lines[input] ?? '', styled[input]) ? 'idle' : 'unsent', from: input, input, rows };
 }
 
@@ -1278,7 +1282,9 @@ function twoRules(lines: string[], styled: string[], composer: Extract<ScreenDat
   }
   if (!footer) return { kind: 'unknown' };
   const rows = lines.slice(input + 1, bottom);
-  if (rows.some((line) => line.trim())) return { kind: 'unsent', from: top, input, rows };
+  if (rows.some((line) => line.trim()) && !rowsAreDim(composer, rows, styled.slice(input + 1, bottom))) {
+    return { kind: 'unsent', from: top, input, rows };
+  }
   const typed = (lines[input] ?? '').replace(composer.prompt, '').trim();
   return { kind: placeholder(typed, composer, lines[input] ?? '', styled[input]) ? 'idle' : 'unsent', from: top, input, rows };
 }
@@ -1305,6 +1311,24 @@ function placeholder(
     return allDimAfter(styledLine, skip);
   }
   return composer.placeholders.some((entry) => ('equals' in entry ? typed === entry.equals : typed.startsWith(entry.prefix)));
+}
+
+// Rows under the input row that hold only a greyed suggestion: a suggestion longer than the box is
+// wide wraps onto them, in the same faint style as the input row. Every non-blank row must be
+// styled and all faint; one plain character on any of them is text. A composer without the dim
+// style, and a read without styling, say no — the rows then are text, as they always were.
+function rowsAreDim(
+  composer: { placeholderStyle?: ScreenData['composer']['placeholderStyle'] },
+  rows: string[],
+  styledRows: (string | undefined)[],
+): boolean {
+  if (composer.placeholderStyle !== 'dim') return false;
+  for (let i = 0; i < rows.length; i++) {
+    if (!(rows[i] ?? '').trim()) continue;
+    const styled = styledRows[i];
+    if (styled === undefined || !hasSgr(styled) || !allDimAfter(styled, 0)) return false;
+  }
+  return true;
 }
 
 /** One line's floor hit, as the line's plain text trimmed — the only part of an unrecognised
