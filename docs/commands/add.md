@@ -21,12 +21,16 @@ needs it, and refuses the same folders `up` refuses, before it writes anything.
 Reads the team file (or the one `--file` names), this machine's approval store (the record, and the
 approved copy the seat is put back from), the session's state (`.agents/team.state.json`, including
 the project's stored budget readings), herdr (the session's state, its agents and their workspaces),
+the seat's CLI's own config under the seat's home when the seat is about to start in the lobby,
 and, like `up`: the doctor's findings and the machine's load, free memory, free disk and free swap.
 
 Writes the team file when the seat has to be put back into it, `.agents/team.state.json` (the seat's
 stage, pane and workspace; a seat stopped at a dialog's `waiting-owner` record, with the process
 identity read at that moment; a temporary seat's entry), `.agents/team.log`, the store's ledger of
-seats the team has had, and, through herdr: the workspace, the launch, and the name.
+seats the team has had, the CLI's own trust record for the lobby when the seat is about to start
+there — the file that CLI already reads for a folder it was told to trust, written under the seat's
+home before the workspace is made, and left untouched when it or a folder above it is a link — and,
+through herdr: the workspace, the launch, and the name.
 
 ## Who may run it
 
@@ -157,6 +161,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | `team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat` — any caller but the owner; a temporary seat takes them from any caller | 1 |
 | ``team add: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
 | ``team add: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
+| `team add: <name>: its pane holds a process this record cannot tie to the launch` — the record holds the pane's own shell pid and the CLI's pids, read when the seat was launched; the pane is running neither, and the agent session herdr shows there is not the stored one. Nothing is closed and no second CLI is started in it | 1 |
 | ``team add: the file was never approved on this machine: run `team approve` `` | 1 |
 | ``team add: approved before records were signed: run `team approve` once`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
 | ``team add: the file is not the approved one (<differences>): run `team approve` `` | 1 |
@@ -179,6 +184,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | ``team add: the file is legacy: migrate trust to absolute paths including the lobby ~/.config/team/lobby: ...`` | 1 |
 | ``team add: trust: must list the lobby ~/.config/team/lobby`` | 1 |
 | ``team add: the lobby ~/.config/team/lobby: <check>`` | 1 |
+| `team add: refused: the lobby is not trusted for <cli>: run <cli> in <lobby> and accept the folder` — the CLI's own record for the lobby can't be written, so the seat would open that folder untrusted; `grok` and `cursor` seats are told their own flag instead (`run grok --trust in <lobby>`, `run cursor-agent --trust in <lobby>`) | 1 |
 | ``team add: seat beacon-qa would start in live, inside the protected checkout live; a seat that isn't `mode: shared` never starts in one`` | 1 |
 | `team add: the file changed while add was checking; nothing was written` | 1 |
 | `team add: the load is <n> per core, above <n>` / `team add: free memory is <n>%, below <n>%` | 1 |
@@ -324,3 +330,28 @@ Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--sess
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
 exit 2
 ```
+
+A seat that starts in the lobby is about to open a folder its CLI has never been asked to trust, so
+the record that CLI reads for a trusted folder is written under the seat's home first, for that
+lobby, before any workspace is made; a CLI whose record this build does not know starts with
+nothing written. A record that cannot be written refuses the seat before the file is edited — a
+config file, or a folder above it, that is a link is never read or written, and neither is a config
+the command cannot read. The seat the page stopped above, started again against such a config:
+
+```file file=../../.claude.json
+not json
+```
+
+```console
+$ team remove claude-beacon --keep ; echo "exit $?"
+claude-beacon: stopped
+stopped claude-beacon
+exit 0
+$ team add claude-beacon ; echo "exit $?"
+team add: refused: the lobby is not trusted for claude: run claude in ~/.config/team/lobby and accept the folder
+exit 1
+```
+
+The line names the repair the seat's own CLI needs: a `grok` or `cursor` seat is told `run grok
+--trust in <lobby>`, or `run cursor-agent --trust in <lobby>`. A `--dry-run` reports it as
+`<name>: would refuse: <line>` and writes nothing.

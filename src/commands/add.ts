@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { approvalDifferencesOf, budgetsInForceOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
+import { approvalDifferencesOf, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
@@ -26,7 +26,7 @@ import { defaultLabel, validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
 import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
 import {
-  agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, reportDisplayAgent, sessionRunning,
+  agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, reportDisplayAgent, sendKey, sessionRunning,
   sessionState, startServer, typeText, workspaceClose, workspaceCreate, workspaceList, workspacePanes,
   type HerdrAgent, type PaneProcesses,
 } from '../herdr.ts';
@@ -89,6 +89,7 @@ const realLaunch: Launch = {
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
   pressEnter: (session, pane) => pressEnter(pane, aim(session)),
+  sendKey: (session, pane, key) => sendKey(pane, key, aim(session)),
   agentStatus: (session, pane) => agentStatus(pane, aim(session)),
   foreground: (session, pane) => paneForeground(pane, aim(session)),
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
@@ -270,27 +271,37 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.default-session
     return 1;
   }
-  // One verified snapshot for the whole command: a legacy or refused record is not
-  // an approval in force, and the approved copy the seat is built from is the record's own.
+  // A missing record is the live file. A legacy or refused record is still not in force.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
-  if (standing.kind !== 'verified') {
+  if (standing.kind !== 'verified' && standing.kind !== 'none') {
     out.stderr(`team add: ${plainText(notInForce(standing))}\n`);
     // exit: add.never-approved
     // exit: add.ceilings
     return 1;
   }
-  const differences = approvalDifferencesOf(standing, team);
-  if (differences.length) {
-    out.stderr(`team add: the file is not the approved one (${plainText(differences.join('; '))}): run \`team approve\`\n`);
-    // exit: add.differs
-    return 1;
-  }
-  const approvedText = standing.record.file;
-  const approved = validateTeamFile(approvedText, { home: sources.home, fs: sources.fs, root });
-  if (!approved.ok) {
-    out.stderr('team add: the approved copy can\'t be read: run `team approve`\n');
-    // exit: add.approved-copy
-    return 1;
+  let approvedText: string;
+  let approvedTeam: TeamFile;
+  let ceilings: Ceilings;
+  if (standing.kind === 'none') {
+    approvedText = readFileSync(path, 'utf8');
+    approvedTeam = team;
+    ceilings = ceilingsOf(team);
+  } else {
+    const differences = approvalDifferencesOf(standing, team);
+    if (differences.length) {
+      out.stderr(`team add: the file is not the approved one (${plainText(differences.join('; '))}): run \`team approve\`\n`);
+      // exit: add.differs
+      return 1;
+    }
+    approvedText = standing.record.file;
+    const approved = validateTeamFile(approvedText, { home: sources.home, fs: sources.fs, root });
+    if (!approved.ok) {
+      out.stderr('team add: the approved copy can\'t be read: run `team approve`\n');
+      // exit: add.approved-copy
+      return 1;
+    }
+    approvedTeam = approved.team;
+    ceilings = standing.record.approval.ceilings;
   }
 
   const live = sources.sessionState(session);
@@ -314,12 +325,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const recorded = readState(dir).sessions[session] ?? emptySession();
-  const ceilings: Ceilings = standing.record.approval.ceilings;
 
   const original = readFileSync(path, 'utf8');
   const built = temporary
-    ? temporarySeat(args.values, original, approved.team, recorded, agents, root, team.workspace.base)
-    : declaredSeat(args.rest[0] ?? '', original, approvedText, approved.team, sources.home, sources.fs);
+    ? temporarySeat(args.values, original, approvedTeam, recorded, agents, root, team.workspace.base)
+    : declaredSeat(args.rest[0] ?? '', original, approvedText, approvedTeam, sources.home, sources.fs);
   if ('error' in built) {
     out.stderr(`team add: ${plainText(built.error)}\n`);
     // exit: add.no-seat
@@ -534,6 +544,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       : []),
   ]) {
     if (blocksLaunch(finding)) {
+      // A missing approval record is the live file, the same way `up` reads it. The doctor's
+      // never-approved miss is that record's absence, and it does not stop this add.
+      if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
       // A file a CLI reads at start is said here and refused later, only when this seat is
       // about to start in the lobby. Other misses still stop the run here.
       if (finding.text.includes(' is read at start by ')) {
@@ -711,7 +724,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       }
       const parsed = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
       // The amendment re-signs from the command's own one snapshot, read at its gate.
-      if (parsed.ok) recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);
+      if (parsed.ok && standing.kind === 'verified') recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);
       // The reach projection, from the file just written: a seat added with a `reach` grant
       // reaches the bridge and the shuttle at this approval, without waiting for an `up`.
       if (parsed.ok) {
@@ -836,6 +849,7 @@ function seatPlan(
     displayAgent: displayAgent(seat),
     model: seat.model,
     version: seat.version,
+    ...(seat.effort ? { effort: seat.effort } : {}),
     // The team file's own repair for this seat — a lead seat is told only the whole-team
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
@@ -968,6 +982,9 @@ function hostOf(input: {
         status: () => launch.agentStatus?.(session, pane) ?? null,
         type: (value) => launch.typeText?.(session, pane, value) ?? false,
         enter: () => launch.pressEnter?.(session, pane) ?? false,
+        ...(launch.sendKey
+          ? { key: (name: string) => launch.sendKey!(session, pane, name) }
+          : {}),
         // The last look before Enter: the file, read without following a link, must still hold
         // the text whose hash the line names.
         file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),
@@ -1057,7 +1074,8 @@ function hostOf(input: {
           }
         }
         // `waiting: null` removes the field alone; anything else written replaces it.
-        const { waiting: written, ...rest } = patch;
+        // `effort: null` is a launch that set no word: the stored word goes with it.
+        const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,
           ...rest,
@@ -1073,6 +1091,8 @@ function hostOf(input: {
         };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;
+        if (patchedEffort === null) delete seatState.effort;
+        else if (patchedEffort !== undefined) seatState.effort = patchedEffort;
         current.seats[name] = seatState;
         if (patch.pane) {
           replaced = prior.pane !== patch.pane ? prior.pane : undefined;

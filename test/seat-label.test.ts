@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalDifferences, approvalOf } from '../src/approve/approval.ts';
 import { runTeamCheck } from '../src/check/team.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import { runDoctor, seatNameFindings, type DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type UpSources } from '../src/commands/up.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
