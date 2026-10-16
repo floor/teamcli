@@ -341,6 +341,30 @@ None.
 
 None.
 
+## `hold`
+
+Hidden: no
+
+Usage:
+
+    team hold <reason> [--until <time>]
+    team hold --release
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--release` | no | no | no |
+| `--until` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `reason` | yes | no |
+
 ## `init`
 
 Hidden: no
