@@ -93,7 +93,8 @@ row — `status` names the seat — the owner looks at the pane: it says whether
 one `team` launched, and `up`'s own guards are in `docs/commands/up.md`.
 
 The model is the seat's `display` when the running model matches the file, and
-`<model> <version> (file: <display>)` when it doesn't. A screen that doesn't show the model is a
+`<model> <version> (file: <display>)` when it doesn't. An effort word alone does not move the
+column: the model on the pane is still the file's. A screen that doesn't show the model is a
 `note` rather than a difference: `unread` is never wrong.
 
 A record in force is not a note of its own: the live file is what the commands read, so nothing is
@@ -153,7 +154,7 @@ here.
 | `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched` | the same restart. Said when the launch line starts a program other than the CLI's own binary, or the file says the launcher chooses the model, and the process is not the one `team` launched — including when the stored agent session is still the live one, in which case the row stays the running seat |
 | `<seat> runs <model> <version>; the file says <declared>; its launch line starts a launcher; the process in its pane is not the one team launched` | the same restart, when the screen's model is not the file's and the launch line names a launcher |
 | `<seat>: the agent in <pane> is named "x"` | `herdr --session <s> agent rename <pane> <seat>` |
-| `<seat> runs <model> <version>; the file says <declared>` (`<declared>` is the seat's `display` spelling) | `restart the seat on the file's model (<command>), or correct the file`. `<command>` is `team remove <seat> --keep, then team add <seat>`, or, for a lead, `team down, then team up` (to restart the whole team) |
+| `<seat>: running <model> <version> <effort>, file says <declared> <effort>` — the model not matching the file, or an effort word the pane printed differing from the file's (the seat's `effort:`, or the word `default` when it carries none); each side prints its word only when it has one, and a pane that printed none leaves the file's word standing, so an effort drift is always a word actually seen (`<declared>` is the seat's `display` spelling) | `restart the seat on the file's model (<command>), or correct the file`. `<command>` is `team remove <seat> --keep, then team add <seat>`, or, for a lead, `team down, then team up` (to restart the whole team) |
 | `<seat> is marked stopped in the file and is running` | `team remove <seat> --keep`, or take `stopped: true` off the seat |
 | `<seat>: waiting for owner (<classification>)` | `the owner runs team up` (it offers to open the pane, skip the seat or stop cleanly), or `team answer <seat> trust` when the classification is `trust` and the policy is `dialogs.trust: orchestrator` |
 | `<seat>: trust sent; recovery required` | `the owner runs team up` |
