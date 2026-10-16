@@ -27,6 +27,12 @@ or `team down, then team up` for a lead — when its screen names a model the fi
 or its launch line starts a launcher; a pane it can say nothing about is repaired by looking at
 it. Nothing either report says starts a seat.
 
+A seat no source has heard from past the blind threshold counts as not working, in the check and
+in the status alike: the run adds the owner's difference `<seat>: unknown for over <threshold> —
+blind, and it counts as not working`, repaired with the owner's look at the pane, and
+[`team seats`](seats.md) prints the reading itself as `unknown (blind)` beside the source it was
+read from.
+
 A process a seat recorded with `team proc add` shows too: one `note:` line per live record —
 `proc <name>: <by> since <at>`, with `, pid <n>` when one is recorded — printed after the other
 notes. A record whose process has ended is not printed, and a team that recorded none shows no
@@ -43,7 +49,7 @@ such line. `--json` carries the same reading as a `procs` array, absent when the
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
 | `--project` | `<name>` | cover the project the name holds — its teams, read from the registry — instead of one team's reading; anyone may aim it, from any folder |
-| `--all` | — | render the expanded seat registry columns (`SEAT`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `LAST ACTIVE`, `PANE`) and include those fields in `--json` rows |
+| `--all` | — | render the expanded seat registry columns (`SEAT`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `STATE`, `SOURCE`, `LAST ACTIVE`, `PANE`); `--json` rows keep the shape they published, so `STATE` and `SOURCE` print in the table alone |
 | `--json` | — | the same reading as one JSON document instead of the table, the notes and the repairs |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
