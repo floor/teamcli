@@ -1,19 +1,22 @@
 // The dev-mode gates matrix. TEAMCLI_DEV_MODE=1 turns a command's caller gate into a warning
 // (a log line beside it where the command logs) and the run continues past it; unset, every gate
 // refuses as always. `grant`, `delegate`, `revoke` and `approve` are owner-only in every mode.
-// The rows for the commands whose dev-mode landing has not reached this branch yet are
-// `test.todo`s, filled as their commits land. Every file, caller and pane below is synthetic.
+// `register`'s row is a `test.todo` until its landing reaches this branch; every other row is a
+// scene. Every file, caller and pane below is synthetic.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runApprove, type ApproveSources } from '../src/approve/command.ts';
+import { runAdd, type AddSources } from '../src/commands/add.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
 import { runGrant } from '../src/commands/grant.ts';
+import { runInit } from '../src/commands/init.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -64,6 +67,18 @@ function repo(builder: (root: string) => string = file): { root: string; home: s
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home, { recursive: true });
   writeFileSync(join(root, '.agents', 'team.yaml'), builder(root));
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, env: gitEnv(), stdio: 'ignore' });
+  return { root, home };
+}
+
+/** A repository with no team file and a home of its own beside it: `init`'s starting point. */
+function emptyRepo(): { root: string; home: string } {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-dev-matrix-init-')));
+  dirs.push(base);
+  const root = join(base, 'acme');
+  const home = join(base, 'home');
+  mkdirSync(root, { recursive: true });
+  mkdirSync(home, { recursive: true });
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, env: gitEnv(), stdio: 'ignore' });
   return { root, home };
 }
@@ -163,6 +178,53 @@ function downSources(home: string, stopped: { n: number }): DownSources {
       sleep: async () => {},
       now: () => NOW,
     },
+  };
+}
+
+/** `add`'s sources. `live` is the session the run reads once the gate is behind it; every scene
+ *  stops at or before that read, so the launch, the agents and the workspaces never matter. */
+function addSources(home: string, live: 'running' | 'stopped' | null): AddSources {
+  return {
+    home,
+    sessionState: () => live,
+    agents: () => [],
+    workspaces: () => [],
+    doctor: doctor(home),
+    now: () => NOW,
+    launch: upWorld().launch,
+  };
+}
+
+/** `restart`'s sources: the stop world's shape plus restart's own launch, session read and
+ *  doctor. `live` is the herdr answer past the gate; the scenes stop at or before it. */
+function restartSources(home: string, live: 'running' | 'stopped' | null): RestartSources {
+  return {
+    home,
+    sessionRunning: () => true,
+    agents: () => [],
+    alive: () => true,
+    screen: () => ({ kind: 'idle' }),
+    screenText: () => '',
+    status: () => 'idle',
+    foreground: () => [],
+    now: () => NOW,
+    sleep: async () => {},
+    launch: {
+      typeText: () => true,
+      sendKey: () => true,
+      pressEnter: () => true,
+      agentPanes: () => [],
+      closeWorkspace: () => true,
+      stopSession: () => false,
+      deleteSession: () => false,
+      kill: () => false,
+      sleep: async () => {},
+      now: () => NOW,
+    },
+    sessionState: () => live,
+    workspaces: () => [],
+    upLaunch: upWorld().launch,
+    doctor: doctor(home),
   };
 }
 
@@ -322,6 +384,88 @@ test('remove --abandon: unset, the owner-only gate refuses; set, it is a warning
   expect(continued.closed).toContain('w3');
 });
 
+// --- add --------------------------------------------------------------------------------------
+// Past the gate under dev mode the run reads the session next: with it stopped, that reading
+// refuses — which a run still standing at the gate could never say. The exact `1` is the mode;
+// `true` is not it.
+
+const ADD_LINE = 'only the owner, the orchestrator or the operator runs it; this call is unplaced (it runs under herdr)';
+const RESTART_LINE = 'only the owner, the orchestrator or the operator restarts a seat; this call is unplaced (it runs under herdr)';
+const INIT_LINE = 'only the owner runs init, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
+
+test('add: unset, the caller gate refuses; set, it warns, logs and the run reads on', async () => {
+  const refused = repo();
+  const refusedIo = testIo(refused.root, UNPLACED);
+  expect(await runAdd(['worker'], refusedIo, addSources(refused.home, 'stopped'))).toBe(1);
+  expect(refusedIo.err).toBe(`team add: ${ADD_LINE}\n`);
+  expect(refusedIo.out).toBe('');
+  expect(existsSync(join(refused.root, '.agents', 'team.log'))).toBe(false);
+
+  const truthy = repo();
+  const truthyIo = testIo(truthy.root, UNPLACED);
+  truthyIo.env = { ...truthyIo.env, TEAMCLI_DEV_MODE: 'true' };
+  expect(await runAdd(['worker'], truthyIo, addSources(truthy.home, 'stopped'))).toBe(1);
+  expect(truthyIo.err).toBe(`team add: ${ADD_LINE}\n`);
+
+  const readOn = repo();
+  const readIo = testIo(readOn.root, UNPLACED);
+  readIo.env = { ...readIo.env, TEAMCLI_DEV_MODE: '1' };
+  expect(await runAdd(['worker'], readIo, addSources(readOn.home, 'stopped'))).toBe(1);
+  // The warning is the gate moved aside; the line after it is the run having moved with it.
+  expect(readIo.err).toBe(
+    `team add: warning: ${ADD_LINE}; dev mode continues\n`
+    + 'team add: session acme is stopped; clear it with `herdr session delete acme`\n',
+  );
+  expect(readIo.out).toBe('');
+  expect(readFileSync(join(readOn.root, '.agents', 'team.log'), 'utf8'))
+    .toBe(`${NOW.toISOString()} add [unplaced (it runs under herdr)] warning: ${ADD_LINE}; dev mode continues\n`);
+});
+
+// --- restart ----------------------------------------------------------------------------------
+// Past the gate under dev mode the restart reads herdr next: with no answer it refuses there,
+// which only a run that moved past the gate can say.
+
+test('restart: unset, the caller gate refuses; set, it warns, logs and the run reads on', async () => {
+  const refused = repo();
+  approve(refused.home, refused.root);
+  const refusedIo = testIo(refused.root, UNPLACED);
+  expect(await runRestart(['lead'], refusedIo, restartSources(refused.home, null))).toBe(1);
+  expect(refusedIo.err).toBe(`team restart: ${RESTART_LINE}\n`);
+  expect(refusedIo.out).toBe('');
+  expect(existsSync(join(refused.root, '.agents', 'team.log'))).toBe(false);
+
+  const readOn = repo();
+  approve(readOn.home, readOn.root);
+  const readIo = testIo(readOn.root, UNPLACED);
+  readIo.env = { ...readIo.env, TEAMCLI_DEV_MODE: '1' };
+  expect(await runRestart(['lead'], readIo, restartSources(readOn.home, null))).toBe(1);
+  expect(readIo.err).toBe(`team restart: warning: ${RESTART_LINE}; dev mode continues\nteam restart: herdr doesn't answer\n`);
+  expect(readIo.out).toBe('');
+  expect(readFileSync(join(readOn.root, '.agents', 'team.log'), 'utf8'))
+    .toBe(`${NOW.toISOString()} restart [unplaced (it runs under herdr)] warning: ${RESTART_LINE}; dev mode continues\n`);
+});
+
+// --- init -------------------------------------------------------------------------------------
+// Under dev mode the gate warns and `init` writes the team file it was there to write; unset,
+// nothing is written at all.
+
+test('init: unset, the caller gate refuses and nothing is written; set, it warns, logs and writes', async () => {
+  const refused = emptyRepo();
+  const refusedIo = testIo(refused.root, UNPLACED);
+  expect(await runInit([], refusedIo, refused.home, undefined, { loggedIn: () => true, now: () => NOW })).toBe(1);
+  expect(refusedIo.err).toBe(`team init: ${INIT_LINE}\n`);
+  expect(existsSync(join(refused.root, '.agents'))).toBe(false);
+
+  const wrote = emptyRepo();
+  const wroteIo = testIo(wrote.root, UNPLACED);
+  wroteIo.env = { ...wroteIo.env, TEAMCLI_DEV_MODE: '1' };
+  expect(await runInit([], wroteIo, wrote.home, undefined, { loggedIn: () => true, now: () => NOW })).toBe(0);
+  expect(wroteIo.err).toBe(`team init: warning: ${INIT_LINE}; dev mode continues\n`);
+  expect(existsSync(join(wrote.root, '.agents', 'team.yaml'))).toBe(true);
+  expect(readFileSync(join(wrote.root, '.agents', 'team.log'), 'utf8'))
+    .toContain(`${NOW.toISOString()} init [unplaced (it runs under herdr)] warning: ${INIT_LINE}; dev mode continues\n`);
+});
+
 // --- the owner-only edits ---------------------------------------------------------------------
 // Dev mode waives caller gates; it never widens `grant`, `delegate`, `revoke` or `approve`.
 
@@ -380,12 +524,9 @@ describe('the owner-only edits are not dev-mode gates', () => {
 });
 
 // --- the landing rows -------------------------------------------------------------------------
-// Written as `test.todo` rows until the dev-mode commits for these commands land; the scenes
-// replace the todos, one for each, the moment the shas are on the branch.
+// `register`'s dev-mode landing has not reached this branch yet: its row stays a `test.todo`
+// and becomes a scene the moment its sha lands, like `add`, `restart` and `init` did.
 
 describe('landing rows (todo until the commits land)', () => {
   test.todo('register: unset the caller gate refuses; set it warns, logs the line, and the run continues', () => {});
-  test.todo('add: unset the caller gate refuses; set it warns, logs the line, and the run continues', () => {});
-  test.todo('restart: unset the caller gate refuses; set it warns, logs the line, and the run continues', () => {});
-  test.todo('init: unset the caller gate refuses; set it warns, logs the line, and the run continues', () => {});
 });
