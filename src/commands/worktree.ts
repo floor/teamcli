@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { notInForce, worktreeTeamInForceOf } from '../approve/approval.ts';
+import { notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { insideTrust } from '../file/paths.ts';
@@ -110,11 +110,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     home: sources.home,
     checkOnly: true,
   });
-  const standing = loaded.ok ? (sources.standing?.(loaded.root) ?? approvalStanding(loaded.root, sources.home)) : null;
-  const inForce = loaded.ok && standing ? worktreeTeamInForceOf(standing, loaded.team) : null;
-  // Placement is judged on the file the command will use. A verified run uses the approved
-  // copy, so an unapproved protected list on the live file does not refuse the load.
-  const placed = loaded.ok ? placedProblems(inForce?.team ?? loaded.team, loaded.root, sources.home) : [];
+  const placed = loaded.ok ? placedProblems(loaded.team, loaded.root, sources.home) : [];
   if (!loaded.ok || placed.length) {
     const problems = loaded.ok ? placed : loaded.errors;
     for (const problem of problems) {
@@ -126,21 +122,13 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     return 2;
   }
   const { team, root } = loaded;
-  // One verified snapshot for the whole command, read once: every value the subcommands read
-  // from the file is the approved copy's, including when the fingerprints match. The caller's
-  // gate below is judged on those values too — a seat the file added to `orchestrator` is not one
-  // until the owner approves it. With nothing verified the file's own values are read, exactly
-  // as before, so the refusals are still main's. `project` on the snapshot is the live file's.
-  if (standing === null || inForce === null) {
-    io.stderr('team worktree: the stored copy can\'t be read\n');
-    // exit: worktree.approved-copy
-    return 1;
-  }
-  const reading = inForce.team;
+  const standing = sources.standing?.(loaded.root) ?? approvalStanding(loaded.root, sources.home);
+  // The live file is the record the subcommands act on: an edit to it is not a difference to say.
+  const reading = team;
   const dir = dirname(loaded.path);
   // The gate judges the caller placed in the session this command asks about — the proof its pane
   // is that session's. With no `--session` the session judged is the caller's own placement: the
-  // approved file's session first, then a session the state records this caller's pane in (`team
+  // file's session first, then a session the state records this caller's pane in (`team
   // up --session <other>`) — never one a non-owner chose. The refusal names the caller's own
   // placement, exactly as main described it.
   const judged = args.values.session !== undefined
@@ -174,17 +162,11 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     // exit: worktree.never-approved
     return 1;
   }
-  // One note, before the folder or anything else the command prints: the run goes on with the
-  // approved settings, and the owner is told the file asks for more than that.
-  if (inForce.differs) {
-    io.stderr('team worktree: using the stored workspace settings; the file has changed since that copy was stored\n');
-  }
-
   const who = describeCaller(caller);
   if (sub === 'list') return listWorktrees(io, reading, root, dir);
   // `list` is the only subcommand that arrives without a task; the gate above already returned.
   const named = task ?? '';
-  if (sub === 'new') return create(io, sources, reading, team, root, dir, session, named, args.values.kind, args.values.seat, who);
+  if (sub === 'new') return create(io, sources, reading, root, dir, session, named, args.values.kind, args.values.seat, who);
   return removeWorktree(io, sources, reading, root, dir, session, named, who);
 }
 
@@ -198,11 +180,9 @@ function listWorktrees(io: Io, team: TeamFile, root: string, dir: string): numbe
   return 0;
 }
 
-// `team` is the approved copy for a verified standing, or the live file when nothing is verified;
-// every value below is read from it. `file` is the live file, read for one thing only: a seat
-// the live file names and the stored copy does not.
+// `team` is the live file; every value below is read from it.
 function create(
-  io: Io, sources: WorktreeSources, team: TeamFile, file: TeamFile, root: string, dir: string, session: string, task: string,
+  io: Io, sources: WorktreeSources, team: TeamFile, root: string, dir: string, session: string, task: string,
   kind: string | undefined, seatName: string | undefined, who: string,
 ): number {
   const named = taskProblem(task);
@@ -258,7 +238,7 @@ function create(
     return 1;
   }
   if (!insideTrust(folder, team.trust, root, sources.home)) {
-    io.stderr(`team worktree: ${folder} is outside the approved trust paths\n`);
+    io.stderr(`team worktree: ${folder} is outside the file's trust paths\n`);
     // exit: worktree.trust
     return 1;
   }
@@ -266,17 +246,12 @@ function create(
   if (landing.real !== landing.logical) {
     const rel = relative(realpathSync(root), landing.real).split(sep).join('/');
     if (!insideTrust(rel, team.trust, root, sources.home)) {
-      io.stderr(`team worktree: ${folder} follows a symlink to ${landing.real}, which is outside the approved trust paths\n`);
+      io.stderr(`team worktree: ${folder} follows a symlink to ${landing.real}, which is outside the file's trust paths\n`);
       // exit: worktree.symlink
       return 1;
     }
   }
   if (seatName !== undefined && !team.seats.some((seat) => seat.name === seatName)) {
-    if (file.seats.some((seat) => seat.name === seatName)) {
-      io.stderr(`team worktree: seat ${seatName} is not in the stored copy\n`);
-      // exit: worktree.seat-unapproved
-      return 1;
-    }
     io.stderr(`team worktree: --seat ${JSON.stringify(seatName)} names no declared seat\n`);
     // exit: worktree.seat
     return 1;

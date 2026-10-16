@@ -27,6 +27,11 @@ or `team down, then team up` for a lead — when its screen names a model the fi
 or its launch line starts a launcher; a pane it can say nothing about is repaired by looking at
 it. Nothing either report says starts a seat.
 
+A process a seat recorded with `team proc add` shows too: one `note:` line per live record —
+`proc <name>: <by> since <at>`, with `, pid <n>` when one is recorded — printed after the other
+notes. A record whose process has ended is not printed, and a team that recorded none shows no
+such line. `--json` carries the same reading as a `procs` array, absent when there is none.
+
 ## Synopsis
 
     team status [--session <name>] [--file <path>] [--all] [--json]
@@ -47,11 +52,12 @@ it. Nothing either report says starts a seat.
 | --- | --- |
 | the owner, from a terminal outside herdr | read the team, and aim the read with `--file` and `--session` |
 | a seat of the team, placed in the file's session, on the pane the state records for it | read the team; a seat the state records no pane for, or records on another pane, fails closed |
-| a pane outside the team that the approved file names in its `delegates` entries | read the team; a pane only the live file names does not pass |
+| a pane outside the team that the live file names in its `delegates` entries | read the team; a pane newly named by the live file also passes |
 | anyone else, an owner's run without a terminal included | nothing: the fixed sentence `team status: this team is not yours to read` on stderr, stdout empty, exit 2 |
 
-`--file` and `--session` aimed by anyone else are refused before any file or session is read
-(`--file is the owner's, from a terminal outside herdr; this call is …`), exit 1. And herdr has to
+`--file` and `--session` aimed by anyone else are refused before any file or session is read —
+`--file is the owner's, from a terminal outside herdr; this call is …`, or `only the owner runs
+this, from a terminal outside herdr` for a run with no terminal — and exit 1. And herdr has to
 answer once the caller has passed the gate: without it, `status` can't say anything and exits 2.
 
 ## Output and exit codes
@@ -169,7 +175,6 @@ budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
-note: approval #1 (2026-10-04), key fe21ef6293de
 difference: claude-keeper is in the file and is not running
   repair: team add claude-keeper
 1 difference(s)

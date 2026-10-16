@@ -1574,6 +1574,83 @@
       "classify": "working",
       "composer": "idle",
       "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/idle.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/idle-footer.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/model-picker.txt",
+      "cli": "muse",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/permission.txt",
+      "cli": "muse",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/trust.txt",
+      "cli": "muse",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/unsent.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/usage-unavailable.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/usage.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/working.txt",
+      "cli": "muse",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/spark-constructed.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.9/wonder-full-constructed.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
     }
   ],
   "yaml": [

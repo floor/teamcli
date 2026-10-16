@@ -2300,7 +2300,7 @@ describe('the upgrade from 0.2.1', () => {
       .replaceAll('GPT-5.6-Terra', 'GPT-6-Sol');
   }
 
-  test("the rules-file line's repair works: remove --keep then add writes the file at the fresh launch", async () => {
+  test("the rules-file line names team reload, and a relaunch writes the file at the fresh launch", async () => {
     // A rules file travels as a message only on a CLI that takes rules that way, so the seat
     // the line is printed for is a Codex one.
     const withScribe = migratedTeamYaml().replace(
@@ -2316,10 +2316,7 @@ describe('the upgrade from 0.2.1', () => {
       agentList: () => [{ name: 'scribe', agent: 'codex', pane: 'w2:p1', workspace: 'w2', status: 'idle', cwd: null }],
     };
     const before = await runDoctorCmd([], live);
-    expect(before.out).toContain(
-      'scribe: its rules file is missing; run `team remove scribe --keep` then `team add scribe` '
-        + '(or `team down` then `team up` for the whole team)',
-    );
+    expect(before.out).toContain('scribe: its rules file is missing; run team reload scribe');
 
     const codexBox = (text: string): string => codexCapture('idle').replace('› Ask Codex to do anything', `› ${text}`);
     expect(
@@ -2489,7 +2486,7 @@ describe('the upgrade from 0.2.1', () => {
     );
   });
 
-  test('coordinator and operator relaunch lines offer only whole-team repair, and down/up clears them', async () => {
+  test('coordinator and operator relaunch lines offer only whole-team repair, their rules-file line names team reload, and down/up clears both', async () => {
     // Separate coordinator and operator seats
     const withOp = migratedTeamYaml()
       .replace('operator: lead', 'operator: opSeat')
@@ -2545,7 +2542,8 @@ describe('the upgrade from 0.2.1', () => {
     const docIdentAfter = await runDoctorCmd([], liveLeads);
     expect(docIdentAfter.out).not.toContain('launched before team recorded its process');
 
-    // 2. Rules-file warning: coordinator and operator name only team down/up
+    // 2. Rules-file warning: every seat, a lead included, is repaired with team reload — the
+    // command that closes the ready seat and launches the file's line, which writes the rules file
     const withCodexLeads = withOp
       .replaceAll('cli: claude-code', 'cli: codex')
       .replaceAll('vendor: anthropic', 'vendor: openai')
@@ -2564,12 +2562,8 @@ describe('the upgrade from 0.2.1', () => {
       };
     });
     const docRules = await runDoctorCmd([], liveLeads);
-    expect(docRules.out).toContain(
-      'lead: its rules file is missing; run `team down` then `team up` (to restart the whole team)',
-    );
-    expect(docRules.out).toContain(
-      'opSeat: its rules file is missing; run `team down` then `team up` (to restart the whole team)',
-    );
+    expect(docRules.out).toContain('lead: its rules file is missing; run team reload lead');
+    expect(docRules.out).toContain('opSeat: its rules file is missing; run team reload opSeat');
     expect(docRules.out).not.toContain('team remove lead --keep');
     expect(docRules.out).not.toContain('team remove opSeat --keep');
 

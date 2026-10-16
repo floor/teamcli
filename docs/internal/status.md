@@ -42,8 +42,8 @@ It does need herdr to answer once the caller has passed: without it, `status` ca
 and exits 2.
 
 `--file` and `--session` are the owner's. Aimed by anyone else, each is refused before any file
-or session is read (`--file is the owner's, from a terminal outside herdr; this call is …`) and
-exits 1.
+or session is read — `--file is the owner's, from a terminal outside herdr; this call is …`, or
+`only the owner runs this, from a terminal outside herdr` for a run with no terminal — and exits 1.
 
 A plain folder's seat runs `team status` from the folder that holds `.agents`. The lookup does
 not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim the parent's file.
@@ -96,10 +96,11 @@ The model is the seat's `display` when the running model matches the file, and
 `<model> <version> (file: <display>)` when it doesn't. A screen that doesn't show the model is a
 `note` rather than a difference: `unread` is never wrong.
 
-An approval in force is a note of its own, `approval #1 (2026-10-04), key fe21ef6293de`: the
-signing's number, its date and the key's fingerprint — the first twelve hex digits of the key's
-public half. An owner who noted the fingerprint sees a *replaced* key; a process that only reads
-it changes nothing `team` shows, and `team` computes what it shows.
+A record in force is not a note of its own: the live file is what the commands read, so nothing is
+compared against the record and the reading says nothing about it. A file with no record on this
+machine is the ordinary file — a machine that never approved it is no difference, and the reading
+exits 0 for it. A legacy record, or one the verification refused, is the file's case, in the table
+below — the commands a repair may name refuse until the file is in force again.
 
 ## Budgets
 
@@ -158,7 +159,7 @@ here.
 | `<seat>: trust sent; recovery required` | `the owner runs team up` |
 | `<seat>: its launch stopped at "<stage>"` | `the owner runs team up (it resumes the launch)` |
 | `<seat>: its rules were not delivered` | `team remove <seat> --keep`, then `team add <seat>` |
-| `<seat>: its rules file is missing` / `… is a symbolic link` / `… is not a regular file` / `… has mode 0644, not 0600` / `… is not owned by this user` / `… cannot be read` / `… differs from the approved rules` | `the owner runs team up` — the seat's rules travel in a file in the project state folder, and it no longer holds the approved rules text; `status` never rewrites it |
+| `<seat>: its rules file is missing` / `… is a symbolic link` / `… is not a regular file` / `… has mode 0644, not 0600` / `… is not owned by this user` / `… cannot be read` / `… differs from the team file's rules` | `team reload <seat>` — the seat's rules travel in a file in the project state folder, and it no longer holds the rules text the live file gives it; `status` never rewrites it |
 | `<seat> holds text in its input box that was never sent` | `the owner clears or sends it in the pane; team does not type into a box it can't verify` |
 | `<seat> waits at a permission prompt: its owner's to answer` | `the owner answers it in the pane` |
 | `<seat>: its launch stopped at "named", and it holds text in its input box that was never sent` | `the owner clears or sends it in the pane, then runs team up (it resumes the launch)` |
@@ -168,14 +169,13 @@ here.
 | `an unnamed <cli> (w1:p2) is running and is not in the file` | add the seat to the file, or close it |
 | `worktree <task>: its setup failed` | `team worktree remove <task>` |
 | `the protected checkout "." is on "x", not on "main"` | `the owner switches it back: git -C . switch main` |
-| `the file was never approved on this machine` | `the live file is what the commands read` |
 | `approved before records were signed`, or the case a refused record names | `the live file is what the commands read` |
-| `the file differs from the approved one: <line>` | `the live file is what the commands read` |
 
-The one precondition `status` knows and orders is the real one: the file is not the approved one.
-That difference is printed first, and a repair that names a command that refuses on an unapproved
-file — `team up`, `team add`, `team worktree` — is marked `(after: …)`. Nothing else is reordered
-or marked: a missing or stale watch blocks no repair, and what blocks a launch is `team doctor`'s
+The one precondition `status` knows and orders is the real one: the record is legacy, or the
+verification refused it. That difference is printed first, and a repair that names a command that
+refuses while the record is not in force — `team up`, `team add`, `team worktree` — is marked
+`(after: …)`. Nothing else is reordered or marked: a missing or stale watch blocks no repair, and
+what blocks a launch is `team doctor`'s
 to report. When at least one repair is the owner's, the summary line reports
 `N difference(s), M for the owner`.
 
@@ -212,6 +212,7 @@ may not read the team gets the fixed sentence on stderr and nothing on stdout, w
 | `team status: unexpected "x"` (with the usage) | 2 |
 | `team status: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team status: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
+| `team status: only the owner runs this, from a terminal outside herdr` — a run with no terminal aiming either flag; judged before the caller gate, so it is this line and not the fixed sentence below | 1 |
 | `team status: this team is not yours to read` | 2 |
 | `team status: team.yaml line <n>: <message>` | 2 |
 | `team status: herdr doesn't answer; is it installed and running?` | 2 |
@@ -324,7 +325,6 @@ budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
-note: approval #1 (2026-10-04), key fe21ef6293de
 difference: claude-keeper is in the file and is not running
   repair: team add claude-keeper
 1 difference(s)
@@ -354,9 +354,7 @@ team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's 
       "pane": "w1:p1"
     }
   ],
-  "notes": [
-    "approval #1 (2026-10-04), key fe21ef6293de"
-  ],
+  "notes": [],
   "differences": [
     {
       "what": "claude-keeper is in the file and is not running",
@@ -431,16 +429,15 @@ budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
-note: approval #1 (2026-10-04), key fe21ef6293de
 0 difference(s)
 exit 0
 ```
 
 The machine's own swap is read for one case only: the check in force — the 2GB default, or the
 file's own `swap_free_min` — asks for more free swap than this reading says the machine has in
-total. The same fact `doctor` warns about is one note, above the approval note, with both figures
-and the repair, in the reading's own words — `would refuse now`, never a promise about a later run;
-`--json` carries it in `notes` in the same place:
+total. The same fact `doctor` warns about is one note, with both figures and the repair, in the
+reading's own words — `would refuse now`, never a promise about a later run; `--json` carries it
+in `notes` in the same place:
 
 ```console machine="small-swap"
 $ team status ; echo "exit $?"
@@ -453,7 +450,6 @@ budgets:
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
-note: approval #1 (2026-10-04), key fe21ef6293de
 0 difference(s)
 exit 0
 ```

@@ -24,7 +24,7 @@ export type Live = {
 
 export type Row = { name: string; id?: string; state: string; model: string; pane: string; stored?: string; start_cwd?: string };
 
-/** The repair of the one precondition `status` knows: the file is not the approved one. The
+/** The repair of the one precondition `status` knows: the file's approval is not in force. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
 export const APPROVAL_REPAIR = 'the live file is what the commands read';
 
@@ -32,7 +32,7 @@ export const APPROVAL_REPAIR = 'the live file is what the commands read';
  * One disagreement, with the two facts about its repair that the renderer needs and must not
  * re-derive from the repair's wording, both set where the difference is created:
  *
- * - `needs`: the repair names a command that refuses while the file is not the approved one.
+ * - `needs`: the repair names a command that refuses while no approval is in force.
  *   Confirmed from the commands themselves: `team up` (`up.ts`), `team add` (`add.ts`), and
  *   `team worktree` (`worktree.ts`) each refuse on the standing before they do anything. Such a
  *   repair waits for `APPROVAL_REPAIR`, and is printed with `(after: …)` while the approval
@@ -121,7 +121,8 @@ function limitMark(seat: Seat | undefined, screen: Screen): string | null {
 }
 
 // Compares the file and the state with the live session. Pure: every input is handed in.
-// `watch` is the watch values in force — the approved ones — so an unapproved edit can't move a verdict.
+// `watch` is the watch values in force — the live file's under a verified standing, the defaults
+// under none — so the verdict reads one object.
 export function compare(
   team: TeamFile,
   session: string,

@@ -73,6 +73,15 @@ models:
       ignore_case: true
       model: 'Grok {1}'
       version: '{1}'
+# From a run (1.0.60, a chat session on a scratch pane): the row grok paints under the composer's
+# closing rule, at the pane's right edge, read `Weekly limit left: 0% · ` — the weekly quota
+# figure, repainted on every refresh. The welcome screen draws no such row; the row is the
+# session footer's. The quota read below takes this row, and only under the closing rule.
+quota:
+  - account: xai
+    match: '\bWeekly limit left: ([0-9]+)%'
+    left: '{1}%'
+    window: weekly
 # The last six plain lines. Fast is first, so `Grok 4.7 Fast (` is not read as `Grok`. The
 # effort paren is required, so `Grok Build` and `Grok 4.7 is here!` do not match. The paren
 # and `· always-approve` stay outside the model. The file's model is the name without the
@@ -138,5 +147,10 @@ screen:
     # column only. The empty box reads `  │ ❯` + padding + the edge, whose trimmed remainder is
     # the edge alone — the placeholder.
     strip_suffix: '\s*│$'
+    # The status row under the closing rule, from the same 1.0.60 run as the quota block above:
+    # the footer's quota cell `Weekly limit left: 0% · `, painted under the rule in a session.
+    # The grammar pins the row by its own words; the read takes the last row under the rule that
+    # carries them, so the pane's other footer rows are never mistaken for it.
+    status: 'Weekly limit left: [0-9]+%'
     placeholders:
       - equals: '│'

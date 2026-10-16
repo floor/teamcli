@@ -20,10 +20,10 @@ import { callerOf, describeCaller } from '../caller.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
+import { validLockName } from './name.ts';
 
-/** A lock name: lowercase letters, digits and single hyphens. Nothing here is a path. */
-export const LOCK_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-export const LOCK_NAME_MAX = 64;
+/** The lock's name rule lives in its own leaf module, so the state can clean a key by it too. */
+export { LOCK_NAME, LOCK_NAME_MAX, validLockName } from './name.ts';
 /** A wait longer than a day is a mistake, not a hold. */
 export const WAIT_MAX_SECONDS = 86_400;
 const WHO_FILE = 'who';
@@ -52,10 +52,6 @@ export const realLockSources: LockSources = {
   now: () => new Date(),
   sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
 };
-
-export function validLockName(name: string): boolean {
-  return name.length <= LOCK_NAME_MAX && LOCK_NAME.test(name);
-}
 
 /** `<home>/.config/team/locks`, the same home `lobbyDir` uses, one folder in from it. */
 export function locksRoot(home: string): string {
