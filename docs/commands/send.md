@@ -73,11 +73,11 @@ not carry. An agent's id is assigned once and never reused; its name is display 
 
 ## What it reads and writes
 
-Reads the team file, the caller's placement, and the herdr session's agents. A plain send
-writes `.agents/send-drops/<session>/<seat>/<id>` (the file mode 0600), types one trigger line
-into that seat's pane, reads the pane back before Enter to check the composer holds that line,
-and reads it again after Enter. `send-drops`, the session directory, and the seat directory are
-each mode 0700. This command never deletes a delivered drop file;
+Reads the team file, the caller's placement, the agent registry, and the herdr session's
+agents. A plain send writes `.agents/send-drops/<session>/<seat>/<id>` (the file mode 0600),
+types one trigger line into that seat's pane, reads the pane back before Enter to check the
+composer holds that line, and reads it again after Enter. `send-drops`, the session directory,
+and the seat directory are each mode 0700. This command never deletes a delivered drop file;
 the owner removes `.agents/send-drops` when those messages are no longer needed. `--wait` to a
 Claude Code seat reads the processes of the seat's pane and the socket file's presence in
 `cc-socks` instead of writing a drop file. The socket is the first of the pane's processes —
@@ -102,6 +102,7 @@ refused before the seat is looked up. A run with no terminal is refused before `
 | Caller | May send to |
 | --- | --- |
 | the owner | any agent |
+| an orchestrator | any seat of its own team |
 | an orchestrator | an orchestrator, in any team |
 | an assistant seat | its entity's main coordinator |
 | any seat | its own team's orchestrator |
@@ -110,7 +111,9 @@ refused before the seat is looked up. A run with no terminal is refused before `
 ## The sender header
 
 Every drop file opens with a header, written before the body: the sender's agent id, and the reach
-above or the grant that admitted the send. The receiver reads who sent a message and why that sender
+above or the grant that admitted the send. A seat's header names it — its agent id, its name and
+its seat; the owner's reads `from the owner`. A waited send's frame opens the same way, and so
+does the body the message history keeps. The receiver reads who sent a message and why that sender
 was let through; the drop record carries the sender's id from day one.
 
 ## Outcomes
