@@ -35,6 +35,7 @@ import { historyPath, readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
+import { filed } from './send-native-fixtures.ts';
 import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T16:00:00.000Z');
@@ -283,8 +284,8 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     expect(hist.ok).toBe(true);
     if (!hist.ok) return;
     expect(hist.entries.map((e) => ({ body: e.body, outcome: e.outcome }))).toEqual([
-      { body: 'first message', outcome: 'delivered' },
-      { body: 'second message', outcome: 'delivered' },
+      { body: filed('first message'), outcome: 'delivered' },
+      { body: filed('second message'), outcome: 'delivered' },
     ]);
 
     const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'native');
@@ -701,7 +702,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(files.length).toBe(1);
     const dropFile = join(drops, files[0]!);
     expect(host.typed[0]?.text ?? null).toBe(triggerLine(dropFile));
-    expect(readFileSync(dropFile, 'utf8')).toBe('stored in state drops');
+    expect(readFileSync(dropFile, 'utf8')).toBe(filed('stored in state drops'));
   });
 
   test('refuses cross-session and non-orchestrator requests, and recovers cleanly if a throw occurs mid-delivery', async () => {

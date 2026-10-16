@@ -1,14 +1,16 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { TEAM_FILE, findRoot } from '../file/load.ts';
+import { TEAM_FILE, findRoot, loadTeamFile } from '../file/load.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
+import { noteTeam } from '../registry/teams.ts';
 import { createAtomic, LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { version } from '../version.ts';
@@ -132,7 +134,7 @@ export function exclude(root: string): string[] {
   return missing;
 }
 
-export const init: Command = (argv, io) => runInit(argv, io);
+export const init: Command = (argv, io) => runInit(argv, io, undefined, undefined, { ...doctorSources, registryHome: homedir() });
 export default init;
 
 export const USAGE = 'Usage: team init [--restore]\n';
@@ -146,7 +148,7 @@ export async function runInit(
   io: Io,
   home?: string,
   readStanding?: (root: string) => Standing,
-  sources: Pick<DoctorSources, 'loggedIn'> & { now?: () => Date } = doctorSources,
+  sources: Pick<DoctorSources, 'loggedIn'> & { now?: () => Date; registryHome?: string } = doctorSources,
 ): Promise<number> {
   const args = readArgs(argv, [], ['restore']);
   if (args.error || args.rest.length) {
@@ -237,6 +239,16 @@ export async function runInit(
   createAtomic(path, text);
   const what = args.flags.has('restore') ? 'restored the approved copy' : 'wrote a skeleton';
   logLine(dirname(path), 'init', describeCaller(caller), `${what} as ${TEAM_FILE}; excluded ${added.length} path(s)`);
+  // The registry is where the user-level state lives: the home the shipped command names, or the
+  // one a test hands in. A caller that names neither leaves the machine's registry alone.
+  const registryHome = sources.registryHome ?? home;
+  if (registryHome !== undefined) {
+    const written = loadTeamFile(root, { home: registryHome, checkOnly: true });
+    if (written.ok) {
+      const unrecorded = noteTeam(registryHome, root, written.team, 'defined', describeCaller(caller));
+      if (unrecorded) io.stderr(`team init: ${unrecorded}\n`);
+    }
+  }
   io.stdout(args.flags.has('restore')
     ? `Restored ${TEAM_FILE} from the copy you last approved on this machine.\n\n${PRIVACY}\n`
     : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run the seats.\n\n${PRIVACY}\n`);

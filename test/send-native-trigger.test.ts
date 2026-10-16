@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { TRIGGER_MAX, triggerLine } from '../src/send/native.ts';
-import { dropDir, nativeHost, owner, world } from './send-native-fixtures.ts';
+import { dropDir, filed, nativeHost, owner, world } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
 
@@ -36,6 +36,6 @@ test('a multi-line body is filed whole and the pane gets one short line', async 
   const line = triggerLine(path);
   if (line === null) throw new Error(`no trigger for ${path}`);
   expect(trigger).toBe(line);
-  expect(readFileSync(path, 'utf8')).toBe(body);
+  expect(readFileSync(path, 'utf8')).toBe(filed(body));
   expect(host.frames).toEqual([]);
 });
