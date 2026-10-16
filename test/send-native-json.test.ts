@@ -3,7 +3,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { dropDir, nativeHost, owner, world } from './send-native-fixtures.ts';
+import { dropDir, filed, nativeHost, owner, world } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
 
@@ -31,12 +31,12 @@ test('--json delivered names the seat, exit 0, and the drop id', async () => {
   expect('error' in doc).toBe(false);
   const drops = dropDir(made.dir);
   expect(readdirSync(drops)).toEqual([doc.ids.sent]);
-  expect(readFileSync(join(drops, doc.ids.sent), 'utf8')).toBe('hello');
+  expect(readFileSync(join(drops, doc.ids.sent), 'utf8')).toBe(filed('hello'));
   expect(pane.typed.length).toBe(1);
   expect(host.frames).toEqual([]);
 });
 
-test('--json unreachable reports exit 1 and keeps the drop id', async () => {
+test('--json not-submitted reports exit 1, the box and the drop id', async () => {
   const made = world();
   cleanup = made.cleanup;
   const { host } = nativeHost(made, ['idle']);
@@ -46,15 +46,17 @@ test('--json unreachable reports exit 1 and keeps the drop id', async () => {
 
   expect(code).toBe(1);
   expect(io.err).toBe('');
-  const doc = JSON.parse(io.out) as { seat: string; status: string; exit: number; error: string; ids: { sent: string; reply: null } };
+  const doc = JSON.parse(io.out) as { seat: string; status: string; exit: number; error: string; box: string | null; ids: { sent: string; reply: null } };
   expect(doc.seat).toBe('native');
-  expect(doc.status).toBe('unreachable');
+  expect(doc.status).toBe('not-submitted');
   expect(doc.exit).toBe(1);
-  expect(doc.error).toContain('herdr did not report the seat working');
+  expect(doc.box).toBeNull();
+  expect(doc.error).toContain('the seat did not take the trigger');
+  expect(doc.error).toContain('the box could not be read');
   expect(doc.ids.reply).toBeNull();
   const path = join(dropDir(made.dir), doc.ids.sent);
   expect(doc.error).toContain(path);
-  expect(readFileSync(path, 'utf8')).toBe('hello');
+  expect(readFileSync(path, 'utf8')).toBe(filed('hello'));
   expect('reply' in doc).toBe(false);
 });
 

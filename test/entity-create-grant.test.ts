@@ -20,7 +20,7 @@ import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { pathlessGrantFiles, readEntityCreateGrants } from '../src/grant.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
 // The scenes' clock: the sources hand it to both commands, and the record's expiry is
 // judged against it — later than one record, earlier than the other.
@@ -33,7 +33,7 @@ const ALPHA = { kind: 'seat' as const, name: 'alpha', pane: 'w1:p1', session: 'h
 const COWORKER = { kind: 'seat' as const, name: 'co-worker', pane: 'w1:p1', session: 'hq' };
 const ALPHA_ELSEWHERE = { kind: 'seat' as const, name: 'alpha', pane: 'w1:p1', session: 'other' };
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 let base: string;
 let home: string;

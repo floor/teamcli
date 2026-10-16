@@ -19,9 +19,9 @@ import { loadTeamFile } from '../src/file/load.ts';
 import { keyFolder } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { readState } from '../src/state.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const NOW = new Date('2026-10-15T12:00:00Z');
 const UNPLACED = { kind: 'unplaced' as const, reason: 'it runs under herdr' };
 

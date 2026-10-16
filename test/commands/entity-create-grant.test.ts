@@ -14,14 +14,14 @@ import type { Terminal } from '../../src/launch/terminal.ts';
 import { readState } from '../../src/state.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-16T10:00:00Z');
 const FUTURE = '2026-12-31T23:59:59Z';
 const PAST = '2026-10-16T09:59:59Z';
 const EXACT_NOW = '2026-10-16T10:00:00Z';
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const AMPLE: Machine = {
   loadPerCore: 0.2,
   memoryFree: 80,
@@ -227,8 +227,11 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
         expect(seats[name]?.stage, name).toBe('ready');
       }
 
-      const leadCaller = { kind: 'seat', name: 'orchestrator', pane: seats.orchestrator?.pane ?? 'seat-pane-1', session: 'acme-v4' } as const;
-      const sendIo = testIo(v4, leadCaller);
+      // The owner sends the brief: an orchestrator's own-team seats are outside the reach the
+      // send rules admit, and this scene is about the create-grant covering init and up.
+      const sendIo = testIo(v4, { kind: 'owner' });
+      // The seat takes the brief: idle until the Enter, working after it.
+      let working = false;
       const sendHost: SendHost = {
         agents: () => [{ name: 'builder-1', pane: seats['builder-1']?.pane ?? 'seat-pane-2' }],
         processInfo: () => ({ shell: 1, foreground: [2] }),
@@ -236,8 +239,11 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
         deliver: async () => ({ ok: true }),
         native: {
           typeText: () => true,
-          pressEnter: () => true,
-          status: () => 'working',
+          pressEnter: () => {
+            working = true;
+            return true;
+          },
+          status: () => (working ? 'working' : 'idle'),
           wait: async () => {},
         },
         now: () => NOW,
@@ -246,14 +252,16 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       };
       mkdirSync(sendHost.socketsDir, { recursive: true });
       expect(await runSend(['builder-1', 'first brief'], sendIo, sendHost)).toBe(0);
-      expect(sendIo.out).toContain('builder-1: delivered\n');
+      // No socket file under the host's sockets folder: the typed trigger is the fallback, and
+      // the outcome names that path and the socket's reason.
+      expect(sendIo.out).toMatch(/builder-1: delivered \(typed, socket .+\)/);
 
       // 2. Under ~/Documents/acme/archive: also admitted by the same acme grant.
       const archive = join(sb.acmeDocs, 'archive');
       initGitRepo(archive);
       const docsInitIo = testIo(archive, grantedAgent);
       expect(await runInit([], docsInitIo, sb.home, undefined, noLogin)).toBe(0);
-      writeFileSync(join(archive, '.agents', 'team.yaml'), fiveSeatTeam('radio-archive', archive, sb.home));
+      writeFileSync(join(archive, '.agents', 'team.yaml'), fiveSeatTeam('acme-archive', archive, sb.home));
       const docsUpIo = testIo(archive, grantedAgent);
       expect(await runUp(['--dry-run'], docsUpIo, upSources(sb.home, launching(() => {}), terminal()))).toBe(0);
       expect(docsUpIo.out).toContain('builder-1');

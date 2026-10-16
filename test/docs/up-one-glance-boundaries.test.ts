@@ -73,10 +73,13 @@ describe('the one-glance cut of the up page', () => {
     // The scene is the page's only example, and docs.test.ts executes it against fakes — but a
     // fixture can drift as quietly as prose. Here the quoted sentence is taken from the page and
     // required to be the real refusal the command prints for that caller, so the two cannot part.
+    // The scene carries a second invocation, the dry run, whose lines name the reason itself.
     const page = raw(PAGE);
-    const scene = page.match(/```console[\s\S]*?\n\$ team up[^\n]*\n([^\n]+)\nexit 1\n```/);
+    const scene = page.match(/\n\$ (team up[^\n]*)\n([^\n]+)\nexit 1\n/);
     expect(scene, 'up.md lost its refusal scene').not.toBeNull();
-    const quoted = scene![1]!.trim();
+    const invoked = scene![1]!;
+    const quoted = scene![2]!.trim();
+    expect(invoked, 'up.md changed the refusal scene\'s invocation').toBe('team up --file other.yaml ; echo "exit $?"');
 
     base = realpathSync(mkdtempSync(join(tmpdir(), 'up-one-glance-')));
     const root = join(base, 'acme');

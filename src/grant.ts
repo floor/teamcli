@@ -34,28 +34,20 @@ export function grantsDir(home: string = homedir()): string {
 }
 
 /**
- * Reads valid entity create-grant records from `~/.config/team/grants/`. Symbolic links and
- * malformed records are skipped; expiry and path containment are checked when a command asks.
- * A record that names no `paths` covers nothing, so it is skipped too — `pathlessGrantFiles`
- * reports those, and the refusal a caller gets names the file to fix.
+ * Every record file in the owner's grants folder, with its stem and its file name: the read the
+ * create-grants and the send-grants share. The folder and every parent up to `home` must be real
+ * directories, and each file a plain one — a symbolic link anywhere is skipped rather than
+ * followed — and the file must parse to a mapping. What each reader makes of the record's own
+ * fields is its own.
  */
-export function readEntityCreateGrants(home: string = homedir()): EntityCreateGrant[] {
-  return readGrantRecords(home).grants;
-}
-
-/** The file names of the records skipped for naming no `paths`. */
-export function pathlessGrantFiles(home: string = homedir()): string[] {
-  return readGrantRecords(home).pathless;
-}
-
-function readGrantRecords(home: string = homedir()): { grants: EntityCreateGrant[]; pathless: string[] } {
+export function readGrantRecords(home: string = homedir()): { stem: string; file: string; record: Record<string, unknown> }[] {
   const homeResolved = resolve(home);
   for (const dir of [homeResolved, join(homeResolved, '.config'), join(homeResolved, '.config', 'team'), grantsDir(homeResolved)]) {
     try {
       const stat = lstatSync(dir);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) return { grants: [], pathless: [] };
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return [];
     } catch {
-      return { grants: [], pathless: [] };
+      return [];
     }
   }
   const folder = grantsDir(homeResolved);
@@ -63,10 +55,9 @@ function readGrantRecords(home: string = homedir()): { grants: EntityCreateGrant
   try {
     entries = readdirSync(folder).sort();
   } catch {
-    return { grants: [], pathless: [] };
+    return [];
   }
-  const out: EntityCreateGrant[] = [];
-  const pathless: string[] = [];
+  const out: { stem: string; file: string; record: Record<string, unknown> }[] = [];
   for (const entry of entries) {
     if (entry.startsWith('.') || !/\.(?:yaml|yml|json)$/.test(entry)) continue;
     const full = join(folder, entry);
@@ -76,44 +67,70 @@ function readGrantRecords(home: string = homedir()): { grants: EntityCreateGrant
       const text = readFileSync(full, 'utf8');
       const parsed = entry.endsWith('.json') ? JSON.parse(text) : toValue(parseYaml(text));
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-      const record = parsed as Record<string, unknown>;
-      const entity = typeof record.entity === 'string' && record.entity.trim() !== '' ? record.entity.trim() : null;
-      const rawAgent =
-        typeof record.agent === 'string'
-          ? record.agent.trim()
-          : typeof record.seat === 'string'
-            ? record.seat.trim()
-            : typeof record.pane === 'string'
-              ? record.pane.trim()
-              : '';
-      if (!rawAgent) continue;
-      let session =
-        typeof record.session === 'string' && record.session.trim() !== '' ? record.session.trim() : null;
-      let agent = rawAgent;
-      if (session === null && rawAgent.includes('/')) {
-        const slash = rawAgent.indexOf('/');
-        session = rawAgent.slice(0, slash).trim();
-        agent = rawAgent.slice(slash + 1).trim();
-        if (!session || !agent) continue;
-      }
-      let paths: string[] = [];
-      if (Array.isArray(record.paths) && record.paths.every((item) => typeof item === 'string' && item.trim() !== '')) {
-        paths = (record.paths as string[]).map((item) => item.trim());
-      } else if (typeof record.path === 'string' && record.path.trim() !== '') {
-        paths = [record.path.trim()];
-      }
-      if (paths.length === 0) {
-        pathless.push(entry);
-        continue;
-      }
-      const rawExpires = record.expires ?? record.expiry ?? record.expires_at ?? record.expiresAt;
-      if (typeof rawExpires !== 'string' || rawExpires.trim() === '') continue;
-      const expires = rawExpires.trim();
-      if (!Number.isFinite(Date.parse(expires))) continue;
-      out.push({ entity, agent, session, paths, expires, runners: runnersOf(record) });
+      out.push({ stem: entry.replace(/\.(?:yaml|yml|json)$/, ''), file: entry, record: parsed as Record<string, unknown> });
     } catch {
       continue;
     }
+  }
+  return out;
+}
+
+/**
+ * Reads valid entity create-grant records from `~/.config/team/grants/`. Symbolic links and
+ * malformed records are skipped; expiry and path containment are checked when a command asks.
+ * A record that names no `paths` covers nothing, so it is skipped too — `pathlessGrantFiles`
+ * reports those, and the refusal a caller gets names the file to fix.
+ */
+export function readEntityCreateGrants(home: string = homedir()): EntityCreateGrant[] {
+  return readCreateGrantRecords(home).grants;
+}
+
+/** The file names of the records skipped for naming no `paths`. */
+export function pathlessGrantFiles(home: string = homedir()): string[] {
+  return readCreateGrantRecords(home).pathless;
+}
+
+function readCreateGrantRecords(home: string = homedir()): { grants: EntityCreateGrant[]; pathless: string[] } {
+  const out: EntityCreateGrant[] = [];
+  const pathless: string[] = [];
+  for (const { file, record } of readGrantRecords(home)) {
+    const entity =
+      typeof record.entity === 'string' && record.entity.trim() !== ''
+        ? record.entity.trim()
+        : null;
+    const rawAgent =
+      typeof record.agent === 'string'
+        ? record.agent.trim()
+        : typeof record.seat === 'string'
+          ? record.seat.trim()
+          : typeof record.pane === 'string'
+            ? record.pane.trim()
+            : '';
+    if (!rawAgent) continue;
+    let session =
+      typeof record.session === 'string' && record.session.trim() !== '' ? record.session.trim() : null;
+    let agent = rawAgent;
+    if (session === null && rawAgent.includes('/')) {
+      const slash = rawAgent.indexOf('/');
+      session = rawAgent.slice(0, slash).trim();
+      agent = rawAgent.slice(slash + 1).trim();
+      if (!session || !agent) continue;
+    }
+    let paths: string[] = [];
+    if (Array.isArray(record.paths) && record.paths.every((item) => typeof item === 'string' && item.trim() !== '')) {
+      paths = (record.paths as string[]).map((item) => item.trim());
+    } else if (typeof record.path === 'string' && record.path.trim() !== '') {
+      paths = [record.path.trim()];
+    }
+    if (paths.length === 0) {
+      pathless.push(file);
+      continue;
+    }
+    const rawExpires = record.expires ?? record.expiry ?? record.expires_at ?? record.expiresAt;
+    if (typeof rawExpires !== 'string' || rawExpires.trim() === '') continue;
+    const expires = rawExpires.trim();
+    if (!Number.isFinite(Date.parse(expires))) continue;
+    out.push({ entity, agent, session, paths, expires, runners: runnersOf(record) });
   }
   return { grants: out, pathless };
 }

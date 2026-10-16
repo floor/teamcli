@@ -27,12 +27,12 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import type { Live } from '../../src/status/compare.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../../src/store/store.ts';
-import { gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 
 const NOW = new Date('2026-10-04T00:00:00Z');
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 function makeFile(basePath: string, projPath: string): string {
   return `format: 1
 project: acme

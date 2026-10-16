@@ -59,6 +59,8 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
+import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -349,6 +351,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         delete current.seats[name];
       });
       if (priorPane) forgetLaunchedPane(sources.home, priorPane, session);
+      // The old pane is closed: the seat's agent is stopped until the relaunch below re-points it.
+      const ended = registerEnd({ home: sources.home, team, root, by: who, session }, name, 'stopped');
+      if (ended) logLine(dir, 'restart', who, ended.note, sources.now());
     }
 
     const records = progressWriter({ stdout: io.stdout, stderr: io.stderr, isTTY: io.stdoutIsTTY ?? false });
@@ -689,6 +694,21 @@ function hostOf(input: {
       if (patch.pane) {
         if (replaced) forgetLaunchedPane(input.home, replaced, session);
         noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
+        // The registry: a relaunch keeps the seat's agent and re-points it to the new pane.
+        if (name === seat.name) {
+          const made = registerLaunch(
+            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
+            seat,
+            patch.pane,
+            readState(dir).sessions[session]?.seats[name]?.id,
+          );
+          if ('note' in made) logLine(dir, 'restart', input.caller, made.note, input.now());
+          else {
+            // The address: the live session socket this relaunch answers at, recorded on the agent.
+            const refreshed = refreshAgentAddress(input.home, made.id, patch.pane, session);
+            if (refreshed.note) logLine(dir, 'restart', input.caller, refreshed.note, input.now());
+          }
+        }
       }
     },
     running(name) {
@@ -712,6 +732,10 @@ function hostOf(input: {
         delete current.seats[name];
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
+      if (name === seat.name) {
+        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, 'stopped');
+        if (ended) logLine(dir, 'restart', input.caller, ended.note, input.now());
+      }
     },
     say: (line) => input.io.stderr(plainText(line)),
     progress: (name, state) => records.progress(name, state),

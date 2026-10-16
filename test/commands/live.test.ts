@@ -17,13 +17,13 @@ import type { Key } from '../../src/launch/terminal.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { defaultFs } from '../../src/lobby/gate.ts';
 import { readScreen, type Screen } from '../../src/watch/screen.ts';
-import { agyMismatchedFrame, claudeBox, testIo } from '../helpers.ts';
+import { agyMismatchedFrame, CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 const FILE = ['--file', '.agents/team.yaml'];
 const NOW = new Date('2026-10-03T14:02:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 // The captured Codex home names Terra 5.6. The example file says GPT Sol 6, so a launch test
 // that should get past the model check shows the file's model on that same status row.
@@ -5038,8 +5038,11 @@ describe('team up, delegated', () => {
       machine: () => fine,
     }, made));
     expect(code).toBe(1);
-    expect(io.err).toBe('deny\n');
-    expect(io.out).toBe('');
+    // A dry run is never answered with the bare word: it names the reason and the owner's own
+    // command, and the refusal leaves through the real run's exit — the plan, nothing run.
+    expect(io.err).toBe('');
+    expect(io.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is it runs in pane main/w9:p1, which no grant lists\n');
+    expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
     expect(made.starts).toBe(0);
     expect(made.creates).toEqual([]);
   });

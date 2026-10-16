@@ -6,10 +6,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { senderHeader } from '../src/send/admit.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { testIo, type TestIo } from './helpers.ts';
 
 export const NOW = new Date('2026-10-05T04:00:00.000Z');
+
+/** The drop file an owner's send writes: the sender header and its empty line, then the body.
+ *  The header's own wording is pinned in send.test.ts and send-admit.test.ts; the scenes that
+ *  file a body through `runSend` compare against this, so their subject stays the body. */
+export function filed(body: string): string {
+  return `${senderHeader('owner', 'the owner')}\n${body}`;
+}
 
 export type World = { root: string; dir: string; sockets: string; home: string; cleanup: () => void };
 
