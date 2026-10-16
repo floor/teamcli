@@ -22,6 +22,10 @@ roster that cannot be read, and a seat whose status herdr gives as `unknown` or 
 `?`. None of those fail the list. When herdr cannot be asked, the command prints one sentence and
 exits 0; `--json` prints `[]`.
 
+Rows are ordered by session name, and herdr's own `default` session is listed like any other: an
+orphan when no team file names it, and hidden while it is stopped unless `--all` is set. A seat row
+is indented two spaces under its session's row and has no header of its own.
+
 ## Who may run it
 
 Anyone, from any folder. It needs no approval and no project of its own.
@@ -75,6 +79,15 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
+```
+
+The fixture's session is running, and both seats are idle — the plain reading, with no `--seats`:
+
+```console
+$ team list ; echo "exit $?"
+TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE
+beacon  beacon   running  2      2 idle
+exit 0
 ```
 
 `--json` prints the same rows as an array. The keys are stable, and an empty list is `[]`:
