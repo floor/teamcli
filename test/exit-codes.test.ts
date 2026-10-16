@@ -15,6 +15,7 @@ import type { CheckSources } from '../src/check/team.ts';
 import { clientKeyDir, newClientKeyPair, writeClientGrant, writeClientKeyFiles } from '../src/client/records.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
+import { runArchive, writeArchive } from '../src/commands/archive.ts';
 import { runAskShow } from '../src/commands/ask-show.ts';
 import { runApprove, type ApproveSources, type Waiting } from '../src/approve/command.ts';
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
@@ -1660,6 +1661,44 @@ scene('down.refused', async (place) => {
   })), 'valid signature');
 });
 
+async function archived(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return runCompared(place, argv, (args) => runArchive(args, io, { ...sources, home: sources.home ?? place.home }), io);
+}
+
+scene('archive.invocation', async (place) => show(await archived(place, ['extra'], owner, downSources()), 'unexpected'));
+scene('archive.stop-flags', async (place) => show(
+  await archived(place, ['--keep-running', '--abandon'], owner, downSources()),
+  '--keep-running takes the snapshot alone',
+));
+scene('archive.not-a-repo', async (place) => show(await archived(place, [], owner, downSources()), 'not inside a git repository'), false);
+scene('archive.file', async (place) => show(await archived(place, ['--file', 'missing.yaml'], owner, downSources()), 'no team file'));
+scene('archive.file-invalid', async (place) => {
+  invalid(place);
+  return show(await archived(place, ['--file', 'team.yaml'], owner, downSources()), 'line');
+});
+scene('archive.detached', async (place) => show(await archived(place, [], detachedCaller, downSources()), SENTENCE));
+scene('archive.file-owner', async (place) => {
+  write(place, TEAM);
+  return show(await archived(place, ['--file', '.agents/team.yaml'], other, downSources()), "--file is the owner's");
+});
+scene('archive.out-owner', async (place) => {
+  write(place, TEAM);
+  return show(await archived(place, ['--out', join(place.home, 'elsewhere')], other, downSources()), "--out is the owner's");
+});
+scene('archive.keep-running', async (place) => {
+  write(place, TEAM);
+  return show(await archived(place, ['--keep-running'], owner, downSources()), '--keep-running: the stop is skipped.');
+});
+scene('archive.exists', async (place) => {
+  write(place, TEAM);
+  // The pinned clock and the one home put both runs in the same folder: the second is the
+  // refusal, which is the outcome this row names.
+  const first = await archived(place, ['--keep-running'], owner, downSources());
+  if (first.code !== 0) throw new Error(`${first.err}${first.out}`);
+  return show(await archived(place, ['--keep-running'], owner, downSources()), 'exists already');
+});
+
 async function initial(
   place: Place,
   argv: string[],
@@ -1716,6 +1755,44 @@ scene('init.restored', async (place) => {
   approve(place, TEAM);
   rmSync(place.file);
   return show(await initial(place, ['--restore']), 'Restored');
+});
+
+/** An archive of `text`, written by the real writer: its manifest, its hashes and its folder are
+ *  the ones a restore reads, so a scene never plants a hand-made stand-in for them. */
+function archiveIn(place: Place, text: string): string {
+  const root = join(place.base, 'archived');
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  writeFileSync(join(root, '.agents', 'team.yaml'), text);
+  const written = writeArchive({
+    file: join(root, '.agents', 'team.yaml'),
+    root,
+    project: 'acme',
+    session: 'acme',
+    home: place.home,
+    out: join(place.home, '.config', 'team', 'archive'),
+    caller: 'owner',
+    now: NOW,
+    dry: false,
+  });
+  if (!written.ok) throw new Error(written.reason);
+  return written.dir;
+}
+
+scene('init.sources', async (place) => show(
+  await initial(place, ['--restore', '--from-archive', join(place.base, 'somewhere')]),
+  'two sources',
+));
+scene('init.from-archive', async (place) => show(
+  await initial(place, ['--from-archive', join(place.base, 'missing')]),
+  'nothing was restored',
+));
+scene('init.from-archive-invalid', async (place) => {
+  const dir = archiveIn(place, 'format: 1\nproject: acme\nseats: nope\n');
+  return show(await initial(place, ['--from-archive', dir]), "doesn't validate");
+});
+scene('init.restored-archive', async (place) => {
+  const dir = archiveIn(place, readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8'));
+  return show(await initial(place, ['--from-archive', dir]), 'from an archive');
 });
 scene('init.skeleton', async (place) => {
   const root = join(place.base, 'a b');
