@@ -751,8 +751,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           ? defaultLoad
           : loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: sources.home }));
   if (!loaded.ok) {
+    // A file that does not load refuses both runs, one voice each: the real one stops in
+    // `team up`'s own words, the dry one says what a real run would stop on (`! up would
+    // refuse:`, the dry run's line for every refusal it reaches) and prints no plan, because
+    // this file builds none. Both exit as the file error does, and neither launches anything.
     for (const problem of loaded.errors) {
-      out.stderr(`team up: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
+      const said = `${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}`;
+      if (dry) out.stdout(`! up would refuse: ${said}\n`);
+      else out.stderr(`team up: ${said}\n`);
     }
     // exit: up.not-a-repo
     // exit: up.file

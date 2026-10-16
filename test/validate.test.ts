@@ -150,7 +150,7 @@ describe('the lead is a field, or the legacy key', () => {
     // `marked` carries the lead's mark on line 14 and the worker seat on 15..21, so the second
     // mark lands on line 22.
     const twice = change(marked, '    launch: codex\n', '    launch: codex\n    leads: true\n');
-    expect(errors(twice)).toEqual(['22: `leads` is on more than one seat: a team has one orchestrator']);
+    expect(errors(twice)).toEqual(['22: `leads` is on 2 seats: "lead", "worker"; a team has one lead']);
   });
 
   test('the key alone still reads, with its own refusals', () => {
