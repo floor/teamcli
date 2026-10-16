@@ -1,32 +1,24 @@
 # team unlock
 
-Releases a lock `team lock` took, and only that caller's lock. The holder file has to name this
+Releases the lock [`team lock`](lock.md) took — but only when its holder file, `who`, names this
 caller: the same project and the same `by` line. Anyone else is shown who holds it and refused.
-A lock whose holder file is missing, unreadable, or not the four lines `team lock` writes is left
-where it is — the directory is not removed to find out. When no caller can release it, the owner
-removes it by hand, as [team lock](lock.md) describes under "When the holder is gone".
+A lock that cannot be released is left exactly where it is, and [`team lock`](lock.md) tells the
+owner how to clear one by hand.
 
 ## Synopsis
 
     team unlock <name>
 
-## What it reads and writes
-
-Reads the team file in the current folder, and the lock's `who` file under
-`<home>/.config/team/locks/<name>.lock`. When the caller matches, it removes `who` and then the
-directory. The directory goes second, and only when it is empty: a file left beside `who` is not
-swept, and `who` is put back.
-
-## Who may run it
-
-The caller who took it. The same rules as `team lock` for who that is.
-
 ## Flags
 
 | Flag | Meaning |
 | --- | --- |
-| `<name>` | the lock's name, the same closed set as `team lock` |
+| `<name>` | the lock's name, the same closed set as [`team lock`](lock.md) |
 | `--help`, `-h` | the usage, and exit 0 |
+
+## Who may run it
+
+The caller who took it. The same rules as [`team lock`](lock.md) for who that is.
 
 ## Refusals
 
@@ -42,13 +34,18 @@ The caller who took it. The same rules as `team lock` for who that is.
 | `<name>: its holder file cannot be read; left <path> in place` | 1 |
 | `<name>: its lock is not a directory; left <path> in place` | 1 |
 
+A lock that is not held, or held by someone else, is never removed: nothing is cleared and nobody
+is guessed.
+
 ## Exit codes
 
-- `0` — the lock was released.
-- `1` — it is not held, it is held by someone else, its holder can't be read, or the directory could not be removed.
-- `2` — the invocation can't be read, or the team file can't.
+| Exit | When |
+| --- | --- |
+| 0 | the lock was released |
+| 1 | it is not held, it is held by someone else, its holder can't be read, or the directory could not be removed |
+| 2 | the invocation can't be read, or the team file can't |
 
-## Examples
+## Example
 
 ```fixture
 approved: false
@@ -92,3 +89,5 @@ $ team unlock demo ; echo "exit $?"
 demo: not held
 exit 1
 ```
+
+Rationale, behaviour, refusals and known limits: [docs/internal/unlock.md](../internal/unlock.md).
