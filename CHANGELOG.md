@@ -13,23 +13,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   places under that name, holding a CLI at the seat's prompt — so `team send`, `team seats`,
   `team watch` and `team down` can address it. It types nothing into the pane and never
   overwrites a record that names another pane; `--dry-run` prints the line the real run would
-  print and writes nothing. The owner, or a delegate the file approves for `up`.
+  print and writes nothing. The owner, or a delegate the file names for `up`.
+
+- `team status`'s seats table ends each row with the word a send would use to reach the seat —
+  `socket` or `typed` — read from the pane's own processes, so no extra herdr call. The `--json`
+  row keeps the shape it published.
 
 ### Changed
 
 - `team up --dry-run` is never answered with the bare word `deny`: for a caller the run does not
   admit it prints `! up would refuse:` with the reason, `! to unblock:` with the owner's own run
   of this folder, and — when no flag kept the file unread — the plan, and exits 1.
-- `team send`'s no-record refusals name `team up` as the command that records the seat it
-  launches, and a sender or target the registry holds no agent for is judged as the seat the live
-  team file declares for it — the bootstrap a seat herdr placed, before `up` or `add` first
-  recorded it, is reachable by that seat's name and role.
+- `team send`'s no-record refusals name the commands that write the record: `team up` registers a
+  seat it leaves standing, and for a caller the live file declares, `team register <seat>` records
+  the seat where it already runs; a sender or target the registry holds no agent for is judged as
+  the seat the live team file declares for it — the bootstrap a seat herdr placed, before `up` or
+  `add` first recorded it, is reachable by that seat's name and role.
+- `team send` to a Claude Code seat writes one frame on its session's cross-session socket by
+  default and types nothing, falling back to the drop file and one trigger line when no socket
+  takes the frame — the outcome line carries the path (`delivered (socket)`, `delivered (typed,
+  socket <reason>)`), and discovery reads this Mac's `/tmp/cc-socks` beside the sockets folder.
 - A send records the send-to-outcome milliseconds and the path the send took — `socket` or
   `typed` — as the history line's optional `ms` and `via` fields, shown by `team feed` after the
   outcome; a line written before this build keeps the six required fields alone.
 - A claude-code seat's cross-session socket address is recorded in the registry when `add`,
-  `reload` or `restart` launches the pane, so a send can address the seat without re-reading
-  herdr.
+  `reload`, `restart` or `up` launches the pane, or `register` records one already running, so a
+  send can address the seat without re-reading herdr.
 
 ## [0.3.5] - 2026-10-07
 
