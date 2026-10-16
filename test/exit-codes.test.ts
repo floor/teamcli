@@ -3762,10 +3762,10 @@ function refusalIds(command: string): string[] {
 function refusalCore(text: string): string {
   const line = text.split('\n').map((item) => item.trim()).find(Boolean) ?? '';
   return line
-    .replace(/^! (?:up|down|add) would refuse: /, '')
+    .replace(/^! (?:up|down|add|register) would refuse: /, '')
     .replace(/^team add: refused: /, '')
     .replace(/^[^:\n]+: would refuse: /, '')
-    .replace(/^team (?:up|down|add): /, '')
+    .replace(/^team (?:up|down|add|register): /, '')
     .replace(/\/(?:private\/)?tmp\/team-exit-\w+/g, '<place>')
     .replace(/acme-[0-9a-f]{8,}/g, 'acme-<id>');
 }
