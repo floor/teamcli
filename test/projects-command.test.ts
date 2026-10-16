@@ -103,7 +103,7 @@ test('team status --project covers every team of the project, registered or not'
       project: 'TeamCLI',
       session: 'teamcli',
       root: '/work/teamcli',
-      roster: [{ agent: 'agt_1', seat: 'lead', role: 'coordinator' }],
+      roster: [{ agent: 'agt_1', seat: 'lead', role: 'coordinator', leads: true }],
     });
     const io = testIo('/anywhere');
     const code = await runStatus(['--project', 'TeamCLI'], io, statusWith(place.dir, sourcesOf([project()])));

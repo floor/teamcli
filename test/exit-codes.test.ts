@@ -1693,7 +1693,7 @@ scene('status.project-listed', async (place) => {
     project: 'TeamCLI',
     session: 'teamcli',
     root: place.root,
-    roster: [{ agent: 'agt_1', seat: 'lead', role: 'coordinator' }],
+    roster: [{ agent: 'agt_1', seat: 'lead', role: 'coordinator', leads: true }],
   });
   const ran = await status(place, ['--project', 'TeamCLI'], { ...statusSources(quiet), projects: projectSources(), home: place.home });
   expect(ran.out).toContain('project TeamCLI  4f2a1b7c9d0e');
