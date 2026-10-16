@@ -37,10 +37,16 @@ function ensureTeam(input: RegistryTeam): string | null {
   return noteTeam(home, root, seed, 'running', by);
 }
 
-/** One roster entry set (an agent) or taken out (null); every other entry stays as it is. */
+/** One roster entry set (an agent) or taken out (null). Every line's `leads` is re-resolved to
+ *  the file's own lead seat — `team.orchestrator`, whatever `leads: true` or `coordinator:` it was
+ *  spelled with; the capability, never a role name. So a mark that moved between launches does not
+ *  linger on a line that no longer holds it. */
 function writeRoster(input: RegistryTeam, teamId: string, seat: string, entry: { agent: string; role: string } | null): void {
-  const roster = (getTeam(input.home, teamId)?.roster ?? []).filter((item) => item.seat !== seat);
-  if (entry) roster.push({ agent: entry.agent, seat, role: entry.role });
+  const leadSeat = input.team.orchestrator;
+  const roster = (getTeam(input.home, teamId)?.roster ?? [])
+    .filter((item) => item.seat !== seat)
+    .map((item) => ({ ...item, leads: item.seat === leadSeat }));
+  if (entry) roster.push({ agent: entry.agent, seat, role: entry.role, leads: seat === leadSeat });
   setRoster(input.home, teamId, roster);
 }
 

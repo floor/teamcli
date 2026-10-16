@@ -117,7 +117,7 @@ function registered(
 function teamRecord(
   home: string,
   id: string,
-  team: { project: string; entity: string; session: string; root: string; roster: { agent: string; seat: string; role: string }[] },
+  team: { project: string; entity: string; session: string; root: string; roster: { agent: string; seat: string; role: string; leads: boolean }[] },
 ): void {
   upsertTeam(home, id, {
     project: team.project,
@@ -286,8 +286,8 @@ describe('an agy seat sends to the main coordinator', () => {
       session: 's',
       root,
       roster: [
-        { agent: agy.id, seat: 'agy-seat', role: 'implementer' },
-        { agent: coordinator.id, seat: 'main-coordinator', role: 'coordinator' },
+        { agent: agy.id, seat: 'agy-seat', role: 'implementer', leads: false },
+        { agent: coordinator.id, seat: 'main-coordinator', role: 'coordinator', leads: true },
       ],
     });
     const coordPane = scripted(['idle', 'working']);
@@ -332,8 +332,8 @@ describe('an orchestrator reaches another team by name', () => {
     // by the pane the trigger lands on.
     const alpha = registered(world.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', lab: 'anthropic', team: alphaId, seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
     const beta = registered(world.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', lab: 'anthropic', team: betaId, seat: 'lead', session: 'beta', pane: 'pane-beta-lead' });
-    teamRecord(world.home, alphaId, { project: 'alpha', entity: 'alpha-ent', session: 'alpha', root: alphaRoot, roster: [{ agent: alpha.id, seat: 'lead', role: 'coordinator' }] });
-    teamRecord(world.home, betaId, { project: 'beta', entity: 'beta-ent', session: 'beta', root: betaRoot, roster: [{ agent: beta.id, seat: 'lead', role: 'coordinator' }] });
+    teamRecord(world.home, alphaId, { project: 'alpha', entity: 'alpha-ent', session: 'alpha', root: alphaRoot, roster: [{ agent: alpha.id, seat: 'lead', role: 'coordinator', leads: true }] });
+    teamRecord(world.home, betaId, { project: 'beta', entity: 'beta-ent', session: 'beta', root: betaRoot, roster: [{ agent: beta.id, seat: 'lead', role: 'coordinator', leads: true }] });
     const caller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-alpha-lead', session: 'alpha' };
     const io = testIo(alphaRoot, caller);
     const alphaPane = scripted(['idle']);

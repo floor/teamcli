@@ -339,7 +339,7 @@ test('a record the writer wrote lists with its roster and its file state', async
       session: 'acme',
       root,
       lobby: '/home/.config/team/lobbies/acme',
-      roster: [{ agent: 'agt_0123456789ab', seat: 'lead', role: 'coordinator' }],
+      roster: [{ agent: 'agt_0123456789ab', seat: 'lead', role: 'coordinator', leads: true }],
       lifecycle: 'running',
       by: 'up',
     });
