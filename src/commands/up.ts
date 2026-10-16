@@ -68,6 +68,9 @@ import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerRun } from '../registry/sync.ts';
+import { findAgent } from '../registry/agents.ts';
+import { teamIdOf } from '../registry/teams.ts';
+import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
@@ -1569,6 +1572,17 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         ...(afterwards[seat.name]?.id ? { handle: afterwards[seat.name]?.id } : {}),
       })),
     )) logLine(dir, 'up', callerLabel(caller), note, now());
+    // The address: a claude-code seat this run left ready records the socket its session answers
+    // at, so a later send reaches it without re-reading herdr. A pane herdr cannot read leaves
+    // whatever the record holds; the note, if any, is a log line like the registry's own.
+    for (const seat of team.seats) {
+      const held = afterwards[seat.name];
+      if (seat.cli !== 'claude-code' || held?.stage !== 'ready' || !held.pane) continue;
+      const agent = findAgent(sources.home, { team: teamIdOf(root), seat: seat.name });
+      if (!agent) continue;
+      const refreshed = refreshAgentAddress(sources.home, agent.id, held.pane, session);
+      if (refreshed.note) logLine(dir, 'up', callerLabel(caller), refreshed.note, now());
+    }
     const pending = team.seats.filter((seat) => {
       if (seat.stopped || !profileFor(seat.cli)) return false;
       return afterwards[seat.name]?.stage !== 'ready';
