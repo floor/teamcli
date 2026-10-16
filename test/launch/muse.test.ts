@@ -115,6 +115,16 @@ describe('muse launch and captured screens', () => {
     expect(runningModel('muse', footer('muse-spark-1.2'))).toEqual({ model: 'Muse Spark', version: '1.2' });
   });
 
+  test('Wonder Full 1.0 and Wonder 1.0 each read as themselves, on the launch line and on the footer', () => {
+    expect(muse.modelOf('muse --model muse-wonder-full-1.0 --effort high --yolo')).toEqual({ model: 'Muse Wonder Full', version: '1.0' });
+    expect(runningModel('muse', fixture('wonder-full-constructed'))).toEqual({ model: 'Muse Wonder Full', version: '1.0' });
+    expect(muse.modelOf('muse --model muse-wonder-1.0 --effort high --yolo')).toEqual({ model: 'Muse Wonder', version: '1.0' });
+    expect(runningModel('muse', fixture('idle'))).toEqual({ model: 'Muse Wonder', version: '1.0' });
+    // Wonder is never read off a Wonder Full footer, nor the reverse.
+    expect(runningModel('muse', fixture('wonder-full-constructed'))?.model).not.toBe('Muse Wonder');
+    expect(runningModel('muse', fixture('idle'))?.model).not.toBe('Muse Wonder Full');
+  });
+
   test('a wrapped text reads back from the box, and a different one does not', () => {
     const wrapped = 'Team watch: reports are waiting in .agents/team.log';
     expect(boxHoldsText('muse', wrapped, fixture('unsent'))).toBe(true);
