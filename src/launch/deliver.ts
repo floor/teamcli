@@ -14,7 +14,8 @@ import {
  *  - `working`: the seat was mid-turn; nothing was typed.
  *  - `leftover`: the box already held text that is not the rules line; nothing typed.
  *  - `typing`: the pane took no text; nothing was typed.
- *  - `read-back`: the line was typed and never read back as its own rows.
+ *  - `read-back`: the line was typed and never read back as its own rows. A line this run typed,
+ *    still sitting unsent on an idle CLI, is cleared with the profile's one key.
  *  - `file-changed`: the line read back, but the file no longer held the hash it names; Enter
  *    was not pressed.
  *  - `ack`: Enter was sent and the seat did not come back to its idle prompt. */
@@ -37,6 +38,10 @@ export type Refusal = {
   /** The exit text this CLI's profile types, set when the box already holds exactly it — an
    *  earlier stop's leftover — so the report names the text and the one key, and nothing is sent. */
   exitText?: string;
+  /** Set when this run sent the profile's clearing key for a line it had just typed.
+   *  `yes`: the key restored an idle prompt. `undelivered`: the pane did not take the key.
+   *  `stayed`: the key was sent and the screen did not come back idle. */
+  cleared?: 'yes' | 'undelivered' | 'stayed';
   detail?: 'not-written' | 'changed' | { at: 'folder' | 'place'; what: string };
 };
 
@@ -45,6 +50,9 @@ export interface Delivery {
   status(): string | null;
   type(text: string): boolean;
   enter(): boolean;
+  /** The profile's one clearing key, by the name herdr spells. Absent: a failed read-back
+   *  leaves the line where it was typed. */
+  key?(name: string): boolean;
   /** Whether the seat's rules file still holds, read without following a link, the text whose
    *  hash the line carries — the last look, directly before Enter. */
   file(): boolean;
@@ -212,6 +220,23 @@ function stoppedOn(cli: string, stop: Stop, screen: string | undefined, line: st
   return why;
 }
 
+/** A line this run just typed, whose read-back failed, is cleared with the profile's one key.
+ *  Only an unsent composer on an idle CLI that is still the pane's foreground: a key into a
+ *  dialog, a turn, or a shell would answer something this run did not type. No key on the
+ *  delivery leaves the refusal as it is. */
+async function clearTypedLine(cli: string, why: Refusal, io: Delivery): Promise<Refusal> {
+  const key = why.clearKey ?? null;
+  if (key === null || !io.key) return why;
+  const names = profileFor(cli)?.processNames ?? [];
+  const live = () => reportedLiveAgent(io.foreground(), names);
+  const resting = () => io.status() === 'idle' || io.status() === 'done';
+  if (readScreen(cli, io.screen()).kind !== 'unsent' || !resting() || !live()) return why;
+  if (!io.key(key)) return { ...why, cleared: 'undelivered' };
+  const after = await settleScreen('unsent', () => readScreen(cli, io.screen()).kind, io);
+  if (after === 'idle' && resting() && live()) return { ...why, cleared: 'yes' };
+  return { ...why, cleared: 'stayed', kind: after };
+}
+
 /** What the report says the read-back saw: the reading, and the rows the box drew, when the box
  *  was readable. */
 function reading(why: Refusal, rows: number): string {
@@ -256,8 +281,9 @@ function nextStep(why: Refusal): string {
 
 /** The line a stopped delivery is reported with, and the line the log keeps: the reading and
  *  what the owner does next. It holds no row of the screen — the caller prints `why.row` to the
- *  terminal alone. `team` never clears a box it could not verify: the text a stop leaves behind
- *  stays in the pane, and the line says so. */
+ *  terminal alone. A line this run typed, whose read-back failed, is the one box `team` clears,
+ *  and only with the profile's one key; every other stop leaves its text in the pane, and the
+ *  line says so. */
 export function refusalReport(why: Refusal): string {
   switch (why.stop) {
     case 'file':
@@ -296,9 +322,20 @@ export function refusalReport(why: Refusal): string {
       return `rules not typed: its box already holds text that is not the rules line; ${nextStep(why)}`;
     case 'typing':
       return `rules not typed: the pane took no text (${reading(why, 0)}); ${nextStep(why)}`;
-    case 'read-back':
-      return `rules typed, not sent: the read-back didn't match; the line sits in its box, unsent: `
-        + `press Enter in its pane to send it, or ${clearAdvice(why, 'the box')}, then run up again`;
+    case 'read-back': {
+      const named = why.clearKey ? keyName(why.clearKey) : '';
+      const sits = `the line sits in its box, unsent: press Enter in its pane to send it, or ${clearAdvice(why, 'the box')}, then run up again`;
+      if (why.cleared === 'yes' && named) {
+        return `rules typed, not sent: the read-back didn't match; the line team typed was cleared (${named}); run up again`;
+      }
+      if (why.cleared === 'undelivered' && named) {
+        return `rules typed, not sent: the read-back didn't match; the clearing key (${named}) was not delivered; ${sits}`;
+      }
+      if (why.cleared === 'stayed' && named) {
+        return `rules typed, not sent: the read-back didn't match; the clearing key (${named}) left the screen reading ${why.kind}; ${sits}`;
+      }
+      return `rules typed, not sent: the read-back didn't match; ${sits}`;
+    }
     case 'file-changed':
       return `rules typed, not sent: the rules file changed after it was written`;
     case 'ack':
@@ -315,7 +352,9 @@ export function refusalReport(why: Refusal): string {
  *  is typed once, at an empty idle prompt, read back row by row — every visible character in
  *  order, at most one space hidden at a row break — and Enter is pressed once, after a re-read.
  *  A box that already holds exactly today's line is verified and sent, never typed onto again;
- *  a box holding anything else is left alone, and a seat mid-turn is reported as such. */
+ *  a box holding anything else is left alone, and a seat mid-turn is reported as such. A line
+ *  this run typed whose rows do not read back is cleared with the profile's one key when the
+ *  box is still the unsent composer. */
 export async function deliverRules(cli: string, line: string, seconds: number, io: Delivery): Promise<boolean | 'no-agent'> {
   const names = profileFor(cli)?.processNames ?? [];
   const live = () => reportedLiveAgent(io.foreground(), names);
@@ -354,9 +393,16 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
   }
   // The resumed delivery: a box that already holds exactly today's line — the same path, the
   // same hash, the line `team` would type now — is verified and sent. A box holding anything
-  // else is left alone: `team` never types a second line onto the first, and never clears a box
-  // it could not verify.
+  // else is left alone: `team` never types a second line onto the first, and never clears a
+  // box it did not itself type into this run.
   const resumed = start === 'unsent' && boxState(cli, line, io.screen()) === 'ready';
+  // A failed read-back of a line this run typed. A box that already held the line when this
+  // run started is not that line: the key stays unsent, and the report says the line sits.
+  const readBackStop = async (): Promise<false> => {
+    const why = stoppedOn(cli, 'read-back', io.screen(), line);
+    if (resumed) return report(why);
+    return report(await clearTypedLine(cli, why, io));
+  };
   if (!resumed) {
     if (start !== 'idle') {
       // A box holding exactly this CLI's exit text is an earlier stop's leftover, not the
@@ -375,13 +421,13 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
   // Terminal rendering can lag send-text. Never press Enter until the box is verified to hold
   // the line: an ordinary box reads `unsent` and every row of it reads back as the line.
   for (;;) {
-    if (!free()) return report(stoppedOn(cli, 'read-back', io.screen(), line));
+    if (!free()) return readBackStop();
     const state = boxState(cli, line, io.screen());
     if (state === 'ready') break;
-    if (state === 'no' || io.now() >= deadline) return report(stoppedOn(cli, 'read-back', io.screen(), line));
+    if (state === 'no' || io.now() >= deadline) return readBackStop();
     const before = io.now();
     await io.sleep(100);
-    if (io.now() <= before) return report(stoppedOn(cli, 'read-back', io.screen(), line));
+    if (io.now() <= before) return readBackStop();
   }
   // Re-read immediately before Enter. The agent is asked again: it may have exited since the
   // line was typed, and a dialog that appeared gets no key; a box that no longer holds the line
@@ -390,7 +436,7 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
   // that changed after it was written gets no Enter, whatever now sits at its path.
   if (!live()) return 'no-agent';
   if (!free() || boxState(cli, line, io.screen()) !== 'ready') {
-    return report(stoppedOn(cli, 'read-back', io.screen(), line));
+    return readBackStop();
   }
   if (!io.file()) {
     return report({ stop: 'file-changed', typed: true, sent: false, kind: readScreen(cli, io.screen()).kind, row: null });
@@ -398,7 +444,7 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
   // The caller's own last check, immediately before the key: a refusal sends nothing.
   if (io.beforeInput && !io.beforeInput('enter')) return false;
   if (!io.enter()) {
-    return report(stoppedOn(cli, 'read-back', io.screen(), line));
+    return readBackStop();
   }
   for (;;) {
     const status = io.status();

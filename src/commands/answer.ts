@@ -575,6 +575,7 @@ function deliveryOf(
     status: () => host.status(session, pane),
     type: (text) => host.type(session, pane, text),
     enter: () => host.enter(session, pane),
+    key: (name) => host.sendKey(session, pane, name),
     // The last look before Enter, the same no-follow read `up`'s delivery makes.
     file,
     foreground: () => host.foreground(session, pane),
