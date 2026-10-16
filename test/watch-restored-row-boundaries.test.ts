@@ -84,10 +84,12 @@ describe('the restored row of the watch page', () => {
   });
 
   test('each promise names an arm the check really has, in the order the page tells them', () => {
-    // The stored session came back: silent, decided before the pid mismatch ever reports.
-    expect(RESTORED_SRC.includes('if (seat.continuity === \'restored\') return [];'), 'the restored clause has no arm in the check').toBe(true);
-    // A pane herdr can't read is not merely silent: the mark survives the failed read.
-    expect(RESTORED_SRC.match(/if \(seat\.identity === 'unknown'\) \{\s*ctx\.keep\(key\);\s*return \[\];\s*\}/), 'the can’t-read clause no longer keeps the report-once mark').not.toBeNull();
+    // The stored session came back: the generic line's arm is gated on it — the seat is the
+    // seat again, and only a mismatch that is not a return may report.
+    expect(RESTORED_SRC.includes('if (seat.continuity !== \'restored\' && (seat.identity === \'gone\' || seat.identity === \'replaced\')) {'), 'the restored clause has no arm in the check').toBe(true);
+    // A pane herdr can't read is not merely silent: the mark survives the failed read, for
+    // the generic line and the launcher flag alike.
+    expect(RESTORED_SRC.match(/if \(seat\.identity === 'unknown'\) \{\s*ctx\.keep\(key\);\s*ctx\.keep\(launchKey\);\s*return \[\];\s*\}/), 'the can’t-read clause no longer keeps the report-once mark').not.toBeNull();
     // "no record of its launch" and "no CLI"/"a program team did not launch" are the verdict's
     // own arms, not watch-page inventions.
     expect(IDENTITY_SRC.includes('if (!recorded || !pane || pane.foreground.length === 0) return \'unknown\';'), 'no-record no longer reads as unknown').toBe(true);
@@ -108,11 +110,17 @@ describe('the restored row of the watch page', () => {
       return pass({ team: team(), watch: team().watch, state, live: seen, machine: fine, now: 0, memory, processes: { 'w3:p1': { shell: 500, foreground: [501] } } }).reports.map((report) => report.text);
     };
     const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
-    // Another session under an unlaunched program: the mismatch the page describes, reported.
-    expect(at('other')).toEqual([restored]);
-    // The stored session back on the pane: the seat again, not reported — and the mark released,
-    // for the next mismatch to be a new change.
+    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team remove deepseek-acme --keep, then team add deepseek-acme';
+    // Another session under an unlaunched program: the mismatch the page describes, reported —
+    // and a launch line that names a launcher (this seat's is `team-deepseek`) is still said
+    // beside it, in the order the check pushes them.
+    expect(at('other')).toEqual([restored, launcher]);
+    // The stored session back on the pane: the seat again, not reported — and the generic mark
+    // released, for the next mismatch to be a new change.
     expect(at('kept')).toEqual([]);
+    // The new mismatch reports the generic line again: its condition broke when the stored
+    // session returned. The launcher flag stays quiet — the pane still never held the process
+    // team launched, so its condition never cleared and its report-once mark never released.
     expect(at('other')).toEqual([restored]);
   });
 });
