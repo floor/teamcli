@@ -10,7 +10,10 @@
 // project's own rules. Those rules are decided by the project record and by the `leads`
 // capability a seat holds, never by a role's name, which is each team's own word in any language.
 // A pair whose teams share no project keeps the team rules below unchanged: nothing here ever
-// crosses projects.
+// crosses projects. And a record confers no right: registration, a lifecycle, a signing role —
+// none of it admits anything by itself; every verdict is made from the pair's own relationships
+// and capabilities, and a send with a record on each side but no rule for the pair is refused
+// exactly as a pair the registry never knew.
 
 import type { Agent } from '../registry/agents.ts';
 import { seatsCrossTeams, type SettingLevel } from '../settings/inherit.ts';

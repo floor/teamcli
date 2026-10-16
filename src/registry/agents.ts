@@ -2,6 +2,14 @@
 // The agent id is assigned once at registration and is immutable: it is never reused, never
 // renamed, never re-derived from a seat name. Every write goes through a temporary file and a
 // rename, and a read-modify-write holds the folder's lock.
+//
+// A record's identity is (reach.team, reach.seat) — the team id and the seat the live file
+// declares — and never the pane: a pane change re-points the same record, and one pair holds at
+// most one live record. Records are append-only: ending a seat marks its record ended and takes
+// it out of the roster's reading, but nothing deletes it, so its history stays readable. And a
+// record confers no right: it says which agent a seat is, never what the seat may do — admission
+// decides from the pair's own relationships and capabilities, never from a record's existence
+// (src/send/admit.ts).
 
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
