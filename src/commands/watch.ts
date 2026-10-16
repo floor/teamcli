@@ -285,8 +285,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       const current = currentTeam(io.cwd, aimed, sources.now(), sources.home);
       const team = current.ok ? current.team : first.team;
       const root = current.ok ? current.root : first.root;
-      // The one read of the approval store for the whole pass: the drift line, the
-      // values in force and the checks below all derive from it.
+      // The one read of the approval store for the whole pass: the record's case, the values in
+      // force and the checks below all derive from it.
       const standing = sources.standing(root);
       const overrides: OverrideForce = sources.home
         ? overridesInForceOf(standing, team.project, root, sources.home)

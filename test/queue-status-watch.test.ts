@@ -95,7 +95,7 @@ test('reads project-relative and home-relative queues; absent, non-file and over
   expect(readQueueDepths({ ...team, watch: { ...team.watch, queueDir: '~/queue' } }, root, home)?.first).toBe(1);
 });
 
-test('status text and JSON expose queue depth and identify rate limits instead of idle', async () => {
+test('status text and JSON expose queue depth and name the pool on a rate-limited seat', async () => {
   writeFileSync(join(root, 'notes/queue/first.md'), '1. task\n2. task\n');
   rmSync(join(root, 'notes/queue/second.md'));
   live.screens['second:pane'] = limited;
@@ -104,13 +104,12 @@ test('status text and JSON expose queue depth and identify rate limits instead o
     const io = testIo(root, { kind: 'owner' });
     await runStatus(['--file', file, ...extra], io, sources);
     expect(io.out, io.err).toContain('queues:\n  lead: 0\n  first: 2\n  second: unknown');
-    expect(io.out).toContain('rate limit');
-    expect(io.out).toContain('second: quota or limit reached, resets at 11:00');
+    expect(io.out).toContain('idle (rate limit on anthropic, resets at 11:00)');
     const json = testIo(root, { kind: 'owner' });
     await runStatus(['--file', file, '--json', ...extra], json, sources);
     const rows = JSON.parse(json.out).rows;
     expect(rows.find((row: { name: string }) => row.name === 'first').queue_depth).toBe(2);
-    expect(rows.find((row: { name: string }) => row.name === 'second')).toMatchObject({ queue_depth: null, state: 'rate limit' });
+    expect(rows.find((row: { name: string }) => row.name === 'second')).toMatchObject({ queue_depth: null, state: 'idle (rate limit on anthropic, resets at 11:00)' });
   }
 });
 
@@ -302,5 +301,5 @@ test('temporary seats also have queue depths and rate-limit state', async () => 
   writeFileSync(join(root, 'notes/queue/helper.md'), '- [ ] task\n');
   const io = testIo(root, { kind: 'owner' });
   await runStatus(['--file', file, '--json'], io, { live: () => live, branch: () => 'main', standing: () => verifiedOf(team, text, root), now: () => new Date(), home });
-  expect(JSON.parse(io.out).rows.find((row: { name: string }) => row.name === 'helper')).toMatchObject({ queue_depth: 1, state: 'rate limit, temporary' });
+  expect(JSON.parse(io.out).rows.find((row: { name: string }) => row.name === 'helper')).toMatchObject({ queue_depth: 1, state: 'done (rate limit on anthropic, resets at 11:00), temporary' });
 });
