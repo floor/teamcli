@@ -2,8 +2,17 @@
 // with the one cleaning before it reaches the terminal. The progress writer alone keeps the raw
 // writers: it draws its own `\r\x1b[K` on a TTY and cleans its own fields.
 import { describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { verifiedOf } from '../src/approve/approval.ts';
+import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
+import { runStatus, type StatusSources } from '../src/commands/status.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
 import { cleanedIo, type Io } from '../src/io.ts';
 import { plainLine } from '../src/launch/plain.ts';
+import { emptySession, updateState } from '../src/state.ts';
+import { testIo } from './helpers.ts';
 
 function pair(): { written: string[]; clean: Io } {
   const written: string[] = [];
@@ -62,3 +71,107 @@ describe('cleanedIo', () => {
     expect(JSON.parse(written[0]!).reason).toBe('a\x1bb');
   });
 });
+
+describe('doctor and status cleaning', () => {
+  const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
+  const now = new Date('2026-10-03T14:10:00Z');
+
+  test('doctor cleans strings from the team file and from version/pane reads before printing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'team-doctor-clean-'));
+    try {
+      mkdirSync(join(dir, '.agents'));
+      const file = join(dir, '.agents', 'team.yaml');
+      writeFileSync(file, example.replace('coordinator: claude-coordinator-acme', 'coordinator: "x\\u001b[31my"'));
+      const badIo = testIo(dir, { kind: 'owner' });
+      const sources: DoctorSources = {
+        version: () => 'unreadable\x1b[31m\nnext',
+        onPath: () => true,
+        loggedIn: () => true,
+        herdrVersion: () => '0.13.0',
+        sessionRunning: () => true,
+        now: () => now,
+        home: dir,
+      };
+      expect(await runDoctor(['--file', file], badIo, sources)).toBe(2);
+      expect(badIo.err).toBe('team doctor: line 5: coordinator "xy" names no declared seat\n');
+      expect(badIo.err).not.toContain('\x1b');
+
+      const dirtyFile = example
+        .replace('label: claude opus 5.5', 'label: "acme-web\\u001b[31m"')
+        .replace('launch: claude --model claude-opus-5-5', 'launch: "./aa\\ebb"');
+      writeFileSync(file, dirtyFile);
+      const parsed = validateTeamFile(dirtyFile);
+      if (!parsed.ok) throw new Error('dirtyFile failed validation');
+      const standing = verifiedOf(parsed.team, dirtyFile, dir, now);
+      const io = testIo(dir, { kind: 'owner' });
+      await runDoctor(['--file', file], io, { ...sources, standing: () => standing });
+      expect(io.out).not.toContain('\x1b');
+      expect(io.err).not.toContain('\x1b');
+      expect(io.out).toContain('claude: its version can\'t be read from "unreadable next"');
+      expect(io.out).toContain('./aab');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('status cleans strings from the team file and from panes/herdr before printing and pads columns on cleaned widths', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'team-status-clean-'));
+    try {
+      mkdirSync(join(dir, '.agents'));
+      const file = join(dir, '.agents', 'team.yaml');
+      writeFileSync(file, example.replace('coordinator: claude-coordinator-acme', 'coordinator: "x\\u001b[31my"'));
+      const badIo = testIo(dir, { kind: 'owner' });
+      const baseSources: StatusSources = {
+        live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
+        branch: () => 'main',
+        standing: () => ({ kind: 'none' }),
+        now: () => now,
+        home: dir,
+      };
+      expect(await runStatus(['--file', file], badIo, baseSources)).toBe(2);
+      expect(badIo.err).toBe('team status: team.yaml line 5: coordinator "xy" names no declared seat\n');
+      expect(badIo.err).not.toContain('\x1b');
+
+      const dirtyFile = example.replace(
+        'display: Claude Opus 5.5',
+        'display: "Claude\\u001b[31m\\u001b[32m\\u001b[33m Opus 5.5"',
+      );
+      writeFileSync(file, dirtyFile);
+      const parsed = validateTeamFile(dirtyFile);
+      if (!parsed.ok) throw new Error('dirtyFile failed validation');
+      const standing = verifiedOf(parsed.team, dirtyFile, dir, now);
+      updateState(join(dir, '.agents'), (state) => {
+        state.sessions['acme-web'] = { ...emptySession(), watch: { pid: 1, heartbeat: '2026-10-03T14:09:00Z' } };
+      });
+      const io = testIo(dir, { kind: 'owner' });
+      await runStatus(['--file', file], io, {
+        ...baseSources,
+        standing: () => standing,
+        branch: () => 'feat/\x1b[31mdirty\nbranch',
+        live: () => ({
+          running: true,
+          agents: [
+            { name: 'claude-coordinator-acme', agent: 'claude', pane: 'pane-a', workspace: 'w1', status: 'working\x1b[2J', cwd: null },
+            { name: 'stray\x1b[31m\nagent', agent: 'claude', pane: 'pane-b', workspace: 'w9', status: 'idle', cwd: null },
+          ],
+          workspaces: [
+            { id: 'w1', label: 'claude opus 5.5' },
+            { id: 'w9', label: 'stray' },
+          ],
+          screens: {
+            'pane-a': `❯ \n${'─'.repeat(40)}\n  main · …/acme · Opus 5.5 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`,
+          },
+        }),
+      });
+      expect(io.out).not.toContain('\x1b');
+      expect(io.err).not.toContain('\x1b');
+      expect(io.out).toContain('difference: stray agent (pane-b) is running and is not in the file');
+      expect(io.out).toContain('difference: the protected checkout "." is on "feat/dirty branch", not on "main"');
+      const rowLine = io.out.split('\n').find((line) => line.includes('claude-coordinator-acme')) ?? '';
+      expect(rowLine).toBe('  claude-coordinator-acme  working  Claude Opus 5.5      pane-a');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
