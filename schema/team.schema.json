@@ -28,6 +28,10 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
       "$comment": "the project this team belongs to, by name; absent, the team is its own project"
     },
+    "project_lead": {
+      "type": "boolean",
+      "$comment": "this team leads the project it sits in; one team per project declares it"
+    },
     "entity": {
       "type": "string",
       "minLength": 1,

@@ -107,6 +107,11 @@ export type TeamFile = {
    * team with no project is its own. `project:` above is still the team's own name.
    */
   inProject: string | null;
+  /**
+   * Whether this team leads the project it sits in — the team-side `leads: true`. One team per
+   * project sets it (`team check` refuses two), and the file must name the project it leads.
+   */
+  projectLead: boolean;
   /** The entity the team belongs to, or null. Sets the team's lobby to
    *  `~/.config/team/lobbies/<slug>` unless `lobby` names one outright. */
   entity: string | null;

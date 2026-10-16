@@ -1,7 +1,8 @@
 // The team file's project level. `project:` still names the team itself; the new `in_project:`
-// names the project the team sits in, by the project's name. Both are optional for the project
-// (a team that names none is its own project), so no file written before this field existed
-// loads any differently — the second half of this file walks every team file already in the tree.
+// names the project the team sits in, by the project's name, and `project_lead: true` says this
+// is the project's lead team. All are optional for the project (a team that names none is its own
+// project), so no file written before these fields existed loads any differently — the last part
+// of this file walks every team file already in the tree.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -62,6 +63,37 @@ describe('a team names the project it sits in', () => {
   });
 });
 
+describe('a team says whether it leads the project it sits in', () => {
+  test('`project_lead: true` reads as the lead, beside the project it names', () => {
+    const result = loaded(file('TeamCLI', ['project_lead: true']));
+    if (!result.ok) throw new Error(JSON.stringify(result.errors));
+    expect(result.team.projectLead).toBe(true);
+    expect(result.team.inProject).toBe('TeamCLI');
+  });
+
+  test('a file that says nothing reads false: this team leads no project', () => {
+    const result = loaded(file('TeamCLI'));
+    if (!result.ok) throw new Error(JSON.stringify(result.errors));
+    expect(result.team.projectLead).toBe(false);
+  });
+
+  test('`project_lead: true` with no `in_project` is refused: there is no project to lead', () => {
+    const result = loaded(file(null, ['project_lead: true']));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toEqual([
+      { line: 4, message: 'project_lead needs in_project: name the project this team leads' },
+    ]);
+  });
+
+  test('a `project_lead` that is not true or false is refused', () => {
+    const result = loaded(file('TeamCLI', ['project_lead: maybe']));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toEqual([{ line: 5, message: 'project_lead must be true or false' }]);
+  });
+});
+
 describe('every team file already in the tree loads unchanged', () => {
   // The team files the repository carries: its own, the shipped example, the fixtures the file
   // tests validate, and the v0.1.2 copies. The schema fixtures are not here — they are written
@@ -90,6 +122,7 @@ describe('every team file already in the tree loads unchanged', () => {
         { line, message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read' },
       ]);
       expect(result.team.inProject).toBeNull();
+      expect(result.team.projectLead).toBe(false);
     });
   }
 });

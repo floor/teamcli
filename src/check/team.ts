@@ -8,22 +8,24 @@
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
+import { join } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { approvalCaseRow, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
+import { loadTeamFile, TEAM_FILE } from '../file/load.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
-import type { Problem, Seat, TeamFile } from '../file/types.ts';
+import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
-import { ofTeam, ProjectsError } from '../registry/projects.ts';
-import { teamIdOf } from '../registry/teams.ts';
+import { byName, ofTeam, ProjectsError } from '../registry/projects.ts';
+import { getTeam, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { emptySession, readState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
@@ -161,7 +163,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...signingDifferences(team, live, root, sources.home),
     ...attentionDifferences(team, state, live),
     ...labelDifferences(team, state, live),
-    ...projectDifferences(root, sources.home),
+    ...registryDifferences(team, root, sources.home),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same row `status` prints: a legacy record or one the verification refused still says what
     // it is; a machine that never approved the file is the ordinary file now, and nothing to repair.
@@ -319,27 +321,63 @@ function displayLineMatches(seat: Seat, line: string, screen: string | undefined
 }
 
 /**
- * The project registry's word on this team (src/registry/projects.ts): `ofTeam` answers with the
- * one project whose records name this team, null for a team no project names — a team that is
- * its own project, which is no difference — and refuses the state this check refuses too, a team
- * two projects both name, naming both. The refusal is repeated here rather than re-derived: the
- * registry owns the rule. A registry that does not read refuses the same way, and its error says
- * so in the same line, so a machine whose registry cannot be read is not read as fine either.
- * The repair is on the registry file in both cases, and no team command writes it yet. A check
- * with no home to answer for reads no registry, exactly as the approval store is not read.
+ * What the registries say about this team's place (src/registry/projects.ts, src/registry/teams.ts).
+ * A team is named in one project at most: `ofTeam` owns that rule and refuses the state where two
+ * name it, naming both, and the refusal is repeated here rather than re-derived. A registry that
+ * does not read refuses in the same line, so a machine whose registry cannot be read is not read
+ * as fine. And a project is led by one team: when this team declares `project_lead: true`, the
+ * project's other teams are looked up in the team registry (their `root` to their file) and a
+ * second declaring team is a difference. A sibling the registries cannot answer for — no record,
+ * no readable file, or a file naming another project — is not counted, and a team that declares
+ * no lead reads no sibling at all. A team no project names is its own project, and a machine with
+ * no registry has no projects: neither is a difference. A check with no home answers for no
+ * registry at all, exactly as it reads no approval store.
  */
-function projectDifferences(root: string, home: string | undefined): Difference[] {
+function registryDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
   if (home === undefined) return [];
   try {
     ofTeam(home, teamIdOf(root));
-    return [];
-  } catch (error) {
-    if (!(error instanceof ProjectsError)) throw error;
+    if (!team.projectLead || team.inProject === null) return [];
+    const project = byName(home, team.inProject);
+    if (project === null) return [];
+    const leads = [team.project, ...leadSiblings(team, root, home, project.teams)];
+    if (leads.length < 2) return [];
     return [{
-      what: `the project registry: ${error.message}`,
-      repair: 'fix the project registry (~/.config/team/projects.yaml)',
+      what: `the project ${team.inProject} has ${leads.length} lead teams: ${leads.join(', ')}`,
+      repair: 'take "project_lead: true" off all but one of them',
     }];
+  } catch (error) {
+    if (error instanceof ProjectsError) return [{ what: `the project registry: ${error.message}`, repair: 'fix the project registry (~/.config/team/projects.yaml)' }];
+    if (error instanceof TeamsError) return [{ what: `the team registry: ${error.message}`, repair: 'fix the team registry (~/.config/team/teams.yaml)' }];
+    throw error;
   }
+}
+
+/**
+ * The names of this project's other teams whose files declare `project_lead: true` too, read
+ * through the team registry's `root` and the file's canonical path — text only, so a sibling's
+ * placement and its own trust are not this check's business. A sibling whose file names another
+ * project is a stale registry, not a second lead of this one.
+ */
+function leadSiblings(team: TeamFile, root: string, home: string, teamIds: string[]): string[] {
+  const mine = teamIdOf(root);
+  const out: string[] = [];
+  for (const id of teamIds) {
+    if (id === mine) continue;
+    const siblingRoot = getTeam(home, id)?.root;
+    if (siblingRoot === undefined) continue;
+    let loaded: LoadResult;
+    try {
+      loaded = loadTeamFile(siblingRoot, { file: join(siblingRoot, TEAM_FILE), home, checkOnly: true });
+    } catch {
+      // A file that cannot be read at all (permissions, a broken link) is a sibling the check
+      // cannot see: not counted, and not a reason for this team's check to fail.
+      continue;
+    }
+    if (!loaded.ok) continue;
+    if (loaded.team.projectLead && loaded.team.inProject === team.inProject) out.push(loaded.team.project);
+  }
+  return out;
 }
 
 /**
