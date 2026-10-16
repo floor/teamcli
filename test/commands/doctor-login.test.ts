@@ -251,6 +251,6 @@ describe('team doctor --login', () => {
     const code = await runDoctor(['--file', file, '--invalid-flag'], io, fakeSources());
     expect(code).toBe(2);
     expect(io.err).toContain('unknown option --invalid-flag\n');
-    expect(io.err).toContain('Usage: team doctor [--session <name>] [--file <path>] [--login]\n');
+    expect(io.err).toContain('Usage: team doctor [--session <name>] [--file <path>] [--login] [--jules]\n');
   });
 });

@@ -787,6 +787,6 @@ An option it doesn't know stops it before it reads anything:
 ```console
 $ team doctor --nope ; echo "exit $?"
 team doctor: unknown option --nope
-Usage: team doctor [--session <name>] [--file <path>] [--login]
+Usage: team doctor [--session <name>] [--file <path>] [--login] [--jules]
 exit 2
 ```
