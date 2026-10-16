@@ -54,7 +54,8 @@ when no team file names it, and hidden while it is stopped unless `--all` is set
 
 ## Entity rows
 
-`team list` reads the team registry (`~/.config/team/teams.yaml`) beside the live sessions. A row
+`team list` reads the team registry — `~/.config/team/teams.yaml`,
+[the registries](../concepts/registry.md) — beside the live sessions. A row
 the registry records is served by it, and its `source` is `registry`; a session with no record is
 discovered as above, and its `source` is `discovered`. The registry row carries the entity, the
 team/session, the project and the lobby, the seat count, and three state words: `DEFINED` (the
