@@ -169,7 +169,6 @@ budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
-note: approval #1 (2026-10-04), key fe21ef6293de
 difference: claude-keeper is in the file and is not running
   repair: team add claude-keeper
 1 difference(s)
