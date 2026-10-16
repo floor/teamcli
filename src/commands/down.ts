@@ -9,6 +9,7 @@ import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
+import { noteTeam } from '../registry/teams.ts';
 import {
   agentList,
   agentStatus,
@@ -590,6 +591,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const remember = (): void => {
     if (mayRemember && current.path !== undefined) rememberCurrent(current.dir, current.path, sources.now());
   };
+  // The registry says the team is stopped once its session is, in the run an allowed caller made:
+  // never a dry run, never a refused caller, never another session than the team file's own.
+  // The registry is the user-level home the run was given; a run given none leaves it alone.
+  const noteStopped = (): void => {
+    if (dry || callerRefused || abandonRefused || session !== team.session || sources.home === undefined) return;
+    const unrecorded = noteTeam(sources.home, root, team, 'stopped', describeCaller(caller));
+    if (unrecorded) io.stderr(`team down: ${unrecorded}\n`);
+  };
 
   const running = sources.sessionRunning(session);
   if (running === null) {
@@ -601,6 +610,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if (!running && grantRefusal === undefined) {
     io.stdout(`session ${session} is not running: nothing to stop${dry ? '\ndry run: nothing was run' : ''}\n`);
     remember();
+    noteStopped();
     // exit: down.idle
     return 0;
   }
@@ -969,6 +979,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       log: (who, what) => logLine(dir, 'down', describeCaller(caller), `${who}: ${what}`, now()),
     };
     const report = await executePlan(plan, session, host);
+    if (!report.held) noteStopped();
     // exit: down.stopped
     // exit: down.held
     return report.held ? 1 : 0;
