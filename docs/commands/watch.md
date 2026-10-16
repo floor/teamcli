@@ -218,17 +218,9 @@ approval, or that was never approved, is not run at all. The money a spend check
 the state with the pass's screen figures, so `up` and `add` measure the account's floor against
 it; a reading that is stale by then reads unknown there.
 
-The whole section is the owner's, like the watch's own timings: an edit to a reserve, a floor, the
-marks, `stale_after`, `check_every` or the accounts changes nothing until the owner approves it.
-Until then the reports, the check cadence and the accounts are the approved copy's — or the
-defaults', with no account at all, when nothing was approved — and the difference is reported. The
-same values are what `status`'s table and `up`'s and `add`'s launch gate read.
-
-A seat's own edit is the same kind of drift. While the approval lists a seat as changed — or as
-not in the approved file — the figures off its screen are read and reported as they are, and none
-of them is written to the readings: an unapproved edit to its `account:` must not move its figure
-into another account's bucket, where `up` and `add` would count it. Once the owner approves the
-seat, its figures fold again, under the account the file then names.
+The live file supplies the reserves, floors, marks, cadence, accounts and seat assignments.
+Edits take effect without another approval once an approval is in force; otherwise the
+budget defaults contain no accounts. The same values drive the status table and launch gates.
 
 `budget` is a check like the others: `watch.checks` turns it off. It reports, and never refuses a
 seat: the launch gate of `up` and `add` is what refuses. An account whose figure nothing counts —
@@ -406,21 +398,16 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-The watch's own timings are the owner's too: `interval`, `idle_first`, `idle_repeat`, `team_idle`,
-`nudge_wait` and `unsent_after` are approved with the file, and an edit to one of them changes
-nothing until the owner approves it — the passes keep running with the values of the approved copy,
-or with the defaults when nothing was approved.
-`watch.nudge` is read from the live file on each pass, including while those timings are still
-the approved copy or the defaults.
+The watch reads its timings and nudge settings from the live file on each pass once an
+approval is in force. Edits take effect without another approval. A file with no verified
+approval uses the default timings.
 By default an idle seat is reported once per idle period (`idle_repeat` is off). A team that wants
 repeated idle reports turns them on by setting `watch.idle_repeat` to the repeat interval (such as
 `idle_repeat: 20m`), repeating every 20 minutes while the seat stays quiet.
 
-A check the team doesn't want is turned off in `watch.checks` — a section only the owner changes,
-so it is approved like the rest of them. While that edit is unapproved, the approved list stays
-in force: nothing new is turned off, and a check the approved file turned off stays off. The
-machine below sits at 8% free memory, and this file turns that report off. The approved list left
-it on, so the report still comes.
+A check the team doesn't want is turned off in `watch.checks`. Edits to that list take effect
+on the next pass. The machine below sits at 8% free memory, and the live file turns that
+report off even though the last approval left the check on.
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -463,12 +450,11 @@ seats:
 ```console machine=tight
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z free memory is 8%, below 15%
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
 ```
 
-The owner approves it, and the next pass runs without the check:
+The live edit disables the check immediately. The owner can also record the change:
 
 ```console
 $ team approve ; echo "exit $?"

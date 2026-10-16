@@ -219,7 +219,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ...protectedCheckouts(team, root, sources),
     ...approvalDrift(approvalCase(standing, team)),
     ...overrideDrift(overrides),
-    // The approved file's own rules files, only when there is an approval to write them.
+    // The file's own rules files, only when there is an approval to write them.
     ...rulesFileDifferences(standing, team, root, sources.home),
   ]);
 
@@ -274,13 +274,14 @@ export function overrideDrift(report: OverrideForce): Difference[] {
   ];
 }
 
-// A file that was never approved, or was changed since, runs nothing until the owner approves it.
-// A legacy or refused record is the whole case and its repair in one line of its own.
+// A file that was never approved runs nothing until the owner approves it; a file that changed
+// since the last approval is only said — the commands read it as it stands. A legacy or refused
+// record is the whole case and its repair in one line of its own.
 export function approvalDrift(approval: { differences: string[] | null; reason: string | null }): Difference[] {
   const withApproval = (what: string): Difference => ({ what, repair: APPROVAL_REPAIR, approval: true, owner: true });
   if (approval.reason !== null) return [withApproval(approval.reason)];
   if (approval.differences === null) return [withApproval('the file was never approved on this machine')];
-  return approval.differences.map((line) => withApproval(`the file differs from the approved one: ${line}`));
+  return approval.differences.map((line) => withApproval(`the file has changed since the last approval: ${line}`));
 }
 
 
