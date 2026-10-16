@@ -12,7 +12,7 @@ export const approval: TeamCheck = {
   run(team, ctx) {
     if (team.approvalReason != null) return [];
     if (team.approval?.length) {
-      return reported(ctx.once('approval', `the file differs from the approved one: ${team.approval.join('; ')}`, 'owner'));
+      return reported(ctx.once('approval', `the file has changed since the last approval: ${team.approval.join('; ')}`, 'owner'));
     }
     return [];
   },

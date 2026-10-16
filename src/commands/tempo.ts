@@ -15,7 +15,7 @@ export default tempo;
 
 /**
  * `team tempo <word>`: write the team's tempo. The five watch waits stay as written; the
- * word scales them once the owner approves the file. `normal` is that file with the key
+ * word scales them as soon as the watch reads the live file. `normal` is that file with the key
  * omitted, so writing it changes no approval.
  */
 export async function runTempo(argv: string[], io: Io, sources: { home?: string } = {}): Promise<number> {
@@ -40,10 +40,23 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
     // exit: tempo.detached
     return 1;
   }
-  if (!isOwner(caller)) {
-    io.stderr(`team tempo: only the owner runs tempo, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
-    // exit: tempo.not-owner
-    return 1;
+  const placement = `only the owner runs tempo, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+  const owner = isOwner(caller);
+  if (!owner) {
+    // Set to exactly `1`. Dev mode says the owner-only line once, as a warning, and the write
+    // continues. The orchestrator's and the operator's own seats stay refused in every mode:
+    // the peek reads the file for those two names and nothing else.
+    const dev = io.env.TEAMCLI_DEV_MODE === '1';
+    const peeked = dev ? loadTeamFile(io.cwd, { home: sources.home ?? homedir() }) : null;
+    const held = !dev
+      || (peeked !== null && peeked.ok && caller.kind === 'seat'
+        && (caller.name === peeked.team.orchestrator || caller.name === peeked.team.operator));
+    if (held) {
+      io.stderr(`team tempo: ${placement}\n`);
+      // exit: tempo.not-owner
+      return 1;
+    }
+    io.stderr(`team tempo: warning: ${placement}; dev mode continues\n`);
   }
   const loaded = loadTeamFile(io.cwd, { home: sources.home ?? homedir() });
   let failed: string | undefined;
@@ -59,7 +72,6 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
     const wrote = writeTeamFile(loaded.path, next);
     if (wrote.ok) {
       io.stdout(`tempo: ${word}\n`);
-      if (word !== 'normal') io.stderr('team tempo: it takes effect when the file is approved\n');
       // exit: tempo.set
       return 0;
     }

@@ -861,8 +861,6 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.another-pane
     // exit: down.delegate
     // exit: down.delegate-approval
-    // exit: down.delegate-approved-copy
-    // exit: down.delegate-drift
     // exit: down.delegate-evidence
     // exit: down.delegate-placement
     // exit: down.delegate-command

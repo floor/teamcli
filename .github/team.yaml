@@ -252,3 +252,22 @@ seats:
     version: "V4.1"
     display: DeepSeek V4.1 Flash
     launch: claude
+
+  # 2026-10-16: testers move off Codex as its weekly quota runs low.
+  - role: tester
+    name: tester-deepseek
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    display: DeepSeek V4.1 Flash
+    launch: claude
+
+  - role: tester
+    name: tester-sonnet
+    cli: antigravity
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    display: Claude Sonnet 5.5
+    launch: agy

@@ -107,7 +107,7 @@ describe('tempo', () => {
     expect(compare(approvedFingerprints(old.record), fingerprints(urgent)).map(describeDifference)).toEqual(['`tempo` changed']);
     const normal = parsed(setTempo(TEAM, 'normal'));
     expect(compare(approvedFingerprints(old.record), fingerprints(normal))).toEqual([]);
-    expect(watchInForceOf(old, urgent).idleFirst).toBe(600);
+    expect(watchInForceOf(old, urgent).idleFirst).toBe(300);
     expect(watchInForceOf(old, urgent).interval).toBe(team.watch.interval);
     expect(watchInForceOf(verified(urgentText, urgent), urgent).idleFirst).toBe(300);
     expect(watchInForceOf(verified(urgentText, urgent), urgent).idleRepeat).toBe(600);
@@ -140,7 +140,7 @@ describe('team tempo', () => {
     const io = testIo(where.root, { kind: 'owner' });
     expect(await runTempo(['urgent'], io, { home: where.home })).toBe(0);
     expect(io.out).toBe('tempo: urgent\n');
-    expect(io.err).toBe('team tempo: it takes effect when the file is approved\n');
+    expect(io.err).toBe('');
     expect(readFileSync(where.file, 'utf8').startsWith('format: 1\ntempo: urgent\n')).toBe(true);
     const again = testIo(where.root, { kind: 'owner' });
     const before = readFileSync(where.file, 'utf8');

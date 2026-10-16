@@ -2,7 +2,6 @@
 // runs the registered checks in the order it owns, applies the report-once rule, and dials the
 // nudge. A check never reads herdr, a screen or the file itself — only the observation it is
 // handed (RFC 0002 § 4.2).
-import { seatNamed } from '../approve/fingerprint.ts';
 import { observe, observeCheck, type Seen } from '../budgets/readings.ts';
 import type { CheckOutcome } from '../budgets/run.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -176,9 +175,9 @@ function quotaOf(cli: string, screen: Screen, pane: string | undefined, runs: bo
 
 // What one pass is handed: the file, the session, the observed world, the clock, the watch's
 // memory, and what the caller knows that the world does not. `approval` is how the file differs
-// from the approved one: [] when it doesn't, null when it was never approved, undefined when that
-// wasn't looked at. `watch` and `budgets` are the sections in force — the approved ones, or the
-// defaults while the file's own are not approved — and the checks read those, never the file's.
+// from the last approval: [] when it doesn't, null when it was never approved, undefined when that
+// wasn't looked at. `watch` and `budgets` are the sections in force — the live file's under a
+// verified standing, the defaults under none — and the checks read those, never the file's.
 // `outcomes` is what the accounts' check commands read outside the pass, when the watch last ran
 // them. `readings` is the project's stored cache, recalled by the caller; this pass folds its
 // figures into it, whatever session they were seen in (§ 4.4). `foreground` is herdr's
@@ -381,21 +380,11 @@ export function pass({
   // keep two buckets — while a figure on another account (a launcher showing the vendor it really
   // runs on) stays that account's, whichever seat's screen showed it.
   //
-  // A seat the approval lists as changed — or as not in the approved file — is drift, and its
-  // figures are read as they are but none is folded: an unapproved edit to its `account:` must
-  // not move its figure into another account's bucket, where `up` and `add` would count it.
-  // Nothing is saved for that seat until the owner approves.
-  const drift = new Set(
-    (Array.isArray(approval) ? approval : []).map(seatNamed).filter((name): name is string => name !== null),
-  );
-  for (const [name, recorded] of Object.entries(state.seats)) {
-    if (recorded.temporary && drift.has(recorded.temporary.like)) {
-      drift.add(name);
-    }
-  }
+  // The live file is the record: a seat's figures fold under the account the file names now,
+  // and a change since the last approval holds no seat's figures back.
   let readings = stored.slice();
   for (const seat of observations) {
-    if (!seat.running || drift.has(seat.name)) continue;
+    if (!seat.running) continue;
     for (const figure of seat.quota) {
       const account = figure.account === seat.vendor ? seat.account : figure.account;
       if (budgets.accounts[account]?.sources.includes('status_line')) {

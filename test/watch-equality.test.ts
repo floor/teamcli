@@ -180,7 +180,7 @@ function oldPass(
 
   // A file with no approval record (`null`) is not a report of its own, here as in the core:
   // the never-approved line was a leftover, and only a difference is the owner's to answer.
-  if (approval?.length) once('approval', `the file differs from the approved one: ${approval.join('; ')}`, 'owner');
+  if (approval?.length) once('approval', `the file has changed since the last approval: ${approval.join('; ')}`, 'owner');
 
   const limits = team.machine;
   if (machine.loadPerCore !== null && machine.loadPerCore > limits.loadMax) {
