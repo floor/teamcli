@@ -9,7 +9,7 @@ import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } fro
 import { usesLauncher } from '../launch/line.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { readScreen } from '../watch/screen.ts';
-import { modelDiffers, seatModel } from './statusline.ts';
+import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
 // `processes` each seat pane's process identity, where it was read, and null where herdr can't
@@ -26,7 +26,7 @@ export type Row = { name: string; id?: string; state: string; model: string; pan
 
 /** The repair of the one precondition `status` knows: the file is not the approved one. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
-export const APPROVAL_REPAIR = 'the owner runs team approve';
+export const APPROVAL_REPAIR = 'the live file is what the commands read';
 
 /**
  * One disagreement, with the two facts about its repair that the renderer needs and must not
@@ -428,7 +428,7 @@ export function compare(
     if (claimed.has(agent.pane) || labels.get(agent.workspace) === WATCH_LABEL) continue;
     differences.push({
       what: `${agent.name ?? `an unnamed ${agent.agent ?? 'agent'}`} (${agent.pane}) is running and is not in the file`,
-      repair: 'add the seat to the file and run team approve, or close it',
+      repair: 'add the seat to the file, or close it',
     });
   }
 
@@ -569,6 +569,12 @@ function modelOf(
 ): string {
   const running = seatModel(seat, live.screens[agent.pane]);
   if (!running) {
+    // A profile may say the launch line's model stands when the screen names none: its column
+    // shows it labelled, and the note says where the name comes from.
+    if (launchModelWhenUnread(seat.cli)) {
+      notes.push(`${seat.name}: its screen shows no model; the launch line's ${seat.display} stands`);
+      return `${seat.display} (from launch)`;
+    }
     notes.push(`${seat.name}: version unread (its screen doesn't show the model)`);
     return `${seat.display} (unread)`;
   }
@@ -596,7 +602,7 @@ function modelMismatchRepair(team: TeamFile, name: string): string {
   const command = isLeadSeat(team, name)
     ? relaunchRepair(team, name, 'plain')
     : `team remove ${name} --keep, then team add ${name}`;
-  return `restart the seat on the file's model (${command}), or correct the file and run team approve`;
+  return `restart the seat on the file's model (${command}), or correct the file`;
 }
 
 /** A pane that holds only a shell, on a record that never stored the process team launched.

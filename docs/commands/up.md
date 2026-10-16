@@ -26,7 +26,8 @@ into — and its sidebar is rewritten from the file either way.
 | --- | --- |
 | the owner | run it, from a terminal outside herdr |
 | a run with no terminal | a real run is refused: `team up: only the owner runs this, from a terminal outside herdr`; `--dry-run` prints the plan and `! up would refuse:` with that sentence, and launches nothing |
-| anyone | run `--dry-run`, which reaches nothing and changes nothing |
+| a caller the run admits | run `--dry-run`, which reaches nothing and changes nothing |
+| a caller the run does not admit | a real run and a `--dry-run` are answered alike, with the one word `deny` on stderr and nothing on stdout — no reason, and no plan — and exit 1 |
 | the orchestrator's seat, when the approved `grant` lists `up` | run it on this folder's own team file. The run does not relaunch or close that seat. `--session` and `--file` are refused before either is read |
 | a seat, or a pane of another session | run `--dry-run` only; a real run is refused, unless the approved `grant` admits the orchestrator's seat or the approved file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
 
@@ -36,6 +37,7 @@ into — and its sidebar is rewritten from the file either way.
 | --- | --- | --- |
 | every seat ready, watch running | one `<seat>: ready` record per seat in file order, on stdout; `watch: started`, on stderr | 0 |
 | `--dry-run` | the plan; `! up would refuse: …` per refusal above it | the refusal's own exit, else 0 |
+| a caller the run does not admit | `deny`, and nothing else: no `team up:` prefix, no reason, no plan | 1 |
 | the run is refused | one `team up: <reason>` per reason, on stderr, before the first step | 1 |
 | a seat was left out, the server did not start, the watch did not start | the seats' records and the run's own lines | 1 |
 | the invocation can't be read | `team up: <problem>` and the usage | 2 |
@@ -45,6 +47,9 @@ into — and its sidebar is rewritten from the file either way.
 
 ```console caller=agent
 $ team up --file other.yaml ; echo "exit $?"
+deny
+exit 1
+$ team up --dry-run --file other.yaml ; echo "exit $?"
 deny
 exit 1
 ```

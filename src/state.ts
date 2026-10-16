@@ -30,14 +30,6 @@ export type SeatState = {
   stage: 'launched' | 'named' | 'ready';
   /** The CLI the seat was launched with: `down` stops it under it when the file renamed it. */
   cli?: string;
-  /** The model token the seat was launched with. */
-  model?: string;
-  /** The version token the seat was launched with. */
-  version?: string;
-  /** The effort word the seat was launched with, when set. */
-  effort?: string;
-  /** The full shell launch command the seat was started with. */
-  launch_line?: string;
   /** ISO 8601 timestamp when the seat last reached ready or was seen working. */
   last_active?: string;
   pane?: string;
@@ -64,6 +56,18 @@ export type SeatState = {
    * seat (`replacedSeat`). Absent when the launch's reading had none.
    */
   agent_session?: string;
+  /**
+   * What this launch declared, written when the idle prompt appears and left in place when a
+   * later ready write merges onto the record. A skip of a seat that is already ready does not
+   * set them: the file may have drifted, and the record has to stay the launch. Absent on a
+   * seat launched before they were stored.
+   */
+  model?: string;
+  version?: string;
+  /** Absent when the launch set no effort word. A later launch that sets none removes it. */
+  effort?: string;
+  /** The launch command of that idle record. Stored for the registry; reload does not compare it. */
+  launch_line?: string;
   // `own_commits` is the home for a temporary seat whose end is `merged:` and that has no worktree.
   // A seat in a worktree keeps that record on the worktree instead.
   temporary?: { like: string; until: string; task?: string; own_commits?: boolean };

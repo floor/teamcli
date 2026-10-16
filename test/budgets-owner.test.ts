@@ -205,7 +205,7 @@ describe('the watch reads them', () => {
     expect(code).toBe(0);
     expect(io.out).toContain('openai weekly is 92% used, past the 50% mark');
     expect(io.out).toContain('openai weekly is 92% used, past the 90% mark');
-    expect(io.out).toContain('the file differs from the approved one: `budgets` changed');
+    expect(io.out).not.toContain('the file differs from the approved one');
   });
 
   test('an unapproved cadence edit does not stretch the loop\'s check runs', async () => {
