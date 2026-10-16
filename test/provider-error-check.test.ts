@@ -6,12 +6,13 @@ import type { CheckContext, Report, SeatObservation } from '../src/watch/check.t
 import { providerError } from '../src/watch/checks/provider-error.ts';
 import type { Screen } from '../src/watch/screen.ts';
 
-function seat(name: string, screen: { kind: string; reset?: string | null }, running = true, working = false): SeatObservation {
+function seat(name: string, screen: { kind: string; reset?: string | null }, running = true, working = false, account?: string): SeatObservation {
   return {
     name,
     running,
     working,
     screen: screen as Screen,
+    account,
   } as SeatObservation;
 }
 
@@ -72,6 +73,20 @@ describe('provider-error check', () => {
     finish();
     const quiet = harness();
     expect(texts(providerError.run(seat('claude-b', { kind: 'rate limit', reset: null }), quiet.ctx))).toEqual([
+      'operator: claude-b is at a rate limit: usage limit, and the screen names no reset time',
+      'owner: claude-b is at a rate limit: usage limit, and the screen names no reset time',
+    ]);
+  });
+
+  test('a rate limit names the pool the seat spends, and leaves it out when the seat names none', () => {
+    const { ctx } = harness();
+    const limited = seat('claude-b', { kind: 'rate limit', reset: '11:00' }, true, false, 'claude-glm');
+    expect(texts(providerError.run(limited, ctx))).toEqual([
+      'operator: claude-b is at a rate limit on claude-glm: usage limit, resets at 11:00',
+      'owner: claude-b is at a rate limit on claude-glm: usage limit, resets at 11:00',
+    ]);
+    const bare = harness();
+    expect(texts(providerError.run(seat('claude-b', { kind: 'rate limit', reset: null }, true, false, ''), bare.ctx))).toEqual([
       'operator: claude-b is at a rate limit: usage limit, and the screen names no reset time',
       'owner: claude-b is at a rate limit: usage limit, and the screen names no reset time',
     ]);
