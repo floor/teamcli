@@ -92,6 +92,12 @@ either folder is left there. The fields are in the README's
   (`DeepSeek V4.1 Flash`, `Gemini 3.8 Flash`). Herdr draws line 2 as its status word, then
   ` · `, then that text (`done · Grok 4.7 high`, `idle · Opus 5.5 default`). That is line 2.
 
+While the seat runs, the watch paints both lines. Line 1 is the file's title. Line 2 takes the
+running model and version the pane's screen shows when they differ from the file's, and the
+effort word the screen shows; a screen this version cannot read, or one that shows no running
+model, keeps the file's display — never the CLI's name. An effort word, once seen, stays until a
+later screen shows a different one.
+
 `effort` is optional. It is a known field: a file may set it, and a file that leaves it out
 loads as before. The words a lab allows are [`src/profiles/efforts.json`](../src/profiles/efforts.json),
 format 1, keyed by the seat's `vendor`. Each list is the words that lab's own CLI help printed.
@@ -128,11 +134,15 @@ grant:
 - `seat` is the orchestrator's name, the one `coordinator:` or `leads: true` resolves. The
   operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":
   "<written>"`.
-- `scope` names acts from the closed set `up`, `down`, `approve`, `init` and `reload`. The
+- `scope` names acts from the closed set `up`, `down`, `approve`, `init`, `reload` and `swap`. The
   list is non-empty, each act appears once, and the order is part of the value the owner
   approves. An empty list is `grant.scope must name at least one of: up, down, approve, init,
-  reload`. A repeated act is `grant.scope names "<act>" twice`. Any other word is
-  `grant.scope must name up, down, approve, init, reload: "<word>" is not one`.
+  reload, swap`. A repeated act is `grant.scope names "<act>" twice`. Any other word is
+  `grant.scope must name up, down, approve, init, reload, swap: "<word>" is not one`.
+- `swap` in `scope` admits the orchestrator's seat to `team remove <operator> --keep`: the swap
+  of the operator's agent (`docs/commands/remove.md`). Never its own seat — a seat cannot close
+  the pane its own call runs in — so the orchestrator's own swap stays the owner's or a
+  delegate's whose entry lists `swap`. The grant itself stays an owner section.
 - `approve` in `scope` is an ordinary approval: the roster and `rules`. A change to `grant`
   itself, and a change to any other owner section, stays the owner's. The grant admits the
   orchestrator's seat for that class when it lists `approve`. The run is this folder's own
@@ -156,7 +166,7 @@ the owner approves. Omitted, it reads as `null` and nothing is delegated.
 ```yaml
 delegates:
   - pane: main/w1:p1        # <herdr session>/<pane id>, outside the team's session
-    commands: [up, down]    # of up, down, add, remove, approve: non-empty, distinct, order kept
+    commands: [up, down]    # of up, down, add, remove, approve, swap: non-empty, distinct, order kept
   - pane: main/w2:p1
     commands: [add, remove]
 ```
@@ -166,7 +176,10 @@ delegates:
 - A pane is herdr's pane ID — `<session>/<pane id>`, such as `main/w1:p1` — one slash, no
   whitespace, matched on the whole string and case-sensitively. A pane closed and made again has
   a new ID, so delegation is off until the owner approves a file naming that new ID.
-- `commands` names at most one each of the five `up`, `down`, `add`, `remove` and `approve`.
+- `commands` names at most one each of the six `up`, `down`, `add`, `remove`, `approve` and
+  `swap`. `swap` admits `team remove <lead> --keep` and `team add <lead>` on the orchestrator's
+  or the operator's seat — the swap of that seat's agent — and nothing else; `remove` never
+  reaches a lead.
   Entry order and command order are part of the value the owner approves: a reorder is a change
   like any other.
 - `approve` in `commands` still parses — a file that names it is read like any other — and no

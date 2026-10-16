@@ -5,6 +5,8 @@ import { recordSeatDigestOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
+import { isLeadSeat } from '../file/sections/lead.ts';
+import { grantGate, logGranted } from '../grant.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { markStopped, takeOut } from '../file/lines.ts';
@@ -42,6 +44,9 @@ export type RemoveSources = DownSources & {
   // The delegate gate, overridable so a test can hand a delegated run its verdict. Absent: the
   // real gate (`src/delegate.ts`).
   delegateGate?: typeof delegateGate;
+  // The grant gate, overridable so a test can hand a granted swap its verdict. Absent: the real
+  // gate (`src/grant.ts`).
+  grantGate?: typeof grantGate;
 };
 
 function aim(session: string): string | undefined {
@@ -63,8 +68,6 @@ export const USAGE = 'Usage: team remove <name> [--keep] [--abandon] [--session 
 function delegateRefused(io: { stderr(text: string): void }, verdict: { text: string }): number {
   io.stderr(`team remove: ${verdict.text}\n`);
   // exit: remove.delegate-approval
-  // exit: remove.delegate-approved-copy
-  // exit: remove.delegate-drift
   // exit: remove.delegate-evidence
   // exit: remove.delegate-placement
   // exit: remove.delegate
@@ -173,6 +176,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   const { team, path, root } = loaded;
   const dir = dirname(path);
+  // A lead's `--keep` is a swap: the agent on the orchestrator's or the operator's seat
+  // is stopped so `team add <lead>` can start its replacement. The file is never edited for it —
+  // a lead is never `stopped:` (`file/sections/lead.ts`), and a file whose lead were stopped
+  // would refuse every later command until hand-edited — so the seat stays declared and leading
+  // through the gap, and the state records the swap (`swapping`) until the add clears it.
+  const lead = isLeadSeat(team, name);
+  const swap = lead && args.flags.has('keep');
   // The gate judges the caller placed in the session this command asks about — the proof its pane
   // is that session's. With no `--session` the session judged is the caller's own placement: the
   // file's session first, then a session the state records this caller's pane in (`team up
@@ -202,6 +212,9 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       dir,
       flags: [...args.flags, ...Object.keys(args.values)],
       io,
+      // A swap is admitted by the entry's `swap` word alone, and its `--keep` is then the
+      // delegate's: `remove` in an entry never reaches a lead.
+      ...(swap ? { swap: true } : {}),
     });
     if (decided.kind === 'refused') return delegateRefused(io, decided);
     delegatePane = decided.pane;
@@ -236,10 +249,33 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     }
     io.stderr('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
   }
-  if ((name === team.orchestrator || name === team.operator) && caller.kind !== 'owner') {
-    io.stderr(`team remove: only the owner removes the orchestrator's or the operator's seat; this call is ${describeCaller(caller)}\n`);
-    // exit: remove.coordinator
-    return 1;
+  // A lead is taken out of the file by the owner alone. Its swap — `--keep` — is the owner's,
+  // the granted seat's when the grant lists `swap`, or an approved delegate's whose entry lists
+  // `swap` (the gate above already required it). Never the seat's own: closing its pane would end
+  // this very call before anything starts the replacement, and leave the team without its lead.
+  let grantSeat: string | null = null;
+  if (lead && caller.kind !== 'owner') {
+    if (!swap) {
+      io.stderr(`team remove: only the owner removes the orchestrator's or the operator's seat; this call is ${describeCaller(caller)}\n`);
+      // exit: remove.coordinator
+      return 1;
+    }
+    if (caller.kind === 'seat' && caller.name === name) {
+      io.stderr(`team remove: ${name} can't swap its own seat: closing its pane would end this call before the new agent starts; the owner, the granted seat or an approved delegate swaps it\n`);
+      // exit: remove.swap-self
+      return 1;
+    }
+    if (delegatePane === null) {
+      const said = (sources.grantGate ?? grantGate)({ act: 'swap', io, home: sources.home });
+      if (said.kind === 'refused') {
+        io.stderr(`team remove: only the owner, the granted seat or an approved delegate swaps the orchestrator's or the operator's seat: ${said.text}\n`);
+        // exit: remove.swap-grant
+        return 1;
+      }
+      // The grant names the orchestrator, and the self-swap was refused above: what passes here
+      // is the orchestrator swapping the operator's seat.
+      grantSeat = said.grant.seat;
+    }
   }
 
   const recorded = readState(dir).sessions[session]?.seats[name];
@@ -281,7 +317,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const listed = agents.filter((item) => item.name === name);
-  // A name the approved copy does not carry, and the live file does not declare. The owner
+  // A name the live file does not declare. The owner
   // keeps today's refusal, and so does a record with no single live agent, a temporary record,
   // and a name the live file still declares. A caller who is not the owner, meeting one live
   // agent herdr reports idle or done whose screen — read with the cli the record carries — is
@@ -305,7 +341,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       }
     }
     if (!leave && busy === undefined) {
-      io.stderr(`team remove: ${name}: its record is not an approved seat; left as it is (the owner cleans it: team remove ${name} --abandon)\n`);
+      io.stderr(`team remove: ${name}: its record is not a declared seat; left as it is (the owner cleans it: team remove ${name} --abandon)\n`);
       // exit: remove.unverified
       return 1;
     }
@@ -352,7 +388,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     const holdsExit = where === 'unsent' && profile !== null
       && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
     const clearable = holdsExit && profile?.exitClear !== null;
-    leave = caller.kind !== 'owner' && where !== 'free' && where !== 'exited' && where !== 'working' && !clearable
+    // A lead is never left running under another name: its swap stops a free seat or nothing.
+    leave = !lead && caller.kind !== 'owner' && where !== 'free' && where !== 'exited' && where !== 'working' && !clearable
       && (agent.status === 'idle' || agent.status === 'done');
     if (where !== 'free' && where !== 'exited' && !abandon && !clearable && !leave) {
       // A refusal here is the kept safety: herdr reports the seat working, its screen shows a
@@ -385,7 +422,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
 
   // An edit that will not validate is refused before the seat is stopped. Stopping first would
   // end the live session and then report that nothing was written.
-  if (!temporary) {
+  if (!temporary && !swap) {
     const ahead = editProblems(path, name, args.flags.has('keep'));
     if (ahead) {
       for (const problem of ahead) {
@@ -410,7 +447,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // The audit line, exactly at the effects boundary: a delegated run that reaches here is
     // committed to its effects — the stop below when the seat runs, the file edit after it. Every
     // refusal came sooner; a `--keep` run never got past the gate.
-    if (delegatePane !== null) logDelegated(dir, delegatePane, 'remove', sources.now());
+    if (delegatePane !== null) logDelegated(dir, delegatePane, swap ? 'swap' : 'remove', sources.now(), swap ? name : undefined);
+    if (grantSeat !== null) logGranted(dir, grantSeat, 'swap', sources.now(), name);
 
     if (agent && !leave) {
       const liveCwd = sources.foregroundCwd ? sources.foregroundCwd(session, agent.pane) : null;
@@ -445,7 +483,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
 
     let kept: string | null = null;
     let rewrote: string | null = null;
-    if (!temporary) {
+    if (!temporary && !swap) {
       const refused = withLock(dir, () => {
         const text = readFileSync(path, 'utf8');
         const next = args.flags.has('keep') ? markStopped(text, name) : takeOut(text, name);
@@ -498,6 +536,14 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         delete current.seats[name];
       });
     }
+    // The swap's record: the gap is a replacement in progress, not a lost lead. Written after the
+    // stop, so a refused or failed stop leaves no record; `add` clears it once the seat runs.
+    if (swap) {
+      updateState(dir, (file) => {
+        const current = (file.sessions[session] ??= emptySession());
+        (current.swapping ??= {})[name] = { by: describeCaller(caller), at: sources.now().toISOString() };
+      });
+    }
     // A temporary seat's rules file goes with the seat: nothing of it is left in the state
     // folder. A declared seat's stays — a stopped seat comes back to its own file. No home set
     // is a test that stands in for no store at all. The remover builds the path itself, from the
@@ -522,8 +568,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       left = { pane: agent.pane, free, renamed: sources.renameAgent?.(session, agent.pane, free) ?? false };
     }
     const who = describeCaller(caller);
-    const what = temporary ? `removed temporary ${name}` : args.flags.has('keep') ? `stopped ${name}` : `removed ${name}`;
+    const what = temporary ? `removed temporary ${name}` : swap ? `stopped ${name} for a swap` : args.flags.has('keep') ? `stopped ${name}` : `removed ${name}`;
     logLine(dir, 'remove', who, what, sources.now());
+    if (swap) {
+      io.stdout(`${what}; the file still names it the ${name === team.orchestrator ? 'orchestrator' : 'operator'}: \`team add ${name}\` starts its new agent\n`);
+      // exit: remove.swapped
+      return 0;
+    }
     io.stdout(left
       ? `${what} (its pane ${left.pane} was left running; nothing was typed; ${left.renamed ? `it now reads as ${left.free}` : "it still carries the seat's name"})\n`
       : `${what}\n`);

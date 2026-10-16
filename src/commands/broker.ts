@@ -59,7 +59,8 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
   // The start is the owner's, and this gate comes before every other prerequisite: a call placed
   // as a seat, in a pane, under herdr, or with no terminal is refused here, before the credential
   // is read and before the socket is bound. A run with no terminal gets the one sentence; the
-  // Keychain is not asked.
+  // Keychain is not asked. Dev mode converts the owner-only line to a warning once the file is
+  // read — except for the orchestrator's and the operator's own seats, refused in every mode.
   const caller = callerOf(io);
   const detached = detachedRefusal(caller);
   if (detached !== undefined) {
@@ -67,10 +68,23 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
     // exit: broker.detached
     return 1;
   }
-  if (!isOwner(caller)) {
-    io.stderr(`team broker: only the owner runs \`broker\`, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
-    // exit: broker.not-owner
-    return 1;
+  const placement = `only the owner runs \`broker\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+  const owner = isOwner(caller);
+  if (!owner) {
+    // Set to exactly `1`. Dev mode says the owner-only line once, as a warning, and the start
+    // continues. The orchestrator's and the operator's own seats stay refused in every mode:
+    // the peek reads the file for those two names and nothing else.
+    const dev = io.env.TEAMCLI_DEV_MODE === '1';
+    const peeked = dev ? loadTeamFile(io.cwd, { home: sources.home }) : null;
+    const held = !dev
+      || (peeked !== null && peeked.ok && caller.kind === 'seat'
+        && (caller.name === peeked.team.orchestrator || caller.name === peeked.team.operator));
+    if (held) {
+      io.stderr(`team broker: ${placement}\n`);
+      // exit: broker.not-owner
+      return 1;
+    }
+    io.stderr(`team broker: warning: ${placement}; dev mode continues\n`);
   }
   const root = findRoot(io.cwd);
   if (!root) {

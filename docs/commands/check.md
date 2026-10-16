@@ -24,7 +24,7 @@ read through 0.3.3.
 | --- | --- |
 | the owner, from a terminal outside herdr | check the team; an owner without a terminal is not this caller |
 | a seat of the team being checked | the same answer, placed in the file's session, on the pane the state records for it |
-| a pane outside the team that the approved file names in its `delegates` entries | the same gate the changing commands use, minus the command list and the audit line: the check is a read, not an act |
+| a pane outside the team that the live file names in its `delegates` entries | the same gate the changing commands use, minus the command list and the audit line: the check is a read, not an act |
 | anyone else | nothing: the fixed sentence `team check: this team is not yours to check`, whatever failed underneath |
 
 Aimed by a caller that passes the gate but is not the owner, `--file` and `--session` meet the
