@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { machineAccountsOf, machineAccountsPath, payingAccountOf } from '../src/information/machine-accounts.ts';
+import { machineAccountsByEntityOf, machineAccountsOf, machineAccountsPath, ownerEntityOf, payingAccountOf } from '../src/information/machine-accounts.ts';
 
 /** A seat-shaped input, the four fields the mapping reads. */
 function seat(cli: string, launch: string, vendor = cli, account?: string) {
@@ -45,6 +45,77 @@ describe('machine accounts', () => {
         expect(machineAccountsOf(home), text).toEqual([]);
         rmSync(base, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('the accounts keyed by entity', () => {
+    /** One temp home holding one file's bytes, read inside, wiped after — the file itself is the
+     *  owner's own and no test reads it. */
+    const withFile = (text: string, read: (home: string) => void) => {
+      const base = mkdtempSync(join(tmpdir(), 'team-accounts-'));
+      const home = join(base, 'home');
+      mkdirSync(join(home, '.config', 'team'), { recursive: true });
+      writeFileSync(machineAccountsPath(home), text);
+      try {
+        read(home);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    };
+
+    test('an entity key with a list reads as that entity’s accounts, in file order', () => {
+      withFile('accounts:\n  northwind: [openai, xai]\n  garden:\n    - anthropic-max\n', (home) => {
+        expect(machineAccountsByEntityOf(home)).toEqual([
+          { entity: 'northwind', accounts: ['openai', 'xai'] },
+          { entity: 'garden', accounts: ['anthropic-max'] },
+        ]);
+        expect(machineAccountsOf(home)).toEqual(['anthropic-max', 'openai', 'xai']);
+      });
+    });
+
+    test('the flat list stays one unnamed entity, read exactly as before', () => {
+      withFile('accounts:\n  - xai\n  - openai\n  - xai\n', (home) => {
+        expect(machineAccountsByEntityOf(home)).toEqual([{ entity: null, accounts: ['openai', 'xai'] }]);
+        expect(machineAccountsOf(home)).toEqual(['openai', 'xai']);
+      });
+    });
+
+    test('a map whose entries are no lists keeps the older reading: its keys are account names', () => {
+      withFile('accounts:\n  xai:\n  openai: {}\n', (home) => {
+        expect(machineAccountsByEntityOf(home)).toEqual([{ entity: null, accounts: ['openai', 'xai'] }]);
+        expect(machineAccountsOf(home)).toEqual(['openai', 'xai']);
+      });
+    });
+
+    test('the two readings mix in one map: a list under a key is that entity’s, anything else is a name', () => {
+      withFile('accounts:\n  northwind: [xai]\n  openai:\n', (home) => {
+        expect(machineAccountsByEntityOf(home)).toEqual([
+          { entity: 'northwind', accounts: ['xai'] },
+          { entity: null, accounts: ['openai'] },
+        ]);
+        expect(machineAccountsOf(home)).toEqual(['openai', 'xai']);
+      });
+    });
+
+    test('a name two entities list is owned by the first entry in the file', () => {
+      withFile('accounts:\n  northwind: [xai, shared]\n  garden: [xai, anthropic]\n', (home) => {
+        expect([...ownerEntityOf(machineAccountsByEntityOf(home)).entries()]).toEqual([
+          ['shared', 'northwind'],
+          ['xai', 'northwind'],
+          ['anthropic', 'garden'],
+        ]);
+      });
+    });
+
+    test('an unnamed entry and an empty list own nothing', () => {
+      withFile('accounts:\n  garden: []\n  xai:\n', (home) => {
+        expect(machineAccountsByEntityOf(home)).toEqual([
+          { entity: 'garden', accounts: [] },
+          { entity: null, accounts: ['xai'] },
+        ]);
+        expect([...ownerEntityOf(machineAccountsByEntityOf(home)).entries()]).toEqual([]);
+        expect(machineAccountsOf(home)).toEqual(['xai']);
+      });
     });
   });
 
