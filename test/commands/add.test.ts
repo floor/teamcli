@@ -722,6 +722,64 @@ describe('team add', () => {
     expect(made.renames).toEqual(['lead']);
   });
 
+  test('does not adopt an unnamed agent when another seat claims the workspace or the pane differs', async () => {
+    updateState(join(project, '.agents'), (state) => {
+      const session = state.sessions.acme ?? emptySession();
+      session.seats.lead = { stage: 'launched', workspace: 'ws-shared', pane: 'pane-lead' };
+      session.seats.worker = { stage: 'ready', workspace: 'ws-shared', pane: 'pane-worker' };
+      state.sessions.acme = session;
+    });
+    const made = world();
+    const stray: HerdrAgent = { name: null, agent: 'claude', pane: 'pane-other', workspace: 'ws-shared', status: 'idle', cwd: null };
+    const io = testIo(project, owner);
+    const code = await runAdd(['lead'], io, sources(made, {
+      sessionState: () => 'running',
+      agents: () => [stray],
+      workspaces: () => [{ id: 'ws-shared' }],
+    }));
+    expect(code).toBe(0);
+    expect(made.creates).toEqual(['lead']);
+  });
+
+  test('counts live undeclared agents against seat, temporary and vendor ceilings when removed from state', async () => {
+    const yaml = `${readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')}limits:\n  seats: 2\n  temporary: 1\n  vendors:\n    anthropic: 1\n    openai: 1\n`;
+    approve(yaml);
+    const liveTemp: HerdrAgent = {
+      name: 'worker-tmp-1',
+      agent: 'claude',
+      pane: 'pane-temp',
+      workspace: 'ws-temp',
+      status: 'idle',
+      cwd: null,
+    };
+    const made = world();
+    const ioTemp = testIo(project, owner);
+    const tempCode = await runAdd(
+      ['--temporary', '--like', 'scribe', '--until', 'merged:fix/fresh'],
+      ioTemp,
+      sources(made, {
+        sessionState: () => 'running',
+        agents: () => [liveTemp],
+        workspaces: () => [{ id: 'ws-temp' }],
+      }),
+    );
+    expect(tempCode).toBe(1);
+    expect(ioTemp.err).toContain('the approval allows 1 temporary seats; 2 would be running');
+
+    const ioVendor = testIo(project, owner);
+    const vendorCode = await runAdd(
+      ['worker'],
+      ioVendor,
+      sources(made, {
+        sessionState: () => 'running',
+        agents: () => [liveTemp],
+        workspaces: () => [{ id: 'ws-temp' }],
+      }),
+    );
+    expect(vendorCode).toBe(1);
+    expect(ioVendor.err).toContain('the approval allows 1 anthropic seats; 2 would be running');
+  });
+
   test('a new seat found at a dialog waits for its owner: nothing is closed, and it exits 1', async () => {
     const made = world();
     const closed: string[] = [];

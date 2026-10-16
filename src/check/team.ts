@@ -154,7 +154,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     ...approvalDrift(approvalCase(standing, team)),
     ...overrideDrift(overrides),
-    ...rulesFileDifferences(standing, root, sources.home),
+    ...rulesFileDifferences(standing, team, root, sources.home),
   ]);
   const differences = comparison.differences;
   for (const difference of differences) {
@@ -210,8 +210,7 @@ function attentionDifferences(team: TeamFile, state: SessionState, live: Live): 
  */
 function viewOf(attention: Attention, name: string, status: string): Difference | null {
   switch (attention) {
-    case 'permission':
-      return { what: `${name} waits at a permission prompt: its owner's to answer`, repair: 'the owner answers it in the pane', owner: true };
+    // `compare()` already emits the permission-prompt difference for `status` and `check`.
     case 'question':
       return { what: `${name} asked a question: the operator's to act on`, repair: 'the operator acts in the pane' };
     case 'vendor notice':

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runStatus, standingSource, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type UpSources } from '../src/commands/up.ts';
@@ -91,8 +91,10 @@ describe('an override is the owner\'s, by approval', () => {
     expect(quotaWith('codex', force.profiles).some((pattern) => pattern.account === 'anthropic')).toBe(false);
 
     const doctor = testIo(root, OWNER);
-    expect(await runDoctor(FILE, doctor, doctorSources())).toBe(1);
-    expect(doctor.out).toContain('MISS  run `team approve`: `overrides` changed\n');
+    const doctorCode = await runDoctor(FILE, doctor, doctorSources());
+    expect(doctor.out).not.toContain('team approve');
+    expect(doctor.out).not.toContain('`overrides` changed');
+    expect(doctorCode).not.toBe(2);
 
     const status = testIo(root, OWNER);
     expect(await runStatus(FILE, status, statusSources())).toBe(1);

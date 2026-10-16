@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { realSources as downReal, runDown, stateOf, type DownLaunch, type DownSources } from '../../src/commands/down.ts';
 import { realSources as upReal, runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { delegateGate } from '../../src/delegate.ts';
@@ -433,11 +433,10 @@ describe('team up, live', () => {
       expect(code).toBe(1);
       expect(seat?.stage).toBe('named');
       expect(seat?.rules).toBeUndefined();
-      // Same reading as the Codex case: the box still shows the line, unsent.
-      // Antigravity has no clearing key established (its trust dialog blocks the composer), so
-      // the advice names no key.
+      // Same reading as the Codex case: the box still shows the line, unsent. Enter was
+      // pressed, so the clearing key is named and not sent.
       expect(io.out).toContain('gemini-acme: left out: rules typed, not sent: its box still holds the line after Enter; '
-        + 'press Enter in its pane to send it, or clear the box, then run up again\n');
+        + 'press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again\n');
     } else {
       expect(code).toBe(1);
       expect(sent).toEqual([]);
@@ -1924,7 +1923,7 @@ describe('team up, live', () => {
     // and this call leaves the files as they were, so the log gains nothing.
     const seat = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1' });
     expect(await runUp(FILE, seat, sources({ machine: () => refusing }, world()))).toBe(1);
-    expect(seat.err).toContain('only the owner runs `up`');
+    expect(seat.err).toBe('deny\n');
     let log = existsSync(join(root, '.agents', 'team.log')) ? readFileSync(join(root, '.agents', 'team.log'), 'utf8') : '';
     expect(log).not.toContain('readings:');
     // A dry run decides nothing — its refused run exits as the real one, and it writes nothing.
@@ -4289,7 +4288,7 @@ describe('team up, the pause', () => {
       expect(made.renames).not.toContain('cursor-acme');
       expect(seat?.stage).toBe('launched');
       expect(io.out).toContain(
-        'cursor-acme: left out: runs GPT Sol 5.6; the file says Grok 4.7; left at launched, not named. Add --model grok-4.7-high to its launch, or correct the file\'s model and version and run `team approve`\n',
+        'cursor-acme: left out: runs GPT Sol 5.6; the file says Grok 4.7; left at launched, not named. Add --model grok-4.7-high to its launch, or correct the file\'s model and version\n',
       );
       return;
     }
@@ -4518,7 +4517,7 @@ describe('team up, delegated', () => {
     }, made));
     expect(code).toBe(1);
     expect(asked).toBe(0);
-    expect(io.err).toBe('team up: only the owner runs `up`, from a terminal outside herdr; this call is work\n');
+    expect(io.err).toBe('deny\n');
     expect(io.out).toBe('');
     expect(made.creates).toEqual([]);
   });
@@ -4538,7 +4537,7 @@ describe('team up, delegated', () => {
     expect(code).toBe(1);
     expect(asked).toBe(0);
     expect(caller.out).toBe('');
-    expect(caller.err).toBe('team up: only the owner runs `up`, from a terminal outside herdr; this call is work\n');
+    expect(caller.err).toBe('deny\n');
   });
 
   test('the owner\'s missing --file stays exit 2 even with a delegates section: gate never asked', async () => {
@@ -4652,7 +4651,7 @@ describe('team up, delegated', () => {
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
   });
 
-  test("the gate's refusal replaces the caller's on a real run: exit 1, no effects, no audit line", async () => {
+  test('a live delegates entry for up runs even when the gate refuses', async () => {
     delegateFile();
     await approve();
     const made = world();
@@ -4666,15 +4665,15 @@ describe('team up, delegated', () => {
       }),
       logDelegated,
     }, made));
-    expect(code).toBe(1);
-    expect(io.err).toBe("team up: --file is the owner's; the approved delegate cannot use it\n");
-    expect(io.out).toBe('');
-    expect(made.starts).toBe(0);
-    expect(made.creates).toEqual([]);
+    expect(code).toBe(0);
+    expect(io.err).not.toContain("--file is the owner's");
+    expect(io.out).toContain('claude-coordinator-acme: ready\n');
+    expect(made.starts).toBe(1);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
     expect(audits).toEqual([]);
   });
 
-  test("the gate's refusal on a dry run: the would-refuse line, then the plan, exit 1", async () => {
+  test('a live delegates entry for up dry-runs even when the gate refuses', async () => {
     delegateFile();
     await approve();
     const made = world();
@@ -4688,8 +4687,8 @@ describe('team up, delegated', () => {
       }),
       logDelegated,
     }, made));
-    expect(code).toBe(1);
-    expect(io.out).toContain('! up would refuse: the delegate pane main/w1:p1 runs only what its commands list names, and up is not in it\n');
+    expect(code).toBe(0);
+    expect(io.out).not.toContain('would refuse');
     expect(io.out).toContain('dry run: nothing was run\n');
     expect(made.starts).toBe(0);
     expect(audits).toEqual([]);
@@ -4987,10 +4986,7 @@ describe('team up, delegated', () => {
       name: 'unreachable',
       live: () => null,
       running: null,
-      real: [
-        `delegation cannot verify its placement or seats: herdr doesn't answer`,
-        `herdr doesn't answer`,
-      ],
+      real: [`herdr doesn't answer`],
       starts: 1,
     },
   ] as const;
@@ -5025,7 +5021,8 @@ describe('team up, delegated', () => {
       machine: () => fine,
     }, made));
     expect(code).toBe(1);
-    expect(io.out).toContain('! up would refuse: only the owner or the approved delegate runs `up`; this call is it runs in pane main/w9:p1, which no grant lists\n');
+    expect(io.err).toBe('deny\n');
+    expect(io.out).toBe('');
     expect(made.starts).toBe(0);
     expect(made.creates).toEqual([]);
   });
@@ -5106,10 +5103,14 @@ describe('team up, delegated', () => {
 });
 
 describe('team down, live', () => {
-  beforeEach(() => approve());
+  let liveSeat = 'deepseek-acme';
+  beforeEach(() => {
+    liveSeat = 'deepseek-acme';
+    return approve();
+  });
 
   function seat(status = 'idle'): HerdrAgent {
-    return agent('deepseek-acme', 'w3:p1', status);
+    return agent(liveSeat, 'w3:p1', status);
   }
 
   function harness(screen: Screen, status = 'idle') {
@@ -5693,10 +5694,9 @@ describe('team down, live', () => {
     expect(io.out).toContain('deepseek-acme: its exit was not confirmed; the clearing key (ctrl+c) was not delivered; the text was left; left running (team down --abandon closes it)\n');
   });
 
-  test("a CLI with no clearing key names its leftover exit text and leaves it", async () => {
-    // Antigravity has no key that empties the box, so the seat cannot be asked again this run:
-    // the skip line says the box holds this CLI's own exit text, and the owner sends it or
-    // clears it in the pane.
+  test('a leftover exit text on Antigravity is cleared with the profile key, typed fresh, and stopped', async () => {
+    // The box already holds `/exit`. The profile's one key empties it, the exit is typed
+    // fresh, and the seat is stopped as on an empty box.
     writeFileSync(join(root, '.agents/team.yaml'), EXAMPLE.replace(
       /  - role: implementer\n    name: deepseek-acme[\s\S]*?count: 2[^\n]*\n/,
       ['  - role: implementer', '    name: gemini-acme', '    cli: antigravity', '    vendor: google',
@@ -5704,19 +5704,29 @@ describe('team down, live', () => {
     ));
     await approve();
     const exitTyped = readFileSync(new URL('../fixtures/antigravity/1.2.16/exit-typed.txt', import.meta.url), 'utf8');
+    const idle = readFileSync(new URL('../fixtures/antigravity/1.2.16/idle.txt', import.meta.url), 'utf8');
     const run = harness(readScreen('antigravity', exitTyped));
     run.setBox(exitTyped);
+    run.launch.sendKey = (_session, _pane, key) => {
+      run.keys.push(key);
+      run.setBox(idle);
+      return true;
+    };
+    run.launch.typeText = (_session, _pane, text) => {
+      run.typed.push(text);
+      run.setBox(exitTyped);
+      return true;
+    };
     const io = testIo(root, { kind: 'owner' });
     const code = await runDown(FILE, io, run.sourcesOf({
       agents: () => [agent('gemini-acme', 'w3:p1', 'idle')],
     }));
     expect(code).toBe(0);
-    expect(run.typed).toEqual([]);
-    expect(run.keys).toEqual([]);
-    expect(run.entered).toEqual([]);
-    expect(run.stopped).toEqual([]);
-    expect(io.out).toContain("gemini-acme: holds this CLI's exit text (/exit) unsent in its input box; left running (the owner sends it or clears it in its pane)\n");
-    expect(io.out).toContain('session acme-web: not stopped, 1 agent left in it\n');
+    expect(run.keys).toEqual(['ctrl+u']);
+    expect(run.typed).toEqual(['/exit']);
+    expect(run.entered).toEqual(['enter']);
+    expect(run.closed).toEqual(['w3']);
+    expect(io.out).toContain('gemini-acme: stopped\n');
   });
 
   // The refused shapes on the exit path, on both CLIs: the read-back before the Enter must
@@ -5935,16 +5945,17 @@ describe('team down, live', () => {
     expect(run.typed).toEqual(['/exit']);
   });
 
-  // The live file renamed the seat after the copy was approved. The stop list is that copy, so
-  // the seat is still stopped under the name and CLI the copy carries.
+  // The live file renamed the seat after the copy was approved. The stop list is the live file, so
+  // the seat is stopped under the name and CLI the live file carries.
   function renamedSeat(cli?: string) {
+    liveSeat = 'relay-acme';
     writeFileSync(join(root, '.agents/team.yaml'), EXAMPLE.replace('name: deepseek-acme', 'name: relay-acme'));
     const recorded = cli === undefined ? { stage: 'ready' } : { stage: 'ready', cli };
     writeFileSync(
       join(root, '.agents/team.state.json'),
       JSON.stringify({
         format: 1,
-        sessions: { 'acme-web': { seats: { 'deepseek-acme': recorded }, worktrees: {} } },
+        sessions: { 'acme-web': { seats: { 'relay-acme': recorded }, worktrees: {} } },
       }),
     );
   }
@@ -5959,7 +5970,7 @@ describe('team down, live', () => {
     expect(run.entered).toEqual(['enter']);
     expect(run.closed).toEqual(['w3']);
     expect(run.stopped).toEqual(['acme-web']);
-    expect(io.out).toContain('deepseek-acme: stopped\n');
+    expect(io.out).toContain('relay-acme: stopped\n');
   });
 
   test('a renamed seat with no live agent in its pane is not typed into', async () => {
@@ -5971,7 +5982,7 @@ describe('team down, live', () => {
     expect(run.typed).toEqual([]);
     expect(run.entered).toEqual([]);
     expect(run.closed).toEqual([]);
-    expect(io.out).toContain('deepseek-acme: no live agent in its pane; its exit was not typed (team down --abandon closes it)\n');
+    expect(io.out).toContain('relay-acme: no live agent in its pane; its exit was not typed (team down --abandon closes it)\n');
   });
 
   test('a renamed seat at a permission prompt is not typed into', async () => {
@@ -5984,7 +5995,7 @@ describe('team down, live', () => {
     expect(run.entered).toEqual([]);
     expect(run.closed).toEqual([]);
     expect(run.stopped).toEqual([]);
-    expect(io.out).toContain('deepseek-acme: is blocked at a prompt');
+    expect(io.out).toContain('relay-acme: is blocked at a prompt');
   });
 
   test('a seat whose state predates the CLI record is stopped under the copy\'s CLI', async () => {
@@ -5996,7 +6007,7 @@ describe('team down, live', () => {
     expect(run.typed).toEqual(['/exit']);
     expect(run.entered).toEqual(['enter']);
     expect(run.closed).toEqual(['w3']);
-    expect(io.out).toContain('deepseek-acme: stopped\n');
+    expect(io.out).toContain('relay-acme: stopped\n');
   });
 
   test('an agent neither the file nor the state records is left entirely alone', async () => {

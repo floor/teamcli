@@ -125,7 +125,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | --- | --- |
 | `<seat> is in the file and is not running` | herdr lists no agent for a seat the file has, does not stop, and the watch has not seen running |
 | `<seat> was running and is gone (its pane closed, or its CLI ended)` | herdr lists no agent for a seat the watch had seen running; said at each disappearance |
-| `<seat> is no longer the process team launched (its session was restored, or its CLI was restarted)` | the process in the seat's pane is not the one recorded when `team` launched it: the pane runs no CLI, or one `team` did not launch. A pane whose stored agent session is still the live one stays quiet on this line |
+| `<seat> is no longer the process team launched (its session was restored, or its CLI was restarted)` | the process in the seat's pane is not the one recorded when `team` launched it: the pane runs no CLI, or a program `team` did not launch runs in it and the agent session herdr shows there is not the one stored at launch. A pane the stored session came back on is the seat again and is not reported; a seat with no record of its launch, or a pane herdr can't read, is not reported either |
 | `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched — <repair>` | that pane holds a process `team` did not launch, and the launch line starts a program other than the CLI's own binary, or the file says the launcher chooses the model. A pane back at its shell is not this report. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
 | `<seat> waits at a permission prompt: its owner's to answer` | a permission dialog or a trust question; only its owner answers those |
 | `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
@@ -142,7 +142,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model — <repair>` (`<declared>` is the seat's `display` spelling) | the running model or version is not the file's. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
 | `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, a workspace labelled watchdog aside |
 | `the file was never approved on this machine` | there is no approval record for this project |
-| `approved before records were signed: run \`team approve\` once` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
+| `approved before records were signed` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
 | `<why the record was refused>` | a signed record that does not verify (changed after approval, another root, a replayed or rolled-back generation): said once, and the watch keeps watching |
 | `the file differs from the approved one: <differences>` | the file is not the approved one; the differences read as `team status` prints them |
 | `the load is <n> per core, above <n>` | over `machine.load_max` |

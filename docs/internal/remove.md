@@ -134,7 +134,7 @@ with the text named, in the refusal below.
 | `team remove: line <n>: <message>` | 2 |
 | `team remove: only the owner, the orchestrator or the operator runs it; this call is <caller>` | 1 |
 | `team remove: only the owner, the orchestrator, the operator or the approved delegate runs it; this call is <caller>` — the file names a delegate, and this call is not it | 1 |
-| ``team remove: delegation needs a verified approval: <reason>`` / ``team remove: delegation needs a readable approved copy: run `team approve` `` / ``team remove: delegation needs the approved file: the file is not the approved one (<differences>): run `team approve` `` — the delegate gate, reading the same approval every other check reads | 1 |
+| ``team remove: delegation needs a verified approval: <reason>`` — the delegate gate, when the record is legacy or refused | 1 |
 | ``team remove: delegation cannot verify its placement or seats: <reason>`` | 1 |
 | `team remove: the approved delegate must be an external non-seat pane` | 1 |
 | ``team remove: the approved delegate <session>/<pane id> may not run `remove`; its approved commands are <list>`` | 1 |
@@ -161,8 +161,8 @@ with the text named, in the refusal below.
 | `team remove: <seat> holds unsent text in its input box; left as it is` | 1 |
 | `team remove: <seat> holds this CLI's exit text (<exit>) unsent in its input box; left as it is (the owner sends it or clears it in its pane)` | 1 |
 | ``team remove: no launch profile for `<cli>`; left as it is`` | 1 |
-| ``team remove: the file was never approved on this machine: run `team approve` `` | 1 |
-| ``team remove: approved before records were signed: run `team approve` once`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
+| ``team remove: the file was never approved on this machine `` | 1 |
+| ``team remove: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
 | ``team remove: another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share; the line names no command, because the lock is shared. The lock is taken before this run's first effect and released at its end; every refusal above is decided first and never shows it | 1 |
 | ``team remove: another session-mutating run may be holding session <session>, and its lock cannot be read; if no run is using it, delete <state dir>/seat-locks/<session>/.run`` — the lock file does not read as a token, so its holder is unknown and only the owner clears it; the line names the file | 1 |
 

@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { anotherPaneRefusal, noPaneRefusal } from '../src/caller.ts';
+import { runDoctor } from '../src/commands/doctor.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -307,7 +308,8 @@ describe('the placement walk decides the granted seat', () => {
     const io = placeIo([LEAD, PILOT, WORKER, GHOST], { alpha: ['ghost-pane', 'lead-pane', 'pilot-pane', 'worker-pane'] }, [GHOST.root], GHOST.pane);
     const code = await runUp([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toBe(`team up: ${anotherPaneRefusal('lead', 'lead-pane')}\n`);
+    expect(io.err).toBe('deny\n');
+    expect(io.out).toBe('');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
@@ -322,7 +324,8 @@ describe('the placement walk decides the granted seat', () => {
     );
     const code = await runUp([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toContain('team up: only the seat the grant names runs this: this call is ');
+    expect(io.err).toBe('deny\n');
+    expect(io.out).toBe('');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
@@ -332,7 +335,8 @@ describe('the placement walk decides the granted seat', () => {
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runUp([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toBe(`team up: ${noPaneRefusal('lead')}\n`);
+    expect(io.err).toBe('deny\n');
+    expect(io.out).toBe('');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
@@ -342,7 +346,8 @@ describe('the placement walk decides the granted seat', () => {
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);
     const code = await runUp([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toBe('team up: only the seat the grant names runs this: this call is pilot\n');
+    expect(io.err).toBe('deny\n');
+    expect(io.out).toBe('');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
@@ -406,7 +411,8 @@ describe('the scope the approval signed', () => {
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runUp([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toBe('team up: the grant does not list `up`\n');
+    expect(io.err).toBe('deny\n');
+    expect(io.out).toBe('');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
@@ -425,14 +431,14 @@ describe('the scope the approval signed', () => {
     expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
   });
 
-  test('up with no grant section keeps today\'s owner refusal', async () => {
+  test('up with no grant section denies a seat', async () => {
     setup({ grant: false });
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runUp([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toContain('team up: only the owner runs `up`, from a terminal outside herdr; this call is ');
+    expect(io.err).toBe('deny\n');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
@@ -453,31 +459,48 @@ describe('the scope the approval signed', () => {
 });
 
 describe('the approval the grant rides on', () => {
-  test('up is refused on a file never approved', async () => {
+  test('the granted seat is admitted with no approval record', async () => {
     setup({ approve: false });
     rmSync(storePath('acme', root, home), { recursive: true, force: true });
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runUp([], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toContain('team up: a grant needs a verified approval: the file was never approved on this machine: run `team approve`\n');
-    expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
+    expect(code, io.err + io.out).toBe(0);
+    expect(io.err).not.toContain('never approved');
+    expect(io.err).not.toContain('deny');
+    // The session starts down, so the ready records are not kept and the three seats launch.
+    expect(trace.workspaces).toEqual([
+      { label: 'lead', cwd: root },
+      { label: 'pilot', cwd: root },
+      { label: 'worker', cwd: lobby },
+    ]);
+    expect(trace.closed).toEqual([]);
+    expect(trace.audits).toEqual([]);
   });
 
-  test('up is refused on a grant the approval does not carry', async () => {
+  test('an edited grant admits the granted seat, and doctor does not name approve', async () => {
     setup();
     writeFileSync(join(dir, 'team.yaml'), teamText({ scope: ['up', 'down', 'approve'] }));
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runUp([], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toContain('team up: a grant needs the approved file: the file is not the approved one (`grant` changed): run `team approve`\n');
-    expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
+    expect(code, io.err + io.out).toBe(0);
+    expect(io.err).not.toContain('not the approved one');
+    expect(io.err).not.toContain('team approve');
+    expect(io.err).not.toContain('deny');
+    expect(trace.workspaces).toEqual([
+      { label: 'pilot', cwd: root },
+      { label: 'worker', cwd: lobby },
+    ]);
+    expect(trace.audits).toEqual([{ seat: 'lead', act: 'up' }]);
+    const doctorIo = testIo(root);
+    await runDoctor([], doctorIo, doctor());
+    expect(doctorIo.out + doctorIo.err).not.toContain('team approve');
   });
 
-  test('down is refused on a grant the approval does not carry', async () => {
+  test('an edited grant admits down', async () => {
     setup();
     writeFileSync(join(dir, 'team.yaml'), teamText({ scope: ['up', 'down', 'approve'] }));
     record({
@@ -488,9 +511,10 @@ describe('the approval the grant rides on', () => {
     const { sources, trace } = downTrace(() => people());
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runDown([], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toContain('team down: a grant needs the approved file: the file is not the approved one (`grant` changed): run `team approve`\n');
-    expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
+    expect(code, io.err).toBe(0);
+    expect(io.err).not.toContain('not the approved one');
+    expect(io.err).not.toContain('team approve');
+    expect(trace.closed).toEqual(['worker-ws']);
   });
 });
 
