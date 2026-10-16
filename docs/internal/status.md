@@ -67,6 +67,9 @@ or a CLI started by hand; or `stopped` when the file marks it stopped; or `wrong
 when an agent sits in the seat's workspace under another name. A `wrong name` row's model is
 the one that pane's screen names, or `(unread)` when the screen names none — never the file's.
 
+With `--all`, the table renders the expanded seat registry columns — `SEAT`, `ID`, `ROLE`, `CLI`,
+`MODEL`, `EFFORT`, `STATUS`, `LAST ACTIVE`, `PANE` — and every `--json` row carries those fields too.
+
 A pane is its seat only while the process `team` launched is still in it. The state records, for
 each seat `up` or `add` launched, the pane's own shell process and the processes the launch left in
 front of it — pids only, never a command line. The reading is one `herdr pane process-info` of the
