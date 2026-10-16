@@ -394,6 +394,7 @@ function seatPlan(
     displayAgent: displayAgent(seat),
     model: seat.model,
     version: seat.version,
+    ...(seat.effort ? { effort: seat.effort } : {}),
     // The team file's own repair for this seat — a lead seat is told only the whole-team
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
@@ -1333,12 +1334,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           const retained = current.retained_seats?.[name];
           if (current.retained_seats?.[name]) delete current.retained_seats[name];
           const id = prior.id ?? retained?.id ?? mintSeatId();
-          const declared = team.seats.find((seat) => seat.name === name);
+          const isSkipReady = current.seats[name]?.stage === 'ready' && patch.stage === 'ready';
+          const declared = isSkipReady ? undefined : team.seats.find((seat) => seat.name === name);
           // The CLI the seat was launched with: `down` needs it when the file no longer names the seat.
-          const cli = declared?.cli ?? prior.cli;
+          const cli = team.seats.find((seat) => seat.name === name)?.cli ?? prior.cli;
           const model = declared?.model ?? prior.model;
           const version = declared?.version ?? prior.version;
-          const effort = declared?.effort ?? prior.effort;
+          const effort = declared ? declared.effort : prior.effort;
           const launch_line = declared?.launch ?? prior.launch_line;
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
@@ -1353,7 +1355,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
             }
           }
           // `waiting: null` removes the field alone; anything else written replaces it.
-          const { waiting: written, ...rest } = patch;
+          // `effort: null` is a launch that set no word: the stored word goes with it.
+          const { waiting: written, effort: patchedEffort, ...rest } = patch;
           const seat: SeatState = {
             ...prior,
             ...rest,
@@ -1368,6 +1371,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           };
           if (written === null) delete seat.waiting;
           else if (written) seat.waiting = written;
+          if (patchedEffort === null) delete seat.effort;
+          else if (patchedEffort !== undefined) seat.effort = patchedEffort;
           current.seats[name] = seat;
           if (patch.pane) {
             replaced = prior.pane !== patch.pane ? prior.pane : undefined;

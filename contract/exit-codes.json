@@ -1781,6 +1781,174 @@
     },
     {
       "code": 0,
+      "command": "reload",
+      "id": "reload.reloaded",
+      "meaning": "the seat was closed at an idle prompt and the new launch reached ready",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 0,
+      "command": "reload",
+      "id": "reload.same",
+      "meaning": "the seat is already running what the file declares",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.absent",
+      "meaning": "the file has no seat of that name",
+      "trigger": "team reload missing"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.changed",
+      "meaning": "the seat changed before it closed; nothing relaunched",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.grant-another-pane",
+      "meaning": "the state records another pane for the granted seat",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.grant-approval",
+      "meaning": "a grant needs a verified approval",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.grant-approved-copy",
+      "meaning": "a grant needs a readable approved copy",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.grant-caller",
+      "meaning": "only the seat the grant names runs this",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.grant-drift",
+      "meaning": "a grant needs the approved file",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.grant-file",
+      "meaning": "the team file can't be read",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.grant-flag",
+      "meaning": "--file is the owner's; the granted seat cannot use it",
+      "trigger": "team reload worker --file other.yaml"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.grant-no-pane",
+      "meaning": "no pane is recorded for the granted seat",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.grant-omitted",
+      "meaning": "the approved file grants nothing",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.grant-scope",
+      "meaning": "the grant does not list reload",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.launch",
+      "meaning": "the close happened and the new launch did not reach ready",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.not-idle",
+      "meaning": "the seat is not at an idle prompt; nothing closed",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.not-running",
+      "meaning": "the seat has no ready pane to close",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.run-lock",
+      "meaning": "another session-mutating run is holding the session",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.self",
+      "meaning": "a granted reload does not close the caller's seat",
+      "trigger": "team reload lead"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.unrecorded",
+      "meaning": "the model and effort were not recorded at launch",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.unsent",
+      "meaning": "the seat holds unsent text; nothing closed",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.working",
+      "meaning": "the seat is working; nothing closed",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 2,
+      "command": "reload",
+      "id": "reload.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team reload worker --file missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "reload",
+      "id": "reload.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team reload"
+    },
+    {
+      "code": 0,
       "command": "remove",
       "id": "remove.kept",
       "meaning": "a stopped seat was kept",
