@@ -222,7 +222,6 @@ delegates:
       io: { env: {}, stdinIsTTY: true },
       sources: {
         standing: () => verified(yaml, parsed(yaml)) as Extract<Standing, { kind: 'verified' }>,
-        approvedCopy: () => yaml,
         state: () => ({ format: 1, sessions: {} }),
         agents: (session: string) => (session === 'other' ? [agent('worker', 'w1:p1')] : []),
         sessionRunning: () => null,
@@ -316,23 +315,23 @@ grant:
   });
 });
 
-describe('an unapproved tempo never reaches the watch, in either direction', () => {
-  test('a relaxed escalation against a record from before the key stays unscaled', () => {
+describe('the live tempo reaches the watch in either direction', () => {
+  test('a relaxed edit scales waits even with a record from before the key', () => {
     const old = predating(TEAM, parsed(TEAM));
     const relaxed = parsed(setTempo(TEAM, 'relaxed'));
     expect(compare(old.record.approval.fingerprints, fingerprints(relaxed)).map(describeDifference))
       .toEqual(['`tempo` changed']);
-    // The approved word is `normal` for a predating record: 600 stays 600, not 1200.
-    expect(watchInForceOf(old, relaxed).idleFirst).toBe(600);
+    // The live relaxed word doubles the wait even with a predating record.
+    expect(watchInForceOf(old, relaxed).idleFirst).toBe(1200);
   });
 
-  test('an unapproved revert to normal keeps the approved urgent in force', () => {
+  test('a live revert to normal restores the unscaled waits', () => {
     const urgentText = setTempo(TEAM, 'urgent');
     const approved = verified(urgentText, parsed(urgentText));
     const reverted = parsed(TEAM);
     expect(compare(approved.record.approval.fingerprints, fingerprints(reverted)).map(describeDifference))
       .toEqual(['`tempo` changed']);
-    // The approved word is `urgent`: the waits stay halved, not returned to 600.
-    expect(watchInForceOf(approved, reverted).idleFirst).toBe(300);
+    // The live normal word restores the unscaled wait.
+    expect(watchInForceOf(approved, reverted).idleFirst).toBe(600);
   });
 });

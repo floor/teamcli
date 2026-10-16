@@ -589,7 +589,7 @@ for (const command of COMMANDS) {
         // probe-seat is not in the file. That refusal comes before trust or the approval record.
         expect(run.code).toBe(1);
         expect(run.out).toBe('');
-        expect(run.err).toBe('team add: the approved file has no seat "probe-seat"\n');
+        expect(run.err).toBe('team add: the file has no seat "probe-seat"\n');
         expect(run.err).not.toContain('never approved');
         expect(readFileSync(file, 'utf8')).toBe(run.before);
         return;
@@ -607,7 +607,7 @@ for (const command of COMMANDS) {
       if (command.name === 'add') {
         expect(run.code).toBe(1);
         expect(run.out).toBe('');
-        expect(run.err).toBe('team add: the approved file has no seat "probe-seat"\n');
+        expect(run.err).toBe('team add: the file has no seat "probe-seat"\n');
         expect(run.err).not.toContain('never approved');
         return;
       }

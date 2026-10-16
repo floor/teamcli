@@ -6,11 +6,10 @@ import { compare, describe, fingerprints } from './approve/fingerprint.ts';
 import { anotherPaneRefusal, callerAncestors, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf } from './caller.ts';
 import { ORDINARY_SECTIONS } from './delegate.ts';
 import { loadTeamFile } from './file/load.ts';
-import type { GrantScope, LoadResult, TeamFile } from './file/types.ts';
-import { validateTeamFile } from './file/validate.ts';
+import type { GrantScope, LoadResult } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
-import { approvalStanding, approvedCopy, type Standing } from './store/store.ts';
+import { approvalStanding, type Standing } from './store/store.ts';
 import { parseYaml, toValue } from './yaml.ts';
 
 /** Known entity roots when a create-grant record names an entity and omits `paths`. */
@@ -294,8 +293,6 @@ export type GrantVerdict =
 export type GrantSources = {
   load?: (cwd: string) => LoadResult;
   standing?: (root: string) => Standing;
-  /** Null when the approved copy cannot be read. */
-  approvedCopy?: (root: string) => string | null;
 };
 
 /**
@@ -316,11 +313,11 @@ export function logGranted(dir: string, seat: string, act: GrantScope, now?: Dat
  * call: no remembered copy, no `--file`, and no walk of other sessions the state holds.
  * It decides and stops. It does not print, write, or launch.
  *
- * The grant `up` and `down` trust is the live file's. A stored copy is not a gate for them:
- * an edit of `grant` admits the seat the file names now. `approve` still refuses every owner
- * section outside `ORDINARY_SECTIONS`, `grant` included, and that act still needs a readable
- * stored copy. `reload` still requires the stored copy: an unreadable copy, or a file that
- * differs from it, is a refusal.
+ * The grant every act trusts is the live file's. A stored copy is not a gate for any act:
+ * an edit of `grant` admits the seat the file names now, and a file that differs from the
+ * last approval is not a refusal. `approve` still refuses every owner section outside
+ * `ORDINARY_SECTIONS`, `grant` included — read from the record's own fingerprints, never
+ * from a stored copy.
  */
 export function grantGate(input: {
   act: GrantScope;
@@ -343,34 +340,16 @@ export function grantGate(input: {
     return refuse('approval', `a grant needs a verified approval: ${notInForce(standing)}`);
   }
 
-  // `up` and `down` read the live file: a fingerprint difference is not a refusal.
-  // `approve` still refuses an owner section outside the ordinary list. `reload` still
-  // requires the stored copy, including that the live file match it.
-  let grant = loaded.team.grant;
-  let omitted = 'the file grants nothing';
-  if (act === 'approve' || act === 'reload') {
-    const copy = sources.approvedCopy ? sources.approvedCopy(loaded.root) : approvedCopy(loaded.root, home);
-    const approved = copy === null ? null : validated(copy);
-    if (approved === null) {
-      return refuse('approved-copy', 'a grant needs a readable approved copy: run `team approve`');
-    }
+  const grant = loaded.team.grant;
+  if (act === 'approve') {
     const differences = compare(approvedFingerprints(standing.record), fingerprints(loaded.team));
-    if (act === 'approve') {
-      const kept = differences.filter((difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name));
-      if (kept.length > 0) {
-        return refuse('not-ordinary', `this change needs the owner: ${kept.map(describe).join('; ')}`);
-      }
-    } else if (differences.length > 0) {
-      return refuse(
-        'drift',
-        `a grant needs the approved file: the file is not the approved one (${differences.map(describe).join('; ')}): run \`team approve\``,
-      );
+    const kept = differences.filter((difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name));
+    if (kept.length > 0) {
+      return refuse('not-ordinary', `this change needs the owner: ${kept.map(describe).join('; ')}`);
     }
-    grant = approved.grant;
-    if (act === 'reload') omitted = 'the approved file grants nothing';
   }
 
-  if (grant === null) return refuse('omitted', omitted);
+  if (grant === null) return refuse('omitted', 'the file grants nothing');
 
   // The placement `add` and `remove` use for a named seat: this session, this name, the pane
   // the state records for it now. The session is the grant's, not a session the caller picks
@@ -386,11 +365,3 @@ export function grantGate(input: {
   return { kind: 'passed', grant };
 }
 
-function validated(text: string): TeamFile | null {
-  try {
-    const result = validateTeamFile(text);
-    return result.ok ? result.team : null;
-  } catch {
-    return null;
-  }
-}

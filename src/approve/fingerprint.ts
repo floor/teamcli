@@ -150,7 +150,7 @@ export const WATCH_CHECKS_CHANGED = '`watch.checks` changed';
 /** One line per difference, as `status`, `doctor` and the refusals print it. */
 export function describe(difference: Difference): string {
   if (difference.kind === 'section') return `\`${difference.name}\` changed`;
-  if (difference.kind === 'seat-new') return `seat ${difference.name} is not in the approved file`;
+  if (difference.kind === 'seat-new') return `seat ${difference.name} is not in the last approval`;
   return `seat ${difference.name} changed`;
 }
 
@@ -160,6 +160,6 @@ export function describe(difference: Difference): string {
  * readings fold; `null` for a section difference.
  */
 export function seatNamed(line: string): string | null {
-  const match = /^seat (.+) (?:changed|is not in the approved file)$/.exec(line);
+  const match = /^seat (.+) (?:changed|is not in the last approval)$/.exec(line);
   return match?.[1] ?? null;
 }
