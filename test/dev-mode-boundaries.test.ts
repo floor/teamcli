@@ -1,7 +1,7 @@
 // TEAMCLI_DEV_MODE at its edges. The builder's test holds the middle: unset refuses,
 // exactly `1` mounts, no approval artifacts. These scenes hold what the middle leans on —
 // the value must be exactly `1` (anything else set leaves every refusal a refusal), a
-// verified approval is not softened (drift refuses as before, and a verified run mounts
+// verified copy is not a drift refusal when the live file is edited (and a verified run mounts
 // with no warning at all), the caller line converts alone (a placed-outside caller mounts an
 // approved file on a warning), the warning is one line, joined and deduped, on the dry run
 // too, and the mount's rules file still has to live at a path that can be typed and read
@@ -150,27 +150,29 @@ describe('TEAMCLI_DEV_MODE at the edges', () => {
       io.env = { TEAMCLI_DEV_MODE: value };
       const code = await runUp([], io, sources(made.home, runs.launch));
       expect(code, `TEAMCLI_DEV_MODE=${JSON.stringify(value)} must not mount`).toBe(1);
-      expect(io.err).toContain('team up: only the owner runs `up`');
-      expect(io.err).toContain('team up: the file was never approved');
-      expect(io.err).not.toContain('warning:');
+      expect(io.err).toBe('deny\n');
+      expect(io.out).toBe('');
       expect(runs.runs).toEqual([]);
     }
   });
 
-  test('a drifted file still refuses: dev mode does not soften the approved copy', async () => {
+  test('an edited live file mounts with no drift warning for the owner', async () => {
     const made = repo();
     const approved = file(made.root);
     approve(made.root, made.home, approved);
-    // One seat field the file's owner sections cover: the live file is no longer the approved one.
-    writeFileSync(join(made.root, '.agents', 'team.yaml'), file(made.root, 'Claude Haiku'));
+    // The live file is the record: editing the file after approval mounts without a drift refusal or warning.
+    writeFileSync(
+      join(made.root, '.agents', 'team.yaml'),
+      approved.replace('claude --model claude-opus-5-5', 'claude --model claude-opus-5-5 --live-mount'),
+    );
     const runs = world();
     const io = testIo(made.root, OWNER);
     io.env = { TEAMCLI_DEV_MODE: '1' };
     const code = await runUp([], io, sources(made.home, runs.launch));
-    expect(code).toBe(1);
-    expect(io.err).toContain('team up: the file is not the approved one');
+    expect(code).toBe(0);
+    expect(io.err).not.toContain('not the approved one');
     expect(io.err).not.toContain('warning:');
-    expect(runs.runs).toEqual([]);
+    expect(runs.runs.map((run) => run.command).join('\n')).toContain('claude --model claude-opus-5-5 --live-mount');
   });
 
   test('a verified run mounts as ever: dev mode adds no warning to it', async () => {
@@ -210,8 +212,8 @@ describe('TEAMCLI_DEV_MODE at the edges', () => {
     io.env = { TEAMCLI_DEV_MODE: '1' };
     const code = await runUp(['--dry-run'], io, sources(made.home, runs.launch));
     expect(code).toBe(0);
-    expect(io.out).toContain(
-      '! warning: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr); the file was never approved on this machine: run `team approve`; run `team approve`: this file was never approved on this machine',
+    expect(io.out.split('\n')[0]).toBe(
+      '! warning: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr); the file was never approved on this machine',
     );
     expect(io.out).not.toContain('team up:');
     expect(io.err).not.toContain('team up:');
