@@ -1,0 +1,17 @@
+❯ /Users/example/.local/bin/muse --no-session-log
+
+  Muse Code 1.4.9
+
+  Contributor mode is on, so your content may be used
+  for product improvement. Turn it off in /settings.
+  See Terms of Service for more information.
+
+  Skills: 53 loaded · 2 warnings (ctrl+o to expand)
+
+  Including your 30 Claude Code personal skills —
+  manage with /settings.
+
+── Voice input (⌥ + v to start) ─────────────────────
+❯
+─────────────────────────────────────────────────────
+  muse-wonder-full-1.0 · high · …/muse-ws · Auto-review
