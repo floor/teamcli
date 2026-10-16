@@ -225,9 +225,10 @@ unchanged file. That is a true advisory about this machine, not drift.
 
 ## Examples, moved here whole
 
-The examples below are the page's own, moved here whole, in the order they stood in. The
-team file, the fixture and the first console are also on [the `team status` page](../commands/status.md);
-the rest stand only in this note and are not executed by any test — `test/docs.test.ts` reads
+The examples below stood on [the `team status` page](../commands/status.md) before its one-glance
+cut, in the order they stood in, and they stand there no longer: the page carries one shorter
+example now — the same team file without the `budgets:` account, the implementer up, and the one
+difference. None of the examples here is executed by any test — `test/docs.test.ts` reads
 `docs/commands/` alone.
 
 ```yaml file=.agents/team.yaml
