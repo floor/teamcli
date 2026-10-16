@@ -308,3 +308,13 @@ seats:
     version: "1.0"
     display: Muse Wonder 1.0
     launch: muse
+
+  # 2026-10-16: Jules (Google's remote coding agent, the owner's Ultra plan) as a remote builder.
+  - role: builder
+    name: builder-jules
+    cli: claude-code
+    vendor: google
+    model: Jules
+    version: "0.1.42"
+    display: Jules 0.1.42
+    launch: jules
