@@ -19,7 +19,7 @@ import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
-import { relaunchRepair } from '../file/sections/lead.ts';
+import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel, validateTeamFile } from '../file/validate.ts';
@@ -245,6 +245,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       flags: [...args.flags, ...Object.keys(args.values)],
       io,
       home: sources.home,
+      // The second half of a swap: an entry that lists `swap` starts the lead it
+      // stopped, as an entry that lists `add` already could.
+      ...(!temporary && isLeadSeat(team, args.rest[0] ?? '') ? { swap: true } : {}),
     });
     if (verdict.kind === 'refused') return delegateRefused(out, verdict);
     delegatePane = verdict.pane;
@@ -730,6 +733,19 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const report = await executePlan(plan, session, host);
     const afterwards = readState(dir).sessions[session]?.seats[built.name];
     const launched = !report.held && !report.dropped.includes(built.name) && afterwards?.stage === 'ready';
+    // A lead stopped for a swap runs again: the swap's record goes, and the log says who closed it.
+    // A launch that did not reach ready keeps it, so `doctor` still names the gap as a swap.
+    const swapped = launched ? readState(dir).sessions[session]?.swapping?.[built.name] : undefined;
+    if (swapped) {
+      updateState(dir, (file) => {
+        const current = file.sessions[session];
+        if (current?.swapping) {
+          delete current.swapping[built.name];
+          if (Object.keys(current.swapping).length === 0) delete current.swapping;
+        }
+      });
+      logLine(dir, 'add', who, `${built.name} runs its new agent (swap started by ${swapped.by} at ${swapped.at})`, sources.now());
+    }
     if (launched && built.temporary) {
       recordLedger(storePath(team.project, root, sources.home), [built.seat]);
     }

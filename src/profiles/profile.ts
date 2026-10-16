@@ -167,7 +167,7 @@ function synthesizeModelId(cli: string, modelName: string, version: string): str
     const match = /^GPT\s+(\S+)$/i.exec(modelName);
     return match?.[1] ? `gpt-${version}-${match[1].toLowerCase()}` : null;
   }
-  if (cli === 'antigravity') {
+  if (cli === 'antigravity' || cli === 'gemini') {
     const match = /^Gemini\s+(\S+)$/i.exec(modelName);
     return match?.[1] ? `gemini-${version}-${match[1].toLowerCase()}` : null;
   }
@@ -221,7 +221,7 @@ export function withLaunchOverrides(
   let next = launch.trim();
   if (overrides.modelId) {
     const option = profile.modelFlag('', '').option;
-    const modelPattern = profile.cli === 'codex' || profile.cli === 'grok'
+    const modelPattern = profile.cli === 'codex' || profile.cli === 'grok' || profile.cli === 'gemini'
       ? /(^|\s)(--model|-m)(=|\s+)(\S+)/
       : /(^|\s)(--model)(=|\s+)(\S+)/;
     if (modelPattern.test(next)) {
@@ -267,7 +267,7 @@ export type ModelRule = {
 
 type Shipped = { profile: Profile; status: ModelRule[]; quota: QuotaPattern[] };
 
-const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok'] as const;
+const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'] as const;
 // The keys every profile carries. `status_model` and `last_used_model` are optional: a profile
 // without the first belongs to a CLI whose screen doesn't show its model; the second says the
 // CLI starts on its last-used model when a launch names none, and no shipped profile sets it.
@@ -743,11 +743,12 @@ function rulesOf(node: YamlNode): string | null {
   return text(required(entries, 'option', node.line), 'option');
 }
 
-function loginOf(node: YamlNode): { check: string[]; hint: string } {
+function loginOf(node: YamlNode): { check: string[] | null; hint: string } {
   const entries = mapping(node, 'login');
   only(entries, ['check', 'hint']);
+  const check = optional(entries, 'check');
   return {
-    check: strings(required(entries, 'check', node.line).value, 'check'),
+    check: check ? strings(check.value, 'check') : null,
     hint: text(required(entries, 'hint', node.line), 'hint'),
   };
 }

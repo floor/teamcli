@@ -275,6 +275,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `reload.invocation` | `reload` | 2 | the invocation can't be read | `team reload` |
 | `remove.kept` | `remove` | 0 | a stopped seat was kept | `team remove worker --keep` |
 | `remove.removed` | `remove` | 0 | the seat was removed | `team remove worker` |
+| `remove.swapped` | `remove` | 0 | a lead seat was stopped for a swap; the file still names it | `team remove lead --keep` |
 | `remove.temporary` | `remove` | 0 | a temporary seat was removed | `team remove worker` |
 | `remove.abandon` | `remove` | 1 | only the owner abandons a seat | `team remove worker --abandon` |
 | `remove.agents` | `remove` | 1 | the agents can't be read | `team remove worker` |
@@ -302,6 +303,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.run-lock` | `remove` | 1 | another session-mutating run is holding the session | `team remove worker` |
 | `remove.session-owner` | `remove` | 1 | --session is the owner's | `team remove worker --session other` |
 | `remove.stop-failed` | `remove` | 1 | the seat could not be stopped | `team remove worker` |
+| `remove.swap-grant` | `remove` | 1 | no grant or delegate admits this caller's swap of a lead seat | `team remove lead --keep, from a seat the grant does not admit` |
+| `remove.swap-self` | `remove` | 1 | a seat can't swap its own lead seat | `team remove lead --keep, from the lead's own pane` |
 | `remove.unverified` | `remove` | 1 | a name the file does not carry is left as it is | `team remove extra` |
 | `remove.edit` | `remove` | 2 | the edit would not validate | `team remove lead` |
 | `remove.file` | `remove` | 2 | the team file can't be read | `team remove worker --file missing.yaml` |
