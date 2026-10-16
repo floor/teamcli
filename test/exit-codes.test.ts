@@ -36,6 +36,7 @@ import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
@@ -3326,6 +3327,131 @@ scene('send.detached', async (place) => show(await sent(place, ['--list'], detac
 scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), SENTENCE));
 scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), SENTENCE));
 scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), SENTENCE));
+
+const ACTIVE_TWO = TWO.replace('    stopped: true\n', '');
+
+function restartSources(place: Place, over: Partial<RestartSources> = {}): RestartSources {
+  return {
+    ...downSources({ home: place.home }),
+    home: place.home,
+    sessionRunning: () => true,
+    sessionState: () => 'running',
+    agents: () => [],
+    workspaces: () => [],
+    doctor: doctor(place.home),
+    now: () => NOW,
+    launch: downLaunch(),
+    upLaunch: launching(IDLE),
+    ...over,
+  };
+}
+
+async function restarted(
+  place: Place,
+  argv: string[],
+  caller: Caller = owner,
+  over: Partial<RestartSources> = {},
+): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const code = await runRestart(argv, io, restartSources(place, over));
+  return { code, out: io.out, err: io.err };
+}
+
+scene('restart.usage', async (place) => show(await restarted(place, []), 'a seat name is required'));
+scene('restart.configuration', async (place) => show(await restarted(place, ['worker', '--file', 'missing.yaml']), 'no team file'));
+scene('restart.detached', async (place) => show(await restarted(place, ['worker'], detachedCaller), SENTENCE));
+scene('restart.caller', async (place) => {
+  write(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker'], other), 'only the owner, the orchestrator or the operator');
+});
+scene('restart.self', async (place) => {
+  write(place, ACTIVE_TWO);
+  recordLead(place, leadSeat.pane);
+  return show(await restarted(place, ['lead'], leadSeat), 'cannot restart its own recorded pane');
+});
+scene('restart.temporary', async (place) => {
+  write(place, ACTIVE_TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats['worker-tmp-1'] = { stage: 'ready', temporary: { like: 'worker', until: 'result:out.md' } };
+  });
+  return show(await restarted(place, ['worker-tmp-1']), 'is a temporary copy');
+});
+scene('restart.unknown', async (place) => {
+  write(place, ACTIVE_TWO);
+  return show(await restarted(place, ['missing']), 'not a signed declared seat');
+});
+scene('restart.lead', async (place) => {
+  write(place, ACTIVE_TWO);
+  const opCaller = { kind: 'seat', name: 'worker', pane: 'pane-op', session: 'acme' } as const;
+  write(place, ACTIVE_TWO.replace('operator: lead', 'operator: worker'));
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-op' };
+  });
+  return show(await restarted(place, ['lead', '--abandon'], opCaller), 'does not abandon the orchestrator');
+});
+scene('restart.signed-off', async (place) => {
+  write(place, TWO);
+  return show(await restarted(place, ['worker']), 'is signed off');
+});
+scene('restart.herdr', async (place) => {
+  write(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker'], owner, { sessionState: () => null }), "doesn't answer");
+});
+scene('restart.no-session', async (place) => {
+  write(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker'], owner, { sessionState: () => 'absent', sessionRunning: () => false }), 'is not running');
+});
+scene('restart.replaced', async (place) => {
+  write(place, ACTIVE_TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.worker = {
+      stage: 'ready',
+      pane: 'pane-old',
+      workspace: 'ws-old',
+      launched: { shell: 400, cli: [401] },
+    };
+  });
+  const upLaunch = launching(IDLE);
+  upLaunch.processInfo = () => ({ shell: 400, foreground: [999] });
+  return show(await restarted(place, ['worker'], owner, { upLaunch }), 'has a process in its old pane');
+});
+scene('restart.abandon-working', async (place) => {
+  write(place, ACTIVE_TWO);
+  recordLead(place, leadSeat.pane);
+  return show(await restarted(place, ['worker', '--abandon'], leadSeat, {
+    agents: () => [agent('worker', 'working')],
+    screen: () => ({ kind: 'working' }),
+  }), 'a granted abandon leaves it');
+});
+scene('restart.busy', async (place) => {
+  write(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker'], owner, {
+    agents: () => [agent('worker', 'working')],
+    screen: () => ({ kind: 'working' }),
+  }), 'is working; left as it is');
+});
+scene('restart.not-ready', async (place) => {
+  approve(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker'], owner, {
+    doctor: doctor(place.home, { version: () => null }),
+  }), 'install');
+});
+scene('restart.dry-run', async (place) => {
+  approve(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker', '--dry-run'], owner), 'dry run: nothing was run');
+});
+scene('restart.run-lock', async (place) => {
+  approve(place, ACTIVE_TWO);
+  const dir = join(place.root, '.agents');
+  mkdirSync(join(dir, 'seat-locks', 'acme'), { recursive: true });
+  writeFileSync(seatLockPath(dir, 'acme', '.run'), `${process.pid} 0a1b2c3d\n`);
+  return show(await restarted(place, ['worker'], owner), 'another session-mutating run is holding');
+});
+scene('restart.ready', async (place) => {
+  approve(place, ACTIVE_TWO);
+  return show(await restarted(place, ['lead'], owner), 'restarted lead');
+});
 
 const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
 

@@ -317,6 +317,24 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.invocation` | `remove` | 2 | the invocation can't be read | `team remove` |
 | `remove.locked` | `remove` | 2 | the locked edit does not validate | `team remove worker` |
 | `remove.not-a-repo` | `remove` | 2 | not inside a git repository | `team remove worker` |
+| `restart.dry-run` | `restart` | 0 | the stop and launch plan was printed and nothing was touched | `team restart worker --dry-run` |
+| `restart.ready` | `restart` | 0 | the seat was restarted in a new pane | `team restart worker` |
+| `restart.abandon-working` | `restart` | 1 | a seat caller passed --abandon on a working seat | `team restart worker --abandon` |
+| `restart.busy` | `restart` | 1 | the seat is busy and --abandon was not given, or graceful stop did not close the pane | `team restart worker` |
+| `restart.caller` | `restart` | 1 | the caller may not restart a seat, or passed an owner-only flag | `team restart worker` |
+| `restart.detached` | `restart` | 1 | a run with no terminal | `team restart worker` |
+| `restart.herdr` | `restart` | 1 | herdr doesn't answer | `team restart worker` |
+| `restart.lead` | `restart` | 1 | a seat caller passed --abandon for the orchestrator's or the operator's seat | `team restart lead --abandon` |
+| `restart.no-session` | `restart` | 1 | the herdr session is not running | `team restart worker` |
+| `restart.not-ready` | `restart` | 1 | preflight or launch did not produce a ready seat | `team restart worker` |
+| `restart.replaced` | `restart` | 1 | the old pane holds a process that is not the seat's CLI | `team restart worker` |
+| `restart.run-lock` | `restart` | 1 | another session-mutating run is holding the session | `team restart worker` |
+| `restart.self` | `restart` | 1 | a seat caller tried to restart its own recorded pane | `team restart lead` |
+| `restart.signed-off` | `restart` | 1 | the seat is parked or stopped | `team restart worker` |
+| `restart.temporary` | `restart` | 1 | the seat is a temporary copy | `team restart worker-tmp-1` |
+| `restart.unknown` | `restart` | 1 | the seat is not a declared seat | `team restart missing` |
+| `restart.configuration` | `restart` | 2 | the team file can't be read or parsed, or not inside a git repository | `team restart worker --file missing.yaml` |
+| `restart.usage` | `restart` | 2 | the invocation can't be read | `team restart` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
 | `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
 | `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |
