@@ -24,8 +24,8 @@ is a name the writer put on the record. The receipt says a process was shown the
 the recipient acted on it.
 
 The message key is a second file, `~/.config/team-key/messages.json`, beside the approval key.
-It is created the first time a message or a receipt is signed. An empty mailbox creates nothing.
-The approval key never signs a message.
+It is created the first time a message or a receipt is signed; nothing else creates it, and an
+empty mailbox creates nothing. The approval key never signs a message.
 
 ## What it reads and writes
 
