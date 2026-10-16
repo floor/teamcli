@@ -7,7 +7,7 @@ import { runApprove } from '../../src/approve/command.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { type HerdrAgent } from '../../src/herdr.ts';
 import { readState, type SeatState } from '../../src/state.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 // The boundaries of the waiting-seat heal: a pane the host no longer lists is replaced, and
 // nothing else is. These tests pin the other side of each line the heal draws — the seats whose
@@ -18,7 +18,7 @@ import { testIo } from '../helpers.ts';
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
 const FILE = ['--file', '.agents/team.yaml'];
 const NOW = new Date('2026-10-03T14:02:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 let base: string;
 let root: string;

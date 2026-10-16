@@ -44,6 +44,8 @@ import { logLine } from '../log.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
+import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
@@ -1126,6 +1128,21 @@ function hostOf(input: {
       if (patch.pane) {
         if (replaced) forgetLaunchedPane(input.home, replaced, session);
         noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
+        // The registry: the seat's agent is registered at its first launch, re-pointed after.
+        if (name === seat.name) {
+          const made = registerLaunch(
+            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
+            seat,
+            patch.pane,
+            readState(dir).sessions[session]?.seats[name]?.id,
+          );
+          if ('note' in made) logLine(dir, 'add', input.caller, made.note, input.now());
+          else {
+            // The address: the live session socket this launch answers at, recorded on the agent.
+            const refreshed = refreshAgentAddress(input.home, made.id, patch.pane, session);
+            if (refreshed.note) logLine(dir, 'add', input.caller, refreshed.note, input.now());
+          }
+        }
       }
     },
     running(name) {
@@ -1150,6 +1167,11 @@ function hostOf(input: {
         delete current.seats[name];
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
+      // The registry: a temporary seat's agent ends with it; a declared seat's comes back as itself.
+      if (name === seat.name) {
+        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, temporary ? 'retired' : 'stopped');
+        if (ended) logLine(dir, 'add', input.caller, ended.note, input.now());
+      }
     },
     // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
     // here with the same function the records use: no escape sequence or bidi override reaches

@@ -4,8 +4,10 @@ Checks the public npm and GitHub records of one release: the exact version and i
 — with a provenance attestation when the file declares trusted publishing for the package — the tag
 and where it points, the GitHub release, and the changelog entry. With the file's Linear pair it
 also verifies the project's milestone and a qualifying status update; with the activity pair, the
-release marker in the project's public activity file. Run it by hand after a publish, or let CI run
-it after it creates a tag.
+release marker in the project's public activity file. Beside those checks it reads npm's `dist-tags`
+document: when `next` points at a version older than `latest`, the run warns and prints the exact
+`npm dist-tag add` command that would catch the tag up — and never runs it. Run it by hand after a
+publish, or let CI run it after it creates a tag.
 
 ## Synopsis
 
@@ -45,6 +47,11 @@ wherever they appear, so `--file --help` prints the usage and exits 0.
 | a bad invocation, an invalid team file, or a package the file does not declare | `team release: <reason>`; with `--json`, one error object instead (`usage` for the arguments and an undeclared package, `configuration` for the file) | 64 |
 
 A timeout, a transport failure, or a 408, 429 or 5xx response is retried exactly once; other failures are not retried.
+
+A run whose npm `dist-tags` document shows `next` behind `latest` appends one `warn  <reason>` line
+after the table, or a `"warning"` member after `checks` with `--json`. The warning is a hint, not a
+check: it changes no row, no status and no exit code, and a document that is absent or unreadable,
+or whose tags are not versions, prints nothing.
 
 ## Example
 
@@ -86,7 +93,8 @@ seats:
 ```
 
 The registry says material 3.0.2 is out with its provenance, the release and the changelog are
-right, but the tag's commit has not reached the default branch — one check missing, so exit 1:
+right, but the tag's commit has not reached the default branch and npm's `next` tag still points at
+3.0.1 — one check missing, one warning, so exit 1:
 
 ```console
 $ team release check material@3.0.2 ; echo "exit $?"
@@ -95,6 +103,7 @@ npm        pass     exact version, checksums, and provenance found
 tag        missing  tag commit is not an ancestor of the default branch
 github     pass     published release matches SemVer channel
 changelog  pass     changelog entry has a valid release date
+warn  npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next
 exit 1
 ```
 

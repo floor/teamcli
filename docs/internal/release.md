@@ -22,14 +22,14 @@ not the worktree's; a folder that is not a git repository is read from `.agents/
 folder only, not from a parent, and a link at `.agents` or at the file is not followed;
 `--file <path>` names another file instead, a relative path resolved
 against the working directory — then the file's `releases` section, then the public records over HTTPS
-only: the npm registry's version and attestation endpoints, and GitHub's repository, tag, compare,
+only: the npm registry's version, attestation and dist-tags endpoints, and GitHub's repository, tag, compare,
 release and contents endpoints — plus, when the file configures them, one read-only GraphQL read
 of the Linear project and one contents read of the activity file. Every read is credential-free
 except that one Linear request, whose key is read from the macOS Keychain (below); no read uses a
 token, a credential helper or a local git fetch. It writes nothing: no state, no baseline, no
 cache, no approval — nothing to npm, GitHub, Linear or a file. A timeout, a transport failure, or a
 408, 429 or 5xx response is retried exactly once; other failures are not retried. A run makes at
-most eleven endpoint reads and twenty-two attempts, or thirteen and twenty-six with both optional
+most twelve endpoint reads and twenty-four attempts, or fourteen and twenty-eight with both optional
 pairs configured.
 
 ## Who may run it
@@ -122,6 +122,21 @@ a pass):
 | `linear` | the configured project is active, has exactly one milestone named `<version>` and it is complete, and has a status update dated at or after the changelog release day |
 | `activity` | the configured public activity file has the marker line exactly once |
 
+### The `next` dist-tag warning
+
+One read stands beside the checks: npm's `dist-tags` document for the package, the small one that
+names each channel's version. When its `next` tag points at a version older than `latest` — by
+Semantic Versioning 2.0.0's precedence, so a prerelease is behind the release it precedes — the run
+prints one line after the table, naming the exact command that catches the tag up and running
+nothing itself:
+
+    npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next
+
+With `--json` it is a `"warning"` member after `checks`, absent when there is nothing to say. It is
+a hint, never a check: it adds no row, changes no check's status and never changes the exit code. A
+`next` tag level with or ahead of `latest`, an absent tag, a value that is not a version, and a read
+that fails or is refused all print nothing.
+
 ## Refusals
 
 | Message | Exit |
@@ -147,7 +162,8 @@ only in this note and are not executed by any test — `test/docs.test.ts` reads
 alone.
 
 The registry says material 3.0.2 is out with its provenance, the release and the changelog are
-right, but the tag's commit has not reached the default branch — one check missing, so exit 1:
+right, but the tag's commit has not reached the default branch and npm's `next` tag still points at
+3.0.1 — one check missing, one warning, so exit 1:
 
 ```console
 $ team release check material@3.0.2 ; echo "exit $?"
@@ -156,6 +172,7 @@ npm        pass     exact version, checksums, and provenance found
 tag        missing  tag commit is not an ancestor of the default branch
 github     pass     published release matches SemVer channel
 changelog  pass     changelog entry has a valid release date
+warn  npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next
 exit 1
 ```
 
@@ -186,7 +203,8 @@ $ team release check material@3.0.2 --json ; echo "exit $?"
     "tag": { "status": "missing", "detail": "tag commit is not an ancestor of the default branch" },
     "github": { "status": "pass", "detail": "published release matches SemVer channel" },
     "changelog": { "status": "pass", "detail": "changelog entry has a valid release date" }
-  }
+  },
+  "warning": "npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next"
 }
 exit 1
 ```

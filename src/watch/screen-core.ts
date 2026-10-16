@@ -341,12 +341,22 @@ function kindOfStage(name: StageName): Screen['kind'] {
 }
 
 /** The reset time a rate-limit window names, from the phrase the seat printed. Null when the
- *  window matches the limit and does not name a time. */
+ *  window matches the limit and does not name a time. Two CLIs' phrases are captured: Claude
+ *  Code's `Your limit will reset at 11:00`, and Gemini's `Access resets at 2:10 PM GMT+2.` —
+ *  its trailing period is the sentence's, not the time's. A dialog draws the sentence inside a
+ *  box, so the time stops at the box's closing border. */
+const RESET_PHRASES = [
+  /Your limit will reset at\s+([^│|]+?)\.?\s*(?:[│|]\s*)?$/,
+  /Access resets at\s+([^│|]+?)\.?\s*(?:[│|]\s*)?$/,
+];
+
 function resetOf(lines: string[]): string | null {
   for (const line of lines) {
-    const found = /Your limit will reset at\s+(.+?)\s*$/.exec(line);
-    const time = found?.[1]?.trim();
-    if (time) return time;
+    for (const phrase of RESET_PHRASES) {
+      const found = phrase.exec(line);
+      const time = found?.[1]?.trim();
+      if (time) return time;
+    }
   }
   return null;
 }

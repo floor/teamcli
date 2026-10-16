@@ -119,6 +119,34 @@ describe('team status', () => {
     expect(code).toBe(0);
   });
 
+  test('a hold is the first note, in the reading and in the document, and no exit moves', async () => {
+    const clean = await status();
+    const record = { reason: 'freeze deploys', by: 'owner', at: '2026-10-03T14:00:00.000Z', until: '2026-10-04T00:00:00.000Z' };
+    updateState(join(dir, '.agents'), (state) => {
+      state.hold = record;
+    });
+    const { code, out } = await status();
+    expect(code).toBe(clean.code);
+    expect(out).toBe(
+      clean.out.replace(
+        /^(note: )/m,
+        `note: hold until ${record.until}: ${record.reason}\n$1`,
+      ),
+    );
+    const doc = JSON.parse((await status('--json')).out) as { notes: string[]; hold?: typeof record };
+    expect(doc.hold).toEqual(record);
+    expect(doc.notes[0]).toBe(`hold until ${record.until}: ${record.reason}`);
+    // A hold that has lapsed is not a hold: neither the note nor the document carries one.
+    updateState(join(dir, '.agents'), (state) => {
+      state.hold = { ...record, until: '2026-10-03T13:00:00.000Z' };
+    });
+    const lapsed = await status();
+    expect(lapsed.code).toBe(clean.code);
+    expect(lapsed.out).toBe(clean.out);
+    const lapsedDoc = JSON.parse((await status('--json')).out) as { hold?: unknown };
+    expect(lapsedDoc.hold).toBeUndefined();
+  });
+
   test('a missing seat, with its repair', async () => {
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const { code, out } = await status();
@@ -799,6 +827,24 @@ describe('team status', () => {
     live = { ...built(), agents: [...built().agents, tmp], screens: { ...built().screens, 'w5:p1': codexScreen('idle') } };
     const readable = await status();
     expect(readable.out).toMatch(/codex-acme-tmp-1\s+done, temporary/);
+  });
+
+  test('C4: a seat stopped at its usage limit: the row names the pool and the reset time', async () => {
+    const limitScreen = readFileSync(new URL('./fixtures/claude-code/rate-limit.txt', import.meta.url), 'utf8');
+    // A file seat whose cli is Claude Code: the pool is its vendor, as the counting rules resolve it.
+    live = { ...built(), screens: { ...built().screens, 'w3:p1': limitScreen } };
+    const stopped = await status();
+    expect(stopped.out).toMatch(/deepseek-acme\s+done \(rate limit on deepseek, resets at 11:00\)/);
+    // A temporary seat's row names the pool of the seat it is like.
+    const tmp = agent('deepseek-acme-tmp-1', 'w5', 'done');
+    live = { ...built(), agents: [...built().agents, tmp], screens: { ...built().screens, 'w5:p1': limitScreen } };
+    updateState(join(dir, '.agents'), (state) => {
+      (state.sessions['acme-web'] ??= emptySession()).seats['deepseek-acme-tmp-1'] = {
+        stage: 'ready', temporary: { like: 'deepseek-acme', until: 'result:out.md' },
+      };
+    });
+    const temp = await status();
+    expect(temp.out).toMatch(/deepseek-acme-tmp-1\s+done \(rate limit on deepseek, resets at 11:00\), temporary/);
   });
 
   test('a seat waiting at a permission or trust prompt is a difference for the owner', async () => {
