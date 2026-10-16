@@ -2222,6 +2222,132 @@
     },
     {
       "code": 0,
+      "command": "restart",
+      "id": "restart.dry-run",
+      "meaning": "the stop and launch plan was printed and nothing was touched",
+      "trigger": "team restart worker --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "restart",
+      "id": "restart.ready",
+      "meaning": "the seat was restarted in a new pane",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.abandon-working",
+      "meaning": "a seat caller passed --abandon on a working seat",
+      "trigger": "team restart worker --abandon"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.busy",
+      "meaning": "the seat is busy and --abandon was not given, or graceful stop did not close the pane",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.caller",
+      "meaning": "the caller may not restart a seat, or passed an owner-only flag",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.herdr",
+      "meaning": "herdr doesn't answer",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.lead",
+      "meaning": "a seat caller passed --abandon for the orchestrator's or the operator's seat",
+      "trigger": "team restart lead --abandon"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.no-session",
+      "meaning": "the herdr session is not running",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.not-ready",
+      "meaning": "preflight or launch did not produce a ready seat",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.replaced",
+      "meaning": "the old pane holds a process that is not the seat's CLI",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.run-lock",
+      "meaning": "another session-mutating run is holding the session",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.self",
+      "meaning": "a seat caller tried to restart its own recorded pane",
+      "trigger": "team restart lead"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.signed-off",
+      "meaning": "the seat is parked or stopped",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.temporary",
+      "meaning": "the seat is a temporary copy",
+      "trigger": "team restart worker-tmp-1"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.unknown",
+      "meaning": "the seat is not a declared seat",
+      "trigger": "team restart missing"
+    },
+    {
+      "code": 2,
+      "command": "restart",
+      "id": "restart.configuration",
+      "meaning": "the team file can't be read or parsed, or not inside a git repository",
+      "trigger": "team restart worker --file missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "restart",
+      "id": "restart.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team restart"
+    },
+    {
+      "code": 0,
       "command": "seats",
       "id": "seats.shown",
       "meaning": "the seats table was printed",
