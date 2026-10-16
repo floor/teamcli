@@ -829,6 +829,7 @@ function seatPlan(
     displayAgent: displayAgent(seat),
     model: seat.model,
     version: seat.version,
+    ...(seat.effort ? { effort: seat.effort } : {}),
     // The team file's own repair for this seat — a lead seat is told only the whole-team
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
@@ -1051,7 +1052,8 @@ function hostOf(input: {
           }
         }
         // `waiting: null` removes the field alone; anything else written replaces it.
-        const { waiting: written, ...rest } = patch;
+        // `effort: null` is a launch that set no word: the stored word goes with it.
+        const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,
           ...rest,
@@ -1067,6 +1069,8 @@ function hostOf(input: {
         };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;
+        if (patchedEffort === null) delete seatState.effort;
+        else if (patchedEffort !== undefined) seatState.effort = patchedEffort;
         current.seats[name] = seatState;
         if (patch.pane) {
           replaced = prior.pane !== patch.pane ? prior.pane : undefined;

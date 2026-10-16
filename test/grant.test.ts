@@ -65,7 +65,7 @@ describe('grant validation', () => {
       seat: 'lead',
       scope: ['up', 'down', 'approve', 'init'],
     });
-    expect(GRANT_SCOPES).toEqual(['up', 'down', 'approve', 'init']);
+    expect(GRANT_SCOPES).toEqual(['up', 'down', 'approve', 'init', 'reload']);
   });
 
   test('session, seat and scope are the closed fields', () => {
@@ -76,13 +76,13 @@ describe('grant validation', () => {
       'grant.seat must name the orchestrator "lead": "helper"',
     );
     expect(messages(BASE + 'grant:\n  session: acme\n  seat: lead\n  scope: []\n')).toContain(
-      'grant.scope must name at least one of: up, down, approve, init',
+      'grant.scope must name at least one of: up, down, approve, init, reload',
     );
     expect(messages(BASE + 'grant:\n  session: acme\n  seat: lead\n  scope: [up, up]\n')).toContain(
       'grant.scope names "up" twice',
     );
     expect(messages(BASE + 'grant:\n  session: acme\n  seat: lead\n  scope: [worktree]\n')).toContain(
-      'grant.scope must name up, down, approve, init: "worktree" is not one',
+      'grant.scope must name up, down, approve, init, reload: "worktree" is not one',
     );
     expect(messages(BASE + 'grant:\n  session: acme\n  seat: lead\n  scope: up\n')).toContain(
       'grant.scope must be a list',
