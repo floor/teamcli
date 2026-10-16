@@ -11,10 +11,11 @@ import type { Command, Io } from '../io.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
+import { readProjects } from '../registry/projects.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { liveSocketOf } from '../send/address.ts';
-import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
+import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
 import { readSendGrants } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
@@ -812,7 +813,13 @@ function admissionOf(
   // a rule that crosses teams to read, so a send that would leave stays refused.
   if (record === null && teamOf(judged) !== fileTeamId) return { ok: false, why: noAgentRecord(caller, declared) };
   const records = admitRecordsOf(home, team, ownTeam);
-  const verdict = admitSend(sender, judged, records);
+  // The project level `admitSend` reads: the registered projects, which decide the pairs a
+  // project's own rules admit, and the asker's `seats_cross_teams` chain, entity → project →
+  // team → seat, which `admitSend` resolves itself (`seatsCrossTeams`). No level's record
+  // carries a declaration of that setting yet, so the chain is empty here and the setting
+  // stands at its own default, off.
+  const context: AdmitContext = { projects: readProjects(home), crossTeams: {} };
+  const verdict = admitSend(sender, judged, records, undefined, context);
   if (verdict.ok) return { ok: true, rule: verdict.rule, sender };
   // The grant folder is asked for a recorded sender alone: a grant names an identity, and the
   // declared one has none yet. So the header it would write never claims a grant.
@@ -821,7 +828,7 @@ function admissionOf(
     if (grants.length > 0) {
       const grant = sendGrantFor(record, judged, grants, records, now());
       if (grant !== undefined) {
-        const granted = admitSend(record, judged, records, grant);
+        const granted = admitSend(record, judged, records, grant, context);
         if (granted.ok) return { ok: true, rule: granted.rule, sender: record };
       }
     }
@@ -866,7 +873,9 @@ function recordFor(home: string, session: string, seat: string): Agent | null {
 /** The admission records a send is judged against: every registered team — so a target in another
  *  team is judged by that team's own record — and, over it, this run's team from the live file,
  *  which is the seed the registry projects. The file's project, entity and lead, with the roster
- *  the store holds for that team and the file's own seats behind it. */
+ *  the store holds for that team and the file's own seats behind it; a file seat the file names as
+ *  its coordinator carries the `leads` capability there, so the project rules read the file's own
+ *  lead off the line the file declares it on. */
 function admitRecordsOf(home: string, team: TeamFile, teamId: string): AdmitTeams {
   const roster: AdmitTeam['roster'] = [];
   for (const agent of readAgents(home)) {
@@ -874,7 +883,9 @@ function admitRecordsOf(home: string, team: TeamFile, teamId: string): AdmitTeam
     roster.push({ agent: agent.id, seat: agent.reach.seat, role: agent.signing.role });
   }
   for (const seat of team.seats) {
-    if (!roster.some((entry) => entry.seat === seat.name)) roster.push({ agent: '', seat: seat.name, role: seat.role });
+    if (!roster.some((entry) => entry.seat === seat.name)) {
+      roster.push({ agent: '', seat: seat.name, role: seat.role, leads: seat.name === team.orchestrator });
+    }
   }
   return {
     ...readTeams(home),
