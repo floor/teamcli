@@ -19,8 +19,10 @@ import { callerLabel, describeCaller, detachedRefusal, mayLaunchSeats, sessionOw
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
+import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
+import type { Seat } from '../file/types.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
-import { agentList, paneForeground, paneProcesses, paneRead, sessionState, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
+import { agentList, paneForeground, paneProcesses, paneRead, reportDisplayAgent, sessionState, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { launchedIdentity } from '../launch/identity.ts';
@@ -58,6 +60,13 @@ export type RegisterSources = {
   /** The seat's live session socket, recorded on the agent after the registry write, as a
    *  launch records it. Left out, the real read runs over herdr. */
   refreshAddress?: typeof refreshAgentAddress;
+  /** Line 1 of the seat's herdr sidebar, re-applied on an adoption: the file's own
+   *  `workspaceLabel`, through the same rename `up` and `add` make. Left out, the real write
+   *  runs over herdr. */
+  renameWorkspace?: (session: string, workspace: string, label: string) => boolean;
+  /** Line 2, re-applied the same way: `displayAgent(seat)`, through the `pane report-metadata`
+   *  call `add` reports it with. Left out, the real write runs over herdr. */
+  reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
   now: () => Date;
 };
 
@@ -331,6 +340,10 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // read. A record that names another pane — or no pane at all, a launch this command did not
   // finish — is not overwritten from here: that is the owner's `team down`, then `team up`.
   if (held !== undefined && held.pane === found.pane && held.stage === 'ready') {
+    // The repair `team check` names, the one act here that writes no record: the seat's two
+    // sidebar lines are re-applied from the file, so a label or display that drifted is put
+    // back where the seat stands. A dry run paints nothing.
+    if (!dry) relabel(out, sources, session, seat, found, name);
     out.stdout(`${plainLine(name)}: already registered — pane ${plainLine(found.pane)}; nothing was written\n`);
     // exit: register.already
     return 0;
@@ -401,6 +414,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     const refreshed = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, found.pane, session);
     if (refreshed.note) logLine(dir, 'register', callerLabel(walked), refreshed.note, now);
   }
+  // The seat's sidebar, painted from the file the way `up` and `add` paint it: the record above
+  // makes the seat reachable; these two writes make its own lines say what the file says.
+  relabel(out, sources, session, seat, found, name);
   noteLaunchedPane(sources.home, path, found.pane, session);
   // The audit line a delegated act writes, naming the authority (`up`) it was run under; a
   // granted seat writes the grant's own line.
@@ -410,4 +426,32 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   out.stdout(`${plainLine(name)}: registered — pane ${plainLine(found.pane)}; nothing was launched\n`);
   // exit: register.ready
   return 0;
+}
+
+/** The two sidebar writes `up` and `add` make after a launch, re-applied to the seat this run
+ *  adopts — line 1, the file's own `workspaceLabel`, line 2 its `displayAgent` — with no
+ *  relaunch and nothing typed. A herdr that refuses one is one line for that seat, the relabel
+ *  contract `up`, `add` and the watch keep; the record stands either way. */
+function relabel(
+  out: Io,
+  sources: RegisterSources,
+  session: string,
+  seat: Seat,
+  found: HerdrAgent,
+  name: string,
+): void {
+  const title = workspaceLabel(seat);
+  const renamed = (sources.renameWorkspace ?? ((s, workspace, label) => workspaceRename(workspace, label, s)))(
+    session,
+    found.workspace,
+    title,
+  );
+  if (!renamed) out.stdout(`${plainLine(name)}: its title was not reported\n`);
+  const display = displayAgent(seat);
+  const reported = (sources.reportDisplayAgent ?? ((s, pane, text) => reportDisplayAgent(pane, text, s)))(
+    session,
+    found.pane,
+    display,
+  );
+  if (!reported) out.stdout(`${plainLine(name)}: its display was not reported\n`);
 }
