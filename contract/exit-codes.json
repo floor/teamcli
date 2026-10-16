@@ -584,6 +584,83 @@
     },
     {
       "code": 0,
+      "command": "brief",
+      "id": "brief.delivered",
+      "meaning": "the brief was recorded and the seat's channel took it",
+      "trigger": "team brief worker brief.md"
+    },
+    {
+      "code": 0,
+      "command": "brief",
+      "id": "brief.done",
+      "meaning": "the seat's brief was marked done",
+      "trigger": "team brief --done --summary shipped"
+    },
+    {
+      "code": 0,
+      "command": "brief",
+      "id": "brief.dry-run",
+      "meaning": "the brief file and the seat were checked and nothing was written",
+      "trigger": "team brief worker brief.md --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "brief",
+      "id": "brief.list",
+      "meaning": "one row per seat was printed, nothing was written",
+      "trigger": "team brief --list"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team brief worker brief.md"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.held",
+      "meaning": "the brief is recorded and the pane was left untouched",
+      "trigger": "team brief worker brief.md"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.refused",
+      "meaning": "nothing was handed, on purpose: a caller that may not, a seat the file does not declare, a brief file that cannot be taken, or a brief that is not active",
+      "trigger": "team brief missing brief.md"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.send-refused",
+      "meaning": "the brief is recorded, and team send refused to deliver it",
+      "trigger": "team brief worker brief.md"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.unreachable",
+      "meaning": "the brief is recorded, and the seat was not reached",
+      "trigger": "team brief worker brief.md"
+    },
+    {
+      "code": 2,
+      "command": "brief",
+      "id": "brief.configuration",
+      "meaning": "the team file can't be read, or the brief folder can't be written",
+      "trigger": "team brief worker brief.md"
+    },
+    {
+      "code": 2,
+      "command": "brief",
+      "id": "brief.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team brief"
+    },
+    {
+      "code": 0,
       "command": "broker",
       "id": "broker.stopped",
       "meaning": "the broker served until it was stopped",

@@ -535,7 +535,7 @@ function socketOf(host: SendHost, processes: PaneProcesses): string | null {
 }
 
 /** The caller class the caller check returned, as the log's bracket: `answer`'s own. */
-function logWho(caller: Caller, team: TeamFile): string {
+export function logWho(caller: Caller, team: TeamFile): string {
   if (caller.kind === 'owner' || caller.kind === 'owner-no-tty') return 'owner';
   if (caller.kind === 'unplaced') return 'unplaced';
   if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
@@ -548,7 +548,7 @@ function logWho(caller: Caller, team: TeamFile): string {
  * `answer`'s refusal texts for the two placements it can name, and the authority rule named
  * in the rest.
  */
-function callerProblemOf(caller: Caller, team: TeamFile, at?: SeatStanding): string | null {
+export function callerProblemOf(caller: Caller, team: TeamFile, at?: SeatStanding): string | null {
   if (caller.kind === 'owner') return null;
   const verdict = callerVerdict(caller, team.orchestrator, at);
   if (verdict.kind === 'ok') return null;
