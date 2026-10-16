@@ -2,6 +2,9 @@
 // record lists is admitted for `init` and `up` on the covered paths before expiry, and every
 // refusal around it holds — a name not in the ancestry, an expired record, a record with no
 // runner, a path escape, and a caller under herdr whose ancestry happens to carry the name.
+// The same record admits the team's own commands — `status` and `down` for the covered team,
+// and `add`/`remove` beside them — and the sentences they print without it are asserted here
+// byte for byte.
 // The commands are driven through the walker: the fake ancestors are injected as the real
 // `callerSources`, so `callerOf`/`walkCaller` place the call exactly as they would a live one.
 import { describe, expect, test } from 'bun:test';
@@ -9,7 +12,11 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Process } from '../src/caller.ts';
+import { runAdd, type AddSources } from '../src/commands/add.ts';
+import { runDown } from '../src/commands/down.ts';
 import { runInit } from '../src/commands/init.ts';
+import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { grantsDir, readEntityCreateGrants } from '../src/grant.ts';
 import type { Terminal } from '../src/launch/terminal.ts';
@@ -186,6 +193,73 @@ function upSources(home: string, launch: Launch, term: Terminal, now: Date = NOW
     machine: () => AMPLE,
     terminal: () => term,
     launch,
+  };
+}
+
+/** What `status` reads from outside the file: the session is not running, and no store exists. */
+function statusSources(home: string): StatusSources {
+  return {
+    live: () => ({ running: false, agents: [], workspaces: [], screens: {} }),
+    branch: () => null,
+    standing: () => ({ kind: 'none' }),
+    now: () => NOW,
+    home,
+    gate: { standing: () => ({ kind: 'none' }), agents: () => [] },
+  };
+}
+
+/** What `down` and `remove` read from outside the file: a running session with no agents, so a
+ *  stop is the session's own and the counter is the run's whole effect. */
+function stopSources(home: string, stopped: { n: number }): RemoveSources {
+  return {
+    sessionRunning: () => true,
+    agents: () => [],
+    alive: () => false,
+    screen: () => ({ kind: 'idle' }),
+    screenText: () => '',
+    status: () => 'idle',
+    foreground: () => [],
+    now: () => NOW,
+    sleep: async () => {},
+    home,
+    launch: {
+      typeText: () => true,
+      sendKey: () => true,
+      pressEnter: () => true,
+      agentPanes: () => [],
+      closeWorkspace: () => true,
+      stopSession: () => {
+        stopped.n += 1;
+        return true;
+      },
+      deleteSession: () => true,
+      kill: () => true,
+      sleep: async () => {},
+      now: () => NOW,
+    },
+  };
+}
+
+/** What `add` reads from outside the file. `sessionState` answers `null` — herdr silent — which
+ *  is where a run the record admits stops: past the detached sentence and past the caller rule. */
+function addSources(home: string): AddSources {
+  return {
+    home,
+    sessionState: () => null,
+    agents: () => [],
+    workspaces: () => [],
+    doctor: {
+      version: () => '2.1.288',
+      onPath: () => true,
+      loggedIn: () => true,
+      herdrVersion: () => '0.7.1',
+      sessionRunning: () => false,
+      now: () => NOW,
+      home,
+    },
+    machine: () => AMPLE,
+    now: () => NOW,
+    launch: launching(() => {}),
   };
 }
 
@@ -417,6 +491,162 @@ describe("a create-grant's runner outside herdr", () => {
       const upCode = await runUp([], upIo, { ...upSources(sb.home, up.host, terminal()), now: up.now, sleep: up.sleep });
       expect(upCode, `${upIo.err}${upIo.out}`).toBe(0);
       expect(up.counts.launches).toBeGreaterThanOrEqual(5);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a create-grant's runner and the team's other commands", () => {
+  test('status reads a covered team for the record\'s runner, and refuses every other read', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', WITH_RUNNER);
+      const v7 = join(sb.code, 'v7');
+      initGitRepo(v7);
+      mkdirSync(join(v7, '.agents'), { recursive: true });
+      writeFileSync(join(v7, '.agents', 'team.yaml'), fiveSeatTeam('beacon-v7', v7, sb.home));
+
+      const granted = walkIo(v7, OUTSIDE_HERDR);
+      const code = await runStatus([], granted, statusSources(sb.home));
+      expect(code, `${granted.err}${granted.out}`).not.toBe(2);
+      expect(granted.out).toContain('team beacon-v7, session "beacon-v7"');
+      expect(granted.err).not.toContain('this team is not yours to read');
+      // The read alone: a granted run keeps no remembered copy the way the owner's run does.
+      expect(readState(join(v7, '.agents')).last_valid).toBeUndefined();
+
+      // A team under no granted path, for the scene below that aims a covered runner at it.
+      const elsewhere = join(sb.home, 'Code', 'elsewhere');
+      initGitRepo(elsewhere);
+      mkdirSync(join(elsewhere, '.agents'), { recursive: true });
+      writeFileSync(join(elsewhere, '.agents', 'team.yaml'), fiveSeatTeam('elsewhere', elsewhere, sb.home));
+
+      const cases: { name: string; body: string; cwd: string; ancestors: Process[] }[] = [
+        { name: 'a runner the record does not name', body: WITH_RUNNER, cwd: v7, ancestors: WITHOUT_RUNNER },
+        { name: 'a caller under herdr whose ancestry carries the name', body: WITH_RUNNER, cwd: v7, ancestors: UNDER_HERDR },
+        { name: 'an expired record', body: recordWith(PAST, `runner: ${RUNNER}\n`), cwd: v7, ancestors: OUTSIDE_HERDR },
+        { name: 'a team outside the covered path', body: WITH_RUNNER, cwd: elsewhere, ancestors: OUTSIDE_HERDR },
+      ];
+      for (const one of cases) {
+        writeGrant(sb.home, 'beacon.yaml', one.body);
+        const io = walkIo(one.cwd, one.ancestors);
+        expect(await runStatus([], io, statusSources(sb.home)), one.name).toBe(2);
+        expect(io.err, one.name).toBe('team status: this team is not yours to read\n');
+        expect(io.out, one.name).toBe('');
+      }
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('down stops a covered team for the record\'s runner, and refuses every other stop', async () => {
+    const sb = makeSandbox();
+    try {
+      const v8 = join(sb.code, 'v8');
+      initGitRepo(v8);
+      mkdirSync(join(v8, '.agents'), { recursive: true });
+      writeFileSync(join(v8, '.agents', 'team.yaml'), fiveSeatTeam('beacon-v8', v8, sb.home));
+      const elsewhere = join(sb.home, 'Code', 'elsewhere');
+      initGitRepo(elsewhere);
+      mkdirSync(join(elsewhere, '.agents'), { recursive: true });
+      writeFileSync(join(elsewhere, '.agents', 'team.yaml'), fiveSeatTeam('elsewhere', elsewhere, sb.home));
+
+      writeGrant(sb.home, 'beacon.yaml', WITH_RUNNER);
+      const stopped = { n: 0 };
+      const granted = walkIo(v8, OUTSIDE_HERDR);
+      const code = await runDown([], granted, stopSources(sb.home, stopped));
+      expect(code, `${granted.err}${granted.out}`).toBe(0);
+      expect(stopped.n).toBe(1);
+      // Both sentences this run would otherwise carry are absent — the detached one, which a
+      // no-terminal caller meets before any file is read, and the placement one after it.
+      expect(granted.err).not.toContain('only the owner runs this, from a terminal outside herdr');
+      expect(granted.err).not.toContain('stops the team');
+
+      const detached = 'team down: only the owner runs this, from a terminal outside herdr\n';
+      const cases: { name: string; body: string; cwd: string; ancestors: Process[]; line: string }[] = [
+        { name: 'a runner the record does not name', body: WITH_RUNNER, cwd: v8, ancestors: WITHOUT_RUNNER, line: detached },
+        { name: 'an expired record', body: recordWith(PAST, `runner: ${RUNNER}\n`), cwd: v8, ancestors: OUTSIDE_HERDR, line: detached },
+        { name: 'a team outside the covered path', body: WITH_RUNNER, cwd: elsewhere, ancestors: OUTSIDE_HERDR, line: detached },
+        {
+          name: 'a caller under herdr whose ancestry carries the name',
+          body: WITH_RUNNER,
+          cwd: v8,
+          ancestors: UNDER_HERDR,
+          line: 'team down: only the owner, the orchestrator or the operator stops the team; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
+        },
+      ];
+      for (const one of cases) {
+        writeGrant(sb.home, 'beacon.yaml', one.body);
+        const io = walkIo(one.cwd, one.ancestors);
+        expect(await runDown([], io, stopSources(sb.home, stopped)), one.name).toBe(1);
+        expect(io.err, one.name).toBe(one.line);
+      }
+      // No refused run stopped anything: the count is the one admitted run's.
+      expect(stopped.n).toBe(1);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('add and remove reach their own work under the grant, and hold every other caller out', async () => {
+    const sb = makeSandbox();
+    try {
+      const v9 = join(sb.code, 'v9');
+      initGitRepo(v9);
+      mkdirSync(join(v9, '.agents'), { recursive: true });
+      writeFileSync(join(v9, '.agents', 'team.yaml'), fiveSeatTeam('beacon-v9', v9, sb.home));
+      const elsewhere = join(sb.home, 'Code', 'elsewhere');
+      initGitRepo(elsewhere);
+
+      writeGrant(sb.home, 'beacon.yaml', WITH_RUNNER);
+      // The record admits the run, which goes on to its own work: a granted caller meets neither
+      // the detached sentence nor the caller rule. `add` stops at its first herdr read, and
+      // `remove` takes the seat out of the file — no caller sentence on either way.
+      const addIo = walkIo(v9, OUTSIDE_HERDR);
+      expect(await runAdd(['builder-2'], addIo, addSources(sb.home)), `${addIo.err}${addIo.out}`).toBe(1);
+      expect(addIo.err).toBe('team add: herdr doesn\'t answer\n');
+
+      const stopped = { n: 0 };
+      const removeIo = walkIo(v9, OUTSIDE_HERDR);
+      expect(await runRemove(['builder-2'], removeIo, stopSources(sb.home, stopped)), `${removeIo.err}${removeIo.out}`).toBe(0);
+      expect(removeIo.err).not.toContain('only the owner');
+      const after = readFileSync(join(v9, '.agents', 'team.yaml'), 'utf8');
+      expect(after).not.toContain('builder-2');
+      expect(after).toContain('builder-1');
+
+      // The seat is put back for the scenes below: each of them refuses before any file read,
+      // so none may touch it.
+      const before = fiveSeatTeam('beacon-v9', v9, sb.home);
+      writeFileSync(join(v9, '.agents', 'team.yaml'), before);
+
+      // Every caller the record does not admit keeps today's lines, unchanged.
+      for (const one of [
+        { name: 'a runner the record does not name', cwd: v9, ancestors: WITHOUT_RUNNER },
+        { name: 'a team outside the covered path', cwd: elsewhere, ancestors: OUTSIDE_HERDR },
+      ]) {
+        const add = walkIo(one.cwd, one.ancestors);
+        expect(await runAdd(['builder-2'], add, addSources(sb.home)), one.name).toBe(1);
+        expect(add.err, one.name).toBe('team add: only the owner runs this, from a terminal outside herdr\n');
+        const remove = walkIo(one.cwd, one.ancestors);
+        expect(await runRemove(['builder-2'], remove, stopSources(sb.home, stopped)), one.name).toBe(1);
+        expect(remove.err, one.name).toBe('team remove: only the owner runs this, from a terminal outside herdr\n');
+      }
+
+      // Under herdr the record never admits, and the caller rule says so in its own words.
+      const under = walkIo(v9, UNDER_HERDR);
+      expect(await runAdd(['builder-2'], under, addSources(sb.home))).toBe(1);
+      expect(under.err).toBe(
+        'team add: only the owner, the orchestrator or the operator runs it; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
+      );
+      const underRemove = walkIo(v9, UNDER_HERDR);
+      expect(await runRemove(['builder-2'], underRemove, stopSources(sb.home, stopped))).toBe(1);
+      expect(underRemove.err).toBe(
+        'team remove: only the owner, the orchestrator or the operator runs it; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
+      );
+      // No run but the admitted removal had an effect: it stopped nothing (no live agent to
+      // stop), and no refused run read far enough to write.
+      expect(stopped.n).toBe(0);
+      expect(readFileSync(join(v9, '.agents', 'team.yaml'), 'utf8')).toBe(before);
     } finally {
       rmSync(sb.base, { recursive: true, force: true });
     }
