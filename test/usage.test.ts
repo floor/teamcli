@@ -1796,4 +1796,111 @@ describe('team usage', () => {
     writeFileSync(file, 'format: 1\nproject: acme\n');
     await untouched(watched, () => usageAt(root));
   });
+
+  test('a stored status-line reading from a seat that spends another lab is dropped from both labs, while a matching account row prints', async () => {
+    const text = `format: 1
+project: acme
+session: acme-web
+operator: lead
+trust:
+  - ~/.config/team/lobby
+  - ${root}
+workspace:
+  mode: shared
+budgets:
+  accounts:
+    anthropic:
+      kind: subscription
+      reserve: 10%
+      sources: [status_line]
+    deepseek:
+      kind: subscription
+      reserve: 10%
+      sources: [status_line]
+    openai-work:
+      kind: subscription
+      reserve: 10%
+      sources: [status_line]
+seats:
+  - role: orchestrator
+    name: lead
+    label: lead
+    leads: true
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: deepseek-acme
+    label: deepseek-acme
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Reasoner
+    version: "3.2"
+    launch: team-deepseek
+  - role: implementer
+    name: codex-work
+    label: codex-work
+    cli: codex
+    vendor: openai
+    account: openai-work
+    model: GPT Sol
+    version: "6"
+    launch: codex
+`;
+    writeFileSync(file, text);
+    approve(text);
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions['acme-web'] = { ...emptySession() } as never;
+      state.budgets = {
+        'anthropic/weekly/deepseek-acme': {
+          account: 'anthropic',
+          window: 'weekly',
+          left: 88,
+          used: 12,
+          changedAt: '2026-10-04T08:58:00Z',
+          resetsAt: '2026-10-04T09:44:00Z',
+          seat: 'deepseek-acme',
+          source: 'status_line',
+          confirmed: true,
+        },
+        'openai-work/weekly/codex-work': {
+          account: 'openai-work',
+          window: 'weekly',
+          left: 39,
+          used: 61,
+          changedAt: '2026-10-04T08:58:00Z',
+          resetsAt: '2026-10-04T09:44:00Z',
+          seat: 'codex-work',
+          source: 'status_line',
+          confirmed: true,
+        },
+      } as never;
+    });
+
+    const theirProject = 'zeta-4WX';
+    const theirRoot = join(base, theirProject);
+    mkdirSync(join(theirRoot, '.agents'), { recursive: true });
+    const theirText = teamTextFor(theirProject, ['zeta-only-3HMV'], '');
+    writeFileSync(join(theirRoot, '.agents', 'team.yaml'), theirText);
+    approve(theirText, { root: theirRoot, name: theirProject });
+
+    const seat = await usageAt(root, SEAT);
+    const owner = await usageAt(root, OWNER);
+    expect(seat.code).toBe(0);
+    expect(owner.code).toBe(0);
+
+    // Neither view attributes the host anthropic status-line reading from deepseek-acme to anthropic or deepseek.
+    for (const face of [seat.out, owner.out]) {
+      expect(face).toContain('anthropic  unknown\n  acme    unknown  pace not known\n');
+      expect(face).toContain('deepseek  unknown\n  acme    unknown  pace not known\n');
+      expect(face).toContain('openai-work  weekly  left 39%  used 61%  resets in 44m  codex-work  changed 2m ago  status line  fresh  pace not known');
+      expect(face).not.toContain('deepseek-acme');
+      expect(face).not.toContain('left 88%');
+      expect(face).not.toContain('not shown');
+    }
+    expect(seat.out).not.toContain(theirProject);
+    expect(owner.out).toContain(theirProject);
+  });
 });

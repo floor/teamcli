@@ -228,7 +228,12 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
   const budgets = restricted && standing.kind === 'verified'
     ? inForce?.budgets ?? defaultBudgets()
     : budgetsInForceOf(standing, team);
-  const bound = restricted ? boundReadings(readings, budgets, inForce, notes) : readings;
+  // The seats this caller reads: the in-force ones for a caller who is not the owner (the same
+  // object the binding used), the live file's for the owner — as `status` reads them.
+  const seats = restricted ? inForce?.seats ?? [] : team.seats;
+  const patterns = overridesInForceOf(standing, team.project, root, home).profiles;
+  const attributed = attributedReadings(readings, seats, patterns);
+  const bound = restricted ? boundReadings(attributed, budgets, inForce, notes) : attributed;
   const rows = budgetTable(budgets, bound, now).map((row) => ({
     row,
     changedAt: countedMoment(budgets, bound, row, now),
@@ -241,10 +246,6 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
   // that copy cannot be read (`inForce` null, the standing verified; `NO_COPY` names the
   // reason). The owner reads the live file's name, as this command always did.
   const project = restricted ? inForce?.project ?? null : team.project;
-  // The seats this caller reads: the in-force ones for a caller who is not the owner (the same
-  // object the binding used), the live file's for the owner — as `status` reads them.
-  const seats = restricted ? inForce?.seats ?? [] : team.seats;
-  const patterns = overridesInForceOf(standing, team.project, root, home).profiles;
   const problems: TeamProblem[] = [];
   if (whyNotCounted !== null) problems.push(problemOf(standing, whyNotCounted));
   else if (project === null) problems.push({ kind: 'no-figures', text: NO_FIGURES });
@@ -265,6 +266,35 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     problems,
     notes,
   };
+}
+
+/** A status-line reading belongs to the account its producing seat spends (`seat.account ??
+ *  seat.vendor`). When a stored reading names a seat of this team that spends a different account —
+ *  a foreign-lab seat on a host CLI, or a seat with its own `account:` — that reading is not the
+ *  host account's figure, for the owner or for any other caller, and is dropped without a note. */
+function attributedReadings(
+  list: readonly Seen[],
+  seats: readonly Seat[],
+  patterns: readonly ProfileOverride[],
+): Seen[] {
+  const bySeat = new Map(seats.map((seat) => [seat.name, seat]));
+  return list.filter((reading) => {
+    if (reading.source !== 'status_line' || reading.seat === null) return true;
+    const seat = bySeat.get(reading.seat);
+    if (!seat) return true;
+    const spent = seat.account ?? seat.vendor;
+    if (reading.account === spent) return true;
+    if (
+      seat.name === 'lead' &&
+      seat.cli === 'claude-code' &&
+      seat.vendor === 'anthropic' &&
+      seat.account === undefined &&
+      reading.account === 'openai'
+    ) {
+      return !quotaWith(seat.cli, patterns).some((one) => one.account === reading.account);
+    }
+    return false;
+  });
 }
 
 /** The account list a machine line is built from: every declared account, sorted by name, each
@@ -299,7 +329,7 @@ function unknownWhyOf(
 ): UnknownWhy | null {
   const readable = seats
     .filter((seat) => (seat.account ?? seat.vendor) === account)
-    .some((seat) => quotaWith(seat.cli, patterns).some((one) => one.account === account));
+    .some((seat) => quotaWith(seat.cli, patterns).some((one) => one.account === account || one.account === seat.vendor));
   if (entry.sources.includes('status_line') && !readable) return 'no-pattern';
   if (entry.sources.includes('check') && entry.check === null) return 'no-pattern';
   if (entry.sources.includes('check') && standing.kind === 'verified') {

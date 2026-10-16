@@ -376,10 +376,11 @@ export function pass({
   // The figures this pass saw, folded into the readings the project keeps (§ 4.3, § 4.4). Only an
   // account whose `sources` name `status_line` takes a screen reading: a check-only account never
   // records one here, and neither does an account the budgets in force don't name (#50). A figure
-  // names the account its pattern measures (§ 3b): one that measures this seat's vendor is this
-  // seat's account — its own `account:` when the file names one, so two accounts of one vendor
-  // keep two buckets — while a figure on another account (a launcher showing the vendor it really
-  // runs on) stays that account's, whichever seat's screen showed it.
+  // names the account its pattern measures (§ 3b), and counts only when that account is this
+  // seat's vendor (recorded under the seat's resolved account, so two accounts of one vendor keep
+  // two buckets) or is already this seat's resolved account. A figure for any other account — such
+  // as a host CLI's status row on a seat that spends another lab — is not recorded under either
+  // (docs/commands/usage.md).
   //
   // A seat the approval lists as changed — or as not in the approved file — is drift, and its
   // figures are read as they are but none is folded: an unapproved edit to its `account:` must
@@ -397,7 +398,8 @@ export function pass({
   for (const seat of observations) {
     if (!seat.running || drift.has(seat.name)) continue;
     for (const figure of seat.quota) {
-      const account = figure.account === seat.vendor ? seat.account : figure.account;
+      if (figure.account !== seat.vendor && figure.account !== seat.account) continue;
+      const account = seat.account;
       if (budgets.accounts[account]?.sources.includes('status_line')) {
         readings = observe(readings, { ...figure, account }, seat.name, now);
       }
