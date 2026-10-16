@@ -98,9 +98,13 @@ $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
 gpt-reviewer: delivered
 exit 0
 $ team feed ; echo "exit $?"
-09:00:00  owner -> gpt-reviewer  [delivered]  the gate is green
+09:00:00  owner -> gpt-reviewer  [delivered]  from the owner — admitted by: the owner
+          
+          the gate is green
 exit 0
 $ team feed --seat gpt-reviewer ; echo "exit $?"
-09:00:00  owner -> gpt-reviewer  [delivered]  the gate is green
+09:00:00  owner -> gpt-reviewer  [delivered]  from the owner — admitted by: the owner
+          
+          the gate is green
 exit 0
 ```
