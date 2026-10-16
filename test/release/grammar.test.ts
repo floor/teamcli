@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   GITHUB_PATTERN, LINEAR_PROJECT_PATTERN, PACKAGE_PATTERN, SEMVER_PATTERN, activityFileProblem, activityMarkerProblem,
-  hasPrerelease, keychainServiceProblem, packageProblem,
+  compareVersions, hasPrerelease, keychainServiceProblem, packageProblem,
 } from '../../src/release/grammar.ts';
 
 describe('the SemVer 2.0.0 grammar', () => {
@@ -25,6 +25,31 @@ describe('the SemVer 2.0.0 grammar', () => {
     expect(hasPrerelease('1.0.0-alpha.1+x-y')).toBe(true);
     expect(hasPrerelease('1.0.0')).toBe(false);
     expect(hasPrerelease('1.0.0+build-x')).toBe(false);
+  });
+});
+
+describe('the version precedence (SemVer 2.0.0 §11)', () => {
+  const cases: [string, string, number][] = [
+    ['1.2.3', '1.2.3', 0], ['1.2.3', '1.2.4', -1], ['1.2.3', '1.3.0', -1], ['1.2.3', '2.0.0', -1],
+    ['2.0.0', '1.9.9', 1], ['3.0.1', '3.0.2', -1], ['10.0.0', '9.0.0', 1],
+    // A prerelease is always lower than the release it precedes.
+    ['1.0.0-alpha', '1.0.0', -1], ['1.0.0', '1.0.0-rc.1', 1], ['1.0.0-rc.1', '1.0.0-rc.2', -1],
+    // Its fields decide in order: numeric before alphanumeric, numbers by value, more fields first.
+    ['1.0.0-1', '1.0.0-alpha', -1], ['1.0.0-2', '1.0.0-10', -1], ['1.0.0-alpha', '1.0.0-alpha.1', -1],
+    ['1.0.0-alpha.1', '1.0.0-alpha.beta', -1], ['1.0.0-beta.2', '1.0.0-beta.11', -1],
+    // Build metadata never decides.
+    ['1.0.0+build.1', '1.0.0+build.2', 0], ['1.0.0-alpha+001', '1.0.0-alpha', 0],
+    ['1.0.0-alpha+1', '1.0.0', -1],
+  ];
+  for (const [one, two, order] of cases) {
+    test(`${one} ${order === 0 ? 'equals' : order < 0 ? 'is below' : 'is above'} ${two}`, () => expect(compareVersions(one, two)).toBe(order));
+  }
+
+  test('a string that is not a version decides nothing', () => {
+    expect(compareVersions('v1.2.3', '1.2.3')).toBeNull();
+    expect(compareVersions('1.2.3', 'latest')).toBeNull();
+    expect(compareVersions('', '1.2.3')).toBeNull();
+    expect(compareVersions('1.0.0', '3.0.2\n')).toBeNull();
   });
 });
 

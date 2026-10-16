@@ -857,6 +857,34 @@
     },
     {
       "code": 0,
+      "command": "delegate",
+      "id": "delegate.done",
+      "meaning": "the authority record was updated, already matched, or passed a write-free preview",
+      "trigger": "team delegate <session/pane> --commands up,down"
+    },
+    {
+      "code": 1,
+      "command": "delegate",
+      "id": "delegate.refused",
+      "meaning": "the caller is not the owner, the file changed during the edit, or the write failed",
+      "trigger": "team delegate <session/pane> --commands up,down"
+    },
+    {
+      "code": 2,
+      "command": "delegate",
+      "id": "delegate.invalid",
+      "meaning": "the team file or proposed authority record is invalid or cannot be read",
+      "trigger": "team delegate <session/pane> --commands up,down"
+    },
+    {
+      "code": 2,
+      "command": "delegate",
+      "id": "delegate.invocation",
+      "meaning": "the command arguments are invalid",
+      "trigger": "team delegate <session/pane> --commands up,down"
+    },
+    {
+      "code": 0,
       "command": "doctor",
       "id": "doctor.clear",
       "meaning": "nothing is missing",
@@ -1134,6 +1162,104 @@
       "id": "feed.usage",
       "meaning": "the invocation can't be read",
       "trigger": "team feed extra"
+    },
+    {
+      "code": 0,
+      "command": "grant",
+      "id": "grant.done",
+      "meaning": "the authority record was updated, already matched, or passed a write-free preview",
+      "trigger": "team grant lead --scope up,down"
+    },
+    {
+      "code": 1,
+      "command": "grant",
+      "id": "grant.refused",
+      "meaning": "the caller is not the owner, the file changed during the edit, or the write failed",
+      "trigger": "team grant lead --scope up,down"
+    },
+    {
+      "code": 2,
+      "command": "grant",
+      "id": "grant.invalid",
+      "meaning": "the team file or proposed authority record is invalid or cannot be read",
+      "trigger": "team grant lead --scope up,down"
+    },
+    {
+      "code": 2,
+      "command": "grant",
+      "id": "grant.invocation",
+      "meaning": "the command arguments are invalid",
+      "trigger": "team grant lead --scope up,down"
+    },
+    {
+      "code": 0,
+      "command": "hold",
+      "id": "hold.placed",
+      "meaning": "the hold was placed",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 0,
+      "command": "hold",
+      "id": "hold.released",
+      "meaning": "the hold was released",
+      "trigger": "team hold --release"
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.caller",
+      "meaning": "not the owner, the orchestrator or the operator",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.held",
+      "meaning": "a hold already stands",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.io",
+      "meaning": "the state can't be read or written",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.not-held",
+      "meaning": "no hold stands",
+      "trigger": "team hold --release"
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.until",
+      "meaning": "--until is not a clock or an instant",
+      "trigger": "team hold \"freeze deploys\" --until tomorrow"
+    },
+    {
+      "code": 2,
+      "command": "hold",
+      "id": "hold.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 2,
+      "command": "hold",
+      "id": "hold.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team hold"
     },
     {
       "code": 0,
@@ -1680,6 +1806,97 @@
       "id": "pr.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team pr check body.md"
+    },
+    {
+      "code": 0,
+      "command": "proc",
+      "id": "proc.added",
+      "meaning": "the process was recorded",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 0,
+      "command": "proc",
+      "id": "proc.done",
+      "meaning": "the record was cleared",
+      "trigger": "team proc done build"
+    },
+    {
+      "code": 0,
+      "command": "proc",
+      "id": "proc.listed",
+      "meaning": "the live records were listed",
+      "trigger": "team proc list"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.caller",
+      "meaning": "the caller is no seat of this team and not the owner",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.other-seat",
+      "meaning": "another seat's record, which the caller may not clear",
+      "trigger": "team proc done build"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.pid",
+      "meaning": "the pid is not running",
+      "trigger": "team proc add build --pid 4243"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.taken",
+      "meaning": "another seat holds the name, with its process live",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.unknown",
+      "meaning": "no record holds that name",
+      "trigger": "team proc done build"
+    },
+    {
+      "code": 2,
+      "command": "proc",
+      "id": "proc.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 2,
+      "command": "proc",
+      "id": "proc.file-invalid",
+      "meaning": "the team file can't be parsed",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 2,
+      "command": "proc",
+      "id": "proc.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team proc"
+    },
+    {
+      "code": 2,
+      "command": "proc",
+      "id": "proc.not-yours",
+      "meaning": "the caller may not read this team",
+      "trigger": "team proc list"
     },
     {
       "code": 0,
@@ -2271,6 +2488,34 @@
     },
     {
       "code": 0,
+      "command": "revoke",
+      "id": "revoke.done",
+      "meaning": "the authority record was updated, already matched, or passed a write-free preview",
+      "trigger": "team revoke grant"
+    },
+    {
+      "code": 1,
+      "command": "revoke",
+      "id": "revoke.refused",
+      "meaning": "the caller is not the owner, the file changed during the edit, or the write failed",
+      "trigger": "team revoke grant"
+    },
+    {
+      "code": 2,
+      "command": "revoke",
+      "id": "revoke.invalid",
+      "meaning": "the team file or proposed authority record is invalid or cannot be read",
+      "trigger": "team revoke grant"
+    },
+    {
+      "code": 2,
+      "command": "revoke",
+      "id": "revoke.invocation",
+      "meaning": "the command arguments are invalid",
+      "trigger": "team revoke grant"
+    },
+    {
+      "code": 0,
       "command": "seats",
       "id": "seats.shown",
       "meaning": "the seats table was printed",
@@ -2372,6 +2617,13 @@
       "command": "send",
       "id": "send.held",
       "meaning": "the message is on disk and the pane was left untouched",
+      "trigger": "team send worker hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
+      "id": "send.not-submitted",
+      "meaning": "the trigger was typed and the seat never took it",
       "trigger": "team send worker hello"
     },
     {

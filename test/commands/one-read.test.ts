@@ -218,7 +218,7 @@ describe('one read of the approval store per command', () => {
     expect(gate.reads()).toBe(1);
   });
 
-  test('status: one gate, and the table and the note hold its values', async () => {
+  test('status: one gate, and the table holds its values', async () => {
     const gate = gateThenPoison();
     const io = testIo(project, owner);
     const code = await runStatus(['--file', file, '--json'], io, {
@@ -230,7 +230,6 @@ describe('one read of the approval store per command', () => {
     } satisfies StatusSources);
     expect(code).toBe(1); // the session is down: every seat is missing
     const doc = JSON.parse(io.out);
-    expect(doc.notes.some((note: string) => note.startsWith('approval #1 (2026-10-04)'))).toBe(true);
     // The gate's budgets are in the table: the account the owner approved is a row.
     expect(doc.budgets?.map((row: { account: string }) => row.account)).toEqual(['openai']);
     expect(gate.reads()).toBe(1);

@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
+import { processNameMatches } from '../clis.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
@@ -9,6 +10,8 @@ import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { findRoot, loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
+import { getTeam, noteTeam, teamIdOf } from '../registry/teams.ts';
+import { registerEnd, registerSessionEnd } from '../registry/sync.ts';
 import {
   agentList,
   agentStatus,
@@ -170,7 +173,7 @@ export default down;
 // The seat has left when no foreground process is its CLI. An unreadable list keeps the wait.
 export function paneStillRunning(foreground: readonly string[] | null, processNames: readonly string[]): boolean {
   if (!foreground) return true;
-  return foreground.some((name) => processNames.includes(name));
+  return foreground.some((name) => processNameMatches(name, processNames));
 }
 
 /**
@@ -612,6 +615,31 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const remember = (): void => {
     if (mayRemember && current.path !== undefined) rememberCurrent(current.dir, current.path, sources.now());
   };
+  // The registry says the team is stopped once its session is, in the run an allowed caller made:
+  // never a dry run, never a refused caller, and never a session other than the one the registry
+  // addresses the team in. That is the session the last launch recorded (`up --session x` records
+  // `x`), the file's own while the team has no record. The record keeps the session the run
+  // acted on. The registry is the user-level home the run was given; a run given none leaves it alone.
+  const noteStopped = (): void => {
+    if (dry || callerRefused || abandonRefused || sources.home === undefined) return;
+    let addressed = team.session;
+    try {
+      addressed = getTeam(sources.home, teamIdOf(root))?.session ?? team.session;
+    } catch {
+      // A registry that cannot be read is said by the write below, which reads it again.
+    }
+    if (session !== addressed) return;
+    const unrecorded = noteTeam(sources.home, root, { ...team, session }, 'stopped', describeCaller(caller));
+    if (unrecorded) io.stderr(`team down: ${unrecorded}\n`);
+  };
+  // A session found already stopped has no agent left in it: the registry's agents that were
+  // launched there are stopped, with their panes cleared. A seat closed by the run below is
+  // ended one by one as it is dropped, so a seat left running is never marked stopped.
+  const noteSessionEmpty = (): void => {
+    if (dry || callerRefused || abandonRefused || sources.home === undefined) return;
+    const unrecorded = registerSessionEnd({ home: sources.home, team, root, by: describeCaller(caller), session });
+    if (unrecorded) io.stderr(`team down: ${unrecorded.note}\n`);
+  };
 
   const running = sources.sessionRunning(session);
   if (running === null) {
@@ -623,6 +651,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if (!running && grantRefusal === undefined) {
     io.stdout(`session ${session} is not running: nothing to stop${dry ? '\ndry run: nothing was run' : ''}\n`);
     remember();
+    noteStopped();
+    noteSessionEmpty();
     // exit: down.idle
     return 0;
   }
@@ -975,10 +1005,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       running() {},
       drop(name) {
         let pane: string | undefined;
+        let temporaryDropped = false;
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[name];
           pane = prior?.pane;
+          temporaryDropped = Boolean(prior?.temporary);
           if (prior?.id && !prior.temporary) {
             (current.retained_seats ??= {})[name] = {
               id: prior.id,
@@ -988,11 +1020,21 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           delete current.seats[name];
         });
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
+        // The registry: the seat's agent ends with its pane. A temporary seat is gone for good.
+        if (sources.home !== undefined) {
+          const ended = registerEnd(
+            { home: sources.home, team, root, by: describeCaller(caller), session },
+            name,
+            temporaryDropped ? 'retired' : 'stopped',
+          );
+          if (ended) io.stderr(`team down: ${ended.note}\n`);
+        }
       },
       say: (line) => io.stdout(line),
       log: (who, what) => logLine(dir, 'down', describeCaller(caller), `${who}: ${what}`, now()),
     };
     const report = await executePlan(plan, session, host);
+    if (!report.held) noteStopped();
     // exit: down.stopped
     // exit: down.held
     return report.held ? 1 : 0;

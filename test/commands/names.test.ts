@@ -20,6 +20,10 @@ import { createRepository, type Repository } from '../check/repository.ts';
 const NOTICE = 'team check: `team check` is now `team commits check`, and is still read through 0.3.3\n';
 const TWIN = 'team check: `team check --pr` is now `team pr check`, and is still read through 0.3.3\n';
 
+/** A standing the verification refused: it still says what it is, and still carries the
+ *  approval repair. A machine with no record at all carries neither. */
+const REFUSED_WHY = 'the record is signed, but its key is missing';
+
 /** The usage block an old spelling's refusal prints: the tail of the export, where the combined
  *  text keeps it byte for byte. */
 const OLD_USAGE = CHECK_USAGE.slice(CHECK_USAGE.indexOf('Usage: team check <ref>'));
@@ -144,15 +148,34 @@ describe('the old spelling is the new run, one notice line first', () => {
         home,
       });
       expect(ran.code).toBe(1);
+      // A machine that never approved the file carries no row and marks no repair: the report is
+      // the file's state alone.
       expect(ran.stdout).toBe(
-        'difference: the file was never approved on this machine\n' +
+        'difference: lead is in the file and is not running\n' +
+          '  repair: the owner runs team up\n' +
+          'team check: 1 difference(s), 1 for the owner\n' +
+          'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n',
+      );
+      expect(ran.stderr).toBe('');
+      // A standing that still says something keeps its row first, and the row marks the repairs
+      // that wait on it.
+      const refused = await runCheck(folder, [], {
+        live: () => ({ running: false, agents: [], workspaces: [], screens: {} }),
+        branch: () => 'main',
+        standing: () => ({ kind: 'refused', why: REFUSED_WHY }),
+        now: () => new Date(0),
+        home,
+      });
+      expect(refused.code).toBe(1);
+      expect(refused.stdout).toBe(
+        `difference: ${REFUSED_WHY}\n` +
           '  repair: the live file is what the commands read\n' +
           'difference: lead is in the file and is not running\n' +
           '  repair: the owner runs team up (after: the live file is what the commands read)\n' +
           'team check: 2 difference(s), 2 for the owner\n' +
           'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n',
       );
-      expect(ran.stderr).toBe('');
+      expect(refused.stderr).toBe('');
     } finally {
       rmSync(folder, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });

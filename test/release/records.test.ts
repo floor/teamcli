@@ -455,14 +455,16 @@ describe('the activity check', () => {
 });
 
 describe('the budget with the two reads added', () => {
-  test('the maximal configured run is thirteen reads and twenty-six attempts, each once retried', async () => {
-    // Every endpoint of a full configured run — trusted publishing, a chain of four tag objects,
-    // the Linear and activity reads — each answered 500 then 200: thirteen reads, two attempts.
+  test('the maximal configured run is fourteen reads and twenty-eight attempts, each once retried', async () => {
+    // Every endpoint of a full configured run — trusted publishing, the dist-tags document, a
+    // chain of four tag objects, the Linear and activity reads — each answered 500 then 200:
+    // fourteen reads, two attempts.
     const shas = ['b', 'c', 'd', 'e'].map((letter) => letter.repeat(40));
     const chain = [TAG_OBJECT, ...shas];
     const ok = new Map<string, Record<string, unknown>>([
       [URLS.npm, fixture('npm-version.json')],
       [URLS.attest, fixture('npm-attestations.json')],
+      [URLS.tags, { latest: '3.0.2', next: '3.0.2' }],
       [URLS.repo, fixture('github-repo.json')],
       [URLS.ref, fixture('github-tag-ref-annotated.json')],
       [URLS.release, fixture('github-release.json')],
@@ -479,17 +481,18 @@ describe('the budget with the two reads added', () => {
     const answers: Answers = new Map(urls.map((url) => [url, [json({}, 500), json(ok.get(url) as Record<string, unknown>)]]));
     const { result, requested } = await run(answers);
     expect(new Set(requested)).toEqual(new Set(urls));
-    expect(urls.length).toBe(13);
-    expect(requested.length).toBe(26);
-    for (const outcome of Object.values(result)) expect(outcome.status).toBe('pass');
+    expect(urls.length).toBe(14);
+    expect(requested.length).toBe(28);
+    expect(result.warning).toBeUndefined();
+    for (const outcome of Object.values(result)) if (typeof outcome !== 'string') expect(outcome.status).toBe('pass');
   });
 
   test('a cap that prevents the Linear or activity read makes that check unknown, and the key is never read', async () => {
-    // Seven reads cover everything before the two new ones in a passing run's shape (npm, attest,
-    // repo, ref, compare, release, changelog = 7; the eighth would be Linear's). The exhausted
+    // Eight reads cover everything before the two new ones in a passing run's shape (npm, attest,
+    // tags, repo, ref, compare, release, changelog = 8; the ninth would be Linear's). The exhausted
     // read cap is a non-secret prerequisite: the budget cannot make the request, so the Keychain
     // must not be touched at all — zero key-reader calls, zero Linear requests.
-    const { result, requested, keyCalls } = await run(happyRecords(), { caps: { reads: 7, attempts: 26 } });
+    const { result, requested, keyCalls } = await run(happyRecords(), { caps: { reads: 8, attempts: 28 } });
     expect(keyCalls).toEqual([]);
     expect(requested).not.toContain(URLS.linear);
     expect(requested).not.toContain(URLS.activity);
@@ -500,7 +503,7 @@ describe('the budget with the two reads added', () => {
   test('an exhausted attempt cap stops the Linear read before the key is read', async () => {
     // The read cap still allows the read, but every attempt the run could make is already spent:
     // the request cannot be sent, so the Keychain is not read — zero calls, zero requests.
-    const { result, requested, keyCalls } = await run(happyRecords(), { caps: { reads: 13, attempts: 7 } });
+    const { result, requested, keyCalls } = await run(happyRecords(), { caps: { reads: 13, attempts: 8 } });
     expect(keyCalls).toEqual([]);
     expect(requested).not.toContain(URLS.linear);
     expect(result.linear).toEqual({ status: 'unknown', detail: 'Linear record could not be read' });
