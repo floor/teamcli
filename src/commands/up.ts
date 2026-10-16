@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
-import { callerLabel, callerOf, describeCaller, detachedRefusal, mayLaunchSeats, walkCaller } from '../caller.ts';
-import { delegateGate, logDelegated } from '../delegate.ts';
+import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
+import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
 import { grantGate, logGranted } from '../grant.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
@@ -386,6 +386,8 @@ function seatPlan(
   processes: Readonly<Record<string, PaneProcesses | null>> = {},
   screenOf: (pane: string) => string | null = () => null,
   owner = true,
+  /** Dev-mode mount: a message seat's rules come from the live file, with no approval in force. */
+  liveRules = false,
 ): UpSeat {
   const planned: UpSeat = {
     name: seat.name,
@@ -396,6 +398,7 @@ function seatPlan(
     displayAgent: displayAgent(seat),
     model: seat.model,
     version: seat.version,
+    ...(seat.effort ? { effort: seat.effort } : {}),
     // The team file's own repair for this seat — a lead seat is told only the whole-team
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
@@ -403,7 +406,7 @@ function seatPlan(
     // An option seat's rules keep coming from the live file, as main's launch line does; a
     // message seat's file and line are the approved copy's, whatever the live file says now.
     rules: rulesOf(team, seat, root),
-    ...seatDeliveryOf(standing, team, seat, root, home),
+    ...seatDeliveryOf(standing, team, seat, root, home, liveRules),
   };
   const known = agents ?? [];
   const asked = agents !== null;
@@ -571,6 +574,74 @@ function restartNote(
   return {};
 }
 
+/** The live file names this caller for `up`: the grant seat, on the pane the state records. */
+function grantAdmitsUp(team: TeamFile, io: Io, dir: string): boolean {
+  const grant = team.grant;
+  if (!grant || !grant.scope.includes('up')) return false;
+  const caller = callerOf(io, grant.session);
+  return callerVerdict(caller, grant.seat, standingOf(dir, grant.session, caller)).kind === 'ok';
+}
+
+/** A caller who is not the owner and is not named for `up`. Stderr is the word `deny`. */
+function denyUp(out: { stderr(text: string): void }): number {
+  out.stderr('deny\n');
+  // exit: up.deny
+  // exit: up.delegate
+  // exit: up.delegate-approval
+  // exit: up.delegate-approved-copy
+  // exit: up.delegate-drift
+  // exit: up.delegate-evidence
+  // exit: up.delegate-placement
+  // exit: up.delegate-command
+  // exit: up.grant-another-pane
+  // exit: up.grant-approval
+  // exit: up.grant-approved-copy
+  // exit: up.grant-caller
+  // exit: up.grant-drift
+  // exit: up.grant-no-pane
+  // exit: up.grant-scope
+  return 1;
+}
+
+/** Doctor's never-approved line. The other two non-verified cases share `notInForce`'s text. */
+const NEVER_APPROVED_DOCTOR = 'run `team approve`: this file was never approved on this machine';
+
+/** Pulls the dev-mode warnings out of `refusals` and joins them into the one line. */
+function devWarningLine(refusals: string[], standing: Standing, caller: Caller): string {
+  const placement = `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+  const mismatches = new Set(
+    refusals.map(approvedCopyMismatch).filter((inner): inner is string => inner !== null),
+  );
+  const kept: string[] = [];
+  const warnings: string[] = [];
+  for (const line of refusals) {
+    if (devModeWarning(line, standing, placement, mismatches)) warnings.push(line);
+    else kept.push(line);
+  }
+  refusals.splice(0, refusals.length, ...kept);
+  return [...new Set(warnings)].join('; ');
+}
+
+/** The approved-copy mismatch `up` itself says. A grant or a delegation says the same words
+ *  after its own prefix, and those stay refusals. The returned text is the parenthetical. */
+function approvedCopyMismatch(line: string): string | null {
+  const prefix = 'the file is not the approved one (';
+  const suffix = '): run `team approve`';
+  if (!line.startsWith(prefix) || !line.endsWith(suffix)) return null;
+  return line.slice(prefix.length, line.length - suffix.length);
+}
+
+function devModeWarning(line: string, standing: Standing, placement: string, mismatches: ReadonlySet<string>): boolean {
+  if (line === placement) return true;
+  if (approvedCopyMismatch(line) !== null) return true;
+  // Doctor says the same mismatch as `run \`team approve\`: <differences>`, and that miss
+  // blocks the launch on its own. It joins the warning; it is not a second refusal.
+  if (standing.kind === 'verified' && mismatches.has(line.slice('run `team approve`: '.length))) return true;
+  if (standing.kind === 'verified') return false;
+  if (line === notInForce(standing)) return true;
+  return standing.kind === 'none' && line === NEVER_APPROVED_DOCTOR;
+}
+
 export async function runUp(argv: string[], io: Io, sources: UpSources): Promise<number> {
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
@@ -582,6 +653,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     return 2;
   }
   const dry = args.flags.has('dry-run');
+  // Set to exactly `1`. Anything else, including unset, leaves every refusal where it is.
+  const dev = io.env.TEAMCLI_DEV_MODE === '1';
   // §RFC0007: a caller the ordinary rule refuses is judged by the delegate gate against the
   // DEFAULT live file of this cwd, read with no flag — before any `--file` or `--session` is
   // honoured. Both are the owner's alone: the gate refuses them for a delegated run, and a
@@ -649,10 +722,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.grant-flag
     return 1;
   }
-  if (!mayLaunchSeats(walked) && aimed && verdict === null && grantRefusal === null) {
-    out.stderr(
-      `team up: only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(walked)}\n`,
-    );
+  // Dev mode does not return here: the file is mounted, and the same sentence is a warning below.
+  if (!mayLaunchSeats(walked) && aimed && verdict === null && grantRefusal === null && !dev) {
+    out.stderr('deny\n');
     // exit: up.not-owner
     return 1;
   }
@@ -718,23 +790,28 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     upFp !== undefined &&
     ownerAuthorized(io.env, upFp);
 
+  // The owner, or the seat the live file names for `up`. A missing approval record does not refuse.
+  const named =
+    mayLaunchSeats(caller) ||
+    ownerToken ||
+    grantedSeat !== null ||
+    delegated !== null ||
+    grantAdmitsUp(team, io, dir) ||
+    delegateNamedFor(team, 'up', io);
+
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
   if (detached !== undefined) {
     refusals.push(detached);
-  } else if (!mayLaunchSeats(caller) && !ownerToken && grantedSeat === null) {
-    if (grantRefusal !== null) {
-      refusals.push(grantRefusal);
-    } else if (verdict === null) {
-      refusals.push(
-        `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
-      );
-    } else if (verdict.kind === 'refused') {
-      refusals.push(verdict.text);
-    }
+  } else if (!named) {
+    // Dev mode mounts and says the placement as a warning. Anyone else is denied.
+    if (!dev) return denyUp(out);
+    refusals.push(`only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
   }
-  if (standing.kind !== 'verified') refusals.push(notInForce(standing));
-  else {
+  if (standing.kind === 'none') {
+    if (dev) refusals.push(notInForce(standing));
+  } else if (standing.kind !== 'verified') refusals.push(notInForce(standing));
+  else if (standing.kind === 'verified') {
     const differences = approvalDifferencesOf(standing, team);
     if (differences.length) {
       refusals.push(`the file is not the approved one (${differences.join('; ')}): run \`team approve\``);
@@ -751,6 +828,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const findings = doctorFindings(team, root, dir, session, sources.doctor, loaded.warnings, standing);
     for (const finding of findings) {
       if (!blocksLaunch(finding)) continue;
+      if (!dev && (finding.text.includes('team approve') || finding.text.includes('never approved'))) continue;
       if (finding.text.includes(' is read at start by ')) startupReadRefusals.push(finding.text);
       else refusals.push(finding.text);
     }
@@ -887,6 +965,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // A passed delegation is not the owner, pane or seat. Every other caller keeps today's
       // reading: anyone but a seat.
       delegated === null && caller.kind !== 'seat',
+      dev,
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
@@ -1036,8 +1115,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     }
   };
 
+  // Dev mode says the no-approval lines and the caller-placement line once, as a warning,
+  // and mounts. Every other refusal stays a refusal. Unset, the list is unchanged.
+  const warning = dev ? devWarningLine(refusals, standing, caller) : '';
+
   if (dry) {
     stampLobbyTrust(false);
+    if (warning) out.stdout(`! warning: ${plainText(warning)}\n`);
     // The same cause can reach the list twice — the gate and `doctor` both read the
     // approval — so a refusal is said once. A refusal leaves through the real run's
     // return below, so the status and the exit id are that refusal's; the words stay these.
@@ -1045,21 +1129,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     out.stdout(plainText(formatPlan(buildPlan())));
   }
   if (refusals.length) {
-    if (!dry) for (const refusal of [...new Set(refusals)]) out.stderr(`team up: ${plainText(refusal)}\n`);
-    // exit: up.delegate
-    // exit: up.delegate-approval
-    // exit: up.delegate-approved-copy
-    // exit: up.delegate-drift
-    // exit: up.delegate-evidence
-    // exit: up.delegate-placement
-    // exit: up.delegate-command
-    // exit: up.grant-another-pane
-    // exit: up.grant-approval
-    // exit: up.grant-approved-copy
-    // exit: up.grant-caller
-    // exit: up.grant-drift
-    // exit: up.grant-no-pane
-    // exit: up.grant-scope
+    if (!dry) {
+      if (warning) out.stderr(`team up: warning: ${plainText(warning)}\n`);
+      for (const refusal of [...new Set(refusals)]) out.stderr(`team up: ${plainText(refusal)}\n`);
+    }
     // exit: up.never-approved
     // exit: up.differs
     // exit: up.doctor
@@ -1071,6 +1144,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.placement
     return 1;
   }
+  if (!dry && warning) out.stderr(`team up: warning: ${plainText(warning)}\n`);
   if (dry) {
     // exit: up.dry-run
     return 0;
@@ -1190,7 +1264,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       deliverRules: async (session, pane, cli, file, seconds) => {
         // The rules go to the file first; nothing is typed until it holds them. The writer
         // builds the path itself, from the approval in force and the seat's name.
-        const written = writeRulesFile(standing, file.seat, root, sources.home, file.text, rulesFileHash(file.text));
+        const written = writeRulesFile(
+          standing,
+          file.seat,
+          root,
+          sources.home,
+          file.text,
+          rulesFileHash(file.text),
+          undefined,
+          dev && standing.kind !== 'verified' ? team.project : undefined,
+        );
         if (!written.ok) return fileRefusalOf(written);
         // The plan already refused a path that can't be typed; this is the same check again, so a
         // path that reached this far by a caller's mistake is refused before anything is typed.
@@ -1258,12 +1341,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           const retained = current.retained_seats?.[name];
           if (current.retained_seats?.[name]) delete current.retained_seats[name];
           const id = prior.id ?? retained?.id ?? mintSeatId();
-          const declared = team.seats.find((seat) => seat.name === name);
+          const isSkipReady = current.seats[name]?.stage === 'ready' && patch.stage === 'ready';
+          const declared = isSkipReady ? undefined : team.seats.find((seat) => seat.name === name);
           // The CLI the seat was launched with: `down` needs it when the file no longer names the seat.
-          const cli = declared?.cli ?? prior.cli;
+          const cli = team.seats.find((seat) => seat.name === name)?.cli ?? prior.cli;
           const model = declared?.model ?? prior.model;
           const version = declared?.version ?? prior.version;
-          const effort = declared?.effort ?? prior.effort;
+          const effort = declared ? declared.effort : prior.effort;
           const launch_line = declared?.launch ?? prior.launch_line;
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
@@ -1278,7 +1362,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
             }
           }
           // `waiting: null` removes the field alone; anything else written replaces it.
-          const { waiting: written, ...rest } = patch;
+          // `effort: null` is a launch that set no word: the stored word goes with it.
+          const { waiting: written, effort: patchedEffort, ...rest } = patch;
           const seat: SeatState = {
             ...prior,
             ...rest,
@@ -1293,6 +1378,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           };
           if (written === null) delete seat.waiting;
           else if (written) seat.waiting = written;
+          if (patchedEffort === null) delete seat.effort;
+          else if (patchedEffort !== undefined) seat.effort = patchedEffort;
           current.seats[name] = seat;
           if (patch.pane) {
             replaced = prior.pane !== patch.pane ? prior.pane : undefined;

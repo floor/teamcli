@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalDifferences, watchInForce } from '../src/approve/approval.ts';
 import { compare, describe as describeDifference, fingerprints, OWNER_SECTIONS, WATCH_CHECKS_CHANGED } from '../src/approve/fingerprint.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';

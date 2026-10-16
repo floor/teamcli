@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fingerprints } from '../src/approve/fingerprint.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { listFolder } from '../src/file/landing.ts';

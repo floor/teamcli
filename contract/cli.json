@@ -138,47 +138,6 @@
       "flags": [
         {
           "hidden": false,
-          "name": "--confirm",
-          "repeatable": false,
-          "takesValue": false
-        },
-        {
-          "hidden": false,
-          "name": "--file",
-          "repeatable": false,
-          "takesValue": true
-        },
-        {
-          "hidden": false,
-          "name": "--help",
-          "repeatable": false,
-          "takesValue": false
-        },
-        {
-          "hidden": false,
-          "name": "--show",
-          "repeatable": false,
-          "takesValue": false
-        },
-        {
-          "hidden": true,
-          "name": "-h",
-          "repeatable": false,
-          "takesValue": false
-        }
-      ],
-      "hidden": false,
-      "name": "approve",
-      "positionals": [],
-      "subcommands": [],
-      "usage": [
-        "team approve [--show] [--confirm] [--file <path>]"
-      ]
-    },
-    {
-      "flags": [
-        {
-          "hidden": false,
           "name": "--ask",
           "repeatable": false,
           "takesValue": true
@@ -973,6 +932,41 @@
       ],
       "usage": [
         "team release check <package@version> [--json] [--file <path>]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "reload",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team reload <seat> [--file <path>]"
       ]
     },
     {

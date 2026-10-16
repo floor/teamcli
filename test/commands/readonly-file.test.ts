@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { placeCaller, type Caller, type CallerSources } from '../../src/caller.ts';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { loadConfig } from '../../src/commands/check.ts';
 import { commits } from '../../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
