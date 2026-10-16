@@ -153,6 +153,10 @@ type Aim = {
 };
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
+  // Send to outcome is measured from here: this command's own handling, the same span the
+  // daemon measures from its handler. The host's clock, not the wall clock: a fixed clock in
+  // a test or the docs runner then reads a fixed millisecond count.
+  const startedAt = host.now().getTime();
   const args = readArgs(argv, ['file', 'timeout'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
   const report: Report = { json: args.flags.has('json'), seat: seatName ?? null, sent: null };
@@ -277,7 +281,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return refuse(io, dir, who, `${to.seat} runs ${to.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`, host, report);
   }
   if (wait && to.cli === 'claude-code') {
-    return deliverSocket(io, dir, who, from, to, body, dry, timeoutS, host, report);
+    return deliverSocket(io, dir, who, from, to, body, dry, timeoutS, host, report, startedAt);
   }
 
   // A plain send, every seat: the body is never typed. It is written whole to a 0600 drop
@@ -302,7 +306,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // and the outcome line keeps the reason it fell (delivered (typed, socket <reason>)).
   let socketNote: string | null = null;
   if (to.cli === 'claude-code') {
-    const attempt = await deliverSocketFrame(dir, who, from, to, body, msgId, host, report);
+    const attempt = await deliverSocketFrame(dir, who, from, to, body, msgId, host, report, startedAt);
     if (attempt.kind === 'done') return delivered(io, to.seat, report, 'socket');
     socketNote = `typed, socket ${attempt.reason}`;
     logLine(dir, 'send', who, `${to.seat}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
@@ -321,15 +325,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const found: Found = to.pane !== null ? { ok: true, pane: to.pane } : findAgent(host, to.session, to.seat);
   if (!found.ok) {
     if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable' });
+    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
     return unreachable(io, dir, who, to.seat, found.reason, host, report);
   }
   if (isBareShellPane(to.dir, to.session, to.seat, host.processInfo(to.session, found.pane))) {
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable' });
+    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
     return unreachable(io, dir, who, to.seat, 'the seat is back at its shell; nothing was typed', host, report);
   }
   report.sent = msgId;
-  return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, msgId, body, trigger, host, report, socketNote ?? undefined);
+  return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, msgId, body, trigger, host, report, startedAt, socketNote ?? undefined);
 }
 
 function finishDaemonSend(
@@ -373,6 +377,8 @@ async function deliverSocket(
   timeoutS: number,
   host: SendHost,
   report: Report,
+  /** When this run started: the ms the outcome's history entry carries is measured from it. */
+  startedAt: number,
 ): Promise<number> {
   // One JSON line, exactly the frame the probe measured: `type:"user"`, the content, and a
   // msg_id for a reader's own correlation. No `from`: this process has no session socket, so
@@ -406,18 +412,18 @@ async function deliverSocket(
   const found: Found = to.pane !== null ? { ok: true, pane: to.pane } : findAgent(host, to.session, to.seat);
   if (!found.ok) {
     if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable' });
+    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
     return unreachable(io, dir, who, to.seat, found.reason, host, report);
   }
   const pane = found.pane;
   const processes = host.processInfo(to.session, pane);
   if (processes === null) {
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable' });
+    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
     return unreachable(io, dir, who, to.seat, "the pane's processes could not be read", host, report);
   }
   const socketPath = to.address ?? socketOf(host, processes);
   if (socketPath === null) {
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable' });
+    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
     return unreachable(io, dir, who, to.seat, `no cross-session socket was found for its pane's processes (looked in ${socketDirs(host)})`, host, report);
   }
 
@@ -441,7 +447,7 @@ async function deliverSocket(
     try {
       const taken = await host.deliver(socketPath, frame);
       if (!taken.ok) {
-        appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable' });
+        appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt, via: 'socket' });
         return unreachable(io, dir, who, to.seat, taken.reason, host, report);
       }
       // The log keeps the seat and the frame's size; never the message's text, and never
@@ -451,11 +457,11 @@ async function deliverSocket(
       if (outcome.kind === 'answered') {
         const read = readReply(outcome.line);
         logLine(to.dir, 'send', who, `${to.seat}: answered (reply ${String(read.reply.length)} characters)`, host.now());
-        appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'answered' });
+        appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'answered', ms: host.now().getTime() - startedAt, via: 'socket' });
         return answered(io, to.seat, read, report);
       }
       logLine(to.dir, 'send', who, `${to.seat}: timeout (sent, no reply within ${String(timeoutS)}s)`, host.now());
-      appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'timeout' });
+      appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'timeout', ms: host.now().getTime() - startedAt, via: 'socket' });
       return timedOut(io, to.seat, timeoutS, report);
     } finally {
       listener.close();
@@ -501,6 +507,7 @@ async function deliverNative(
   trigger: string,
   host: SendHost,
   report: Report,
+  startedAt: number,
   /** How the send reached the seat, for the outcome line (the fallback's own reason). */
   note?: string,
 ): Promise<number> {
@@ -520,19 +527,19 @@ async function deliverNative(
     const where = `the drop file is at ${path}`;
     const entry = { ts: host.now().toISOString(), from, to: seatName, body, id: msgId };
     if (result.outcome === 'held') {
-      appendHistory(project, root, host.home, { ...entry, outcome: 'held' });
+      appendHistory(project, root, host.home, { ...entry, outcome: 'held', ms: host.now().getTime() - startedAt });
       return held(io, dir, who, seatName, `${result.reason ?? 'the composer holds text'}; ${where}`, host, report);
     }
     if (result.outcome === 'unreachable') {
-      appendHistory(project, root, host.home, { ...entry, outcome: 'unreachable' });
+      appendHistory(project, root, host.home, { ...entry, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
       return unreachable(io, dir, who, seatName, `${result.reason ?? 'the seat was not reached'}; ${where}`, host, report);
     }
     if (result.outcome === 'not-submitted') {
-      appendHistory(project, root, host.home, { ...entry, outcome: 'not-submitted' });
+      appendHistory(project, root, host.home, { ...entry, outcome: 'not-submitted', ms: host.now().getTime() - startedAt, via: 'typed' });
       return notSubmitted(io, dir, who, seatName, result, where, host, report);
     }
     logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
-    appendHistory(project, root, host.home, { ...entry, outcome: 'delivered' });
+    appendHistory(project, root, host.home, { ...entry, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'typed' });
     return delivered(io, seatName, report, note);
   } finally {
     lock.release();
@@ -635,6 +642,7 @@ async function deliverSocketFrame(
   msgId: string,
   host: SendHost,
   report: Report,
+  startedAt: number,
 ): Promise<SocketAttempt> {
   report.sent = msgId;
   const frame = frameFor(body, msgId);
@@ -662,7 +670,7 @@ async function deliverSocketFrame(
   }
   if (!taken.ok) return { kind: 'fallback', reason: taken.reason };
   logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
-  appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'delivered' });
+  appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket' });
   return { kind: 'done' };
 }
 
