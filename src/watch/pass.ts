@@ -179,10 +179,11 @@ function quotaOf(cli: string, screen: Screen, pane: string | undefined, runs: bo
 }
 
 // What one pass is handed: the file, the session, the observed world, the clock, the watch's
-// memory, and what the caller knows that the world does not. `approval` is how the file differs
-// from the last approval: [] when it doesn't, null when it was never approved, undefined when that
-// wasn't looked at. `watch` and `budgets` are the sections in force — the live file's under a
-// verified standing, the defaults under none — and the checks read those, never the file's.
+// memory, and what the caller knows that the world does not. `approval` says whether a record is
+// in force — [] under a verified standing, null when there is none, undefined when that wasn't
+// looked at — and nothing compares the file against it: the live file is the record. `watch` and
+// `budgets` are the sections in force — the live file's under a verified standing, the defaults
+// under none — and the checks read those, never the file's.
 // `outcomes` is what the accounts' check commands read outside the pass, when the watch last ran
 // them. `readings` is the project's stored cache, recalled by the caller; this pass folds its
 // figures into it, whatever session they were seen in (§ 4.4). `foreground` is herdr's
@@ -453,10 +454,10 @@ export function pass({
   // The four § 4.2 keeps out of `watch.checks` run whatever the list says: the validation refuses
   // them, and this holds even for a file that reached memory another way.
   //
-  // The off list is the section in force, which the caller passes as `watch`. A file that was
-  // approved — `approval` is a list, empty or not — runs that list. An unapproved `watch.checks`
-  // edit does not turn anything new off, and a check the approved list turned off stays off.
-  // A file never approved, or whose approval was not looked at, turns nothing off.
+  // The off list is the section in force, which the caller passes as `watch`. A file with a
+  // record in force — `approval` is a list, empty or not — runs that list, edited or not: the
+  // live file is the record. A file with no record, or one whose record was not looked at,
+  // turns nothing off.
   const off = Array.isArray(approval) ? new Set(watch.checks) : new Set<string>();
   const enabled = (name: string) => ALWAYS_ON.includes(name) || !off.has(name);
   for (const seat of observations) {

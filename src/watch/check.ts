@@ -165,7 +165,8 @@ export const CHECK_NAMES = [
 ] as const;
 
 // The checks the file cannot turn off (RFC 0002 § 4.2): the four whose condition is the one thing
-// the watch exists for. The schema refuses them in `watch.checks`, and so does `team approve`.
+// the watch exists for. The schema refuses them in `watch.checks`, and the pass runs them
+// whatever the list says.
 export const ALWAYS_ON: readonly string[] = ['attention', 'missing', 'model-drift', 'approval'];
 
 /** A duration in whole minutes, as the report texts write it. */
