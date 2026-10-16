@@ -926,14 +926,23 @@ function recordFor(home: string, session: string, seat: string): Agent | null {
  *  its coordinator carries the `leads` capability there, so the project rules read the file's own
  *  lead off the line the file declares it on. */
 function admitRecordsOf(home: string, team: TeamFile, teamId: string): AdmitTeams {
+  // The file's own assistant, by the place the file gives it: the capability rides the seat's
+  // line, whether the line comes from the registry or from the file's seats below it.
+  const assistantSeat = team.seats.find((seat) => seat.assistant === true)?.name;
   const roster: AdmitTeam['roster'] = [];
   for (const agent of readAgents(home)) {
     if (agent.lifecycle === 'retired' || agent.reach.team !== teamId) continue;
-    roster.push({ agent: agent.id, seat: agent.reach.seat, role: agent.signing.role });
+    roster.push({
+      agent: agent.id, seat: agent.reach.seat, role: agent.signing.role,
+      ...(agent.reach.seat === assistantSeat ? { assistant: true } : {}),
+    });
   }
   for (const seat of team.seats) {
     if (!roster.some((entry) => entry.seat === seat.name)) {
-      roster.push({ agent: '', seat: seat.name, role: seat.role, leads: seat.name === team.orchestrator });
+      roster.push({
+        agent: '', seat: seat.name, role: seat.role, leads: seat.name === team.orchestrator,
+        ...(seat.assistant === true ? { assistant: true } : {}),
+      });
     }
   }
   return {

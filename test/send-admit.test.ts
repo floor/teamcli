@@ -51,7 +51,7 @@ const teams: AdmitTeams = {
       { agent: ORCH_CLI, seat: 'orchestrator', role: 'orchestrator' },
       { agent: BUILDER_1, seat: 'builder-1', role: 'builder' },
       { agent: TESTER_1, seat: 'tester-1', role: 'tester' },
-      { agent: ASSISTANT_CLI, seat: 'assistant', role: 'assistant' },
+      { agent: ASSISTANT_CLI, seat: 'assistant', role: 'assistant', assistant: true },
     ],
   },
   labs: {
@@ -71,6 +71,13 @@ const teams: AdmitTeams = {
     ],
   },
 };
+
+/** The fixture's own team as a file that marks no assistant: its lines without the capability,
+ *  so the entity's first assistant is whichever seat a scene marks below it. */
+function headless(source: AdmitTeams = teams): AdmitTeams {
+  const main = source.teamcli!;
+  return { ...source, teamcli: { ...main, roster: main.roster.map(({ assistant: _stale, ...line }) => line) } };
+}
 
 // The clock every grant test is judged at, and one record as the owner's folder returns them.
 const NOW = new Date('2026-10-16T12:00:00.000Z');
@@ -93,15 +100,51 @@ describe('send admission: the rules that admit', () => {
   });
 
   test('an assistant reaches the coordinator of its entity, in the main team', () => {
-    // The assistant sits in a sub-team of the entity: the coordinator is the main team's lead.
+    // The fixture's own team marks nothing: the entity's first assistant by its place in the
+    // chain is the sub-team's seat, and the coordinator is the main team's lead.
     const assistantLabs = agent('agt_000000000009', 'assistant', 'labs');
     const withAssistant: AdmitTeams = {
-      ...teams,
-      labs: { ...teams.labs!, roster: [...teams.labs!.roster, { agent: assistantLabs.id, seat: 'assistant', role: 'assistant' }] },
+      ...headless(),
+      labs: { ...teams.labs!, roster: [...teams.labs!.roster, { agent: assistantLabs.id, seat: 'assistant', role: 'assistant', assistant: true }] },
     };
     expect(admitSend(assistantLabs, orchCli, withAssistant)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
-    // The same rule in the entity's own team: the coordinator is its own team's lead.
+    // The same capability in the entity's own team: the coordinator is its own team's lead.
     expect(admitSend(assistantCli, orchCli, teams)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
+  });
+
+  test('the chain decides which assistant is the entity\'s: the head of the chain wins', () => {
+    const assistantLabs = agent('agt_000000000009', 'assistant', 'labs');
+    const markedLabs = { ...teams.labs!, roster: [...teams.labs!.roster, { agent: assistantLabs.id, seat: 'assistant', role: 'assistant', assistant: true }] };
+    // The main team's own assistant holds the place, whatever a sub-team marks beside it.
+    const headAndSub: AdmitTeams = { ...teams, labs: markedLabs };
+    expect(admitSend(assistantCli, orchCli, headAndSub)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
+    expect(admitSend(assistantLabs, orchCli, headAndSub).ok).toBe(false);
+    // With the main team marking none, the first of the entity's teams by team id holds it.
+    const archivist = agent('agt_00000000000b', 'assistant', 'archive');
+    const subs: AdmitTeams = {
+      ...headless(),
+      archive: { project: 'archive', entity: 'teamcli', roster: [{ agent: archivist.id, seat: 'assistant', role: 'assistant', assistant: true }] },
+      labs: markedLabs,
+    };
+    expect(admitSend(archivist, orchCli, subs)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
+    expect(admitSend(assistantLabs, orchCli, subs).ok).toBe(false);
+  });
+
+  test('the role word "assistant" is not the capability: the file\'s mark decides', () => {
+    // A seat named and roled the word, with no mark on its line, is admitted by nothing.
+    const byWord = agent('agt_00000000000c', 'assistant', 'labs');
+    const withWord: AdmitTeams = {
+      ...headless(),
+      labs: { ...teams.labs!, roster: [...teams.labs!.roster, { agent: byWord.id, seat: 'assistant', role: 'assistant' }] },
+    };
+    expect(admitSend(byWord, orchCli, withWord).ok).toBe(false);
+    // And the mark on a seat called anything else is what admits it.
+    const marked = agent('agt_00000000000d', 'scribe', 'labs');
+    const withMark: AdmitTeams = {
+      ...headless(),
+      labs: { ...teams.labs!, roster: [...teams.labs!.roster, { agent: marked.id, seat: 'scribe', role: 'builder', assistant: true }] },
+    };
+    expect(admitSend(marked, orchCli, withMark)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
   });
 
   test('an orchestrator reaches every seat of its own team, and no seat of another', () => {
