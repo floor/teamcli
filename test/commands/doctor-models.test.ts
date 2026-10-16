@@ -90,9 +90,9 @@ describe('team doctor on a file of every model shape', () => {
         // notice before the seats' own warnings, and counts it.
         'warn  the file, line 4: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
         // the message seats' rules files: written by `up`, absent in this fixture
-        'warn  plain-codex: its rules file is missing; run `team remove plain-codex --keep` then `team add plain-codex` (or `team down` then `team up` for the whole team)',
-        'warn  plain-voyager: its rules file is missing; run `team remove plain-voyager --keep` then `team add plain-voyager` (or `team down` then `team up` for the whole team)',
-        'warn  plain-reviewer: its rules file is missing; run `team remove plain-reviewer --keep` then `team add plain-reviewer` (or `team down` then `team up` for the whole team)',
+        'warn  plain-codex: its rules file is missing; run team reload plain-codex',
+        'warn  plain-voyager: its rules file is missing; run team reload plain-voyager',
+        'warn  plain-reviewer: its rules file is missing; run team reload plain-reviewer',
         'ok    herdr 0.7.1',
         '--    session pilot is not running',
         'ok    claude 2.1.288 (Claude Code)',
@@ -149,9 +149,9 @@ describe('team doctor on a file of every model shape', () => {
     const warns = run.out.split('\n').filter((line) => line.startsWith('warn'));
     expect(warns).toEqual([
       'warn  the file, line 4: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
-      'warn  plain-codex: its rules file is missing; run `team remove plain-codex --keep` then `team add plain-codex` (or `team down` then `team up` for the whole team)',
-      'warn  plain-voyager: its rules file is missing; run `team remove plain-voyager --keep` then `team add plain-voyager` (or `team down` then `team up` for the whole team)',
-      'warn  plain-reviewer: its rules file is missing; run `team remove plain-reviewer --keep` then `team add plain-reviewer` (or `team down` then `team up` for the whole team)',
+      'warn  plain-codex: its rules file is missing; run team reload plain-codex',
+      'warn  plain-voyager: its rules file is missing; run team reload plain-voyager',
+      'warn  plain-reviewer: its rules file is missing; run team reload plain-reviewer',
       'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.299: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into',
       'warn  script-seat: the launch runs zsh, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
     ]);
