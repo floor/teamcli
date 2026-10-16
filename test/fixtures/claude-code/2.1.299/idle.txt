@@ -1,0 +1,23 @@
+
+ ▐▛███▛█   Claude Code v2.1.299
+▝▜██████▀  Opus 4.8 with high effort · Claude Max
+ ▝▝   ▝▝   /…/tmp/profile-captures/claude/work
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+──────────────────────────────────────────────────────
+❯ Try "refactor <filepath>"
+──────────────────────────────────────────────────────
+  main* · …/claude/work · Opus 4.8 · S: - · L: 18% …
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ←…

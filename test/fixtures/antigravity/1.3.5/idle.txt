@@ -1,0 +1,18 @@
+❯ AGENT_UNATTENDED=1 agy
+
+
+      ▄▀▀▄
+     ▀▀▀▀▀▀
+    ▀▀▀▀▀▀▀▀
+   ▄▀▀    ▀▀▄
+  ▄▀▀      ▀▀▄
+
+  Antigravity CLI 1.3.5
+  <account> (<plan>)
+  Gemini 4 Argon (Medium)
+  <workspace>
+
+──────────────────────────────────────────────────────
+>
+──────────────────────────────────────────────────────
+? for shortcuts                Gemini 4 Argon · medium

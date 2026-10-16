@@ -5,6 +5,7 @@ import { readScreen } from '../../src/watch/screen.ts';
 import { claudeBox } from '../helpers.ts';
 
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/claude-code/2.1.289/${name}.txt`, import.meta.url), 'utf8');
+const current = (name: string) => readFileSync(new URL(`../fixtures/claude-code/2.1.299/${name}.txt`, import.meta.url), 'utf8');
 
 /** The window the pane shows while a turn runs: the box back to empty, the footer's own line
  *  saying so. `deliverRules` observes this after the Enter. */
@@ -163,5 +164,16 @@ describe('the prompt-glyph continuation row', () => {
     // rule gone the reader cannot tell it from box content — and the read fails closed.
     const stray = ['  stray content', '❯ person text', '  more of theirs', rule, status1, status2].join('\n') + '\n';
     expect(readScreen('claude-code', stray).kind).toBe('unknown');
+  });
+});
+
+describe('Claude Code 2.1.299 captures', () => {
+  test('trust, idle, working, question, permission and exit read as those kinds', () => {
+    expect(readScreen('claude-code', current('trust')).kind).toBe('trust');
+    expect(readScreen('claude-code', current('idle')).kind).toBe('idle');
+    expect(readScreen('claude-code', current('working')).kind).toBe('working');
+    expect(readScreen('claude-code', current('question')).kind).toBe('question');
+    expect(readScreen('claude-code', current('permission')).kind).toBe('permission');
+    expect(readScreen('claude-code', current('exit')).kind).toBe('unknown');
   });
 });

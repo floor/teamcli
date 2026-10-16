@@ -3,7 +3,7 @@
 // an environment.
 import { expect, test } from 'bun:test';
 import type { PaneProcesses } from '../../src/herdr.ts';
-import { launchedIdentity, seatProcessVerdict, type LaunchedIdentity } from '../../src/launch/identity.ts';
+import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from '../../src/launch/identity.ts';
 
 const recorded: LaunchedIdentity = { shell: 400, cli: [401] };
 const pane = (shell: number, foreground: number[]): PaneProcesses => ({ shell, foreground });
@@ -65,4 +65,23 @@ test('nothing is recorded for a pane with no CLI in front, or an unreadable one'
   expect(launchedIdentity(pane(400, []))).toBeNull();
   expect(launchedIdentity(null)).toBeNull();
   expect(launchedIdentity(undefined)).toBeNull();
+});
+
+const tied = { asked: true, namedOnPane: true, recordedSession: 'conversation', liveSession: 'conversation' };
+
+test('restored: a pid mismatch whose agent session is the one stored at launch', () => {
+  expect(replacedSeat('replaced', tied)).toBe('restored');
+});
+
+test('doubt: a pid mismatch with no stored session, no live session, or a different one', () => {
+  expect(replacedSeat('replaced', { ...tied, recordedSession: undefined })).toBe('doubt');
+  expect(replacedSeat('replaced', { ...tied, liveSession: undefined })).toBe('doubt');
+  expect(replacedSeat('replaced', { ...tied, liveSession: 'other' })).toBe('doubt');
+  expect(replacedSeat('replaced', { ...tied, asked: false })).toBe('doubt');
+  expect(replacedSeat('replaced', { ...tied, namedOnPane: false })).toBe('doubt');
+});
+
+test('a shell in front is not restored, even when the name and the session match', () => {
+  expect(replacedSeat('gone', tied)).toBe('other');
+  expect(seatProcessVerdict(recorded, pane(500, [500]))).toBe('gone');
 });

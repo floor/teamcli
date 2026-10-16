@@ -55,7 +55,9 @@ function seatProblems(name: string, at: string, line: number, seats: DraftSeat[]
   else if (seat.stopped) check.fail(line, `${at} can't be a stopped seat`);
 }
 
-/** Whether a seat is declared as the orchestrator or the operator in the team file. */
+/** Whether a seat is the orchestrator or the operator, by the name the file resolved.
+ *  The role is not read: `coordinator` and `orchestrator` are that lead when the name matches.
+ *  `up` will not cycle this seat. `add` and `remove` admit the same names. */
 export function isLeadSeat(
   team: { orchestrator: string; operator: string },
   name: string,
@@ -83,6 +85,17 @@ export function relaunchRepair(
   return lead
     ? 'team down, then team up (to restart the whole team)'
     : `team remove ${name} --keep, then team add ${name} (or team down, then team up, for the whole team)`;
+}
+
+/** The restart a report names. An ordinary seat is removed and added again. A lead cannot
+ *  be removed, so the whole team is started again. Nothing here starts the seat. */
+export function seatRestartRepair(
+  team: { orchestrator: string; operator: string },
+  name: string,
+): string {
+  return isLeadSeat(team, name)
+    ? 'team down, then team up (to restart the whole team)'
+    : `team remove ${name} --keep, then team add ${name}`;
 }
 
 /**

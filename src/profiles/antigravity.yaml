@@ -7,7 +7,7 @@ process_names:
   - agy
 tested:
   from: '1.2.16'
-  to: '1.2.16'
+  to: '1.3.5'
 unattended:
   - --dangerously-skip-permissions
 rules: first-message
@@ -33,22 +33,39 @@ trust_answer:
     extract:
       after: 'Accessing workspace:'
       before: 'Do you trust the contents of this project?'
+  # The same dialog on 1.3.5 (`antigravity/1.3.5/trust.txt`): the marked row is still
+  # `Yes, I trust this folder`, Enter still confirms, and the path still sits between
+  # `Accessing workspace:` and the question. The footer gained `↑/↓ Navigate ·` in front
+  # of `enter Confirm`. The model row under it read `Gemini 4 Argon · medium`.
+  - from: '1.3.5'
+    to: '1.3.5'
+    label: 'Yes, I trust this folder'
+    mark: '>'
+    footer: 'enter Confirm'
+    action: '0d'
+    capture: antigravity/1.3.5/trust.txt
+    extract:
+      after: 'Accessing workspace:'
+      before: 'Do you trust the contents of this project?'
+startup_reads:
+  - AGENTS.md
+  - GEMINI.md
 models:
   option:
     - --model
   ids:
-    - match: '^gemini-([0-9]+(?:\.[0-9]+)?)-(flash|pro)(?:-(high|medium|low))?$'
+    - match: '^gemini-([0-9]+(?:\.[0-9]+)?)-(flash|pro|argon)(?:-(high|medium|low))?$'
       ignore_case: true
       model: 'Gemini {2:title}'
       version: '{1}'
 status_model:
-  - match: '(?:^|[\s·|])Gemini\s+([0-9]+(?:\.[0-9]+)*)\s+(Flash|Pro)\b'
+  - match: '(?:^|[\s·|])Gemini\s+([0-9]+(?:\.[0-9]+)*)\s+(Flash|Pro|Argon)\b'
     ignore_case: true
     model: 'Gemini {2:title}'
     version: '{1}'
-    # The two families the capture knows, whatever case the row spells them in; `{2:title}`
-    # reads each back in title case.
-    yields: [Gemini Flash, Gemini Pro]
+    # The families the capture knows, whatever case the row spells them in; `{2:title}`
+    # reads each back in title case. Argon is the 1.3.5 idle footer `Gemini 4 Argon · medium`.
+    yields: [Gemini Flash, Gemini Pro, Gemini Argon]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
 screen:
   chrome:

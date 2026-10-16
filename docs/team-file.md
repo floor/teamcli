@@ -73,18 +73,24 @@ either way. Nothing in this build writes the file or the tracker.
 
 ## `seats`
 
-Each seat names a model and how it is launched. The fields are in the README's
-[file format](../README.md#the-files-format). Two of them decide the herdr workspace title, and
-one no longer does:
+Each seat names a model and how it is launched. The orchestrator and the operator start in
+the project folder. Every other seat starts in the team's lobby. A lead already running in
+either folder is left there. The fields are in the README's
+[file format](../README.md#the-files-format). The sidebar has two lines:
 
+- `label`, when the file writes one, is line 1, the workspace title. A seat expanded from
+  `count` keeps that label on the first instance; each later instance appends `-<n>`, the same
+  suffix the seat's name gets, so the lines differ (`desk`, `desk-2`).
+- A seat with no written label is titled `<name> · <role>`. Count instances already have
+  distinct names (`maker`, `maker-2`), so their lines differ too. The model is never line 1.
+- Left out, the stored `label` stays the model and version in lowercase, which is what an
+  approval of a file written that way already sealed. That stored field stays in the seat's digest.
 - `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
-  as a token of its own when the file writes it.
-- `up` and `add` title the workspace `<display> · <effort>` when the seat sets `effort`,
-  and `<display>` when it does not. The title has no seat name and no role. Seats expanded from
-  `count` share it: herdr shows the seat's name on its own line.
-- `label`, written or left out, is still a field the file may carry. A written one is accepted.
-  It does not title the workspace. Left out, the stored title stays the model and version in
-  lowercase, which is what an approval of a file written that way already sealed.
+  as a token of its own when the file writes it. After launch, `up` and `add` set the pane's
+  display_agent to `<display> <effort>` when the seat sets `effort`, and to `<display> default`
+  when it does not. The display stays the proper-case name, including a multi-word model
+  (`DeepSeek V4.1 Flash`, `Gemini 3.8 Flash`). Herdr draws line 2 as its status word, then
+  ` · `, then that text (`done · Grok 4.7 high`, `idle · Opus 5.5 default`). That is line 2.
 
 `effort` is optional. It is a known field: a file may set it, and a file that leaves it out
 loads as before. The words a lab allows are [`src/profiles/efforts.json`](../src/profiles/efforts.json),
@@ -99,6 +105,45 @@ the field is not stored on the seat, and the seat's approval key is unchanged. A
 or out of the list, changes that key, because the word is part of the seat.
 
 Nothing in the launch line reads `effort`.
+
+## `grant`
+
+Records the grant the owner gives the orchestrator's seat. It is an owner section: adding,
+changing or removing it is a change to the file the owner approves. Omitted, it reads as `null`.
+
+```yaml
+grant:
+  session: acme          # the file's own session
+  seat: lead             # the orchestrator's seat
+  scope:                 # non-empty, distinct, order kept
+    - up
+    - down
+    - approve
+    - init
+```
+
+- `session` is the team's own session: the `session` key, or the project name when that key is
+  omitted. Any other value is `grant.session must be the file's session "<session>": "<written>"`.
+- `seat` is the orchestrator's name, the one `coordinator:` or `leads: true` resolves. The
+  operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":
+  "<written>"`.
+- `scope` names acts from the closed set `up`, `down`, `approve` and `init`. The list is
+  non-empty, each act appears once, and the order is part of the value the owner approves. An
+  empty list is `grant.scope must name at least one of: up, down, approve, init`. A repeated act
+  is `grant.scope names "<act>" twice`. Any other word is `grant.scope must name up, down,
+  approve, init: "<word>" is not one`.
+- `approve` in `scope` is an ordinary approval: the roster and `rules`. A change to `grant`
+  itself, and a change to any other owner section, stays the owner's to approve. `team approve`
+  admits the orchestrator's seat for that class when the approved grant lists `approve`. The
+  run is this folder's own file, `--file` is refused, and the first approval of a team stays
+  the owner's. A roster edit that moves the derived ceiling — a file that declares no `limits`
+  — stays the owner's too.
+- Any other key, including `path`, is an unknown field.
+- `team up` admits the orchestrator's seat when the approved grant lists `up`. The run is this
+  folder's own file: `--session` and `--file` are refused, and the run does not relaunch or close
+  the orchestrator's seat. `team down` admits that seat when the list includes `down`, and leaves
+  the orchestrator's seat and the operator's seat running. A file that omits `grant` keeps
+  today's `down`.
 
 ## `delegates`
 
@@ -141,3 +186,20 @@ delegates:
   herdr's pid vouch are forgeable by a hostile process of the same user, which this tool does
   not resist: it guards a mistaken agent, not a hostile one. Nothing in the grants or in
   `trust:` is changed by that.
+
+## tempo
+
+How fast the watch's waits run. It is an owner section. Omitted, it reads as `normal`.
+
+```yaml
+tempo: urgent
+```
+
+- `relaxed`, `normal` or `urgent`.
+- `relaxed` doubles `idle_first`, `idle_repeat`, `team_idle`, `nudge_wait` and `unsent_after`.
+  `urgent` halves them, to the nearest second, and never below one second. `normal` leaves
+  them as written.
+- An omitted `idle_repeat` stays off. `interval` is the pass rate and is not scaled, and
+  neither are the quota marks or the check switches.
+- `relaxed` and `urgent` take effect when the file is approved. A file that omits the key,
+  and one that sets `normal`, stay the file that was approved.

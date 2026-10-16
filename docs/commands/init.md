@@ -21,7 +21,8 @@ alone runs it, from a terminal outside herdr, and a file that already exists is 
 | Caller | May |
 | --- | --- |
 | the owner, from a terminal outside herdr | run it |
-| a seat, an agent-run CLI, or a command without a terminal | nothing: `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` |
+| a run with no terminal | nothing: `team init: only the owner runs this, from a terminal outside herdr` |
+| a seat, or an agent-run CLI | nothing: `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` |
 
 ## Output and exit codes
 

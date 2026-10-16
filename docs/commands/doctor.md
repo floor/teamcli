@@ -31,7 +31,7 @@ them are done; the last line counts those.
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | nothing is missing; warnings do not change this | one line per finding, its level (`ok  `, `warn`, `MISS`, `--  `) first, then the count: `team doctor: nothing missing, 1 warning` | 0 |
-| at least one `MISS` | the same report, then the count and how many of the missing ones block `up` and `add` | 1 |
+| at least one `MISS` | the same report, then the count — `team doctor: <n> missing, <w> warning(s)` — and `: <n> of them block \`up\` and \`add\`` when any missing one blocks | 1 |
 | the invocation or the team file can't be read | `team doctor: <problem>`, with the usage for the invocation | 2 |
 
 ## Example
@@ -100,6 +100,16 @@ ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 2 warnings
+exit 0
+```
+
+`--login` reads the logins alone — one line per CLI the file's seats use, said once — and no herdr,
+session or machine:
+
+```console
+$ team doctor --login ; echo "exit $?"
+ok    claude-code: logged in
+team doctor: nothing missing, 0 warnings
 exit 0
 ```
 

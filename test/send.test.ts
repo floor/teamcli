@@ -134,72 +134,54 @@ function record(dir: string, seat: string, pane: string): void {
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
 describe('team send: delivered', () => {
-  test('writes one measured frame through the real socket client and exits 0', async () => {
+  test('a Claude Code seat is delivered by the drop file when herdr reports working', async () => {
     const { root, dir, sockets } = world();
-    const { received } = await listen(sockets, 222);
+    const pane = scripted(['idle', 'working']);
+    const host = fake(sockets, { native: pane });
     const io = owner(root);
-    const host = fake(sockets, { deliver: (socketPath, frame) => sendFrame(socketPath, frame) });
 
     const code = await runSend(['lead', 'hello', 'world'], io, host);
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
     expect(io.out).toBe('lead: delivered\n');
-    await until(() => received.length > 0);
-    const frame = received.join('');
-    expect(frame.endsWith('\n')).toBe(true);
-    expect((frame.match(/\n/g) ?? []).length).toBe(1);
-    const parsed = JSON.parse(frame) as { type: string; message: { role: string; content: string }; msg_id: string };
-    expect(parsed.type).toBe('user');
-    expect(parsed.message).toEqual({ role: 'user', content: 'hello world' });
-    expect(parsed.msg_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    // The log keeps the outcome and the size, never the message's text.
+    expect(host.frames).toEqual([]);
+    expect(pane.typed.length).toBe(1);
+    expect(pane.typed[0]).not.toContain('hello world');
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    const path = join(drops, readdirSync(drops)[0] as string);
+    expect(readFileSync(path, 'utf8')).toBe('hello world');
+    expect(pane.typed[0]).toContain(path);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
     expect(log).toContain('send [owner] lead: delivered');
     expect(log).not.toContain('hello world');
   });
 
-  test('--file sends the file body as one frame, newlines escaped', async () => {
-    const { root, sockets } = world();
-    // A file where the socket is expected, so the fixture's own deliver is the one called.
-    const host = fake(sockets);
-    writeFileSync(join(sockets, '222.sock'), '');
+  test('--file writes the file body whole to the drop file', async () => {
+    const { root, dir, sockets } = world();
+    const pane = scripted(['idle', 'working']);
+    const host = fake(sockets, { native: pane });
     writeFileSync(join(root, 'note.txt'), 'line one\nline two\n');
     const io = owner(root);
 
     const code = await runSend(['lead', '--file', 'note.txt'], io, host);
 
     expect(code).toBe(0);
-    expect(host.frames.length).toBe(1);
-    const frame = host.frames[0] as string;
-    expect((frame.match(/\n/g) ?? []).length).toBe(1);
-    const parsed = JSON.parse(frame) as { message: { content: string } };
-    expect(parsed.message.content).toBe('line one\nline two\n');
+    expect(host.frames).toEqual([]);
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe('line one\nline two\n');
+    expect(pane.typed[0]).not.toContain('line one');
   });
 
   test('the orchestrator from its recorded pane may send', async () => {
     const { root, dir, sockets } = world();
     record(dir, 'lead', 'w1:p1');
-    writeFileSync(join(sockets, '222.sock'), '');
     const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
 
-    const code = await runSend(['lead', 'a note'], io, fake(sockets));
+    const code = await runSend(['lead', 'a note'], io, fake(sockets, { native: scripted(['idle', 'working']) }));
 
     expect(code).toBe(0);
     expect(io.out).toBe('lead: delivered\n');
-  });
-
-  test('the pane probe takes the first process with a socket, shell included', async () => {
-    const { root, sockets } = world();
-    // Only the shell's pid has a socket: the foreground pids are tried first, then the shell.
-    writeFileSync(join(sockets, '111.sock'), '');
-    const host = fake(sockets);
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(host.socketsTried).toEqual([join(sockets, '111.sock')]);
   });
 });
 
@@ -251,7 +233,7 @@ describe('team send: refused', () => {
     const host = fake(sockets);
     const io = owner(root);
 
-    const code = await runSend(['lead', 'x'.repeat(FRAME_LIMIT)], io, host);
+    const code = await runSend(['lead', 'x'.repeat(FRAME_LIMIT), '--wait'], io, host);
 
     expect(code).toBe(1);
     expect(io.err).toContain('too large for this channel');
@@ -304,7 +286,7 @@ describe('team send: unreachable', () => {
     const host = fake(sockets);
     const io = owner(root);
 
-    const code = await runSend(['lead', 'hello'], io, host);
+    const code = await runSend(['lead', 'hello', '--wait'], io, host);
 
     expect(code).toBe(1);
     expect(io.err).toContain('unreachable');
@@ -321,7 +303,7 @@ describe('team send: unreachable', () => {
     const host = fake(sockets, { deliver: (socketPath, frame) => sendFrame(socketPath, frame) });
     const io = owner(root);
 
-    const code = await runSend(['lead', 'hello'], io, host);
+    const code = await runSend(['lead', 'hello', '--wait'], io, host);
 
     expect(code).toBe(1);
     expect(io.err).toContain('lead: unreachable');
@@ -424,6 +406,46 @@ const WRAPPED_REPLY = JSON.stringify({
 });
 
 describe('team send: --wait', () => {
+  test('writes one measured frame through the real socket client and says it was sent', async () => {
+    const { root, dir, sockets } = world();
+    const { received } = await listen(sockets, 222);
+    const io = owner(root);
+    const host = fake(sockets, { deliver: (socketPath, frame) => sendFrame(socketPath, frame) });
+
+    const code = await runSend(['lead', 'hello', 'world', '--wait', '--timeout', '1'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain('sent, no reply within 1s');
+    expect(io.err).not.toContain('delivered');
+    await until(() => received.length > 0);
+    const frame = received.join('');
+    expect(frame.endsWith('\n')).toBe(true);
+    expect((frame.match(/\n/g) ?? []).length).toBe(1);
+    const parsed = JSON.parse(frame) as { type: string; message: { role: string; content: string }; msg_id: string };
+    expect(parsed.type).toBe('user');
+    expect(parsed.message).toEqual({ role: 'user', content: 'hello world' });
+    expect(parsed.msg_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const log = readFileSync(join(dir, LOG_FILE), 'utf8');
+    expect(log).toContain('lead: sent on the socket (');
+    expect(log).not.toContain('hello world');
+    expect(log).not.toContain('delivered');
+  });
+
+  test('the pane probe takes the first process with a socket, shell included', async () => {
+    const { root, sockets } = world();
+    // Only the shell's pid has a socket: the foreground pids are tried first, then the shell.
+    writeFileSync(join(sockets, '111.sock'), '');
+    const host = fake(sockets);
+    const io = owner(root);
+
+    const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
+
+    expect(code).toBe(1);
+    expect(host.socketsTried).toEqual([join(sockets, '111.sock')]);
+    expect(host.frames.length).toBe(1);
+  });
+
   test("the seat's reply is printed, the listener is gone and the log keeps no text", async () => {
     const { root, dir, sockets } = world();
     writeFileSync(join(sockets, '222.sock'), '');
@@ -492,15 +514,17 @@ describe('team send: --wait', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toContain('lead: timeout: delivered, but no reply within 1s');
+    expect(io.err).toContain('lead: timeout: sent, no reply within 1s; a seat which does not accept messages from other sessions holds the frame until a person lets it through');
+    expect(io.err).not.toContain('delivered');
     expect(existsSync(senderSocket(sockets))).toBe(false);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
-    // The delivery is recorded first; the window closing is its own line.
-    expect(log).toContain('lead: delivered (');
-    expect(log).toContain('lead: timeout (delivered, no reply within 1s)');
+    // The write is recorded first; the window closing is its own line. Neither says delivered.
+    expect(log).toContain('lead: sent on the socket (');
+    expect(log).toContain('lead: timeout (sent, no reply within 1s)');
+    expect(log).not.toContain('delivered');
   });
 
-  test('--json timeout: a document that says delivered with no reply', async () => {
+  test('--json timeout: a document that says the frame was sent and no reply came', async () => {
     const { root, sockets } = world();
     writeFileSync(join(sockets, '222.sock'), '');
     const io = owner(root);
@@ -512,7 +536,7 @@ describe('team send: --wait', () => {
     const doc = JSON.parse(io.out) as { seat: string; status: string; exit: number; error: string; ids: { sent: string | null } };
     expect(doc.status).toBe('timeout');
     expect(doc.exit).toBe(1);
-    expect(doc.error).toBe('delivered, but no reply within 1s');
+    expect(doc.error).toBe('sent, no reply within 1s; a seat which does not accept messages from other sessions holds the frame until a person lets it through');
     expect(typeof doc.ids.sent).toBe('string');
     expect('reply' in doc).toBe(false);
   });
@@ -655,17 +679,19 @@ describe('team send: --json documents', () => {
     expect(doc.error).toContain('could not be read');
   });
 
-  test('a delivered send carries the composed frame\'s id', async () => {
-    const { root, sockets } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    const host = fake(sockets);
+  test('a delivered send carries the drop file\'s id', async () => {
+    const { root, dir, sockets } = world();
+    const host = fake(sockets, { native: scripted(['idle', 'working']) });
     const io = owner(root);
 
     const code = await runSend(['lead', 'hello', '--json'], io, host);
 
     expect(code).toBe(0);
-    const sent = JSON.parse((host.frames[0] as string).trim()) as { msg_id: string };
-    expect(JSON.parse(io.out)).toEqual({ seat: 'lead', status: 'delivered', exit: 0, ids: { sent: sent.msg_id, reply: null } });
+    expect(host.frames).toEqual([]);
+    const doc = JSON.parse(io.out) as { seat: string; status: string; exit: number; ids: { sent: string; reply: null } };
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(readdirSync(drops)).toEqual([doc.ids.sent]);
+    expect(doc).toEqual({ seat: 'lead', status: 'delivered', exit: 0, ids: { sent: doc.ids.sent, reply: null } });
   });
 });
 
@@ -852,6 +878,12 @@ describe('team send: native drop', () => {
     const json = owner(root);
     expect(await runSend(['lead', 'hello', '--dry-run', '--json'], json, fake(sockets))).toBe(0);
     expect(JSON.parse(json.out)).toEqual({ seat: 'lead', status: 'dry-run', exit: 0, ids: { sent: null, reply: null } });
+    const claude = owner(root);
+    expect(await runSend(['lead', 'hello', '--dry-run'], claude, fake(sockets))).toBe(0);
+    expect(claude.out).toBe('lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written\n');
+    const waited = owner(root);
+    expect(await runSend(['lead', 'hello', '--wait', '--dry-run'], waited, fake(sockets))).toBe(0);
+    expect(waited.out).toBe('lead: dry-run: claude-code via the cross-session socket; nothing was sent\n');
   });
 
   test('a pane that rejects the trigger is unreachable and the file remains', async () => {
@@ -868,6 +900,50 @@ describe('team send: native drop', () => {
     expect(io.err).toContain('the pane did not take the trigger');
     const drops = join(dir, 'send-drops', 'acme', 'native');
     expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe('hello');
+  });
+
+  test('a dialog the classifier already knows is not reached, and nothing further is pressed', async () => {
+    const { root, dir, sockets } = world();
+    const question = readFileSync(new URL('./fixtures/claude-code/2.1.289/question-plain.txt', import.meta.url), 'utf8');
+    const permission = readFileSync(new URL('./fixtures/codex/0.157.0/permission.txt', import.meta.url), 'utf8');
+    const asked = scripted(['idle', 'working']);
+    asked.paneText = () => question;
+    const lead = fake(sockets, { native: asked });
+    const io = owner(root);
+
+    const code = await runSend(['lead', 'hello'], io, lead);
+
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain('not reached');
+    expect(io.err).toContain('the screen reads question');
+    const leadDrops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(io.err).toContain(join(leadDrops, readdirSync(leadDrops)[0] as string));
+    expect(asked.enters).toBe(1);
+    expect(lead.frames).toEqual([]);
+
+    const held = scripted(['idle']);
+    held.paneText = () => permission;
+    const host = fake(sockets, {
+      agents: () => [{ name: 'native', pane: 'w9:p1' }],
+      native: held,
+    });
+    const again = owner(root);
+    expect(await runSend(['native', 'hello'], again, host)).toBe(1);
+    expect(again.err).toContain('not reached');
+    expect(again.err).toContain('the screen reads permission');
+    expect(held.enters).toBe(1);
+  });
+
+  test('a screen that is not one of those dialogs still follows the status rule', async () => {
+    const { root, sockets } = world();
+    const pane = scripted(['idle', 'working']);
+    pane.paneText = () => 'no dialog on this screen\n';
+    const host = fake(sockets, { native: pane });
+    const io = owner(root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(io.out).toBe('lead: delivered\n');
   });
 });
 

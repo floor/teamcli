@@ -1,4 +1,5 @@
 import { isAbsolute, join, resolve } from 'node:path';
+import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { profileFor } from '../profiles/index.ts';
 import { launchCommand, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
@@ -25,7 +26,18 @@ export type Op =
   | { do: 'refuse'; seat: string; why: string; detail?: string }
   /** A seat's final record, decided by the plan: no profile, already ready. The step's printed
    *  text stays for the dry run; `detail` is the stderr lines said after the record. */
-  | { do: 'record'; seat: string; record: FinalRecord; detail?: string }
+  | {
+      do: 'record';
+      seat: string;
+      record: FinalRecord;
+      detail?: string;
+      /** A restored seat: the process ids to store, so the next `up` sees `same`. */
+      launched?: LaunchedIdentity;
+      /** The agent session kept beside those pids. */
+      agentSession?: string;
+      /** This record is a refusal: the run exits 1 even when the stored stage stays ready. */
+      held?: boolean;
+    }
   | {
       do: 'idle';
       seat: string;
@@ -48,7 +60,19 @@ export type Op =
       /** A waiting seat herdr does not name exactly once: left out, nothing launched. */
       resumeGap?: 'none' | 'many';
     }
-  | { do: 'rename'; seat: string; label: string; seconds: number; rules: 'option' | 'message'; pane?: string }
+  | {
+      do: 'rename';
+      seat: string;
+      label: string;
+      seconds: number;
+      rules: 'option' | 'message';
+      pane?: string;
+      /** Sidebar line 2, reported once this rename has named the seat. A failure is one line. */
+      displayAgent?: string;
+    }
+  /** A seat already running, painted from the file without typing into it or launching it again.
+   *  Line 1 is the workspace title; line 2 is display_agent. A failed call is one line. */
+  | { do: 'relabel'; seat: string; pane: string; workspace: string; title: string; displayAgent: string }
   | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string }
   | { do: 'ready'; seat: string; rules: 'option' | 'message'; notice?: string }
   | {
@@ -63,7 +87,7 @@ export type Op =
        *  is working and nothing is closed. */
       drift?: { model: string; version: string; way: string };
     }
-  | { do: 'watch'; label: string; command: string; file?: string }
+  | { do: 'spawn-watch'; command: string; cwd: string; file?: string }
   | {
       do: 'type';
       seat: string;
@@ -97,8 +121,9 @@ export type Op =
 
 /** One thing `up` or `down` does, in order. */
 export type Step =
-  /** A command that is run. */
-  | { kind: 'run'; argv: string[]; note?: string; do?: Op }
+  /** A command that is run. `also` is a second command printed with it; the live run performs
+   *  that work inside this step's `do`, so it adds no step and no wait of its own. */
+  | { kind: 'run'; argv: string[]; also?: string[]; note?: string; do?: Op }
   /** A wait, with its time limit. */
   | { kind: 'wait'; text: string; note?: string; do?: Op }
   /** A seat that is left out, and why. */
@@ -111,6 +136,8 @@ export interface UpSeat {
   /** Relative to the root. */
   cwd: string;
   label: string;
+  /** Sidebar line 2, set on the pane after launch. Absent: the plan does not report one. */
+  displayAgent?: string;
   /** The team file's repair for this seat (`relaunchRepair`'s markdown text): every line this
    *  run prints that names a repair prints this one, never a `remove --keep` a lead seat's file
    *  would refuse. */
@@ -142,6 +169,11 @@ export interface UpSeat {
   waitingLaunched?: LaunchedIdentity;
   /** Set when a waiting seat has no single herdr agent of its name: the resume is left out. */
   resumeGap?: 'none' | 'many';
+  /** The waiting seat's recorded pane, when the host no longer lists it. The seat is launched
+   *  in a fresh workspace, and this id is the one line that says the old pane was replaced. */
+  replacedPane?: string;
+  /** The recorded workspace, when the host still lists it. Named on that same line, and not closed. */
+  leftWorkspace?: string;
   /** The seat works in worktrees: it waits in the lobby until a brief names its worktree. */
   lobby?: boolean;
   /**
@@ -164,6 +196,19 @@ export interface UpSeat {
   /** A ready seat whose model drifted and that this `up` will not close: herdr reports it
    *  working, or its screen shows a running turn. The record stays ready. */
   driftHold?: string;
+  /**
+   * The pane's pids differ and its agent session is the one stored at launch. Nothing is
+   * closed. `launched` is the process in the pane now; the record stores it.
+   */
+  restored?: { launched: LaunchedIdentity; session: string; detail: string };
+  /**
+   * The pane holds a program this record cannot tie to the launch. Nothing is closed and
+   * the stored process is left as it is.
+   */
+  sessionDoubt?: string;
+  /** The doubt is a working or unsent screen: the refusal that already existed.
+   *  The seat is left out and the run exits 1. Nothing is closed. */
+  doubtHeld?: boolean;
   /**
    * A seat recorded with no process identity whose pane is a bare shell or another model.
    * This `up` does not close it: the record cannot prove the pane is the seat's. The line
@@ -193,6 +238,11 @@ export interface UpSeat {
    * says it, so the owner is not left with a seat that is "already ready" and stale.
    */
   restartNote?: string;
+  /**
+   * Set when this `up` is the granted orchestrator's and this seat is that seat. The plan
+   * skips it before any close or launch: the run does not relaunch or close the caller's pane.
+   */
+  grantKeep?: string;
 }
 
 export interface UpInput {
@@ -204,14 +254,14 @@ export interface UpInput {
   seats: readonly UpSeat[];
   /** The watch's pid is alive, so no second watch is started. */
   watchAlive?: boolean;
-  /** When false, no watchdog workspace is created: a flagless watch started in `root` would
+  /** When false, no watch is started: a flagless watch started in `root` would
    *  not read the file this plan was built from. Absent means start one, as before. */
   startWatch?: boolean;
-  /** The command the watchdog pane runs. Defaults to `team watch`. */
+  /** The command the detached watch runs. Defaults to `team watch`. */
   watchLine?: string;
   /**
-   * The team file a flagless watch in `root` would not read. Recorded for the watchdog pane
-   * before its command runs. Absent when that flagless watch already reads the file.
+   * The team file a flagless watch in `root` would not read. Recorded before the process
+   * is spawned. Absent when that flagless watch already reads the file.
    */
   watchFile?: string;
 }
@@ -249,6 +299,10 @@ export function upPlan(input: UpInput): Step[] {
   }
 
   for (const seat of input.seats) {
+    if (seat.grantKeep) {
+      steps.push({ kind: 'skip', text: `${seat.name}: ${seat.grantKeep}` });
+      continue;
+    }
     if (seat.stopped) {
       steps.push({ kind: 'skip', text: `${seat.name}: stopped in the file; start it with \`team add ${seat.name}\`` });
       continue;
@@ -294,6 +348,57 @@ export function upPlan(input: UpInput): Step[] {
       }
       continue;
     }
+    if (seat.restored) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: ${seat.restored.detail}`,
+        do: {
+          do: 'record',
+          seat: seat.name,
+          record: { kind: 'ready' },
+          detail: `  ${seat.restored.detail}\n`,
+          launched: seat.restored.launched,
+          agentSession: seat.restored.session,
+        },
+      });
+      continue;
+    }
+    if (seat.sessionDoubt) {
+      if (seat.doubtHeld) {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.sessionDoubt}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'left out', reason: seat.sessionDoubt },
+            held: true,
+          },
+        });
+      } else if (seat.stage === 'ready') {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.sessionDoubt}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'ready' },
+            detail: `  ${seat.sessionDoubt}\n`,
+          },
+        });
+      } else {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.sessionDoubt}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'left out', reason: seat.sessionDoubt },
+          },
+        });
+      }
+      continue;
+    }
     if (seat.stage === 'ready') {
       // A drifted seat this run will not close keeps the ready record. The detail names the
       // caller's own way; the skip words are that line, not the ordinary "left as it is".
@@ -309,6 +414,23 @@ export function upPlan(input: UpInput): Step[] {
           },
         });
         continue;
+      }
+      // Seats launched before the sidebar took the file's lines still show the CLI or the role.
+      // Repaint both lines from the file. Nothing is typed, and the seat is not launched again.
+      if (seat.pane && seat.workspace && seat.displayAgent) {
+        steps.push({
+          kind: 'run',
+          argv: herdr(session, 'workspace', 'rename', seat.workspace, seat.label),
+          also: herdr(session, 'pane', 'report-metadata', seat.pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent),
+          do: {
+            do: 'relabel',
+            seat: seat.name,
+            pane: seat.pane,
+            workspace: seat.workspace,
+            title: seat.label,
+            displayAgent: seat.displayAgent,
+          },
+        });
       }
       steps.push({
         kind: 'skip',
@@ -357,6 +479,12 @@ export function upPlan(input: UpInput): Step[] {
     let notice: string | undefined;
     if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
     else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;
+    if (seat.replacedPane) {
+      const gone = seat.leftWorkspace
+        ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its workspace ${seat.leftWorkspace} was left`
+        : `its recorded pane ${seat.replacedPane} was gone and was replaced`;
+      notice = notice ? `${notice}; ${gone}` : gone;
+    }
     const takeNotice = (): string | undefined => {
       const text = notice;
       notice = undefined;
@@ -442,7 +570,20 @@ export function upPlan(input: UpInput): Step[] {
       steps.push({
         kind: 'run',
         argv: herdr(session, 'agent', 'rename', pane, seat.name),
-        do: { do: 'rename', seat: seat.name, label: seat.label, seconds: profile.idleTimeout, rules, pane: seat.pane },
+        // Line 2 is printed with the rename. The live run reports it after the name lands,
+        // so the idle wait and anything it asks the owner stay as they were.
+        ...(seat.displayAgent
+          ? { also: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent) }
+          : {}),
+        do: {
+          do: 'rename',
+          seat: seat.name,
+          label: seat.label,
+          seconds: profile.idleTimeout,
+          rules,
+          pane: seat.pane,
+          ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
+        },
       });
     }
     if (profile.rulesOption === null) {
@@ -492,14 +633,14 @@ export function upPlan(input: UpInput): Step[] {
   const watchLine = input.watchLine ?? `team watch${watchArguments}`;
   steps.push({
     kind: 'run',
-    argv: herdr(session, 'workspace', 'create', '--cwd', input.root, '--label', 'watchdog', '--no-focus'),
-    do: { do: 'create', label: 'watchdog', cwd: input.root },
-  });
-  steps.push({
-    kind: 'run',
-    argv: herdr(session, 'pane', 'run', paneOf('watchdog'), watchLine),
-    note: 'a desktop notification follows when the watch exits',
-    do: { do: 'watch', label: 'watchdog', command: watchLine, ...(input.watchFile ? { file: input.watchFile } : {}) },
+    argv: [watchLine],
+    note: 'detached; the state records its pid',
+    do: {
+      do: 'spawn-watch',
+      command: watchLine,
+      cwd: input.root,
+      ...(input.watchFile ? { file: input.watchFile } : {}),
+    },
   });
   return steps;
 }
@@ -518,11 +659,19 @@ export interface DownSeat {
   exitInBox?: boolean;
   /** The pane already shows this CLI's framed exit question. This run did not ask it. */
   atExitQuestion?: boolean;
+  /** Herdr has not named this pane. The state records it for this seat: close it, type nothing,
+   *  unless `keep` names the seat. */
+  unnamed?: boolean;
+  /** Herdr's name for this pane, when it is not the seat's name. The state records the pane
+   *  and the workspace for this seat: close it, type nothing, unless `keep` names the seat.
+   *  The name is not the match. */
+  title?: string;
 }
 
 export interface DownInput {
   session: string;
-  /** The running seats the file and the state name; nothing else is closed. */
+  /** The running seats the file names, plus a pane whose pane and workspace the state records
+   *  for a seat, named or not. A name the file does not carry is not closed on that name. */
   seats: readonly DownSeat[];
   /** Agents in the session that the file and the state don't name. */
   extra: number;
@@ -555,12 +704,32 @@ export function downPlan(input: DownInput): Step[] {
   let left = input.extra;
 
   for (const seat of input.seats) {
+    // Before every close: a kept seat stays, whatever herdr calls its pane.
     if (input.keep.includes(seat.name)) {
       steps.push({
         kind: 'skip',
         text: `${seat.name}: left running; only the owner stops the orchestrator's or the operator's seat`,
       });
       left++;
+      continue;
+    }
+    if (seat.unnamed || seat.title) {
+      const said = seat.title
+        ? `titled ${seat.title}, not its seat name; the state records its pane and workspace, so its workspace was closed`
+        : 'created for this seat and never named; its workspace was closed';
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'workspace', 'close', seat.workspace),
+        note: seat.title
+          ? `titled ${seat.title}; recorded for this seat; closed without typing`
+          : 'created for this seat and never named; closed without typing',
+        do: {
+          do: 'close',
+          seat: seat.name,
+          workspace: seat.workspace,
+          said,
+        },
+      });
       continue;
     }
     const profile = profileFor(seat.cli);
@@ -692,10 +861,12 @@ export function downPlan(input: DownInput): Step[] {
 export function formatPlan(steps: readonly Step[]): string {
   const lines = steps.map((step) => {
     if (step.kind === 'run') {
-      const command = step.argv
+      const show = (argv: readonly string[]) => argv
         .map((word) => (/^<pane of .+>$|^[A-Z_]+=\$[A-Z_]+$/.test(word) ? word : shellQuote(word)))
         .join(' ');
-      return `+ ${command}${step.note ? `\n    (${step.note})` : ''}`;
+      const note = step.note ? `\n    (${step.note})` : '';
+      const extra = step.also ? `\n+ ${show(step.also)}` : '';
+      return `+ ${show(step.argv)}${note}${extra}`;
     }
     if (step.kind === 'wait') return `  wait ${step.text}${step.note ? `\n    (${step.note})` : ''}`;
     return `  skip ${step.text}${step.note ? `\n    (${step.note})` : ''}`;

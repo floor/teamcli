@@ -2,9 +2,9 @@
 
 Watches a running team. Every `watch.interval` seconds it reads the session — the seats, their
 screens, the file, the approval, the machine — prints what is wrong, and removes a merged worktree
-whose end holds. A temporary seat is left as it is: the owner removes it. When a seat asks a
-question, or goes idle, and an approval is in force, it types one fixed line into the one live
-agent of the approved operator — the nudge — so the operator reads its log. A file that was never
+whose end holds. A temporary seat is left as it is: the owner removes it. When a report is
+waiting, and an approval is in force, it types one fixed line into an idle seat — the nudge —
+so that seat reads the log. The operator is not that seat. A file that was never
 approved, a legacy record, and a refused record type nothing. It types nothing into a
 screen it can't read as an empty idle prompt, so a permission dialog and a half-typed sentence are
 left alone. A box that already holds the nudge's own line is sent, not typed into twice — and only
@@ -24,7 +24,7 @@ machine's approval store, the session's state (`.agents/team.state.json`) and he
 agents, each pane's screen and status. With no `--file`, that file is `.agents/team.yaml` of the
 repository's main checkout, found through git's common directory; a folder that is not a git
 repository is read from `.agents/team.yaml` in that folder only, not from a parent, and a link at
-`.agents` or at the file is not followed. A file at another path is what this command reads when `up` recorded it for the watchdog pane
+`.agents` or at the file is not followed. A file at another path is what this command reads when `up` recorded it for the watch
 this session's state names: the command `up` runs carries no `--file`, and any other non-owner
 is refused. It also reads the machine's load, free memory, free disk and
 swap, and, when a temporary seat's end is judged, git.
@@ -32,7 +32,7 @@ swap, and, when a temporary seat's end is judged, git.
 Writes `.agents/team.state.json` (the watch's pid and a heartbeat, once a pass; a temporary seat's
 `worked` and `own_commits` when it sees them; the accounts' latest screen readings and the money the
 spend checks read), `.agents/team.log` (every line it prints), and, through herdr: the nudge's text
-and Enter, and the panes and workspaces of the seats it closes.
+and Enter, and the seats' sidebar lines — the workspace title and the display line — from the file.
 
 The readings are only written when the watch's session is the file's own `session`: `up` and `add`
 count the state as the project's, so a watch on another session — `--session <other>`, which anyone
@@ -69,25 +69,25 @@ in the transcript above an ordinary box leaves the screen unknown.
 
 ## Who may run it
 
-Anyone, in any terminal. `up` starts one for the session in a pane of its own, and this is the one
-`team status` and `team doctor` look for. A person may run one by hand: it prints the same lines,
-and Ctrl-C stops it and exits 0. Two watches must not fight over the same session, so a second one
-refuses. `--no-nudge` and `--no-notify` are the owner's: a seat that passed either would be holding
-the session's only watch with the operator's nudge, or the operator's notices, turned off. `--file`
-is the owner's alone too: the watch `up` starts reads the project's own file from the project root
-and carries no flag, so a non-owner aiming `--file` at another project is refused before that file
-is read.
+Anyone, in any terminal. A run with no terminal is refused before the watch starts:
+`team watch: only the owner runs this, from a terminal outside herdr`. `up` starts one for the session as a background process, and records its
+pid. This is the one `team status` and `team doctor` look for. A person may run one by hand: it
+prints the same lines, and Ctrl-C stops it and exits 0. Two watches must not fight over the same
+session, so a second one refuses. `--no-nudge` and `--no-notify` are the owner's: a seat that
+passed either would be holding the session's only watch with the nudge, or the notices, turned
+off. `--file` is the owner's alone too: the watch `up` starts reads the project's own file from
+the project root and carries no flag, so a non-owner aiming `--file` at another project is
+refused before that file is read.
 
-## When its pane closes
+## When it stops
 
-The watch ends with its pane. `up` starts it in the session's watchdog workspace, and once this
-process has seen itself there it records that pane. A hangup — what closing the pane sends —
-stops the watch the same way Ctrl-C does, and the record is cleared. A process that is still
-running after its pane is gone stops when the next pass finds it gone again. A watch started by
-hand records no pane and keeps running. While a recorded pane is gone and that process is still
-running, `team doctor` names the process by its name and its pid and the repair is to stop it
-and run `team up`.
-`remove --keep` and `add` close the seat's workspace, not the watchdog's.
+`up` starts the watch detached, with no workspace and no pane, and the state records its pid.
+Ctrl-C stops a watch the same way a stop signal does, and the record is cleared. A watch started
+by hand records no pane and keeps running. A watch that already recorded a pane — an older `up` —
+ends when the next pass finds that pane gone again. While that pane is gone and the process is
+still running, `team doctor` names the process by its name and its pid and the repair is to stop
+it and run `team up`.
+`remove --keep` and `add` close the seat's workspace. They do not stop the watch.
 
 ## Flags
 
@@ -104,8 +104,8 @@ and run `team up`.
 Every line carries its time, and every line goes to `.agents/team.log` as well:
 
     2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-    2026-10-04T09:00:00.000Z claude-beacon asked a question: the operator's to act on
-    2026-10-04T09:00:00.000Z nudged the operator: Team watch: reports are waiting in .agents/team.log
+    2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
+    2026-10-04T09:00:00.000Z nudged claude-beacon: Team watch: reports are waiting in .agents/team.log
     2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 
 A report is printed when it starts, and again only after it has cleared: a seat that stays blocked,
@@ -125,7 +125,8 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | --- | --- |
 | `<seat> is in the file and is not running` | herdr lists no agent for a seat the file has, does not stop, and the watch has not seen running |
 | `<seat> was running and is gone (its pane closed, or its CLI ended)` | herdr lists no agent for a seat the watch had seen running; said at each disappearance |
-| `<seat> is no longer the process team launched (its session was restored, or its CLI was restarted)` | the process in the seat's pane is not the one recorded when `team` launched it: the pane runs no CLI, or one `team` did not launch |
+| `<seat> is no longer the process team launched (its session was restored, or its CLI was restarted)` | the process in the seat's pane is not the one recorded when `team` launched it: the pane runs no CLI, or a program `team` did not launch runs in it and the agent session herdr shows there is not the one stored at launch. A pane the stored session came back on is the seat again and is not reported; a seat with no record of its launch, or a pane herdr can't read, is not reported either |
+| `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched — <repair>` | that pane holds a process `team` did not launch, and the launch line starts a program other than the CLI's own binary, or the file says the launcher chooses the model. A pane back at its shell is not this report. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
 | `<seat> waits at a permission prompt: its owner's to answer` | a permission dialog or a trust question; only its owner answers those |
 | `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
 | `<seat> shows a vendor notice: its owner's to act on` | a screen the seat's profile captures as a vendor notice — today, Codex 0.157.0's update screen; `team` never answers one |
@@ -138,8 +139,8 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> has been idle since the watch started` | quiet for `watch.idle_first`, and never seen working (reported once; repeated every `watch.idle_repeat` when set) |
 | `<seat> has been idle for <n> minutes` | quiet for `watch.idle_first` since its last turn (reported once per idle period; repeated every `watch.idle_repeat` when set) |
 | `every agent is idle` | every seat that is not the orchestrator, the operator or parked, quiet for `watch.team_idle` |
-| `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model` (`<declared>` is the seat's `display` spelling) | the running model or version is not the file's |
-| `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, the watchdog pane aside |
+| `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model — <repair>` (`<declared>` is the seat's `display` spelling) | the running model or version is not the file's. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
+| `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, a workspace labelled watchdog aside |
 | `the file was never approved on this machine` | there is no approval record for this project |
 | `approved before records were signed: run \`team approve\` once` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
 | `<why the record was refused>` | a signed record that does not verify (changed after approval, another root, a replayed or rolled-back generation): said once, and the watch keeps watching |
@@ -158,7 +159,7 @@ Each report is addressed to the owner or to the operator. The operator's is what
 for, and `--no-notify` can drop its desktop notification. The owner's — a permission prompt, a
 vendor notice, an approval difference, a
 machine figure, an account inside its reserve or at its floor — is notified anyway, and so are the
-watch's own notices: the file can't be read, herdr doesn't answer, the operator could not be nudged,
+watch's own notices: the file can't be read, herdr doesn't answer, no idle seat could be nudged,
 a typed nudge was not sent, and the watch stopped. Neither flag
 removes the log line, and neither reaches `team status`: a reserve still shows on the budgets
 table, and an approval difference is still a difference.
@@ -168,12 +169,12 @@ A report that is the operator's to act on is also what the nudge stands for. The
 | Line | Made when |
 | --- | --- |
 | `watching the session "<session>" every <n>s` | at the start; `, without nudges` is added by `--no-nudge` |
-| `nudged the operator: Team watch: reports are waiting in .agents/team.log` | the nudge was typed and sent |
-| `nudged the operator (its own unsent line was already in its box): <nudge>` | the box still held the line this same watch process had typed, its Enter never sent; that line is sent instead of typed again |
+| `nudged <seat>: Team watch: reports are waiting in .agents/team.log` | the nudge was typed into an idle seat and sent |
+| `nudged <seat> (its own unsent line was already in its box): <nudge>` | the box still held the line this same watch process had typed, its Enter never sent; that line is sent instead of typed again |
 | `nudge not typed (--no-nudge): <nudge>` | `--no-nudge`, with reports waiting |
 | `ring not typed (--no-nudge): Team: run team messages` | `--no-nudge`, with a message waiting and no report nudge to type; nothing is typed and the record stays |
-| `a nudge was typed and not sent: the operator's box does not hold it` | the pane had not drawn the typed line, or held something else, when the bounded wait for it ended; nothing is sent, and the reports wait for the next pass |
-| `the operator could not be nudged for <n> minutes; <k> report(s) wait: <reports>` | the operator was busy for `watch.nudge_wait`; this one is a desktop notification too |
+| `a nudge was typed and not sent: <seat>'s box does not hold it` | the pane had not drawn the typed line, or held something else, when the bounded wait for it ended; nothing is sent, and the reports wait for the next pass |
+| `no idle seat could be nudged for <n> minutes; <k> report(s) wait: <reports>` | no idle seat was free for `watch.nudge_wait`; this one is a desktop notification too |
 | `rang <seat>: Team: run team messages` | a message was already waiting and that seat's box was an empty idle prompt; the line was typed and sent, and the body was not |
 | `message <id> for <seat> has been waiting <n> minutes` | that message is older than `nudge_wait` and the seat's box was not free; said once, to the owner, and nothing is typed |
 | `herdr doesn't answer; the watch keeps trying` | the pass is skipped and the watch goes on |
@@ -283,7 +284,7 @@ seats:
 watch: none
 ```
 
-Two seats at their prompts, nothing to report: a pass is the two lines that frame it.
+The seats are at their prompts, nothing to report: a pass is the two lines that frame it.
 
 ```console
 $ team watch ; echo "exit $?"
@@ -292,14 +293,15 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-A question is the operator's to act on, so the watch nudges the operator — one fixed line, which is
-not the report itself: the report is in the log, and the line says where.
+A question is the operator's to act on, so the watch nudges an idle seat — one fixed line, which is
+not the report itself: the report is in the log, and the line says where. The operator is a lead
+and is not that seat.
 
-```console screens="claude-beacon=question"
+```console screens="claude-keeper=question"
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z claude-beacon asked a question: the operator's to act on
-2026-10-04T09:00:00.000Z nudged the operator: Team watch: reports are waiting in .agents/team.log
+2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
+2026-10-04T09:00:00.000Z nudged claude-beacon: Team watch: reports are waiting in .agents/team.log
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
 ```
@@ -314,13 +316,12 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-`--no-nudge` keeps the reports and skips the typing — for a watch whose operator is not to be
-interrupted at all:
+`--no-nudge` keeps the reports and skips the typing — for a watch that must not type into a seat:
 
-```console screens="claude-beacon=question"
+```console screens="claude-keeper=question"
 $ team watch --no-nudge ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s, without nudges
-2026-10-04T09:00:00.000Z claude-beacon asked a question: the operator's to act on
+2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
 2026-10-04T09:00:00.000Z nudge not typed (--no-nudge): Team watch: reports are waiting in .agents/team.log
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
@@ -477,7 +478,7 @@ Needs a new approval: `watch.checks` changed.
 Ceilings this approval fixes: 4 seats at most, 2 temporary.
 Seats: 2 (claude-keeper, claude-beacon).
 approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 1a1bc27b94ff488693c2d91d7c4c578250af5482557b8ccc4a0054954f31c019
+Owner-authorization fingerprint: 056248e0763543ab3fed6f7d26c49a46c7188868d50cec2ae241ce1376813df8
 Approved. The record is in ~/.config/team/beacon-<hash>; signed with key fe21ef6293de; check the rest with `team doctor`.
 exit 0
 ```
@@ -489,7 +490,7 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-`up` leaves a watch running in its own pane, so a second one refuses rather than reading the same
+`up` leaves a watch running as a background process, so a second one refuses rather than reading the same
 session twice:
 
 ```console

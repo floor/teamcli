@@ -41,6 +41,8 @@ export type NativePane = {
   pressEnter(session: string, pane: string): boolean;
   status(session: string, pane: string): string | null;
   wait(ms: number): Promise<void>;
+  /** The pane's visible text, or null when it cannot be read. Absent means the caller does not look. */
+  paneText?(session: string, pane: string): string | null;
 };
 
 /**
@@ -97,16 +99,27 @@ export type SubmitResult = { ok: true; status: string } | { ok: false; reason: s
 /**
  * Types `line` once, presses Enter, and reads herdr's status. A first Enter that leaves the
  * status unchanged is followed by one more Enter — the miss measured when Enter was sent
- * before the composer had the line. Never reads the pane.
+ * before the composer had the line. Never reads the pane. `hold`, when given, is asked once
+ * after the first Enter leaves the status unchanged and before a second Enter: true means
+ * press nothing further.
  */
-export async function submitTrigger(pane: NativePane, session: string, paneId: string, line: string): Promise<SubmitResult> {
+export async function submitTrigger(
+  pane: NativePane,
+  session: string,
+  paneId: string,
+  line: string,
+  hold?: () => boolean,
+  beforeEnter?: () => boolean,
+): Promise<SubmitResult> {
   const before = pane.status(session, paneId);
   if (before === null) return { ok: false, reason: "the seat's status could not be read" };
   if (!pane.typeText(session, paneId, line)) return { ok: false, reason: 'the pane did not take the trigger' };
   await pane.wait(SETTLE_MS);
+  if (beforeEnter?.()) return { ok: false, reason: 'held' };
   if (!pane.pressEnter(session, paneId)) return { ok: false, reason: 'the Enter was not taken' };
   const first = await watch(pane, session, paneId, before);
   if (first !== null) return { ok: true, status: first };
+  if (hold?.()) return { ok: false, reason: 'herdr did not report the seat working' };
   if (!pane.pressEnter(session, paneId)) return { ok: false, reason: 'the Enter was not taken' };
   const second = await watch(pane, session, paneId, before);
   if (second !== null) return { ok: true, status: second };

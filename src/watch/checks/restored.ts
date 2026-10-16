@@ -12,16 +12,31 @@ export const restored: SeatCheck = {
     // A reading herdr can't give is no change: `unknown` keeps the mark (a failed read must not
     // make the same condition report twice). Only `same` — the seat is the seat again — clears
     // it, by neither reporting nor keeping.
+    const launchKey = `launcher:${seat.name}`;
     if (seat.identity === 'unknown') {
       ctx.keep(key);
+      ctx.keep(launchKey);
       return [];
     }
-    if (seat.identity !== 'gone' && seat.identity !== 'replaced') return [];
-    return reported(
-      ctx.once(
+    const reports = [];
+    // The stored agent session is on this pane: the seat came back. The generic line stays
+    // quiet. A launch line that names a launcher is still said: the process is the CLI
+    // without that program, and nothing here starts it again.
+    if (seat.continuity !== 'restored' && (seat.identity === 'gone' || seat.identity === 'replaced')) {
+      reports.push(ctx.once(
         key,
         `${seat.name} is no longer the process team launched (its session was restored, or its CLI was restarted)`,
-      ),
-    );
+      ));
+    }
+    if (seat.identity === 'replaced' && seat.launcher) {
+      const repair = seat.lead
+        ? 'team down, then team up (to restart the whole team)'
+        : `team remove ${seat.name} --keep, then team add ${seat.name}`;
+      reports.push(ctx.once(
+        launchKey,
+        `${seat.name}: its launch line starts a launcher, and the process in its pane is not the one team launched — ${repair}`,
+      ));
+    }
+    return reports.flatMap(reported);
   },
 };

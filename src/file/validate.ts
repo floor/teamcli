@@ -93,6 +93,8 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
     limits: valueOf<TeamFile['limits']>(ctx, 'limits'),
     releases: valueOf<ReleaseDecl[]>(ctx, 'releases'),
     tasks: valueOf<TeamFile['tasks']>(ctx, 'tasks'),
+    tempo: valueOf<TeamFile['tempo']>(ctx, 'tempo'),
+    grant: valueOf<TeamFile['grant']>(ctx, 'grant'),
     delegates: valueOf<TeamFile['delegates']>(ctx, 'delegates'),
     seats: seats as Seat[],
   };

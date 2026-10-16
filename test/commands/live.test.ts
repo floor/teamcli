@@ -3,13 +3,14 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { realSources as downReal, runDown, stateOf, type DownLaunch, type DownSources } from '../../src/commands/down.ts';
 import { realSources as upReal, runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { delegateGate } from '../../src/delegate.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import { sessionState, setHerdrRun, workspacePanes, type HerdrAgent, type HerdrWorkspace } from '../../src/herdr.ts';
-import { readApproval, storePath, writeApproval } from '../../src/store/store.ts';
+import { upFingerprint, OWNER_APPROVAL_ENV } from '../../src/approve/owner-token.ts';
+import { approvalStanding, readApproval, storePath, writeApproval } from '../../src/store/store.ts';
 import { readState } from '../../src/state.ts';
 import { parseMemoryPressure, parseSwapUsage, type Machine } from '../../src/watch/machine.ts';
 import type { Key } from '../../src/launch/terminal.ts';
@@ -64,6 +65,16 @@ async function approve() {
   const io = testIo(root, { kind: 'owner' });
   const code = await runApprove(FILE, io, { ask: async () => '5', waiting: () => 'empty', now: () => NOW, home });
   expect(code).toBe(0);
+}
+
+/** An admitted run that is not the owner at a terminal: the token, on a seat. `up` launches and
+ *  does not prompt. A run placed with no terminal is refused before this path. */
+function quietIo() {
+  const standing = approvalStanding(root, home);
+  if (standing.kind !== 'verified') throw new Error('the no-prompt run needs a verified approval');
+  const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: 'acme-web' });
+  io.env[OWNER_APPROVAL_ENV] = upFingerprint(standing.record.approval.fingerprints, standing.generation);
+  return io;
 }
 
 function agent(name: string, pane: string, status = 'idle', kind = 'claude'): HerdrAgent {
@@ -236,7 +247,7 @@ describe('team up, live', () => {
     writeFileSync(path, makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
     await approve();
     const capture = (name: string) => readFileSync(join(import.meta.dir, `../fixtures/codex/0.157.0/${name}.txt`), 'utf8');
-    const made = world((_pane, label) => (label === 'GPT-6 Sol' ? fileModel(capture('idle')) : IDLE));
+    const made = world((_pane, label) => (label === 'codex-acme · implementer' ? fileModel(capture('idle')) : IDLE));
     const sent: string[] = [];
     made.launch.agentStatus = () => 'idle';
     // A shell holds the pane and never hands it to the CLI: the delivery waits it out, types
@@ -260,7 +271,7 @@ describe('team up, live', () => {
     writeFileSync(path, makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
     await approve();
     const capture = (name: string) => readFileSync(join(import.meta.dir, `../fixtures/codex/0.157.0/${name}.txt`), 'utf8');
-    const made = world((_pane, label) => label === 'GPT-6 Sol'
+    const made = world((_pane, label) => label === 'codex-acme · implementer'
       ? fileModel(capture(outcome === 'trust' || outcome === 'startup' ? outcome : 'idle')) : IDLE);
     let codexPane = '';
     let status = 'idle';
@@ -299,7 +310,7 @@ describe('team up, live', () => {
     // §2: the trust dialog and the vendor notice are exactly what a caller with no terminal
     // cannot be asked about — its workspace is closed without input and the record says so.
     const dialogs = outcome === 'trust' || outcome === 'startup';
-    const io = testIo(root, { kind: dialogs ? 'owner-no-tty' : 'owner' });
+    const io = dialogs ? quietIo() : testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['codex-acme'];
     if (outcome === 'accepted') {
@@ -367,7 +378,7 @@ describe('team up, live', () => {
     writeFileSync(path, makeExample(base, root, EXAMPLE.replace(/  - role: implementer\n    name: codex-acme[\s\S]*?stopped: true\n/, `${gemini}\n`)));
     await approve();
     const capture = (name: string) => readFileSync(join(import.meta.dir, `../fixtures/antigravity/1.2.16/${name}.txt`), 'utf8');
-    const made = world((_pane, label) => (label === 'Gemini 3.8 Flash'
+    const made = world((_pane, label) => (label === 'gemini-acme · implementer'
       ? capture(outcome === 'trust' ? outcome : 'idle') : IDLE));
     let geminiPane = '';
     let status = 'idle';
@@ -402,7 +413,7 @@ describe('team up, live', () => {
       ? (pasted ? boxed() : capture('working')) : read(session, pane));
     // The trust dialog under §2: a caller with no terminal is never asked; it closes the
     // workspace without input and says so. The other outcomes run with the owner at a terminal.
-    const io = testIo(root, { kind: outcome === 'trust' ? 'owner-no-tty' : 'owner' });
+    const io = outcome === 'trust' ? quietIo() : testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['gemini-acme'];
     if (outcome === 'accepted') {
@@ -447,10 +458,9 @@ describe('team up, live', () => {
     expect(code).toBe(0);
     expect(made.starts).toBe(1);
     expect(made.creates).toEqual([
-      'Claude Opus 5.5',
-      'DeepSeek V4.1 Flash',
-      'DeepSeek V4.1 Flash',
-      'watchdog',
+      'claude-coordinator-acme · project coordinator',
+      'deepseek-acme · implementer',
+      'deepseek-acme-2 · implementer',
     ]);
     expect(made.renames).toEqual(['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2']);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
@@ -484,7 +494,7 @@ describe('team up, live', () => {
 
   test('a permission prompt without a terminal closes that workspace and leaves the others', async () => {
     await approve();
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? PERMISSION : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? PERMISSION : IDLE));
     // Herdr's list and the pane's process: what the fresh launch's own dialog reads leave behind
     // for the close. The pane is unnamed in herdr (the rename never happened), on the list, and
     // its process is the one the dialog was found with — so the close is proven and happens.
@@ -500,7 +510,7 @@ describe('team up, live', () => {
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
     // §2: an owner whose stdin is not a terminal never prompts — the dialog's workspace is
     // closed without input, the record says why, and the other seats carry on.
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: permission (no terminal for owner)\n');
@@ -520,7 +530,7 @@ describe('team up, live', () => {
 
   test('the same close with no terminal is refused when the process changed under it', async () => {
     await approve();
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? PERMISSION : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? PERMISSION : IDLE));
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
         name: null,
@@ -534,7 +544,7 @@ describe('team up, live', () => {
     // close reads back, so the close can prove nothing and does not happen.
     let n = 0;
     made.launch.processInfo = () => ({ shell: 700 + ++n, foreground: [700 + n, 701 + n] });
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     // §3: a workspace whose pane's process is not the one the dialog was found with is left
@@ -559,7 +569,7 @@ describe('team up, live', () => {
       { name: null, agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
     ];
     made.launch.agents = unnamed;
-    const next = testIo(root, { kind: 'owner-no-tty' });
+    const next = quietIo();
     const code2 = await runUp(FILE, next, sources({ agents: unnamed }, made));
     expect(code2).toBe(1);
     expect(next.out + next.err).not.toContain("doesn't record");
@@ -575,7 +585,7 @@ describe('team up, live', () => {
       { name: 'claude-coordinator-acme', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
     ];
     made.launch.agents = namedList;
-    const named = testIo(root, { kind: 'owner-no-tty' });
+    const named = quietIo();
     const code3 = await runUp(FILE, named, sources({ agents: namedList }, made));
     expect(code3).toBe(1);
     expect(named.out).toContain('claude-coordinator-acme: left out: its waiting pane holds another process\n');
@@ -630,10 +640,10 @@ describe('team up, live', () => {
       { name: null, agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
     ];
     made.launch.agents = listed;
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       agents: listed,
-      workspaces: () => [{ id: 'w9', label: 'Claude Opus 5.5' }],
+      workspaces: () => [{ id: 'w9', label: 'claude-coordinator-acme · project coordinator' }],
     }, made));
     expect(code).toBe(1);
     // An unnamed pane is not the seat. The recorded pane selects nothing, so the seat is left
@@ -689,10 +699,10 @@ describe('team up, live', () => {
       { name: 'claude-coordinator-acme', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
     ];
     made.launch.agents = listed;
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       agents: listed,
-      workspaces: () => [{ id: 'w9', label: 'Claude Opus 5.5' }],
+      workspaces: () => [{ id: 'w9', label: 'claude-coordinator-acme · project coordinator' }],
     }, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its waiting pane holds another process\n');
@@ -747,10 +757,10 @@ describe('team up, live', () => {
       { name: 'claude-coordinator-acme', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
     ];
     made.launch.agents = listed;
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       agents: listed,
-      workspaces: () => [{ id: 'w9', label: 'Claude Opus 5.5' }],
+      workspaces: () => [{ id: 'w9', label: 'claude-coordinator-acme · project coordinator' }],
     }, made));
     expect(code).toBe(1);
     // The record's waiting entry is read before any idle reading: the seat is refused by the
@@ -776,7 +786,7 @@ describe('team up, live', () => {
   test('a trust dialog without a terminal closes that workspace without an answer and leaves the seat out', async () => {
     await approve();
     const trust = 'Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit\n';
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? trust : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? trust : IDLE));
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
         name: null,
@@ -787,7 +797,7 @@ describe('team up, live', () => {
         cwd: null,
       }));
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     // The record names the reading; the close is its stderr detail; the log keeps the record.
@@ -810,7 +820,7 @@ describe('team up, live', () => {
     ['question', 'Which branch should this start from?\n\n❯ 1. main\n  2. next\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n', 'question'],
   ] as const)('a %s reading whose close fails leaves the seat as it is', async (_reading, screen, reading) => {
     await approve();
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? screen : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? screen : IDLE));
     const closed: string[] = [];
     made.launch.closeWorkspace = (_session, workspace) => {
       closed.push(workspace);
@@ -865,7 +875,7 @@ describe('team up, live', () => {
     const made = world(shown);
     // §2, no terminal: a timeout is not a dialog, so the seat keeps today's record and nothing
     // is closed. (At a terminal the owner is asked about the timeout — its own tests.)
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
@@ -958,7 +968,7 @@ describe('team up, live', () => {
         ? `${command.split('\n')[0]}\n… Protected checkouts, relative to the project root: .\n${home}/.config/team/lobby 16:16:23\n❯\n`
         : IDLE;
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(0);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
@@ -975,7 +985,7 @@ describe('team up, live', () => {
     // launch ran and ended, so the wait goes to the deadline and the reading is a timeout.
     const made = world('restarted\n~ ❯\n');
     made.launch.shellBack = () => true;
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
@@ -1036,7 +1046,7 @@ describe('team up, live', () => {
       seen.set(pane, n);
       return n === 1;
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
@@ -1092,7 +1102,7 @@ describe('team up, live', () => {
       seen.set(pane, n);
       return n === 1 ? true : null;
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
@@ -1123,7 +1133,7 @@ describe('team up, live', () => {
     const io = testIo(root, { kind: 'owner' });
     await runUp(FILE, io, sources({ sessionState: () => 'running', workspaces: () => [] }, made));
     expect(made.starts).toBe(0);
-    expect(made.creates).toContain('Claude Opus 5.5');
+    expect(made.creates).toContain('claude-coordinator-acme · project coordinator');
     expect(made.runs.some((run) => run.pane === 'w9:p1')).toBe(false);
     expect(made.runs.some((run) => run.pane === 'w1:p1')).toBe(true);
   });
@@ -1156,7 +1166,7 @@ describe('team up, live', () => {
         {
           sessionState: () => 'running',
           agents: () => [agent('claude-coordinator-acme', 'w8:p1'), agent('deepseek-acme', 'w7:p1')],
-          workspaces: () => [{ id: 'w8', label: 'Claude Opus 5.5' }, { id: 'w7', label: 'DeepSeek V4.1 Flash' }],
+          workspaces: () => [{ id: 'w8', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w7', label: 'deepseek-acme · implementer' }],
         },
         made,
       ),
@@ -1169,7 +1179,7 @@ describe('team up, live', () => {
       '  already ready; left as it is; a relaunch records its process: ' +
         'team down, then team up (to restart the whole team)\n',
     );
-    expect(made.creates).toEqual(['DeepSeek V4.1 Flash', 'watchdog']);
+    expect(made.creates).toEqual(['deepseek-acme-2 · implementer']);
     expect(made.renames).toContain('deepseek-acme');
     expect(made.renames).not.toContain('claude-coordinator-acme');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
@@ -1345,7 +1355,7 @@ describe('team up, live', () => {
     const passed = {
       sessionState: () => 'running' as const,
       agents: listed,
-      workspaces: () => [{ id: 'w8', label: 'Claude Opus 5.5' }, { id: 'w7', label: 'DeepSeek V4.1 Flash' }],
+      workspaces: () => [{ id: 'w8', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w7', label: 'deepseek-acme · implementer' }],
     };
     const plan = testIo(root, { kind: 'owner' });
     expect(await runUp(['--dry-run', ...FILE], plan, sources(passed, made))).toBe(0);
@@ -1406,7 +1416,7 @@ describe('team up, live', () => {
       {
         sessionState: () => 'running',
         agents: () => [agent('claude-coordinator-acme', 'w1:p1'), agent('codex-acme', 'w2:p1')],
-        workspaces: () => [{ id: 'w1', label: 'Claude Opus 5.5' }, { id: 'w2', label: 'GPT-6 Sol' }],
+        workspaces: () => [{ id: 'w1', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w2', label: 'codex-acme · implementer' }],
         alive: () => true,
         watchCommand: () => 'team watch',
       },
@@ -1621,7 +1631,7 @@ describe('team up, live', () => {
           {
             sessionState: () => 'running',
             agents: () => [],
-            workspaces: () => [{ id: 'w7', label: 'DeepSeek V4.1 Flash' }, { id: 'w6', label: 'GPT-6 Sol' }],
+            workspaces: () => [{ id: 'w7', label: 'deepseek-acme · implementer' }, { id: 'w6', label: 'GPT-6 Sol' }],
             doctor: doctor(),
           },
           made,
@@ -1774,7 +1784,7 @@ describe('team up, live', () => {
         {
           sessionState: () => 'running',
           agents: () => [],
-          workspaces: () => [{ id: 'w7', label: 'DeepSeek V4.1 Flash' }, { id: 'w6', label: 'GPT-6 Sol' }],
+          workspaces: () => [{ id: 'w7', label: 'deepseek-acme · implementer' }, { id: 'w6', label: 'GPT-6 Sol' }],
           doctor: doctor(),
         },
         made,
@@ -1851,7 +1861,7 @@ describe('team up, live', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
-    expect(made.creates.filter((label) => label !== 'watchdog')).toEqual(['Claude Opus 5.5']);
+    expect(made.creates.filter((label) => label !== 'watchdog')).toEqual(['claude-coordinator-acme · project coordinator']);
     expect(io.out).toContain('the approval allows 1 seats; 2 would be running');
   });
 
@@ -1914,7 +1924,7 @@ describe('team up, live', () => {
     // and this call leaves the files as they were, so the log gains nothing.
     const seat = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1' });
     expect(await runUp(FILE, seat, sources({ machine: () => refusing }, world()))).toBe(1);
-    expect(seat.err).toContain('only the owner runs `up`');
+    expect(seat.err).toBe('deny\n');
     let log = existsSync(join(root, '.agents', 'team.log')) ? readFileSync(join(root, '.agents', 'team.log'), 'utf8') : '';
     expect(log).not.toContain('readings:');
     // A dry run decides nothing — its refused run exits as the real one, and it writes nothing.
@@ -1979,8 +1989,9 @@ describe('team up, live', () => {
       },
     }, made));
     expect(code).toBe(1);
-    expect(made.creates).toContain('Claude Opus 5.5');
-    expect(made.creates).not.toContain('DeepSeek V4.1 Flash');
+    expect(made.creates).toContain('claude-coordinator-acme · project coordinator');
+    expect(made.creates).not.toContain('deepseek-acme · implementer');
+    expect(made.creates).not.toContain('deepseek-acme-2 · implementer');
     expect(io.out).toContain('deepseek-acme: left out: swap grew by 2.0 GB in 10 minutes, above 1.0 GB');
   });
 
@@ -1989,7 +2000,7 @@ describe('team up, live', () => {
     const made = world();
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({ machine: () => fine }, made))).toBe(0);
-    expect(made.creates).toEqual(['Claude Opus 5.5', 'DeepSeek V4.1 Flash', 'DeepSeek V4.1 Flash', 'watchdog']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
   });
 
   test("a doctor miss refuses, and the watch's missing heartbeat does not", async () => {
@@ -2217,8 +2228,11 @@ describe('team up, one run at a time', () => {
 });
 
 // A restored session: herdr lists the names, and the processes behind them are not the ones team
-// launched. `up` closes each such workspace with no key and no text, clears the launch state, and
-// launches the seat fresh; a seat still holding its recorded process is skipped as ready.
+// launched. A pane back at its shell is closed with no key and no text and the seat launched
+// fresh, even when herdr still lists the seat's name. A pane held by another program is left,
+// unless its agent session is the one stored at launch, in which case the seat is kept and the
+// stored pids become the ones the pane holds now. A seat still holding its recorded process is
+// skipped as ready.
 describe('team up, a session that was restored', () => {
   test('four seats: one same, one gone, one replaced, one whose pane is missing', async () => {
     writeFileSync(join(root, '.agents/team.yaml'), makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
@@ -2256,9 +2270,8 @@ describe('team up, a session that was restored', () => {
       // A pane this run made: the CLI it has just launched.
       return { shell: 700, foreground: [700, 701] };
     };
-    // The repair re-reads herdr immediately before each close: the agent list, the process
-    // reading again, and — for a replaced pane — its screen. w93's pane shows an idle screen,
-    // so the replaced seat is closed only because its screen does not read working.
+    // The repair re-reads herdr immediately before the shell's close. The pane that holds
+    // another program has no stored session, so it is left.
     const agents = [
       agent('claude-coordinator-acme', 'w91:p1', 'idle'),
       agent('codex-acme', 'w92:p1', 'idle', 'codex'),
@@ -2295,7 +2308,7 @@ describe('team up, a session that was restored', () => {
       sources(
         {
           sessionState: () => 'running',
-          workspaces: () => [{ id: 'w91', label: 'Claude Opus 5.5' }, { id: 'w92', label: 'GPT-6 Sol' }, { id: 'w93', label: 'DeepSeek V4.1 Flash' }],
+          workspaces: () => [{ id: 'w91', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w92', label: 'codex-acme · implementer' }, { id: 'w93', label: 'deepseek-acme · implementer' }],
           agents: () => [
             agent('claude-coordinator-acme', 'w91:p1', 'idle'),
             agent('codex-acme', 'w92:p1', 'idle', 'codex'),
@@ -2308,36 +2321,149 @@ describe('team up, a session that was restored', () => {
     );
 
     expect(code).toBe(0);
-    // Each broken seat's workspace is closed before its own fresh launch, and the pane that holds
-    // the wrong process is never typed or run into.
-    expect(made.closes).toEqual(['w91', 'w93']);
-    // The reads of item 1 stand directly before each close, with nothing between: the agent
-    // list, the pane and process read; the screen only for the replaced seat.
+    // The shell is closed before its fresh launch. The pane that holds another program, with no
+    // stored session, is not closed and is never typed or run into. The coordinator's name is
+    // still in the agent list; that does not keep a shell.
+    expect(made.closes).toEqual(['w91']);
     const before = (at: string, n: number) => calls.slice(0, calls.indexOf(at)).slice(-n);
     expect(before('close w91', 2)).toEqual(['agents', 'process w91:p1']);
-    expect(before('close w93', 3)).toEqual(['agents', 'process w93:p1', 'paneText w93:p1']);
     expect(calls.indexOf('close w91')).toBeLessThan(calls.indexOf('run w1:p1'));
-    expect(calls.indexOf('close w93')).toBeLessThan(calls.indexOf('run w2:p1'));
+    expect(calls).not.toContain('close w93');
     expect(keys).toEqual([]);
     expect(made.runs.filter(({ pane }) => ['w91:p1', 'w92:p1', 'w93:p1', 'w94:p1'].includes(pane))).toEqual([]);
-    // Both fresh launches carry their rules; the fresh panes read the new identity back.
     expect(made.runs.find(({ pane }) => pane === 'w1:p1')?.command).toContain('--append-system-prompt');
     expect(made.runs.find(({ pane }) => pane === 'w1:p1')?.command).toContain('Agent: Claude Opus 5.5 · project coordinator');
-    expect(made.runs.find(({ pane }) => pane === 'w2:p1')?.command).toContain('DeepSeek V4.1 Flash');
-    // The report: the same seat already ready, the two relaunches as each one's record plus its
-    // stderr detail, the missing pane launched the way it always was.
     expect(io.out).toContain('codex-acme: ready\n');
     expect(io.err).toContain('  already ready; left as it is\n');
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(io.err).toContain('  its pane held no CLI; closed without input and launched again\n');
     expect(io.out).toContain('deepseek-acme: ready\n');
-    expect(io.err).toContain('  its pane held a process team did not launch; closed without input and launched again\n');
+    expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
+    expect(io.err).not.toContain('its pane held a process team did not launch');
     expect(io.out).toContain('deepseek-acme-2: ready\n');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['codex-acme']).toMatchObject({ stage: 'ready', pane: 'w92:p1', launched: { shell: 410, cli: [411] } });
     expect(seats['claude-coordinator-acme']).toMatchObject({ stage: 'ready', pane: 'w1:p1', launched: { shell: 700, cli: [701] } });
-    expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w2:p1', launched: { shell: 700, cli: [701] } });
-    expect(seats['deepseek-acme-2']).toMatchObject({ stage: 'ready', pane: 'w3:p1', launched: { shell: 700, cli: [701] } });
+    expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
+    expect(seats['deepseek-acme-2']).toMatchObject({ stage: 'ready', pane: 'w2:p1', launched: { shell: 700, cli: [701] } });
+  });
+
+  test('a matching agent session is not closed, and a drifted model on it is not closed', async () => {
+    writeFileSync(join(root, '.agents/team.yaml'), makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
+    await approve();
+    writeFileSync(
+      join(root, '.agents/team.state.json'),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: {
+              'codex-acme': { stage: 'ready', pane: 'w92:p1', workspace: 'w92', launched: { shell: 410, cli: [411] }, agent_session: 'kept' },
+              'deepseek-acme': { stage: 'ready', pane: 'w93:p1', workspace: 'w93', launched: { shell: 430, cli: [431] }, agent_session: 'kept' },
+            },
+            worktrees: {},
+          },
+        },
+      }),
+    );
+    const terra = readFileSync(join(import.meta.dir, '../fixtures/codex/0.161.0/idle.txt'), 'utf8');
+    const made = world();
+    made.session = 'running';
+    made.launch.processInfo = (_session, pane) => {
+      if (pane === 'w92:p1') return { shell: 800, foreground: [801] };
+      if (pane === 'w93:p1') return { shell: 900, foreground: [901] };
+      return { shell: 700, foreground: [700, 701] };
+    };
+    made.launch.paneText = (_session, pane) => (pane === 'w92:p1' ? terra : IDLE);
+    const keys: string[] = [];
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [{ id: 'w92', label: 'GPT-6 Sol' }, { id: 'w93', label: 'DeepSeek V4.1 Flash' }],
+          agents: () => [
+            { ...agent('codex-acme', 'w92:p1', 'idle', 'codex'), session: 'kept' },
+            { ...agent('deepseek-acme', 'w93:p1', 'idle'), session: 'kept' },
+          ],
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).not.toContain('w92');
+    expect(made.closes).not.toContain('w93');
+    expect(keys).toEqual([]);
+    expect(io.err).toContain('  restored; left as it is; its model drifted; left as it is\n');
+    expect(io.err).toContain('  restored; left as it is\n');
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+    expect(seats['codex-acme']).toMatchObject({ stage: 'ready', pane: 'w92:p1', launched: { shell: 800, cli: [801] }, agent_session: 'kept' });
+    expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 900, cli: [901] }, agent_session: 'kept' });
+  });
+
+  test('a different agent session is not closed', async () => {
+    writeFileSync(join(root, '.agents/team.yaml'), makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
+    await approve();
+    writeFileSync(
+      join(root, '.agents/team.state.json'),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: {
+              'claude-coordinator-acme': { stage: 'ready', pane: 'w91:p1', workspace: 'w91', launched: { shell: 420, cli: [421] } },
+              'codex-acme': { stage: 'ready', pane: 'w92:p1', workspace: 'w92', launched: { shell: 410, cli: [411] } },
+              'deepseek-acme': { stage: 'ready', pane: 'w93:p1', workspace: 'w93', launched: { shell: 430, cli: [431] }, agent_session: 'kept' },
+              'deepseek-acme-2': { stage: 'ready', pane: 'w94:p1', workspace: 'w94', launched: { shell: 440, cli: [441] } },
+            },
+            worktrees: {},
+          },
+        },
+      }),
+    );
+    const made = world();
+    made.session = 'running';
+    made.launch.processInfo = (_session, pane) => {
+      if (pane === 'w91:p1') return { shell: 420, foreground: [420, 421] };
+      if (pane === 'w92:p1') return { shell: 410, foreground: [410, 411] };
+      if (pane === 'w93:p1') return { shell: 900, foreground: [901] };
+      if (pane === 'w94:p1') return { shell: 440, foreground: [440, 441] };
+      return { shell: 700, foreground: [700, 701] };
+    };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [
+            { id: 'w91', label: 'Claude Opus 5.5' },
+            { id: 'w92', label: 'GPT-6 Sol' },
+            { id: 'w93', label: 'DeepSeek V4.1 Flash' },
+            { id: 'w94', label: 'DeepSeek V4.1 Flash' },
+          ],
+          agents: () => [
+            agent('claude-coordinator-acme', 'w91:p1', 'idle'),
+            agent('codex-acme', 'w92:p1', 'idle', 'codex'),
+            { ...agent('deepseek-acme', 'w93:p1', 'idle'), session: 'other' },
+            agent('deepseek-acme-2', 'w94:p1', 'idle'),
+          ],
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+    expect(seats['deepseek-acme']).toMatchObject({ pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 
   test('a workspace that does not close leaves the seat out with a line', async () => {
@@ -2364,14 +2490,14 @@ describe('team up, a session that was restored', () => {
     made.launch.closeWorkspace = () => false;
     // The parked codex seat launched here never idles on its screen and its wait times out.
     // §2, no terminal: the timeout keeps today's record — this run never prompts.
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(
       FILE,
       io,
       sources(
         {
           sessionState: () => 'running',
-          workspaces: () => [{ id: 'w91', label: 'Claude Opus 5.5' }],
+          workspaces: () => [{ id: 'w91', label: 'claude-coordinator-acme · project coordinator' }],
           agents: () => [agent('claude-coordinator-acme', 'w91:p1', 'idle')],
           doctor: doctor(),
         },
@@ -2380,7 +2506,7 @@ describe('team up, a session that was restored', () => {
     );
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its workspace did not close; left as it is\n');
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     // Nothing was cleared: the seat's record still names the pane whose process is not the seat's.
     expect((readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {})['claude-coordinator-acme'])
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
@@ -2389,10 +2515,10 @@ describe('team up, a session that was restored', () => {
   // The four recorded seats the close-path tests start from: each with its pane, workspace and
   // identity, and every reading `same`, so only the seat a test breaks takes the repair path.
   const restoredState = {
-    'claude-coordinator-acme': { pane: 'w91:p1', workspace: 'w91', label: 'Claude Opus 5.5', shell: 420, cli: 421 },
-    'codex-acme': { pane: 'w92:p1', workspace: 'w92', label: 'GPT-6 Sol', shell: 410, cli: 411 },
-    'deepseek-acme': { pane: 'w93:p1', workspace: 'w93', label: 'DeepSeek V4.1 Flash', shell: 430, cli: 431 },
-    'deepseek-acme-2': { pane: 'w94:p1', workspace: 'w94', label: 'DeepSeek V4.1 Flash', shell: 440, cli: 441 },
+    'claude-coordinator-acme': { pane: 'w91:p1', workspace: 'w91', label: 'claude-coordinator-acme · project coordinator', shell: 420, cli: 421 },
+    'codex-acme': { pane: 'w92:p1', workspace: 'w92', label: 'codex-acme · implementer', shell: 410, cli: 411 },
+    'deepseek-acme': { pane: 'w93:p1', workspace: 'w93', label: 'deepseek-acme · implementer', shell: 430, cli: 431 },
+    'deepseek-acme-2': { pane: 'w94:p1', workspace: 'w94', label: 'deepseek-acme-2 · implementer', shell: 440, cli: 441 },
   } as const;
   const restoredList = () =>
     Object.entries(restoredState).map(([name, seat]) => agent(name, seat.pane, 'idle', name === 'codex-acme' ? 'codex' : 'claude'));
@@ -2454,7 +2580,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(0);
     expect(io.out).toContain("claude-coordinator-acme: left out: its pane is the seat's again; left as it is\n");
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2472,7 +2598,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: herdr no longer shows this seat on its recorded pane; nothing closed; run team status\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2491,7 +2617,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: herdr no longer shows this seat on its recorded pane; nothing closed; run team status\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2509,7 +2635,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its workspace holds other panes; nothing closed (close its pane there, then run team up)\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2527,7 +2653,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2545,7 +2671,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2563,7 +2689,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2581,7 +2707,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2604,7 +2730,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2621,7 +2747,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2641,7 +2767,8 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('deepseek-acme: left out: the process in its pane is working; nothing closed (stop it there, or run team remove deepseek-acme)\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('DeepSeek V4.1 Flash');
+    expect(made.creates).not.toContain('deepseek-acme · implementer');
+    expect(made.creates).not.toContain('deepseek-acme-2 · implementer');
     expect(seatState('deepseek-acme')).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
   });
 
@@ -2661,7 +2788,8 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('deepseek-acme: left out: the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove deepseek-acme)\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('DeepSeek V4.1 Flash');
+    expect(made.creates).not.toContain('deepseek-acme · implementer');
+    expect(made.creates).not.toContain('deepseek-acme-2 · implementer');
     expect(seatState('deepseek-acme')).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
   });
 
@@ -2682,7 +2810,7 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
@@ -2693,7 +2821,7 @@ describe('team up, a session that was restored', () => {
     writeFileSync(join(root, '.agents/team.yaml'), makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
     await approve();
     const capture = (name: string) => readFileSync(join(import.meta.dir, `../fixtures/codex/0.157.0/${name}.txt`), 'utf8');
-    const made = world((_pane, label) => (label === 'GPT-6 Sol' ? fileModel(capture('idle')) : IDLE));
+    const made = world((_pane, label) => (label === 'codex-acme · implementer' ? fileModel(capture('idle')) : IDLE));
     made.launch.agentStatus = () => 'idle';
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
     // The first message is never typed: the seat stays at named, with the identity recorded.
@@ -2755,7 +2883,7 @@ describe('team up, a session that was restored', () => {
       }),
     );
     const trust = 'Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit\n';
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? trust : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? trust : IDLE));
     made.session = 'running';
     made.launch.agentPanes = () => ['w1:p1', 'w2:p1', 'w3:p1'];
     const listed = [
@@ -2774,11 +2902,11 @@ describe('team up, a session that was restored', () => {
       calls.push(`paneText:${pane}`);
       return pane === 'w1:p1' ? trust : origPaneText(session, pane);
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       agents: () => listed,
-      workspaces: () => [{ id: 'w1', label: 'Claude Opus 5.5' }, { id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
+      workspaces: () => [{ id: 'w1', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w2', label: 'deepseek-acme · implementer' }, { id: 'w3', label: 'deepseek-acme-2 · implementer' }],
     }, made));
     expect(code).toBe(1);
     // The refusal comes from the record itself, before any pane is read or judged: the screen
@@ -2791,7 +2919,7 @@ describe('team up, a session that was restored', () => {
     expect(made.closes).toEqual([]);
     expect(made.terminal.reads).toBe(0);
     // Nothing was created for the recorded seat, and its record — waiting with it — stays.
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'])
       .toMatchObject({ stage: 'launched', pane: 'w1:p1', workspace: 'w1', waiting: { state: 'waiting-owner', classification: 'trust' } });
   });
@@ -2839,7 +2967,7 @@ describe('team up, a session that was restored', () => {
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       agents: () => listed,
-      workspaces: () => [{ id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
+      workspaces: () => [{ id: 'w2', label: 'deepseek-acme · implementer' }, { id: 'w3', label: 'deepseek-acme-2 · implementer' }],
     }, made));
     expect(code).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme: left out: its waiting pane is gone\n');
@@ -2889,7 +3017,7 @@ describe('team up, a session that was restored', () => {
       }),
     );
     const trust = 'Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit\n';
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? trust : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? trust : IDLE));
     made.session = 'running';
     const listed = [
       agent('claude-coordinator-acme', 'w1:p1', 'idle'),
@@ -2915,11 +3043,11 @@ describe('team up, a session that was restored', () => {
       calls.push(`close:${ws}`);
       return origClose(session, ws);
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       agents: () => listed,
-      workspaces: () => [{ id: 'w1', label: 'Claude Opus 5.5' }, { id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
+      workspaces: () => [{ id: 'w1', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w2', label: 'deepseek-acme · implementer' }, { id: 'w3', label: 'deepseek-acme-2 · implementer' }],
     }, made));
     expect(code).toBe(1);
     // The recorded process was verified before anything was closed, its screen read between
@@ -2930,7 +3058,7 @@ describe('team up, a session that was restored', () => {
       'process:w1:p1', 'paneText:w1:p1',
     ]);
     expect(made.terminal.reads).toBe(0);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(io.out).toContain('claude-coordinator-acme: left out: a run with no terminal does not close a waiting seat; left as it is\n');
     expect(made.closes).toEqual([]);
     expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.waiting?.state).toBe('trust-sent-recovery');
@@ -2967,7 +3095,7 @@ describe('team up, a session that was restored', () => {
       }),
     );
     const trust = 'Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit\n';
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? trust : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? trust : IDLE));
     made.session = 'running';
     const listed = [
       agent('claude-coordinator-acme', 'w1:p1', 'idle'),
@@ -2996,11 +3124,11 @@ describe('team up, a session that was restored', () => {
       calls.push(`close:${ws}`);
       return origClose(session, ws);
     };
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       agents: () => listed,
-      workspaces: () => [{ id: 'w1', label: 'Claude Opus 5.5' }, { id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
+      workspaces: () => [{ id: 'w1', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w2', label: 'deepseek-acme · implementer' }, { id: 'w3', label: 'deepseek-acme-2 · implementer' }],
     }, made));
     expect(code).toBe(1);
     // The refusal names the launch's identity as what changed under it and keeps the record —
@@ -3012,7 +3140,7 @@ describe('team up, a session that was restored', () => {
     expect(io.out).toContain('claude-coordinator-acme: left out: a run with no terminal does not close a waiting seat; left as it is\n');
     expect(calls.some((call) => call.startsWith('close:'))).toBe(false);
     expect(made.closes).toEqual([]);
-    expect(made.creates).not.toContain('Claude Opus 5.5');
+    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(made.terminal.reads).toBe(0);
     // The change under the close writes nothing: the record keeps the launch's identity, so the
     // next `up` can still tell what it is looking at.
@@ -3048,7 +3176,7 @@ describe('team up, a session that was restored', () => {
       },
     }));
     const trust = 'Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit\n';
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? trust : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? trust : IDLE));
     made.session = 'running';
     const listed = [
       agent('claude-coordinator-acme', 'w1:p1', 'idle'),
@@ -3065,14 +3193,14 @@ describe('team up, a session that was restored', () => {
       pane === 'w1:p1' ? { shell: 400, foreground: [400, 401] }
         : pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] }
           : pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       agents: () => listed,
       workspaces: () => [
-        { id: 'w1', label: 'Claude Opus 5.5' },
-        { id: 'w2', label: 'DeepSeek V4.1 Flash' },
-        { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w1', label: 'claude-coordinator-acme · project coordinator' },
+        { id: 'w2', label: 'deepseek-acme · implementer' },
+        { id: 'w3', label: 'deepseek-acme · implementer' },
       ],
     }, made));
     expect(code).toBe(1);
@@ -3158,7 +3286,7 @@ describe('team up, the pause', () => {
   /** A seat under coordination whose trust dialog the coordinator may answer mid-prompt. */
   function coordinated(mutate?: (seat: { stage?: string; waiting?: unknown }) => void) {
     const trust = 'Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit\n';
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? trust : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? trust : IDLE));
     made.launch.agents = agentListOf(made);
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
     const typed: string[] = [];
@@ -3183,7 +3311,7 @@ describe('team up, the pause', () => {
 
   test('the prompt is exact, a key it does not know changes nothing, and q closes and stops cleanly', async () => {
     await approve();
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? PERMISSION : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? PERMISSION : IDLE));
     made.launch.agents = agentListOf(made);
     // The process identity read at the moment the waiting record is written, in the same write.
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
@@ -3238,7 +3366,7 @@ describe('team up, the pause', () => {
 
   test('the stop pass reads herdr, the workspace and the process directly before the close', async () => {
     await approve();
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? PERMISSION : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? PERMISSION : IDLE));
     made.launch.agents = agentListOf(made);
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
     // The three reads the stop pass makes, and the close, each on its own label — the World's
@@ -3268,7 +3396,7 @@ describe('team up, the pause', () => {
 
   test('the stop pass never closes a workspace whose process changed while the prompt was open', async () => {
     await approve();
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? PERMISSION : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? PERMISSION : IDLE));
     made.launch.agents = agentListOf(made);
     // The identity this run started with, until the owner presses q; every read after that sees
     // another process in the pane — it was replaced while the prompt sat open.
@@ -3298,7 +3426,7 @@ describe('team up, the pause', () => {
 
   test('o carries the seat to ready: the ordered host calls, and nothing sent before the pane reads idle', async () => {
     await approve();
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? PERMISSION : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? PERMISSION : IDLE));
     made.launch.agents = agentListOf(made);
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
     const read = made.launch.paneText.bind(made.launch);
@@ -3318,19 +3446,19 @@ describe('team up, the pause', () => {
     expect(calls).toEqual([
       // The fresh reading that stopped the seat, the identity read when the dialog was found
       // (nothing is recorded for the seat yet), and the entry write's identity read.
-      'create:Claude Opus 5.5', 'run:w1:p1', 'read:w1:p1', 'process:w1:p1', 'process:w1:p1',
+      'create:claude-coordinator-acme · project coordinator', 'run:w1:p1', 'read:w1:p1', 'process:w1:p1', 'process:w1:p1',
       // o: the key, then the lock's own reads (the pane is still the seat's — herdr's list,
       // then the process), the manual write with its identity read, and the focus. No key,
       // no text.
       'key:o', 'agents', 'agent-panes', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
       // The first poll: the sleep (the owner answers), then fresh reads — the pane is idle.
       'sleep:2000', 'agents', 'agent-panes', 'process:w1:p1', 'read:w1:p1',
-      // The ordinary path from the idle prompt: the model read, the identity, the rename.
-      'read:w1:p1', 'process:w1:p1', 'agent-panes', 'rename:w1:p1:claude-coordinator-acme',
+      // The ordinary path from the idle prompt: the model read, the identity, the agent list
+      // (so the session id can be stored with it), the rename.
+      'read:w1:p1', 'process:w1:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w1:p1:claude-coordinator-acme',
       // Then the later seats, the same way.
-      'create:DeepSeek V4.1 Flash', 'run:w2:p1', 'read:w2:p1', 'read:w2:p1', 'process:w2:p1', 'agent-panes', 'rename:w2:p1:deepseek-acme',
-      'create:DeepSeek V4.1 Flash', 'run:w3:p1', 'read:w3:p1', 'read:w3:p1', 'process:w3:p1', 'agent-panes', 'rename:w3:p1:deepseek-acme-2',
-      'create:watchdog', 'run:w4:p1',
+      'create:deepseek-acme · implementer', 'run:w2:p1', 'read:w2:p1', 'read:w2:p1', 'process:w2:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w2:p1:deepseek-acme',
+      'create:deepseek-acme-2 · implementer', 'run:w3:p1', 'read:w3:p1', 'read:w3:p1', 'process:w3:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w3:p1:deepseek-acme-2',
     ]);
     expect(typed).toEqual([]);
     expect(lockedWhileWaiting.length).toBeGreaterThanOrEqual(2);
@@ -3345,7 +3473,7 @@ describe('team up, the pause', () => {
 
   test('s closes that seat alone: without input, its state cleared, and the later seats reach ready', async () => {
     await approve();
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? PERMISSION : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? PERMISSION : IDLE));
     made.launch.agents = agentListOf(made);
     // The pane's process: the pause's entry write records it as the waiting identity, and the
     // skip's close reads the same one back — the proof the close is made of.
@@ -3375,7 +3503,7 @@ describe('team up, the pause', () => {
 
   test("q keeps a ready seat's workspace and the session that holds it", async () => {
     await approve();
-    const made = world((_pane, label) => (label === 'DeepSeek V4.1 Flash' ? PERMISSION : IDLE));
+    const made = world((_pane, label) => (label === 'deepseek-acme · implementer' || label === 'deepseek-acme-2 · implementer' ? PERMISSION : IDLE));
     made.launch.agents = agentListOf(made);
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
     let stopped = 0;
@@ -3410,7 +3538,7 @@ describe('team up, the pause', () => {
         },
       },
     }));
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? PERMISSION : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? PERMISSION : IDLE));
     made.session = 'running';
     made.launch.agents = agentListOf(made);
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
@@ -3434,7 +3562,7 @@ describe('team up, the pause', () => {
     // The screen of the capture §2's timeout report is built from: the launch line's own echo,
     // the shell's failure, the prompt back. The wait runs out and the owner is asked.
     const shown = "❯ zsh ../tools/launcher.sh\nzsh: can't open input file: ../tools/launcher.sh\n~ ❯\n";
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? shown : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? shown : IDLE));
     made.launch.agents = agentListOf(made);
     made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
     const snapshots: string[] = [];
@@ -3576,7 +3704,7 @@ describe('team up, the pause', () => {
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       alive: () => true,
-      workspaces: () => [{ id: 'w1', label: 'Claude Opus 5.5' }, { id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
+      workspaces: () => [{ id: 'w1', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w2', label: 'deepseek-acme · implementer' }, { id: 'w3', label: 'deepseek-acme-2 · implementer' }],
       agents: listed,
     }, made));
     expect(code).toBe(0);
@@ -3590,7 +3718,7 @@ describe('team up, the pause', () => {
       'agents', 'process:w1:p1', 'read:w1:p1', 'key:o',
       'agents', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
       'sleep:2000', 'agents', 'process:w1:p1', 'read:w1:p1',
-      'read:w1:p1', 'process:w1:p1', 'agent-panes', 'rename:w1:p1:claude-coordinator-acme',
+      'read:w1:p1', 'process:w1:p1', 'agents', 'agent-panes', 'rename:w1:p1:claude-coordinator-acme',
     ]);
     expect(made.creates).toEqual([]);
     expect(made.runs).toEqual([]);
@@ -3645,7 +3773,7 @@ describe('team up, the pause', () => {
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       alive: () => true,
-      workspaces: () => [{ id: 'w1', label: 'Claude Opus 5.5' }, { id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
+      workspaces: () => [{ id: 'w1', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w2', label: 'deepseek-acme · implementer' }, { id: 'w3', label: 'deepseek-acme-2 · implementer' }],
       agents: listed,
     }, made));
     // End of input is not `q`: the run stops asking, leaves the seat as it is and exits 1.
@@ -3713,7 +3841,7 @@ describe('team up, the pause', () => {
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       alive: () => true,
-      workspaces: () => [{ id: 'w1', label: 'Claude Opus 5.5' }, { id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
+      workspaces: () => [{ id: 'w1', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w2', label: 'deepseek-acme · implementer' }, { id: 'w3', label: 'deepseek-acme-2 · implementer' }],
       agents: listed,
     }, made));
     expect(code).toBe(1);
@@ -3722,7 +3850,7 @@ describe('team up, the pause', () => {
     expect(log).not.toContain('injected');
   });
 
-  test('a recorded waiting seat whose pane is gone fails closed, and the repair is named', async () => {
+  test('a recorded waiting seat whose pane is gone is launched in a fresh workspace', async () => {
     await approve();
     writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
       format: 1,
@@ -3751,7 +3879,7 @@ describe('team up, the pause', () => {
     made.seed('w3:p1', IDLE, true);
     made.session = 'running';
     // herdr no longer lists claude's pane: it is gone, whatever the record says. The other
-    // seats' panes are still there, so only the waiting seat fails closed.
+    // seats' panes are still there, so only that seat is launched again.
     const listed = () => [agent('deepseek-acme', 'w2:p1'), agent('deepseek-acme-2', 'w3:p1')];
     made.launch.agents = listed;
     made.launch.processInfo = (_session, pane) =>
@@ -3763,18 +3891,300 @@ describe('team up, the pause', () => {
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       alive: () => true,
-      workspaces: () => [{ id: 'w1', label: 'Claude Opus 5.5' }, { id: 'w2', label: 'DeepSeek V4.1 Flash' }, { id: 'w3', label: 'DeepSeek V4.1 Flash' }],
+      workspaces: () => [{ id: 'w1', label: 'claude-coordinator-acme · project coordinator' }, { id: 'w2', label: 'deepseek-acme · implementer' }, { id: 'w3', label: 'deepseek-acme-2 · implementer' }],
+      agents: listed,
+    }, made));
+    expect(code).toBe(0);
+    // The recorded pane is not in herdr's list, so the seat is launched in a fresh workspace.
+    // Nothing is closed, and the terminal is not read.
+    expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w1:p1 was gone and was replaced; its workspace w1 was left\n');
+    expect(io.out).not.toContain('left out: its waiting pane is gone');
+    expect(made.closes).toEqual([]);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
+    expect(made.terminal.reads).toBe(0);
+    expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.waiting)
+      .toBeUndefined();
+  });
+
+  test.each(['launched', 'named', 'ready'] as const)(
+    'a waiting %s seat whose recorded pane is gone is launched in a fresh workspace',
+    async (stage) => {
+      await approve();
+      writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
+        format: 1,
+        sessions: {
+          'acme-web': {
+            seats: {
+              'claude-coordinator-acme': {
+                stage,
+                pane: 'w9:p1',
+                workspace: 'w9',
+                launched: { shell: 400, cli: [401] },
+                waiting: { state: 'waiting-owner', classification: 'trust' },
+              },
+              'deepseek-acme': { stage: 'ready', pane: 'w2:p1', workspace: 'w2', launched: { shell: 500, cli: [501] } },
+              'deepseek-acme-2': { stage: 'ready', pane: 'w3:p1', workspace: 'w3', launched: { shell: 510, cli: [511] } },
+            },
+            worktrees: {},
+            watch: { pid: 4242, heartbeat: '2026-10-03T14:01:00Z' },
+          },
+        },
+      }));
+      const made = world(IDLE);
+      made.session = 'running';
+      const others = () => [agent('deepseek-acme', 'w2:p1'), agent('deepseek-acme-2', 'w3:p1')];
+      made.launch.agents = others;
+      made.launch.processInfo = (_session, pane) =>
+        pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
+        pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
+      const host = {
+        sessionState: () => 'running' as const,
+        alive: () => true,
+        workspaces: () => [
+          { id: 'w9', label: 'Claude Opus 5.5' },
+          { id: 'w2', label: 'DeepSeek V4.1 Flash' },
+          { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+        ],
+        agents: others,
+      };
+      const io = testIo(root, { kind: 'owner' });
+      const code = await runUp(FILE, io, sources(host, made));
+      expect(code).toBe(0);
+      expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
+      expect(made.closes).toEqual([]);
+      expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1']);
+      expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced; its workspace w9 was left\n');
+      const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'];
+      expect(seat?.waiting).toBeUndefined();
+      expect(seat?.pane).toBe('w1:p1');
+      expect(seat?.stage).toBe('ready');
+      expect(readState(join(root, '.agents')).sessions['acme-web']?.watch?.pid).toBe(4242);
+
+      const again = () => [
+        agent('claude-coordinator-acme', 'w1:p1'),
+        agent('deepseek-acme', 'w2:p1'),
+        agent('deepseek-acme-2', 'w3:p1'),
+      ];
+      made.launch.agents = again;
+      const second = testIo(root, { kind: 'owner' });
+      const code2 = await runUp(FILE, second, sources({ ...host, agents: again }, made));
+      expect(code2).toBe(0);
+      expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
+      expect(made.closes).toEqual([]);
+      expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1']);
+      expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.pane).toBe('w1:p1');
+    },
+  );
+
+  test('a waiting seat whose recorded pane the host still lists is not replaced', async () => {
+    await approve();
+    writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
+      format: 1,
+      sessions: {
+        'acme-web': {
+          seats: {
+            'claude-coordinator-acme': {
+              stage: 'launched',
+              pane: 'w9:p1',
+              workspace: 'w9',
+              launched: { shell: 400, cli: [401] },
+              waiting: { state: 'waiting-owner', classification: 'trust' },
+            },
+            'deepseek-acme': { stage: 'ready', pane: 'w2:p1', workspace: 'w2', launched: { shell: 500, cli: [501] } },
+            'deepseek-acme-2': { stage: 'ready', pane: 'w3:p1', workspace: 'w3', launched: { shell: 510, cli: [511] } },
+          },
+          worktrees: {},
+          watch: { pid: 4242, heartbeat: '2026-10-03T14:01:00Z' },
+        },
+      },
+    }));
+    const made = world(IDLE);
+    made.session = 'running';
+    const listed = (): HerdrAgent[] => [
+      { name: null, agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
+      agent('deepseek-acme', 'w2:p1'),
+      agent('deepseek-acme-2', 'w3:p1'),
+    ];
+    made.launch.agents = listed;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(FILE, io, sources({
+      sessionState: () => 'running',
+      alive: () => true,
+      workspaces: () => [{ id: 'w9', label: 'Claude Opus 5.5' }],
       agents: listed,
     }, made));
     expect(code).toBe(1);
-    // Fail closed: nothing is created, closed or read from the terminal, and the record stays.
     expect(io.out).toContain('claude-coordinator-acme: left out: its waiting pane is gone\n');
-    expect(io.err).toContain('  its record still names it; `team down` then `team up` (to restart the whole team), clears it\n');
-    expect(made.closes).toEqual([]);
+    expect(io.err).toContain(
+      '  its record still names it; `team down` then `team up` (to restart the whole team), clears it\n',
+    );
     expect(made.creates).toEqual([]);
-    expect(made.terminal.reads).toBe(0);
-    expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.waiting)
-      .toEqual({ state: 'waiting-owner', classification: 'trust' });
+    expect(made.closes).toEqual([]);
+    expect(made.runs).toEqual([]);
+    expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.pane).toBe('w9:p1');
+  });
+
+  test('a coordinator, an operator and the implementers whose waiting panes are gone are launched again', async () => {
+    const team = makeExample(base, root, EXAMPLE
+      .replace('operator: claude-coordinator-acme', 'operator: claude-operator-acme')
+      .replace('  seats: 6', '  seats: 8')
+      .replace(
+        '    mode: shared               # the coordinator reads; it never implements\n',
+        `    mode: shared               # the coordinator reads; it never implements
+
+  - role: operator
+    name: claude-operator-acme
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    mode: shared
+`,
+      ));
+    writeFileSync(join(root, '.agents/team.yaml'), team);
+    await approve();
+    const waiting = {
+      stage: 'launched',
+      launched: { shell: 400, cli: [401] },
+      waiting: { state: 'waiting-owner', classification: 'trust' },
+    };
+    writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
+      format: 1,
+      sessions: {
+        'acme-web': {
+          seats: {
+            'claude-coordinator-acme': { ...waiting, pane: 'w9:p1', workspace: 'w9' },
+            'claude-operator-acme': { ...waiting, pane: 'w8:p1', workspace: 'w8' },
+            'deepseek-acme': { ...waiting, pane: 'w7:p1', workspace: 'w7' },
+            'deepseek-acme-2': { ...waiting, pane: 'w6:p1', workspace: 'w6' },
+          },
+          worktrees: {},
+          watch: { pid: 4242, heartbeat: '2026-10-03T14:01:00Z' },
+        },
+      },
+    }));
+    const made = world(IDLE);
+    made.session = 'running';
+    made.launch.agents = () => [];
+    const host = {
+      sessionState: () => 'running' as const,
+      alive: () => true,
+      workspaces: () => [
+        { id: 'w9', label: 'Claude Opus 5.5' },
+        { id: 'w8', label: 'Claude Opus 5.5' },
+        { id: 'w7', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w6', label: 'DeepSeek V4.1 Flash' },
+      ],
+      agents: () => [],
+    };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(FILE, io, sources(host, made));
+    const report = `${io.out}${io.err}`;
+    expect(code).toBe(0);
+    expect(report).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced; its workspace w9 was left\n');
+    expect(report).toContain('claude-operator-acme: its recorded pane w8:p1 was gone and was replaced; its workspace w8 was left\n');
+    expect(report).toContain('deepseek-acme: its recorded pane w7:p1 was gone and was replaced; its workspace w7 was left\n');
+    expect(report).toContain('deepseek-acme-2: its recorded pane w6:p1 was gone and was replaced; its workspace w6 was left\n');
+    expect(report).not.toContain('left out: its waiting pane is gone');
+    expect(report).not.toContain('its record still names it');
+    expect(report).not.toContain('`team down` then `team up`');
+    expect(report).not.toContain('`team remove deepseek-acme --keep` then `team add deepseek-acme`');
+    expect(report).not.toContain('`team remove deepseek-acme-2 --keep` then `team add deepseek-acme-2`');
+    expect(made.creates).toEqual([
+      'claude-coordinator-acme · project coordinator',
+      'claude-operator-acme · operator',
+      'deepseek-acme · implementer',
+      'deepseek-acme-2 · implementer',
+    ]);
+    expect(made.closes).toEqual([]);
+    expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1', 'w2:p1', 'w3:p1', 'w4:p1']);
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats;
+    expect(seats?.['claude-coordinator-acme']?.pane).toBe('w1:p1');
+    expect(seats?.['claude-operator-acme']?.pane).toBe('w2:p1');
+    expect(seats?.['deepseek-acme']?.pane).toBe('w3:p1');
+    expect(seats?.['deepseek-acme-2']?.pane).toBe('w4:p1');
+    for (const name of ['claude-coordinator-acme', 'claude-operator-acme', 'deepseek-acme', 'deepseek-acme-2']) {
+      expect(seats?.[name]?.waiting).toBeUndefined();
+      expect(seats?.[name]?.stage).toBe('ready');
+    }
+    expect(readState(join(root, '.agents')).sessions['acme-web']?.watch?.pid).toBe(4242);
+
+    const again = () => [
+      agent('claude-coordinator-acme', 'w1:p1'),
+      agent('claude-operator-acme', 'w2:p1'),
+      agent('deepseek-acme', 'w3:p1'),
+      agent('deepseek-acme-2', 'w4:p1'),
+    ];
+    made.launch.agents = again;
+    const second = testIo(root, { kind: 'owner' });
+    const code2 = await runUp(FILE, second, sources({ ...host, agents: again }, made));
+    expect(code2).toBe(0);
+    expect(`${second.out}${second.err}`).not.toContain('was gone and was replaced');
+    expect(`${second.out}${second.err}`).not.toContain('its record still names it');
+    expect(made.creates).toEqual([
+      'claude-coordinator-acme · project coordinator',
+      'claude-operator-acme · operator',
+      'deepseek-acme · implementer',
+      'deepseek-acme-2 · implementer',
+    ]);
+    expect(made.closes).toEqual([]);
+    expect(made.runs.map((run) => run.pane)).toEqual(['w1:p1', 'w2:p1', 'w3:p1', 'w4:p1']);
+    const kept = readState(join(root, '.agents')).sessions['acme-web']?.seats;
+    expect(kept?.['claude-coordinator-acme']?.pane).toBe('w1:p1');
+    expect(kept?.['claude-operator-acme']?.pane).toBe('w2:p1');
+    expect(kept?.['deepseek-acme']?.pane).toBe('w3:p1');
+    expect(kept?.['deepseek-acme-2']?.pane).toBe('w4:p1');
+  });
+
+  test('a gone waiting pane whose workspace the host does not list is replaced without naming one', async () => {
+    await approve();
+    writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
+      format: 1,
+      sessions: {
+        'acme-web': {
+          seats: {
+            'claude-coordinator-acme': {
+              stage: 'launched',
+              pane: 'w9:p1',
+              workspace: 'w9',
+              launched: { shell: 400, cli: [401] },
+              waiting: { state: 'waiting-owner', classification: 'trust' },
+            },
+            'deepseek-acme': { stage: 'ready', pane: 'w2:p1', workspace: 'w2', launched: { shell: 500, cli: [501] } },
+            'deepseek-acme-2': { stage: 'ready', pane: 'w3:p1', workspace: 'w3', launched: { shell: 510, cli: [511] } },
+          },
+          worktrees: {},
+          watch: { pid: 4242, heartbeat: '2026-10-03T14:01:00Z' },
+        },
+      },
+    }));
+    const made = world(IDLE);
+    made.session = 'running';
+    const others = () => [agent('deepseek-acme', 'w2:p1'), agent('deepseek-acme-2', 'w3:p1')];
+    made.launch.agents = others;
+    made.launch.processInfo = (_session, pane) =>
+      pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
+      pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(FILE, io, sources({
+      sessionState: () => 'running',
+      alive: () => true,
+      workspaces: () => [
+        { id: 'w2', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+      ],
+      agents: others,
+    }, made));
+    expect(code).toBe(0);
+    expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced\n');
+    expect(`${io.out}${io.err}`).not.toContain('was left');
+    expect(`${io.out}${io.err}`).not.toContain('workspace w9');
+    expect(made.closes).toEqual([]);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
+    const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'];
+    expect(seat?.waiting).toBeUndefined();
+    expect(seat?.pane).toBe('w1:p1');
   });
 });
 
@@ -3824,7 +4234,7 @@ describe('team up, the pause', () => {
             : screen === 'spoof'
               ? home.replace(footer, '  GPT-5.6 Sol 272K High')
               : home.replace(footer, '  GPT-5.6 Sol 272K High              Run Everything');
-    const made = world((_pane, label) => (label === 'Grok 4.7' ? shown : IDLE));
+    const made = world((_pane, label) => (label === 'cursor-acme · implementer' ? shown : IDLE));
     const sent: string[] = [];
     let cursorPane = '';
     let pasted = false;
@@ -3866,7 +4276,7 @@ describe('team up, the pause', () => {
     // The two screens the grammar does not accept run out the idle wait. §2, no terminal: a
     // timeout keeps today's record instead of asking the owner; the accepted screens never
     // reach a dialog, so the caller changes nothing for them.
-    const io = testIo(root, { kind: 'owner-no-tty' });
+    const io = quietIo();
     const say = io.stdout;
     io.stdout = (text: string) => { calls.push('report'); say(text); };
     const detail = io.stderr;
@@ -3913,9 +4323,9 @@ describe('team up, the pause', () => {
       // report after it. The not-checked note was held when the check made it (before the
       // rename, so the seat is named only after the check has had its say) and is written after
       // the record, as the record's stderr detail.
-      const from = calls.indexOf('create:Grok 4.7');
+      const from = calls.indexOf('create:cursor-acme · implementer');
       expect(calls.slice(from, from + 14)).toEqual([
-        'create:Grok 4.7',
+        'create:cursor-acme · implementer',
         'paneRun:AGENT_UNATTENDED=1',
         'paneText',
         'paneText',
@@ -3961,7 +4371,7 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
     .replace(/  - role: implementer\n    name: codex-acme[\s\S]*?stopped: true\n/, `${cursorSeat}\n`)));
   await approve();
   const shown = readFileSync(join(import.meta.dir, '../fixtures/cursor/2026.10.01/gpt-sol-idle.txt'), 'utf8');
-  const made = world((_pane, label) => (label === 'Grok 4.7' ? shown : IDLE));
+  const made = world((_pane, label) => (label === 'cursor-acme · implementer' ? shown : IDLE));
   made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
   const labels = new Map<string, string>();
   const createWorkspace = made.launch.createWorkspace;
@@ -3977,7 +4387,7 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
   made.launch.paneText = (session, id) => {
     const text = pasted.get(id);
     if (text === undefined) return readPane(session, id);
-    if (labels.get(id) === 'Grok 4.7') {
+    if (labels.get(id) === 'cursor-acme · implementer') {
       const [first = '', ...rest] = text.split('\n');
       return shown.replace('  → Plan, search, build anything', [`  → ${first}`, ...rest.map((line) => `    ${line}`)].join('\n'));
     }
@@ -3985,7 +4395,7 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
   };
   made.launch.typeText = (_session, id, text) => { pasted.set(id, text); return true; };
   made.launch.pressEnter = (_session, id) => { pasted.delete(id); working.add(id); return true; };
-  const io = testIo(root, { kind: 'owner-no-tty' });
+  const io = quietIo();
   const code = await runUp(FILE, io, sources({}, made));
   const held = readState(join(root, '.agents')).sessions['acme-web']?.seats['cursor-acme'];
   const pane = held?.pane ?? '';
@@ -4016,7 +4426,7 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
   });
   const seen = listed();
   made.launch.agents = () => seen;
-  const next = testIo(root, { kind: 'owner-no-tty' });
+  const next = quietIo();
   const code2 = await runUp(FILE, next, sources({
     agents: () => seen,
     sessionState: () => 'running',
@@ -4108,16 +4518,13 @@ describe('team up, delegated', () => {
     }, made));
     expect(code).toBe(1);
     expect(asked).toBe(0);
-    expect(io.err).toBe('team up: only the owner runs `up`, from a terminal outside herdr; this call is work\n');
+    expect(io.err).toBe('deny\n');
     expect(io.out).toBe('');
     expect(made.creates).toEqual([]);
   });
 
-  // Today's order, byte for byte, when the default file has no `delegates` section: the flagged
-  // file is read first and its own failure answers — exit 2, the caller refusal never reached,
-  // the gate never asked. The owner's side of the same order, with a section present: the
-  // owner's `--file` is honoured exactly as before and the gate is not asked either.
-  test('with no delegates a missing --file is today\'s exit 2, gate never asked', async () => {
+  // The flag is the owner's, so its target is not looked at.
+  test('with no delegates a non-owner\'s --file is the owner refusal, gate never asked', async () => {
     await approve();
     const made = world();
     let asked = 0;
@@ -4128,9 +4535,10 @@ describe('team up, delegated', () => {
         return { kind: 'passed', pane: 'main/w1:p1' };
       },
     }, made));
-    expect(code).toBe(2);
+    expect(code).toBe(1);
     expect(asked).toBe(0);
-    expect(caller.err).toBe(`team up: no team file at ${join(root, 'missing.yaml')}\n`);
+    expect(caller.out).toBe('');
+    expect(caller.err).toBe('deny\n');
   });
 
   test('the owner\'s missing --file stays exit 2 even with a delegates section: gate never asked', async () => {
@@ -4153,8 +4561,8 @@ describe('team up, delegated', () => {
   // The review's reproduction: an unplaced caller, a valid default file with a `delegates`
   // section, `team up --file <missing>`. Eligibility is read from the DEFAULT file — the gate
   // sees its team and the flag — and the flagged target is never read: the gate's refusal
-  // answers, not today's exit 2. The same on a dry run: the would-refuse line and the plan of
-  // the DEFAULT file, exit 0.
+  // answers, not today's exit 2. A dry run returns that same refusal before a plan, so the
+  // host is not asked and the flagged file stays unread.
   test('an unplaced caller with a delegates file and a missing --file gets the gate\'s refusal, not exit 2', async () => {
     delegateFile();
     await approve();
@@ -4185,7 +4593,7 @@ describe('team up, delegated', () => {
     expect(made.starts).toBe(0);
   });
 
-  test('the same caller on a dry run: the would-refuse line, the default file\'s plan, exit 1', async () => {
+  test('the same caller on a dry run: the gate\'s refusal, before a plan', async () => {
     delegateFile();
     await approve();
     const made = world();
@@ -4198,8 +4606,8 @@ describe('team up, delegated', () => {
       }),
     }, made));
     expect(code).toBe(1);
-    expect(io.out).toContain("! up would refuse: --file is the owner's; the approved delegate cannot use it\n");
-    expect(io.out).toContain('dry run: nothing was run\n');
+    expect(io.err).toBe("team up: --file is the owner's; the approved delegate cannot use it\n");
+    expect(io.out).toBe('');
     expect(io.out + io.err).not.toContain('no team file');
     expect(made.starts).toBe(0);
   });
@@ -4244,7 +4652,7 @@ describe('team up, delegated', () => {
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
   });
 
-  test("the gate's refusal replaces the caller's on a real run: exit 1, no effects, no audit line", async () => {
+  test('a live delegates entry for up runs even when the gate refuses', async () => {
     delegateFile();
     await approve();
     const made = world();
@@ -4258,15 +4666,15 @@ describe('team up, delegated', () => {
       }),
       logDelegated,
     }, made));
-    expect(code).toBe(1);
-    expect(io.err).toBe("team up: --file is the owner's; the approved delegate cannot use it\n");
-    expect(io.out).toBe('');
-    expect(made.starts).toBe(0);
-    expect(made.creates).toEqual([]);
+    expect(code).toBe(0);
+    expect(io.err).not.toContain("--file is the owner's");
+    expect(io.out).toContain('claude-coordinator-acme: ready\n');
+    expect(made.starts).toBe(1);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
     expect(audits).toEqual([]);
   });
 
-  test("the gate's refusal on a dry run: the would-refuse line, then the plan, exit 1", async () => {
+  test('a live delegates entry for up dry-runs even when the gate refuses', async () => {
     delegateFile();
     await approve();
     const made = world();
@@ -4280,8 +4688,8 @@ describe('team up, delegated', () => {
       }),
       logDelegated,
     }, made));
-    expect(code).toBe(1);
-    expect(io.out).toContain('! up would refuse: the delegate pane main/w1:p1 runs only what its commands list names, and up is not in it\n');
+    expect(code).toBe(0);
+    expect(io.out).not.toContain('would refuse');
     expect(io.out).toContain('dry run: nothing was run\n');
     expect(made.starts).toBe(0);
     expect(audits).toEqual([]);
@@ -4296,7 +4704,7 @@ describe('team up, delegated', () => {
     const code = await runUp(FILE, io, sources({ ...passed, logDelegated }, made));
     expect(code).toBe(0);
     expect(made.starts).toBe(1);
-    expect(made.creates).toEqual(['Claude Opus 5.5', 'DeepSeek V4.1 Flash', 'DeepSeek V4.1 Flash', 'watchdog']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(made.terminal.reads).toBe(0);
     expect(audits).toHaveLength(1);
@@ -4351,7 +4759,7 @@ describe('team up, delegated', () => {
   ] as const)('a delegated run at a %s dialog closes without input and never prompts', async (classification, screen) => {
     delegateFile();
     await approve();
-    const made = world((_pane, label) => (label === 'Claude Opus 5.5' ? screen : IDLE));
+    const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? screen : IDLE));
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
         name: null,
@@ -4389,7 +4797,7 @@ describe('team up, delegated', () => {
     );
     await approve();
     const startup = readFileSync(join(import.meta.dir, '../fixtures/codex/0.157.0/startup.txt'), 'utf8');
-    const made = world((_pane, label) => (label === 'GPT-6 Sol' ? fileModel(startup) : IDLE));
+    const made = world((_pane, label) => (label === 'codex-acme · implementer' ? fileModel(startup) : IDLE));
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
         name: null,
@@ -4467,11 +4875,9 @@ describe('team up, delegated', () => {
     expect(io.out + io.err).not.toContain('[o] open pane');
   });
 
-  // The other side of the same hold: a caller the ordinary rule accepts never enters the
-  // delegate branch. The owner without a terminal keeps everything as today — the gate is not
-  // asked, and its idle timeout stays the plain record that leaves the seat at launched, not
-  // the delegated run's close.
-  test('an owner without a terminal never enters the delegate branch: gate unasked, plain timeout', async () => {
+  // A run with no terminal is not admitted, so it never enters the delegate branch. The gate
+  // is not asked, the one sentence is the refusal, and nothing is launched.
+  test('a run with no terminal never enters the delegate branch', async () => {
     delegateFile();
     await approve();
     const made = world("❯ zsh ../tools/launcher.sh\nzsh: can't open input file: ../tools/launcher.sh\n~ ❯\n");
@@ -4488,8 +4894,8 @@ describe('team up, delegated', () => {
     expect(code).toBe(1);
     expect(asked).toBe(0);
     expect(audits).toEqual([]);
-    expect(io.out).toContain('claude-coordinator-acme: left out: timeout\n');
-    expect(io.err).toContain('left at launched\n');
+    expect(io.err).toContain('team up: only the owner runs this, from a terminal outside herdr\n');
+    expect(io.out).not.toContain('left out:');
     expect(made.closes).toEqual([]);
   });
 
@@ -4540,9 +4946,9 @@ describe('team up, delegated', () => {
       sessionState: () => 'running',
       agents: () => listed,
       workspaces: () => [
-        { id: 'w1', label: 'Claude Opus 5.5' },
-        { id: 'w2', label: 'DeepSeek V4.1 Flash' },
-        { id: 'w3', label: 'DeepSeek V4.1 Flash' },
+        { id: 'w1', label: 'claude-coordinator-acme · project coordinator' },
+        { id: 'w2', label: 'deepseek-acme · implementer' },
+        { id: 'w3', label: 'deepseek-acme · implementer' },
       ],
       ...passed,
       logDelegated,
@@ -4581,10 +4987,7 @@ describe('team up, delegated', () => {
       name: 'unreachable',
       live: () => null,
       running: null,
-      real: [
-        `delegation cannot verify its placement or seats: herdr doesn't answer`,
-        `herdr doesn't answer`,
-      ],
+      real: [`herdr doesn't answer`],
       starts: 1,
     },
   ] as const;
@@ -4619,7 +5022,8 @@ describe('team up, delegated', () => {
       machine: () => fine,
     }, made));
     expect(code).toBe(1);
-    expect(io.out).toContain('! up would refuse: only the owner or the approved delegate runs `up`; this call is it runs in pane main/w9:p1, which no grant lists\n');
+    expect(io.err).toBe('deny\n');
+    expect(io.out).toBe('');
     expect(made.starts).toBe(0);
     expect(made.creates).toEqual([]);
   });
@@ -5948,6 +6352,8 @@ describe('team up, a ready seat whose model drifted', () => {
     const ran = await dry(fileModel(terra()));
     expect(ran.code).toBe(0);
     expect(ran.out).toContain('skip codex-acme: already ready; left as it is');
+    expect(ran.out).toContain('workspace rename w92');
+    expect(ran.out).toContain("display-agent 'GPT-6 Sol default'");
     expect(ran.out).not.toContain('workspace close w92');
   });
 

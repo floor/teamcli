@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { modelFlagFinding, runDoctor, type DoctorSources, type Finding } from '../../src/commands/doctor.ts';
 import { profileFor } from '../../src/profiles/index.ts';
 import { statusModelRules, statusModelRulesOf, statusOnLine, type ModelRule, type Profile } from '../../src/profiles/profile.ts';
@@ -154,7 +154,7 @@ describe('team doctor on a file of every model shape', () => {
       'warn  plain-codex: its rules file is missing; run `team remove plain-codex --keep` then `team add plain-codex` (or `team down` then `team up` for the whole team)',
       'warn  plain-voyager: its rules file is missing; run `team remove plain-voyager --keep` then `team add plain-voyager` (or `team down` then `team up` for the whole team)',
       'warn  plain-reviewer: its rules file is missing; run `team remove plain-reviewer --keep` then `team add plain-reviewer` (or `team down` then `team up` for the whole team)',
-      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into',
+      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.299: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into',
       'warn  script-seat: the launch runs zsh, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
     ]);
     expect(run.out).toContain('ok    the watch is running\n');
