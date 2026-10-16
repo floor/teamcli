@@ -192,12 +192,12 @@ claude-beacon-tmp-1: ready
 exit 0
 ```
 
-The seat's name must be one the approved file has, so a name that is not is refused before herdr is
+The seat's name must be one the live file has, so a name that is not is refused before herdr is
 asked anything:
 
 ```console
 $ team add scratch ; echo "exit $?"
-team add: the approved file has no seat "scratch"
+team add: the file has no seat "scratch"
 exit 1
 $ team add --temporary --like claude-beacon --until later ; echo "exit $?"
 team add: --until is result:<path> or merged:<branch>
