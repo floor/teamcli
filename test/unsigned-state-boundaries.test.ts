@@ -308,7 +308,7 @@ describe('a live agent the file does not declare', () => {
       workspaces: () => [{ id: 'w1' }, { id: 'w2' }],
     }));
     expect(code).toBe(1);
-    expect(io.err).toContain('the approval allows 2 seats; 3 would be running');
+    expect(io.err).toContain('the file allows 2 seats; 3 would be running');
   });
 });
 

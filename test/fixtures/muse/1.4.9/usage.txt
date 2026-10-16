@@ -1,0 +1,23 @@
+
+┌───────────────────────────────────────────────────┐
+│  Session usage                                    │
+│                                                   │
+│    Input      30,071                              │
+│    Cached          0                              │
+│    Output         19                              │
+│    Total      30,090                              │
+│                                                   │
+│    Turns            1                             │
+│    Subagents     none                             │
+│                                                   │
+│  Subscription · Muse Code Power Usage             │
+│    Current        0% used · Resets at 8:16 PM     │
+│    Weekly         0% used · Resets Oct 19 at 2:00 │
+│  AM                                               │
+│    as of 3:20 PM                                  │
+└───────────────────────────────────────────────────┘
+
+── Voice input (⌥ + v to start) ─────────────────────
+❯
+─────────────────────────────────────────────────────
+  muse-wonder-1.0 · high · …/muse-ws · Auto-review

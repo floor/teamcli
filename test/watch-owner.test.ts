@@ -93,16 +93,16 @@ describe('a threshold edit, and the approval', () => {
     return { code, err: io.err };
   }
 
-  test('an edit to a threshold is drift, and the approved values stay in force', async () => {
+  test('an edit is drift and the live thresholds take effect', async () => {
     write(source());
     expect((await approve()).code).toBe(0);
     write(source({ unsent_after: '30m', interval: '60s' }));
     const edited = teamFile({ unsent_after: '30m', interval: '60s' });
     expect(approvalDifferences(edited, root, home)).toEqual(['`watch` changed']);
     const inForce = watchInForce(edited, root, home);
-    expect(inForce.unsentAfter).toBe(60);
-    expect(inForce.interval).toBe(120);
-    // What the file says now is not what runs: the stretched values wait for the owner.
+    expect(inForce.unsentAfter).toBe(1800);
+    expect(inForce.interval).toBe(60);
+    // The live thresholds take effect immediately.
     expect(edited.watch.unsentAfter).toBe(30 * 60);
     expect(edited.watch.interval).toBe(60);
   });
@@ -125,7 +125,7 @@ describe('a threshold edit, and the approval', () => {
     expect(watchInForce(file, root, home)).toEqual(defaultWatch());
   });
 
-  test('an unapproved interval edit leaves the staleness verdict on the approved value', async () => {
+  test('a live interval edit changes the staleness verdict', async () => {
     write(source());
     expect((await approve()).code).toBe(0);
     const NOW = new Date('2026-10-04T00:00:00Z');
@@ -155,16 +155,14 @@ describe('a threshold edit, and the approval', () => {
       await runStatus(['--file', '.agents/team.yaml'], io, sources);
       return io.out;
     };
-    // A stretch to a thousand hours is unapproved, so the approved two minutes still decide:
-    // the ten-minute-old heartbeat is stale, not hidden by the edit.
+    // A thousand-hour live interval keeps a ten-minute-old heartbeat inside two intervals.
     write(source({ interval: '1000h' }));
     state(new Date(NOW.getTime() - 10 * 60_000));
-    expect(await status()).toContain("the watch's last pass was 10 minute(s) ago");
-    // And a shrink is no better: three minutes are inside the approved two intervals, whoever
-    // wrote ten seconds in the file.
+    expect(await status()).not.toContain("the watch's last pass was 10 minute(s) ago");
+    // A ten-second live interval makes the three-minute-old heartbeat stale.
     write(source({ interval: '10s' }));
     state(new Date(NOW.getTime() - 3 * 60_000));
-    expect(await status()).not.toContain("last pass");
+    expect(await status()).toContain("the watch's last pass was 3 minute(s) ago");
   });
 
   test('an approval recorded before the section existed stays valid while the section is unchanged', async () => {
@@ -188,10 +186,10 @@ describe('a threshold edit, and the approval', () => {
     }, [], home);
     expect(approvalDifferences(current, root, home)).toEqual([]);
     expect(watchInForce(current, root, home).unsentAfter).toBe(60);
-    // An edit to the section is a difference again, and the copy's values go on running.
+    // The difference remains informational; the live thresholds take effect.
     write(source({ unsent_after: '30m' }));
     const edited = teamFile({ unsent_after: '30m' });
     expect(approvalDifferences(edited, root, home)).toEqual(['`watch` changed']);
-    expect(watchInForce(edited, root, home).unsentAfter).toBe(60);
+    expect(watchInForce(edited, root, home).unsentAfter).toBe(1800);
   });
 });

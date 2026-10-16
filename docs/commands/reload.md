@@ -31,9 +31,10 @@ The log gains one line when the close happens, and no line when it does not.
 ## Who may run it
 
 The owner at a terminal may name any seat, including the operator. A granted orchestrator
-may name any other seat when the approved grant lists `reload`, and may not name its own
-seat: closing that pane would end the caller. `--file` is the owner's. A live file that is
-not the approved copy is refused before a close. A delegate is not offered this command.
+may name any other seat when the file's grant lists `reload`, and may not name its own
+seat: closing that pane would end the caller. The grant this run reads is the live file's,
+like `up` and `down`: a file edited since the last approval is not a refusal. `--file` is
+the owner's. A delegate is not offered this command.
 
 ## Flags
 

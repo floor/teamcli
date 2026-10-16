@@ -43,6 +43,7 @@ const DEFAULT_COMPOSER: Composer = {
   prompt: /(?!)/,
   rule: /(?!)/,
   footers: [],
+  status: [],
   placeholders: [],
   frameRows: 0,
 };
@@ -462,7 +463,7 @@ function composerOf(node: YamlNode): Composer {
   const frameEntry = optional(entries, 'frame_rows');
   const frameRows = frameEntry ? frameRowsOf(frameEntry) : 0;
   if (name === 'box-to-rule') {
-    only(entries, ['mode', 'prompt', 'rule', 'footers', 'placeholders', 'placeholder_style', 'strip_suffix', 'wrap', 'frame_rows']);
+    only(entries, ['mode', 'prompt', 'rule', 'footers', 'status', 'placeholders', 'placeholder_style', 'strip_suffix', 'wrap', 'frame_rows']);
     // For a scrolled-out box, the non-blank lines under the closing rule must match
     // every pattern, in order, and the counts must be equal.
     const footers = optional(entries, 'footers');
@@ -473,6 +474,7 @@ function composerOf(node: YamlNode): Composer {
       rule: regexField(entries, 'rule', node.line),
       stripSuffix: suffix ? composerString(suffix.value, 'strip_suffix', suffix.line) : null,
       footers: footers ? footersOf(footers, false) : [],
+      status: statusFieldOf(entries),
       placeholders: placeholdersOf(required(entries, 'placeholders', node.line).value),
       placeholderStyle,
       wrap,
@@ -663,6 +665,19 @@ function statusLineField(entries: YamlEntry[], line: number): RegExp[] {
     return entry.value.items.map((item) => composerString(item, 'status_line', item.line));
   }
   return [composerString(entry.value, 'status_line', entry.line)];
+}
+
+/** A box composer's `status` grammar: the same shape `status_line` takes — one pattern, or a
+ *  non-empty list — but optional, and absent means no row under the closing rule is a status
+ *  row (the box carries no quota figure to read). */
+function statusFieldOf(entries: YamlEntry[]): RegExp[] {
+  const entry = optional(entries, 'status');
+  if (entry === undefined) return [];
+  if (entry.value.kind === 'seq') {
+    if (entry.value.items.length === 0) fail(entry.line, '"status" must be a string or a non-empty list of strings');
+    return entry.value.items.map((item) => composerString(item, 'status', item.line));
+  }
+  return [composerString(entry.value, 'status', entry.line)];
 }
 
 // Where the status row must sit. A bare pattern is the line directly under the row — the

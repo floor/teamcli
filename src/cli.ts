@@ -12,6 +12,9 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   doctor: () => import('./commands/doctor.ts'),
   down: () => import('./commands/down.ts'),
   init: () => import('./commands/init.ts'),
+  grant: () => import('./commands/grant.ts'),
+  delegate: () => import('./commands/delegate.ts'),
+  revoke: () => import('./commands/revoke.ts'),
   status: () => import('./commands/status.ts'),
   seats: () => import('./commands/seats.ts'),
   list: () => import('./commands/list.ts'),
@@ -36,8 +39,10 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   lock: () => import('./commands/lock.ts'),
   tempo: () => import('./commands/tempo.ts'),
   unlock: () => import('./commands/unlock.ts'),
+  hold: () => import('./commands/hold.ts'),
   broker: () => import('./commands/broker.ts'),
   mcp: () => import('./commands/mcp.ts'),
+  proc: () => import('./commands/proc.ts'),
 };
 
 // The usage below the opening sentence: `team --help`'s first line is package.json's

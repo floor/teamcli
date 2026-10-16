@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { budgetsInForce, watchInForce } from '../../src/approve/approval.ts';
 import { standingSource } from '../../src/commands/status.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
-import { approvedCopy } from '../../src/store/store.ts';
 import type { AddSources } from '../../src/commands/add.ts';
 import type { CheckSources } from '../../src/check/team.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
@@ -710,7 +709,6 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         // real herdr or a real store.
         gate: {
           standing: standingSource(home),
-          approvedCopy: (root) => approvedCopy(root, home),
           state: (dir) => readState(dir),
           agents: () => (herdr === 'running' ? agents() : []),
           sessionRunning: () => (herdr === 'none' ? null : herdr === 'running'),

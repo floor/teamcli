@@ -5,7 +5,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { dropDir, fake, owner, world } from './send-native-fixtures.ts';
+import { dropDir, fake, filed, owner, world } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
 
@@ -50,7 +50,7 @@ test('an overlapping send leaves the first drop whole and writes no second body'
   expect(during.filter((name) => name.endsWith('.tmp'))).toEqual([]);
   expect(during.length).toBe(1);
   const stored = readFileSync(join(drops, during[0] as string), 'utf8');
-  expect(stored).toBe('ALPHA-ONE');
+  expect(stored).toBe(filed('ALPHA-ONE'));
   expect(stored).not.toContain('BETA-TWO');
   expect(second).toBe(1);
   expect(secondIo.err).toContain('refused');
@@ -59,7 +59,7 @@ test('an overlapping send leaves the first drop whole and writes no second body'
   expect(await first).toBe(0);
   const after = readdirSync(drops);
   expect(after).toEqual(during);
-  expect(readFileSync(join(drops, after[0] as string), 'utf8')).toBe('ALPHA-ONE');
+  expect(readFileSync(join(drops, after[0] as string), 'utf8')).toBe(filed('ALPHA-ONE'));
   expect(typed.length).toBe(1);
   expect(typed[0]).not.toContain('ALPHA-ONE');
   expect(typed[0]).not.toContain('BETA-TWO');

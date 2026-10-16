@@ -1,0 +1,161 @@
+import { readArgs } from '../args.ts';
+import { anotherPaneRefusal, describeCaller, detachedRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, standingOf, walkCaller, type Caller, type CallerVerdict } from '../caller.ts';
+import { currentTeam } from '../file/current.ts';
+import { cleanedIo, type Command, type Io } from '../io.ts';
+import { plainLine, plainText } from '../launch/plain.ts';
+import { holdText, liveHold, updateState, type HoldRecord } from '../state.ts';
+
+// `team hold <reason> [--until <time>]` records a hold on the team's work in the team state,
+// and `team hold --release` clears it. The hold lives in the state, never the team file: the
+// file waits for the owner's approval, and a hold that waits is no hold. `status` prints it as
+// a note and `doctor` as a `--` line; a record past its `until` reads as no hold at all
+// (`liveHold`), so nothing has to clear it on time. In this part nothing consults a hold before
+// acting: no command and no launch changes behaviour while one stands. The caller rule is
+// `down`'s — the owner, or the team's orchestrator or operator — because a hold is shown to
+// the whole team like the stop is, and the same gate places and releases.
+
+export const USAGE = `Usage: team hold <reason> [--until <time>]
+       team hold --release
+`;
+
+/** What `runHold` reads from outside, so tests can stand in for the clock and the store. */
+export type HoldSources = { home?: string; now?: () => Date };
+
+const realHoldSources: HoldSources = {};
+
+export const hold: Command = (argv, io) => runHold(argv, io, realHoldSources);
+export default hold;
+
+type Op =
+  | { kind: 'placed'; hold: HoldRecord }
+  | { kind: 'held'; hold: HoldRecord }
+  | { kind: 'released' }
+  | { kind: 'not-held' };
+
+export async function runHold(argv: string[], io: Io, sources: HoldSources = realHoldSources): Promise<number> {
+  const out = cleanedIo(io);
+  const args = readArgs(argv, ['until'], ['release']);
+  if (args.error) return invocation(out, args.error);
+  const now = sources.now?.() ?? new Date();
+  const release = args.flags.has('release');
+  let reason = '';
+  let until: Date | undefined;
+  if (release) {
+    if (args.rest.length > 0 || args.values.until !== undefined) {
+      return invocation(out, '--release takes no <reason> and no --until');
+    }
+  } else {
+    if (args.rest.length === 0) return invocation(out, 'a <reason> is required');
+    const extra = args.rest[1];
+    if (extra !== undefined) return invocation(out, `unexpected "${plainLine(extra)}"`);
+    reason = plainLine(args.rest[0] ?? '').trim();
+    if (reason === '') return invocation(out, 'a <reason> is required');
+    if (args.values.until !== undefined) {
+      const parsed = untilOf(args.values.until, now);
+      if (typeof parsed === 'string') {
+        out.stderr(`team hold: ${parsed}\n`);
+        // exit: hold.until
+        return 1;
+      }
+      until = parsed;
+    }
+  }
+  const walked = walkCaller(io);
+  const detached = detachedRefusal(walked);
+  if (detached !== undefined) {
+    out.stderr(`team hold: ${detached}\n`);
+    // exit: hold.detached
+    return 1;
+  }
+  const current = currentTeam(io.cwd, undefined, now, sources.home, isOwner(walked));
+  if (!current.ok) {
+    for (const problem of current.errors) {
+      out.stderr(`team hold: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
+    }
+    // exit: hold.file
+    return 2;
+  }
+  const { team, dir } = current;
+  if (current.notice) out.stdout(`${plainText(current.notice)}\n`);
+  for (const warning of current.warnings) {
+    out.stderr(`team hold: warning, line ${warning.line}: ${plainText(warning.message)}\n`);
+  }
+  const { caller, session } = judgeCallerIn(io, dir, team);
+  const verdict = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
+  if (verdict.kind !== 'ok') {
+    out.stderr(`team hold: ${refusalOf(verdict, caller)}\n`);
+    // exit: hold.caller
+    return 1;
+  }
+  let op: Op;
+  try {
+    // The read, the check and the write are one step under the state's lock: a hold placed by
+    // two callers at once keeps the first one, and the second is refused by name.
+    op = updateState<Op>(dir, (state) => {
+      if (release) {
+        if (state.hold === undefined) return { kind: 'not-held' };
+        delete state.hold;
+        return { kind: 'released' };
+      }
+      const standing = liveHold(state, now);
+      if (standing !== null) return { kind: 'held', hold: standing };
+      const record: HoldRecord = { reason, by: describeCaller(caller), at: now.toISOString(), ...(until ? { until: until.toISOString() } : {}) };
+      state.hold = record;
+      return { kind: 'placed', hold: record };
+    });
+  } catch (error) {
+    out.stderr(`team hold: ${plainText(error instanceof Error ? error.message : String(error))}\n`);
+    // exit: hold.io
+    return 1;
+  }
+  if (op.kind === 'placed') {
+    out.stdout(`${holdText(op.hold)}\n`);
+    // exit: hold.placed
+    return 0;
+  }
+  if (op.kind === 'released') {
+    out.stdout('hold: released\n');
+    // exit: hold.released
+    return 0;
+  }
+  if (op.kind === 'held') {
+    out.stderr(`team hold: already held${op.hold.until ? ` until ${op.hold.until}` : ''}: ${op.hold.reason}\n`);
+    // exit: hold.held
+    return 1;
+  }
+  out.stderr('team hold: not held\n');
+  // exit: hold.not-held
+  return 1;
+}
+
+/** The caller rule's refusal, in `down`'s own shape: a lost pane and a moved pane keep their
+ *  named repairs, and anyone else is refused by the caller it is. */
+function refusalOf(verdict: CallerVerdict, caller: Caller): string {
+  if (verdict.kind === 'no-pane') return noPaneRefusal(verdict.name);
+  if (verdict.kind === 'another-pane') return anotherPaneRefusal(verdict.name, verdict.recordedPane);
+  return `only the owner, the orchestrator or the operator holds the team; this call is ${describeCaller(caller)}`;
+}
+
+/** `--until`'s two shapes, and nothing else: a local `<HH:MM>` — the next time it comes, today
+ *  or tomorrow when today's has passed — or an ISO 8601 instant carrying `Z` or an offset.
+ *  A shape that does not parse comes back as the refusal's own words. */
+function untilOf(text: string, now: Date): Date | string {
+  const clock = /^(\d{1,2}):([0-5]\d)$/.exec(text);
+  if (clock && Number(clock[1]) <= 23) {
+    const at = new Date(now);
+    at.setHours(Number(clock[1]), Number(clock[2]), 0, 0);
+    if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
+    return at;
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(text)) {
+    const at = new Date(text);
+    if (!Number.isNaN(at.getTime())) return at;
+  }
+  return '--until is a local <HH:MM>, or an ISO 8601 instant with Z or an offset, and nothing else';
+}
+
+function invocation(io: Io, message: string): number {
+  io.stderr(`team hold: ${message}\n${USAGE}`);
+  // exit: hold.invocation
+  return 2;
+}
