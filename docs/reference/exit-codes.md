@@ -14,15 +14,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.branch-missing` | `add` | 1 | the merged branch doesn't exist | `team add --temporary --like lead --until merged:missing` |
 | `add.budget` | `add` | 1 | the budget refuses the seat | `team add worker` |
 | `add.caller` | `add` | 1 | the caller may not change the team | `team add worker` |
-| `add.ceiling` | `add` | 1 | the approval ceiling would be passed | `team add worker` |
-| `add.ceilings` | `add` | 1 | the approved ceilings can't be read | `team add worker` |
+| `add.ceiling` | `add` | 1 | the file's seat ceiling would be passed | `team add worker` |
+| `add.ceilings` | `add` | 1 | a record that does not verify is not in force | `team add worker` |
 | `add.changed` | `add` | 1 | the file changed while add was checking | `team add worker` |
 | `add.default-session` | `add` | 1 | the session can't be "default" | `team add worker --session default` |
 | `add.delegate` | `add` | 1 | the caller is not the approved delegate | `team add worker` |
 | `add.delegate-approval` | `add` | 1 | delegation needs a verified approval | `team add worker` |
-| `add.delegate-approved-copy` | `add` | 1 | delegation needs a readable approved copy | `team add worker` |
 | `add.delegate-command` | `add` | 1 | the approved delegate may not run add | `team add worker` |
-| `add.delegate-drift` | `add` | 1 | delegation needs the approved file | `team add worker` |
 | `add.delegate-edit` | `add` | 1 | the delegate's add would edit the file or the approval | `team add worker` |
 | `add.delegate-evidence` | `add` | 1 | the delegate's placement or seats can't be verified | `team add worker` |
 | `add.delegate-flag` | `add` | 1 | the delegate may not use this flag | `team add worker --temporary` |
@@ -36,12 +34,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.machine-again` | `add` | 1 | the machine goes over a launch limit before the seat starts | `team add worker` |
 | `add.merged-base` | `add` | 1 | workspace.base is required to read a merged end | `team add --temporary --like lead --until merged:topic` |
 | `add.never-approved` | `add` | 1 | the file was never approved | `team add worker` |
-| `add.no-like` | `add` | 1 | the approved file has no seat to copy | `team add --temporary --like missing --until result:out.md` |
+| `add.no-like` | `add` | 1 | the file has no seat to copy | `team add --temporary --like missing --until result:out.md` |
 | `add.no-pane` | `add` | 1 | the state records no pane for the caller's seat | `team add worker` |
 | `add.no-profile` | `add` | 1 | the seat has no launch profile | `team add worker` |
-| `add.no-seat` | `add` | 1 | the approved file has no such seat | `team add missing` |
+| `add.no-seat` | `add` | 1 | the file has no such seat | `team add missing` |
 | `add.not-ready` | `add` | 1 | the launch finished without a ready seat | `team add worker` |
-| `add.not-restored` | `add` | 1 | the seat can't be put back from the approved copy | `team add worker` |
+| `add.not-restored` | `add` | 1 | the seat can't be put back into the file | `team add worker` |
 | `add.override-owner` | `add` | 1 | --model and --effort on a declared seat are the owner's | `team add worker --model claude-sonnet-5-5` |
 | `add.placed` | `add` | 1 | the seat would be placed outside the project | `team add worker` |
 | `add.pretrust` | `add` | 1 | the lobby is not trusted for this seat's CLI | `team add worker` |
@@ -83,7 +81,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.screen` | `answer` | 1 | the pane is not the trust dialog | `team answer lead trust` |
 | `answer.session-owner` | `answer` | 1 | --session is the owner's | `team answer lead trust --session other` |
 | `answer.state` | `answer` | 1 | the seat is not waiting at a trust dialog | `team answer lead trust` |
-| `answer.unverified` | `answer` | 1 | the name is not a seat of the approved copy | `team answer lead trust` |
+| `answer.unverified` | `answer` | 1 | the name is not a declared seat | `team answer lead trust` |
 | `answer.version` | `answer` | 1 | this version has no trust answer | `team answer lead trust` |
 | `answer.configuration` | `answer` | 2 | the team file cannot be read | `team answer lead trust --file missing.yaml` |
 | `answer.usage` | `answer` | 2 | the invocation is not a seat and trust | `team answer` |
@@ -144,9 +142,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.caller` | `down` | 1 | the caller may not change the team | `team down` |
 | `down.delegate` | `down` | 1 | the caller is not the approved delegate of any entry | `team down, from a pane no delegate entry names` |
 | `down.delegate-approval` | `down` | 1 | delegation needs a verified approval | `team down, with no approval in force` |
-| `down.delegate-approved-copy` | `down` | 1 | delegation needs a readable approved copy | `team down, when the approved copy can't be read` |
 | `down.delegate-command` | `down` | 1 | the approved delegate may not run `down` | `team down, from the approved delegate whose commands leave it out` |
-| `down.delegate-drift` | `down` | 1 | the file is not the approved one | `team down, after the file changed since approval` |
 | `down.delegate-evidence` | `down` | 1 | delegation cannot verify its placement or seats | `team down, when herdr or the state can't be read for the gate` |
 | `down.delegate-flag` | `down` | 1 | a prohibited flag is the owner's | `team down --abandon, from the approved delegate` |
 | `down.delegate-placement` | `down` | 1 | the approved delegate must be an external non-seat pane | `team down, with a delegate entry naming a seat's pane` |
@@ -261,13 +257,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `reload.changed` | `reload` | 1 | the seat changed before it closed; nothing relaunched | `team reload worker` |
 | `reload.grant-another-pane` | `reload` | 1 | the state records another pane for the granted seat | `team reload worker` |
 | `reload.grant-approval` | `reload` | 1 | a grant needs a verified approval | `team reload worker` |
-| `reload.grant-approved-copy` | `reload` | 1 | a grant needs a readable approved copy | `team reload worker` |
 | `reload.grant-caller` | `reload` | 1 | only the seat the grant names runs this | `team reload worker` |
-| `reload.grant-drift` | `reload` | 1 | a grant needs the approved file | `team reload worker` |
 | `reload.grant-file` | `reload` | 1 | the team file can't be read | `team reload worker` |
 | `reload.grant-flag` | `reload` | 1 | --file is the owner's; the granted seat cannot use it | `team reload worker --file other.yaml` |
 | `reload.grant-no-pane` | `reload` | 1 | no pane is recorded for the granted seat | `team reload worker` |
-| `reload.grant-omitted` | `reload` | 1 | the approved file grants nothing | `team reload worker` |
+| `reload.grant-omitted` | `reload` | 1 | the file grants nothing | `team reload worker` |
 | `reload.grant-scope` | `reload` | 1 | the grant does not list reload | `team reload worker` |
 | `reload.launch` | `reload` | 1 | the close happened and the new launch did not reach ready | `team reload worker` |
 | `reload.not-idle` | `reload` | 1 | the seat is not at an idle prompt; nothing closed | `team reload worker` |
@@ -293,9 +287,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.default-session` | `remove` | 1 | the session can't be "default" | `team remove worker --session default` |
 | `remove.delegate` | `remove` | 1 | the caller is not the approved delegate | `team remove worker` |
 | `remove.delegate-approval` | `remove` | 1 | delegation needs a verified approval | `team remove worker` |
-| `remove.delegate-approved-copy` | `remove` | 1 | delegation needs a readable approved copy | `team remove worker` |
 | `remove.delegate-command` | `remove` | 1 | the approved delegate may not run remove | `team remove worker` |
-| `remove.delegate-drift` | `remove` | 1 | delegation needs the approved file | `team remove worker` |
 | `remove.delegate-evidence` | `remove` | 1 | the delegate's placement or seats can't be verified | `team remove worker` |
 | `remove.delegate-flag` | `remove` | 1 | the delegate may not use this flag | `team remove worker --keep` |
 | `remove.delegate-placement` | `remove` | 1 | the approved delegate must be an external non-seat pane | `team remove worker` |
@@ -313,7 +305,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.stop-failed` | `remove` | 1 | the seat could not be stopped | `team remove worker` |
 | `remove.swap-grant` | `remove` | 1 | no grant or delegate admits this caller's swap of a lead seat | `team remove lead --keep, from a seat the grant does not admit` |
 | `remove.swap-self` | `remove` | 1 | a seat can't swap its own lead seat | `team remove lead --keep, from the lead's own pane` |
-| `remove.unverified` | `remove` | 1 | a name the approved copy does not carry is left as it is | `team remove extra` |
+| `remove.unverified` | `remove` | 1 | a name the file does not carry is left as it is | `team remove extra` |
 | `remove.edit` | `remove` | 2 | the edit would not validate | `team remove lead` |
 | `remove.file` | `remove` | 2 | the team file can't be read | `team remove worker --file missing.yaml` |
 | `remove.file-invalid` | `remove` | 2 | the team file can't be parsed | `team remove worker --file team.yaml` |
@@ -395,9 +387,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.clear` | `up` | 1 | a stopped session this team records did not clear | `team up` |
 | `up.delegate` | `up` | 1 | only the owner or the approved delegate runs up | `team up` |
 | `up.delegate-approval` | `up` | 1 | the delegate gate needs a verified approval | `team up` |
-| `up.delegate-approved-copy` | `up` | 1 | the delegate gate needs a readable approved copy | `team up` |
 | `up.delegate-command` | `up` | 1 | the approved delegate may not run up | `team up` |
-| `up.delegate-drift` | `up` | 1 | the delegate gate needs the approved file | `team up` |
 | `up.delegate-evidence` | `up` | 1 | the delegate gate can't verify its placement or seats | `team up` |
 | `up.delegate-flag` | `up` | 1 | --session or --file is the owner's on a delegated run | `team up --session other` |
 | `up.delegate-placement` | `up` | 1 | the approved delegate must be an external non-seat pane | `team up` |
@@ -406,9 +396,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
 | `up.grant-another-pane` | `up` | 1 | the granted seat is not on its recorded pane | `team up` |
 | `up.grant-approval` | `up` | 1 | a grant needs a verified approval | `team up` |
-| `up.grant-approved-copy` | `up` | 1 | a grant needs a readable approved copy | `team up` |
 | `up.grant-caller` | `up` | 1 | only the seat the grant names runs this | `team up` |
-| `up.grant-drift` | `up` | 1 | a grant needs the approved file | `team up` |
 | `up.grant-flag` | `up` | 1 | a granted seat cannot aim --session or --file | `team up --file other` |
 | `up.grant-no-pane` | `up` | 1 | no pane is recorded for the granted seat | `team up` |
 | `up.grant-scope` | `up` | 1 | the grant does not list up | `team up` |
@@ -448,7 +436,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.record-gone` | `worktree` | 0 | the record was removed after the folder was already gone | `team worktree remove task` |
 | `worktree.removed` | `worktree` | 0 | the worktree was removed | `team worktree remove task` |
 | `worktree.another-pane` | `worktree` | 1 | the state records another pane for the caller's seat | `team worktree new task` |
-| `worktree.approved-copy` | `worktree` | 1 | the approved copy can't be read | `team worktree new task --kind fix` |
 | `worktree.base` | `worktree` | 1 | workspace.base is not a branch here | `team worktree new task --kind fix` |
 | `worktree.branch` | `worktree` | 1 | the branch already exists | `team worktree new task --kind fix` |
 | `worktree.branch-name` | `worktree` | 1 | the branch name is not valid | `team worktree new task --kind fix` |
@@ -479,14 +466,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.remove-failed` | `worktree` | 1 | the worktree was not removed | `team worktree remove task` |
 | `worktree.remove-task` | `worktree` | 1 | the task name is not a single segment | `team worktree remove ../task` |
 | `worktree.seat` | `worktree` | 1 | --seat names no declared seat | `team worktree new task --kind fix --seat missing` |
-| `worktree.seat-unapproved` | `worktree` | 1 | --seat names a seat only the file declares | `team worktree new task --kind fix --seat added-later` |
 | `worktree.session-owner` | `worktree` | 1 | --session is the owner's | `team worktree new task --session other` |
 | `worktree.setup` | `worktree` | 1 | setup failed | `team worktree new task --kind fix` |
 | `worktree.shared` | `worktree` | 1 | the workspace is shared | `team worktree new task` |
 | `worktree.symlink` | `worktree` | 1 | the worktree follows a symlink outside the trust paths | `team worktree new task --kind fix` |
 | `worktree.task` | `worktree` | 1 | the task name is not a single segment | `team worktree new ../task` |
 | `worktree.tracking` | `worktree` | 1 | the base tracks something that is not a remote branch | `team worktree new task --kind fix` |
-| `worktree.trust` | `worktree` | 1 | the worktree is outside the approved trust paths | `team worktree new select-width --kind fix` |
+| `worktree.trust` | `worktree` | 1 | the worktree is outside the file's trust paths | `team worktree new select-width --kind fix` |
 | `worktree.unpublished` | `worktree` | 1 | the worktree has commits on no remote branch | `team worktree remove task` |
 | `worktree.unreadable` | `worktree` | 1 | the worktree couldn't be read | `team worktree remove task` |
 | `worktree.extra` | `worktree` | 2 | an unexpected argument was given | `team worktree new task extra` |
