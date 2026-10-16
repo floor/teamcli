@@ -21,6 +21,10 @@ visible text, from which the running model is read. It also reads the machine's 
 one check a reading can show this machine cannot pass. It writes nothing but the `last_valid` copy of
 the file it read — and a run that is not the owner's writes nothing at all.
 
+`--project <name>` is the one reading that touches none of that: it reads the project registry
+(`~/.config/team/projects.yaml`) and the team records, no team file and no herdr, and writes
+nothing.
+
 ## Who may run it
 
 The caller decides, not the flags. Three callers get the reading:
@@ -39,7 +43,8 @@ invalid one, a file that was never approved, a refused approval:
 
 The sentence is the whole answer, with or without `--json`: stderr only, stdout empty, exit 2.
 It does need herdr to answer once the caller has passed: without it, `status` can't say anything
-and exits 2.
+and exits 2. `--project` is the exception to this gate — anyone may aim it, from any folder, with
+no caller check and no herdr.
 
 `--file` and `--session` are the owner's. Aimed by anyone else, each is refused before any file
 or session is read — `--file is the owner's, from a terminal outside herdr; this call is …`, or
