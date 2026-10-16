@@ -28,7 +28,7 @@ import { versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
 import { readState, type SeatState } from '../state.ts';
 import { canShowModel, seatModel } from '../status/statusline.ts';
-import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
+import { approvalStanding, LEGACY_LINE, otherMatchingStores, otherStoreNote, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { lobbyPath as derivedLobby } from '../worktree/place.ts';
@@ -593,6 +593,7 @@ export function doctorFindings(
 
   findings.push(
     ...approvalFindings(standing),
+    ...otherMatchingStores(root, sources.home).map((name): Finding => ({ level: 'note', text: otherStoreNote(name) })),
     ...overrideFindings(standing, team, root, sources.home),
     ...checkFindings(standing, team),
     ...budgetChecks,
