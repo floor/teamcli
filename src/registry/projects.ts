@@ -5,12 +5,13 @@
 // own project — so a machine with no projects.yaml is a machine where every team stands alone,
 // and every reader here reads an absent record that way.
 //
-// This file first carries the shape and the reads; the writes (upsertProject, atomic writes and
-// locking like teams.ts) land with it in the same branch, never before: a reader must not see a
-// half-written record.
+// The shape and the reads come first; the write (upsertProject) follows them and is a
+// read-modify-write under a lock ending in an atomic replace, exactly like teams.ts, so a reader
+// never sees half a file and two writers never lose each other's update.
 
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { writeAtomic } from '../state.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
 export type ProjectProvenance = { registered_by: string; registered_at: string; updated_at: string };
@@ -96,6 +97,130 @@ export function ofTeam(home: string, teamId: string): ProjectRecord | null {
     throw new ProjectsError(`team ${teamId} is named in ${found.length} projects: ${found.map((project) => project.id).join(', ')}`);
   }
   return found[0] ?? null;
+}
+
+/** What `upsertProject` takes: any of the record's fields, and who is writing and when. A project
+ *  not yet registered needs `name` at least. The id and the provenance are the writer's own. */
+export type ProjectPatch = Partial<Omit<ProjectRecord, 'id' | 'provenance'>> & { by?: string; at?: string };
+
+/** Creates the project's record, or changes the fields the patch names and nothing else. The id
+ *  is the key and never moves: a rename writes `name` and keeps `byName` answering for the new
+ *  one. A name another project already holds is refused, so `byName` stays an answer.
+ *
+ *  A team two projects would both name is not refused here — a file can be edited into that
+ *  state, and it is `team check` that refuses it; `ofTeam` refuses to answer it either way. */
+export function upsertProject(home: string, id: string, patch: ProjectPatch): ProjectRecord {
+  return locked(home, () => {
+    const projects = readProjects(home);
+    const at = patch.at ?? new Date().toISOString();
+    const prior = projects[id];
+    const { by, at: _at, ...fields } = patch;
+    let record: ProjectRecord;
+    if (prior) {
+      record = { ...prior, ...definedOnly(fields), provenance: { ...prior.provenance, updated_at: at } };
+    } else {
+      if (typeof fields.name !== 'string' || !fields.name) throw new ProjectsError('a new project needs a name');
+      record = {
+        name: fields.name,
+        entity: fields.entity ?? null,
+        lead: fields.lead ?? null,
+        teams: fields.teams ?? [],
+        provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
+      };
+    }
+    if (typeof record.name !== 'string' || !record.name) throw new ProjectsError('a project needs a name');
+    if (record.entity !== null && typeof record.entity !== 'string') throw new ProjectsError('"entity" must be text or null');
+    if (record.lead !== null && typeof record.lead !== 'string') throw new ProjectsError('"lead" must be an agent ID or null');
+    if (!Array.isArray(record.teams)) throw new ProjectsError('"teams" must be a list of team IDs');
+    for (const team of record.teams) {
+      if (typeof team !== 'string' || !team) throw new ProjectsError('a team ID in "teams" must be text');
+    }
+    for (const [other, held] of Object.entries(projects)) {
+      if (other !== id && held.name === record.name) throw new ProjectsError(`a project named ${record.name} is already ${other}`);
+    }
+    delete record.id;
+    projects[id] = record;
+    write(home, projects);
+    return { ...record, id };
+  });
+}
+
+function definedOnly<T extends object>(fields: T): Partial<T> {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as Partial<T>;
+}
+
+// --- the lock and the write ------------------------------------------------------------------
+
+const LOCK_WAIT_MS = 5000;
+const LOCK_STALE_MS = 15000;
+
+function locked<T>(home: string, work: () => T): T {
+  const path = `${projectsFile(home)}.lock`;
+  mkdirSync(dirname(path), { recursive: true });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      const fd = openSync(path, 'wx');
+      writeSync(fd, `${process.pid}\n`);
+      closeSync(fd);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      // A holder that died leaves its file behind: one older than any write takes is not held.
+      try {
+        if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) unlinkSync(path);
+      } catch {
+        // gone already, or taken by another waiter: look again
+      }
+      if (Date.now() > deadline) throw new ProjectsError(`${path} is held by another run`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try {
+    return work();
+  } finally {
+    try {
+      unlinkSync(path);
+    } catch {
+      // already removed as stale
+    }
+  }
+}
+
+function write(home: string, projects: Record<string, ProjectRecord>): void {
+  const path = projectsFile(home);
+  mkdirSync(dirname(path), { recursive: true });
+  writeAtomic(path, emit(projects));
+}
+
+// --- writing the records as the YAML subset the reader takes ---------------------------------
+
+/** A word is written bare only where the reader would read it back as the same text; every
+ *  other string is double-quoted, so an ID of digits or a name with a colon survives a round trip. */
+function scalar(text: string): string {
+  const bare = /^[A-Za-z_/~][A-Za-z0-9_./@~-]*$/.test(text) && !/^(~|null|true|false)$/i.test(text);
+  return bare ? text : JSON.stringify(text);
+}
+
+function nullable(text: string | null): string {
+  return text === null ? 'null' : scalar(text);
+}
+
+function emit(projects: Record<string, ProjectRecord>): string {
+  const ids = Object.keys(projects).sort();
+  if (!ids.length) return 'projects: {}\n';
+  const lines = ['projects:'];
+  for (const id of ids) {
+    const project = projects[id] as ProjectRecord;
+    lines.push(`  ${scalar(id)}:`);
+    lines.push(`    name: ${scalar(project.name)}`);
+    lines.push(`    entity: ${nullable(project.entity)}`);
+    lines.push(`    lead: ${nullable(project.lead)}`);
+    lines.push(project.teams.length ? `    teams: [${project.teams.map(scalar).join(', ')}]` : '    teams: []');
+    const p = project.provenance;
+    lines.push(`    provenance: { registered_by: ${scalar(p.registered_by)}, registered_at: ${scalar(p.registered_at)}, updated_at: ${scalar(p.updated_at)} }`);
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 // --- reading the file's value into records ---------------------------------------------------
