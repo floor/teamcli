@@ -81,7 +81,7 @@ describe('a broken record in the current folder', () => {
     expect(findStore(root, home)).toBe(current);
     const standing = approvalStanding(root, home);
     expect(standing.kind).toBe('refused');
-    if (standing.kind === 'refused') expect(standing.why).toContain('run `team approve`');
+    if (standing.kind === 'refused') expect(standing.why).toContain('the record does not carry a valid signature');
     expect(otherMatchingStores(root, home)).toEqual([basename(oldStore)]);
   });
 });
