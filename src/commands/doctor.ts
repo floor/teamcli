@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
-import { approvalDifferencesOf, budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
+import { budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, isOwner, type Caller } from '../caller.ts';
 import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
@@ -11,7 +11,6 @@ import { parseOutput, runCommand, type CheckReading } from '../budgets/run.ts';
 import { canonicalLanding as showLanding } from '../file/landing.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
-import { validateTeamFile } from '../file/validate.ts';
 import { canonicalLanding, insideTrust, isLegacyTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { declaredModel } from '../file/model.ts';
@@ -22,14 +21,13 @@ import { resolveLobby, verifyLobby } from '../lobby/gate.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
-import { checkRulesFile, rulesFilePathOf } from '../launch/rules-file.ts';
+import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
 import { readState, type SeatState } from '../state.ts';
 import { canShowModel, seatModel } from '../status/statusline.ts';
-import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
@@ -269,31 +267,17 @@ export function budgetCheckFindings(team: TeamFile, standing: Standing, root: st
 
 function overrideFindings(standing: Standing, team: TeamFile, root: string, home: string): Finding[] {
   const report = overridesInForceOf(standing, team.project, root, home);
-  return [
-    ...report.differences.map((line): Finding => ({ level: 'miss', text: `run \`team approve\`: ${line}` })),
-    ...report.problems.map((line): Finding => ({ level: 'miss', text: line })),
-  ];
+  // A stored copy is not a gate. A difference against it is not a miss, and doctor does not
+  // name the deleted command. A file that cannot be parsed still is.
+  return report.problems.map((line): Finding => ({ level: 'miss', text: line }));
 }
 
-function approvalFindings(standing: Standing, team: TeamFile, home: string): Finding[] {
-  if (standing.kind === 'none') {
-    return [{ level: 'miss', text: 'run `team approve`: this file was never approved on this machine' }];
-  }
-  // A line of its own for each case that is not an approval: the legacy record's
-  // repair, or the case the verification refused — never buried in drift.
+function approvalFindings(standing: Standing): Finding[] {
+  // The live file is the record. "Never approved" and "the file differs" are not misses.
+  // A legacy or refused record still names its own case.
   if (standing.kind === 'legacy') return [{ level: 'miss', text: LEGACY_LINE }];
   if (standing.kind === 'refused') return [{ level: 'miss', text: standing.why }];
-  const differences = approvalDifferencesOf(standing, team);
-  if (differences.length) return [{ level: 'miss', text: `run \`team approve\`: ${differences.join('; ')}` }];
-  // The key's fingerprint beside the generation: an owner who notes it sees a replaced key.
-  const key = keyState(home);
-  const ofKey = key.kind === 'key' ? `, key ${keyFingerprint(key.key)}` : '';
-  return [
-    {
-      level: 'ok',
-      text: `the file is the one the owner approved (approval #${standing.generation}, ${standing.signedAt.slice(0, 10)}${ofKey})`,
-    },
-  ];
+  return [];
 }
 
 function cliFindings(cli: string, seats: Seat[], sources: DoctorSources): Finding[] {
@@ -500,8 +484,9 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
 
 // The repair that relaunches one seat `up` leaves as it is: `up` never restarts a ready seat,
 // so a line that names `up` alone names a command that skips the seat. For an orchestrator or
-// an operator, `team remove <seat> --keep` is refused (the file can't have a stopped lead),
-// so only the whole-team sequence is offered. For every other seat — stop it, keep it in the
+// an operator, `team remove <seat> --keep` is a swap: it never marks the lead stopped
+// in the file, and it is the owner's or an authorised swapper's; the line still offers the
+// whole-team sequence, which every caller of these lines may follow. For every other seat — stop it, keep it in the
 // file, add it again: the add launches it fresh, which is what records the process, writes the
 // rules file and starts the seat in the machine lobby — or the whole team at once.
 export const relaunch = (team: Pick<TeamFile, 'orchestrator' | 'operator'>, name: string): string =>
@@ -522,6 +507,20 @@ function identityFindings(team: TeamFile, dir: string, session: string): Finding
       level: 'note',
       text: `${seat.name}: launched before team recorded its process; run ${relaunch(team, seat.name)} to launch it again`,
     });
+  }
+  return findings;
+}
+
+// A lead `team remove <lead> --keep` stopped for a swap and nothing started again: the file still
+// names it the lead, the state no longer records it running. Said as the swap it is, with the one
+// command that ends it, so the gap never reads as a lost orchestrator. A record whose seat runs
+// again (an `up` relaunched it) is stale and says nothing.
+export function swapFindings(team: TeamFile, dir: string, session: string): Finding[] {
+  const current = readState(dir).sessions[session];
+  const findings: Finding[] = [];
+  for (const [name, swap] of Object.entries(current?.swapping ?? {})) {
+    if (current?.seats[name] || !team.seats.some((seat) => seat.name === name)) continue;
+    findings.push({ level: 'warn', text: `${name}: stopped for a swap by ${swap.by} at ${swap.at}; run \`team add ${name}\` to start its new agent` });
   }
   return findings;
 }
@@ -549,14 +548,14 @@ function placeholderVersionFindings(team: TeamFile, dir: string, session: string
         level: 'note',
         text:
           `${seat.name}: runs ${running.model} ${running.version}; the file's version "0" is the placeholder init writes — ` +
-          `write "${running.version}" into the file, then run \`team approve\``,
+          `write "${running.version}" into the file`,
       });
     } else {
       findings.push({
         level: 'warn',
         text:
           `${seat.name}: runs ${running.model} ${running.version}; the file says ${seat.model} 0 — ` +
-          `write model: "${running.model}" and version: "${running.version}" into the file, then run \`team approve\``,
+          `write model: "${running.model}" and version: "${running.version}" into the file`,
       });
     }
   }
@@ -593,29 +592,23 @@ export function doctorFindings(
   findings.push(...seatNameFindings(team, session));
 
   findings.push(
-    ...approvalFindings(standing, approved, sources.home),
+    ...approvalFindings(standing),
     ...overrideFindings(standing, team, root, sources.home),
     ...checkFindings(standing, team),
     ...budgetChecks,
   );
-  // The rules file each message seat runs by, only when there is an approval that writes one.
-  // A file that differs is warned about, never rewritten here. A stopped seat is not checked:
-  // its file is written at the launch that starts it again. The file is written at a delivery,
+  // The rules file each message seat runs by, checked against the live file's text. A file
+  // that differs is warned about, never rewritten here. A stopped seat is not checked: its
+  // file is written at the launch that starts it again. The file is written at a delivery,
   // and a delivery happens only at a launch — which `up` skips for a ready seat, so the line
-  // names the relaunch that performs one.
+  // names the relaunch that performs one. The check runs only once a record exists, so a
+  // file that was never approved does not grow a warning for a file no launch has written.
   if (standing.kind === 'verified') {
-    // The seats of the file as approved, against the approved rules text: a seat the approval
-    // does not hold has no approved rules to check, and `up` refuses a drifted file anyway.
-    const ofRecord = validateTeamFile(standing.record.file);
-    const seats = ofRecord.ok ? ofRecord.team.seats : [];
-    for (const seat of seats) {
+    for (const seat of approved.seats) {
       if (seat.stopped || profileFor(seat.cli)?.rulesOption != null) continue;
-      // A seat name the team file's own rule refuses has no path to check — the parser already
-      // refuses it, so this only guards a record that holds one anyway. The path is resolved
-      // the one way, from the approval in force, like every other reader of the file.
-      const path = rulesFilePathOf(standing, seat.name, root, sources.home);
+      const path = rulesFilePath(approved.project, root, sources.home, seat.name);
       if (path === null) continue;
-      const check = checkRulesFile(path, rulesOf(ofRecord.ok ? ofRecord.team : approved, seat, root));
+      const check = checkRulesFile(path, rulesOf(approved, seat, root));
       if (!check.ok) findings.push({ level: 'warn', text: `${seat.name}: ${check.what}; run ${relaunch(team, seat.name)}` });
     }
   }
@@ -643,6 +636,7 @@ export function doctorFindings(
   findings.push(...launchLines);
 
   findings.push(...identityFindings(team, dir, session));
+  findings.push(...swapFindings(team, dir, session));
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
 
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
@@ -753,8 +747,7 @@ export function doctorFindings(
   }
 
   // The legacy note is told only while the file really is legacy: once the owner has written the
-  // absolute trust entries, the approval findings carry the next step (`run \`team approve\``),
-  // and a note that still says "migrate" would name a step already taken.
+  // absolute trust entries, a note that still says "migrate" would name a step already taken.
   if (!team.trust || team.trust.length === 0 || isLegacyTrust(team.trust)) {
     const fromText = oldLobby ? `from ${plainLine(oldLobby)} to ${plainLine(lobby)}` : `to ${plainLine(lobby)}`;
     findings.push({
