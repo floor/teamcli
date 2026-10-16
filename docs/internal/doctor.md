@@ -200,8 +200,9 @@ This miss is not a reason for `up` to refuse.
 ## Examples, moved here whole
 
 The examples below are the page's own, moved here whole, in the order they stood in. The
-first console is also on [the `team doctor` page](../commands/doctor.md); the rest stand only in
-this note and are not executed by any test — `test/docs.test.ts` reads `docs/commands/` alone.
+first console is also on [the `team doctor` page](../commands/doctor.md); the page's one-glance cut
+dropped its shorter `--login` run, and the richer one below stands in its place. The rest stand only
+in this note and are not executed by any test — `test/docs.test.ts` reads `docs/commands/` alone.
 
 ```yaml file=.agents/team.yaml
 format: 1

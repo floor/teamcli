@@ -107,14 +107,4 @@ team doctor: nothing missing, 2 warnings
 exit 0
 ```
 
-`--login` reads the logins alone — one line per CLI the file's seats use, said once — and no herdr,
-session or machine:
-
-```console
-$ team doctor --login ; echo "exit $?"
-ok    claude-code: logged in
-team doctor: nothing missing, 0 warnings
-exit 0
-```
-
 Rationale, behaviour, refusals and known limits: [docs/internal/doctor.md](../internal/doctor.md).
