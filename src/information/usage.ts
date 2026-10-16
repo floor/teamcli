@@ -1035,12 +1035,12 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
         continue;
       }
       if (account.kind === 'spend') {
-        const entry = spendEntryOf(account, view, mineEntry, now);
+        const entry = spendEntryOf(account, view, mineEntry, now, allTeams);
         if (entry.machine.state !== 'unknown') withFigure.add(account.account);
         accounts.push(entry);
       } else {
         for (const line of account.lines) {
-          const entry = subscriptionEntryOf(account.account, line, view, mineEntry, now, readable.has(account.account));
+          const entry = subscriptionEntryOf(account.account, line, view, mineEntry, now, readable.has(account.account), allTeams);
           if (entry.machine.state !== 'unknown') withFigure.add(account.account);
           accounts.push(entry);
         }
@@ -1142,12 +1142,6 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     notes.push({ scope: 'usage', why: "the full team list is the owner's view: --all shows this team's seats only" });
   }
 
-  if (!allTeams) {
-    for (const lab of labs) for (const entry of lab.accounts) {
-      entry.teams = entry.teams.filter((row) => row.team === mineName) as typeof entry.teams;
-    }
-  }
-
   return {
     format: 1,
     at: new Date(now).toISOString(),
@@ -1183,6 +1177,7 @@ function subscriptionEntryOf(
   mineEntry: TeamEntry | null,
   now: number,
   readable: boolean,
+  allTeams: boolean,
 ): ReportAccount {
   const newest = line.newest;
   const other = newest !== null && newest.team !== mineEntry;
@@ -1204,7 +1199,7 @@ function subscriptionEntryOf(
     ...(view.full && newest !== null ? { team: newest.team.usage.project ?? newest.team.root } : {}),
     ...(newest !== null && (view.full || !other) ? { seat: newest.row.seat } : {}),
   };
-  const rows = view.full ? line.rows : line.rows.filter((one) => one.team === mineEntry);
+  const rows = view.full && allTeams ? line.rows : line.rows.filter((one) => one.team === mineEntry);
   const teams: ReportTeamRow[] = rows
     .map((one) => ({ team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '', ...(view.full ? { root: one.team.root } : {}), row: reportRowOf(one.row, one.pace) }))
     .sort((a, b) => (a.team < b.team ? -1 : 1));
@@ -1233,7 +1228,7 @@ function reportRowOf(row: BudgetRow, pace: number | null): ReportRow {
   };
 }
 
-function spendEntryOf(account: MachineAccount & { kind: 'spend' }, view: UsageView, mineEntry: TeamEntry | null, now: number): ReportAccount {
+function spendEntryOf(account: MachineAccount & { kind: 'spend' }, view: UsageView, mineEntry: TeamEntry | null, now: number, allTeams: boolean): ReportAccount {
   const newest = account.spend.newest;
   const other = newest !== null && newest.team !== mineEntry;
   const staleAfterMs = (newest?.team ?? mineEntry)?.usage.staleAfter ?? 0;
@@ -1247,7 +1242,7 @@ function spendEntryOf(account: MachineAccount & { kind: 'spend' }, view: UsageVi
     other,
     ...(view.full && newest !== null ? { team: newest.team.usage.project ?? newest.team.root } : {}),
   };
-  const rows = view.full ? account.spend.rows : account.spend.rows.filter((one) => one.team === mineEntry);
+  const rows = view.full && allTeams ? account.spend.rows : account.spend.rows.filter((one) => one.team === mineEntry);
   const teams: ReportSpendRow[] = rows
     .map((one) => ({
       team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '',

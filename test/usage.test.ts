@@ -29,6 +29,7 @@ import {
   UNBOUND_ACCOUNT,
   UNBOUND_SHAPE,
   viewFor,
+  type UsageReport,
 } from '../src/information/usage.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
@@ -284,6 +285,67 @@ function extraSeat(name: string, account: string): string {
 }
 
 describe('team usage', () => {
+  test('the default rows keep only the current checkout when projects have the same name', async () => {
+    const otherRoot = join(base, 'another-checkout');
+    for (const [at, left] of [[root, 75], [otherRoot, 25]] as const) {
+      mkdirSync(join(at, '.agents'), { recursive: true });
+      const text = teamText().replace(root, at).replace(
+        '  accounts:\n',
+        '  accounts:\n    deepseek: { kind: spend, floor: 5 USD, sources: [check], check: acme-quota }\n',
+      );
+      writeFileSync(join(at, '.agents', 'team.yaml'), text);
+      approve(text, { root: at });
+      updateState(join(at, '.agents'), (state) => {
+        state.budgets = {
+          'openai/session': { ...READINGS['openai/session'], left, used: 100 - left },
+        } as never;
+        state.spend = {
+          deepseek: { account: 'deepseek', amount: left, currency: 'USD', at: '2026-10-04T08:58:00Z' },
+        } as never;
+      });
+    }
+
+    const linked = join(base, 'linked-checkout');
+    symlinkSync(root, linked);
+    for (const cwd of [root, linked]) {
+      for (const all of [false, true]) {
+        const args = all ? ['--all'] : [];
+        const result = await usageAt(cwd, OWNER, '--json', ...args);
+        expect(result.code).toBe(0);
+        expect(result.err).toBe('');
+        const report = JSON.parse(result.out) as UsageReport;
+        const accounts = report.labs.flatMap((lab) => lab.accounts)
+          .filter((entry) => entry.account === 'openai' || entry.account === 'deepseek');
+        expect(accounts).toHaveLength(2);
+        for (const entry of accounts) {
+          expect(entry.teams.map((row) => row.root).sort()).toEqual(all ? [root, otherRoot].sort() : [root]);
+          expect(entry.teams.every((row) => row.team === 'acme')).toBe(true);
+          const figures = entry.kind === 'subscription'
+            ? entry.teams.map((row) => row.row.left)
+            : entry.teams.map((row) => row.reading.amount);
+          expect(figures.sort()).toEqual(all ? [25, 75] : [75]);
+        }
+        expect(report.teams).toHaveLength(all ? 2 : 1);
+
+        const text = (await usageAt(cwd, OWNER, ...args)).out;
+        const teamRows = text.split('\n').filter((line) => line.startsWith('  acme  '));
+        expect(teamRows.some((line) => line.includes('left 75%'))).toBe(true);
+        expect(teamRows.some((line) => line.includes('75.00 USD'))).toBe(true);
+        expect(teamRows.some((line) => line.includes('left 25%'))).toBe(all);
+        expect(teamRows.some((line) => line.includes('25.00 USD'))).toBe(all);
+      }
+    }
+
+    const restricted = JSON.parse((await usageAt(root, SEAT, '--json', '--all')).out) as UsageReport;
+    expect(restricted.view).toBe('restricted');
+    for (const entry of restricted.labs.flatMap((lab) => lab.accounts)) {
+      expect(entry.teams).toHaveLength(1);
+      expect(entry.teams[0]).not.toHaveProperty('root');
+      if (entry.kind === 'spend') expect(entry.teams[0]?.reading.amount).toBe(75);
+      else if (entry.account === 'openai') expect(entry.teams[0]?.row.left).toBe(75);
+    }
+  });
+
   test('the fixture takes the current file spelling, so no deprecation warning fires on it', () => {
     // The guard for the class a moved word breaks: if the tool's file language moves again —
     // another key renamed, another field deprecated — this fixture would warn, and this fails
