@@ -140,9 +140,10 @@ describe('a restored seat running outside its launcher', () => {
       processes: { 'w3:p1': { shell: 500, foreground: [501] } },
     });
     // The stored session is on the pane, so the generic line stays quiet: the flag is the
-    // launcher's alone, and it names the restart — the pass reports, it launches nothing.
+    // launcher's alone, and it names the restart — the pass reports, it launches nothing,
+    // and the waiting report rides the nudge carrying that same repair line.
     expect(result.reports.map((report) => report.text)).toEqual([launcherLine('deepseek-acme', RESTART_SEAT)]);
-    expect(result.nudge).toBeNull();
+    expect(result.nudge?.pending).toEqual([launcherLine('deepseek-acme', RESTART_SEAT)]);
     expect(result.fallback).toBeNull();
     expect(result.ring).toBeNull();
   });
