@@ -1,8 +1,8 @@
 # The agent and team registries
 
 Two records hold who the fleet is: one file per agent under `~/.config/team/agents/`, and one teams
-file. `team` writes them — registration happens the first time `up` or `add` launches a seat that
-has no agent id yet — and routing, [team list](../commands/list.md) and
+file. `team` writes them — registration happens at a seat's first launch by `up`, `add`, `restart`
+or `reload` — and routing, [team list](../commands/list.md) and
 [team send](../commands/send.md) read them. The team file (`.agents/team.yaml`) stays the seed and
 the projection; the registries are the live truth that `up` and routing read.
 
@@ -18,14 +18,15 @@ the projection; the registries are the live truth that `up` and routing read.
 | `lab`, `cli` | the vendor and the CLI the seat runs |
 | `launch` | the raw launch line, recorded as it was started; `launcher` is a reference, later |
 | `reach` | the namespaces the agent answers to: team, seat, session, pane, and a cross-session address when it has one |
-| `seat_handle` | when it had one, the stable `seat_<12 hex>` handle `team seats` shows, kept for continuity |
+| `seat_handle` | when the launch supplies one, the stable `seat_<12 hex>` handle `team seats` shows; set once, never changed |
 | `mcp`, `skills` | declared now, filled later |
 | `lifecycle` | `registered`, `running`, `stopped` or `retired` |
 | `provenance` | who registered it, and when it was registered and last updated |
 
-`up`, `add`, `remove`, `reload` and `restart` write these records: a relaunch keeps the id and
-re-points `reach.pane`, and a lifecycle change is written to a temporary file and renamed into
-place.
+`up`, `add`, `restart` and `reload` register a seat's agent at its first launch and re-point it on
+every relaunch; `remove` and the stop of a seat end it — `stopped` comes back to the same agent,
+`retired` never does. A relaunch keeps the id and re-points `reach.pane`, and every write goes
+through a temporary file and a rename.
 
 ## The team record
 
