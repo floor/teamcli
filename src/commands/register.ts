@@ -47,8 +47,10 @@ export type RegisterSources = {
   agents: (session: string) => HerdrAgent[] | null;
   /** Null when herdr can't read the pane's processes. */
   processInfo: (session: string, pane: string) => PaneProcesses | null;
-  /** argv0 of each foreground process in the pane, or null when herdr can't read them. */
-  foreground: (session: string, pane: string) => string[] | null;
+  /** argv0 of each foreground process in the pane, or null when herdr can't read them. Left
+   *  out, the pane's CLI is judged by the agent name herdr reports for it — the reading a
+   *  scene that stubs `agents` already carries. The shipped reader always provides this. */
+  foreground?: (session: string, pane: string) => string[] | null;
   paneText: (session: string, pane: string) => string | null;
   screen?: (cli: string, text: string | undefined) => Screen;
   delegateGate?: typeof delegateGate;
@@ -344,7 +346,11 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // neither is a shell behind a name herdr still lists for it.
   const identity = launchedIdentity(sources.processInfo(session, found.pane));
   if (identity === null) return noCliRefused(out, name, found.pane);
-  if (!reportedLiveAgent(sources.foreground(session, found.pane), profile.processNames)) {
+  // The pane's own CLI, in the seat's profile's terms: the foreground argv0s where the caller
+  // reads them, else the agent name herdr reports for that pane. A pane standing in front of
+  // another agent is not this seat, and is not recorded.
+  const live = sources.foreground ? sources.foreground(session, found.pane) : found.agent === null ? null : [found.agent];
+  if (!reportedLiveAgent(live, profile.processNames)) {
     return cliRefused(out, name, found.pane, seat.cli);
   }
   const text = sources.paneText(session, found.pane) ?? undefined;

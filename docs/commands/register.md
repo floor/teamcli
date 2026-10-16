@@ -10,7 +10,8 @@ it, so `team send`, `team seats`, `team watch` and `team down` can address the s
 What it verifies is what herdr and the pane say: that herdr places an agent under that name in the
 session's own workspace, that the pane holds a process in front of the pane's own shell and that
 the process is the one the seat's CLI profile names — the file's `cli` is the authority, herdr's
-`argv0` the reading — and that the screen is the seat at its prompt — `idle` or `working`. A
+`argv0` for the pane (or the agent name herdr reports for it) the reading — and that the screen is
+the seat at its prompt — `idle` or `working`. A
 dialog, a CLI that has exited, another CLI in front, or a reading this version does not recognise
 is not a seat to record. Nothing is typed into the pane, and no workspace is created, closed or
 renamed.
