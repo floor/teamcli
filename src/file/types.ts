@@ -153,6 +153,8 @@ export type TeamFile = {
     quotaMarks: number[];
     // The checks this file turns off, by name. The four that can't be turned off never appear.
     checks: string[];
+    /** Text sent to each idle worker. Absent: the watch's report line. */
+    nudge?: string;
   };
   budgets: {
     staleAfter: number;
