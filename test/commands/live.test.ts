@@ -5103,10 +5103,14 @@ describe('team up, delegated', () => {
 });
 
 describe('team down, live', () => {
-  beforeEach(() => approve());
+  let liveSeat = 'deepseek-acme';
+  beforeEach(() => {
+    liveSeat = 'deepseek-acme';
+    return approve();
+  });
 
   function seat(status = 'idle'): HerdrAgent {
-    return agent('deepseek-acme', 'w3:p1', status);
+    return agent(liveSeat, 'w3:p1', status);
   }
 
   function harness(screen: Screen, status = 'idle') {
@@ -5941,16 +5945,17 @@ describe('team down, live', () => {
     expect(run.typed).toEqual(['/exit']);
   });
 
-  // The live file renamed the seat after the copy was approved. The stop list is that copy, so
-  // the seat is still stopped under the name and CLI the copy carries.
+  // The live file renamed the seat after the copy was approved. The stop list is the live file, so
+  // the seat is stopped under the name and CLI the live file carries.
   function renamedSeat(cli?: string) {
+    liveSeat = 'relay-acme';
     writeFileSync(join(root, '.agents/team.yaml'), EXAMPLE.replace('name: deepseek-acme', 'name: relay-acme'));
     const recorded = cli === undefined ? { stage: 'ready' } : { stage: 'ready', cli };
     writeFileSync(
       join(root, '.agents/team.state.json'),
       JSON.stringify({
         format: 1,
-        sessions: { 'acme-web': { seats: { 'deepseek-acme': recorded }, worktrees: {} } },
+        sessions: { 'acme-web': { seats: { 'relay-acme': recorded }, worktrees: {} } },
       }),
     );
   }
@@ -5965,7 +5970,7 @@ describe('team down, live', () => {
     expect(run.entered).toEqual(['enter']);
     expect(run.closed).toEqual(['w3']);
     expect(run.stopped).toEqual(['acme-web']);
-    expect(io.out).toContain('deepseek-acme: stopped\n');
+    expect(io.out).toContain('relay-acme: stopped\n');
   });
 
   test('a renamed seat with no live agent in its pane is not typed into', async () => {
@@ -5977,7 +5982,7 @@ describe('team down, live', () => {
     expect(run.typed).toEqual([]);
     expect(run.entered).toEqual([]);
     expect(run.closed).toEqual([]);
-    expect(io.out).toContain('deepseek-acme: no live agent in its pane; its exit was not typed (team down --abandon closes it)\n');
+    expect(io.out).toContain('relay-acme: no live agent in its pane; its exit was not typed (team down --abandon closes it)\n');
   });
 
   test('a renamed seat at a permission prompt is not typed into', async () => {
@@ -5990,7 +5995,7 @@ describe('team down, live', () => {
     expect(run.entered).toEqual([]);
     expect(run.closed).toEqual([]);
     expect(run.stopped).toEqual([]);
-    expect(io.out).toContain('deepseek-acme: is blocked at a prompt');
+    expect(io.out).toContain('relay-acme: is blocked at a prompt');
   });
 
   test('a seat whose state predates the CLI record is stopped under the copy\'s CLI', async () => {
@@ -6002,7 +6007,7 @@ describe('team down, live', () => {
     expect(run.typed).toEqual(['/exit']);
     expect(run.entered).toEqual(['enter']);
     expect(run.closed).toEqual(['w3']);
-    expect(io.out).toContain('deepseek-acme: stopped\n');
+    expect(io.out).toContain('relay-acme: stopped\n');
   });
 
   test('an agent neither the file nor the state records is left entirely alone', async () => {

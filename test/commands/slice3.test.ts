@@ -538,8 +538,7 @@ describe('team doctor', () => {
     version: "1.3"
     launch: cursor-agent`,
     ));
-    // No approval call: this file stays unapproved, so the one thing `doctor` counts as missing
-    // is the approval itself and every warning below is about a model.
+    // No approval call: a missing record is not a refusal, and every warning below is about a model.
     const run = await doctor({
       version: (binary) => binary === 'claude'
         ? '2.1.288 (Claude Code)'
@@ -565,7 +564,7 @@ describe('team doctor', () => {
       'warn  deepseek-acme: the launch runs team-deepseek, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher\n',
     );
     expect(run.out).not.toContain('cursor-other: the launch names no model this version knows');
-    expect(run.out).toEndWith('team doctor: 1 missing, 4 warnings: 1 of them block `up` and `add`\n');
+    expect(run.out).toEndWith('team doctor: nothing missing, 4 warnings\n');
   });
 
   test("a launch whose model is not the file's warns", async () => {

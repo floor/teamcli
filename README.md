@@ -320,7 +320,8 @@ refusal, and change nothing.
 The commands read the file in the clone. Edit it, then run the seats. A record an earlier `team`
 left on this machine is still checked where a command needs one that verifies. A legacy record is
 refused with `approved before records were signed`. A record that does not verify is refused with
-the case. A missing record is not a refusal. The watch keeps watching, and `status` keeps reporting.
+the case. A missing record is not a refusal. Approvals guard against mistakes, not against a hostile
+process running as the owner. The watch keeps watching, and `status` keeps reporting.
 
 ## Your first team in five minutes
 

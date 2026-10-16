@@ -742,22 +742,8 @@ describe('team add', () => {
   });
 
   test('counts live undeclared agents against seat, temporary and vendor ceilings when removed from state', async () => {
-    const loaded = loadTeamFile(project, { home });
-    if (!loaded.ok) throw new Error('load');
-    const yaml = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
-    const baseApproval = approvalOf(loaded.team, loaded.root);
-    writeApproval(
-      storePath(loaded.team.project, loaded.root, home),
-      {
-        approval: {
-          ...baseApproval,
-          ceilings: { seats: 2, temporary: 1, vendors: { anthropic: 1, openai: 1 } },
-        },
-        file: yaml,
-      },
-      loaded.team.seats,
-      home,
-    );
+    const yaml = `${readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')}limits:\n  seats: 2\n  temporary: 1\n  vendors:\n    anthropic: 1\n    openai: 1\n`;
+    approve(yaml);
     const liveTemp: HerdrAgent = {
       name: 'worker-tmp-1',
       agent: 'claude',

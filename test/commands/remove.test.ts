@@ -1029,7 +1029,7 @@ describe('team remove', () => {
     expect(readState(join(dir, '.agents')).sessions.acme?.seats.stray).toBeDefined();
   });
 
-  test('a name the live file declares and the approved copy does not keeps today\'s refusal', async () => {
+  test('a name the live file declares and the approved copy does not is removed as a declared seat', async () => {
     writeFileSync(file, `${FILE}  - role: implementer
     name: stray
     label: stray
@@ -1040,19 +1040,19 @@ describe('team remove', () => {
     launch: claude --model claude-opus-5-5
 `);
     strayRecord();
-    const before = readFileSync(file, 'utf8');
     const made = world({ kind: 'idle' }, 'idle');
     made.agents.push({ name: 'stray', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null });
     const renamed: [string, string, string][] = [];
     made.sources.renameAgent = (session, pane, to) => { renamed.push([session, pane, to]); return true; };
     const io = testIo(dir, lead);
-    expect(await runRemove(['stray'], io, made.sources)).toBe(1);
-    expect(io.err).toBe('team remove: stray: its record is not an approved seat; left as it is (the owner cleans it: team remove stray --abandon)\n');
-    expect(readFileSync(file, 'utf8')).toBe(before);
-    expect(readState(join(dir, '.agents')).sessions.acme?.seats.stray).toBeDefined();
+    expect(await runRemove(['stray'], io, made.sources)).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('removed stray\n');
+    expect(readFileSync(file, 'utf8')).toBe(FILE);
+    expect(readState(join(dir, '.agents')).sessions.acme?.seats.stray).toBeUndefined();
     expect(renamed).toEqual([]);
-    expect(made.typed).toEqual([]);
-    expect(made.closed).toEqual([]);
+    expect(made.typed).toEqual(['/exit']);
+    expect(made.closed).toEqual(['w9']);
   });
 
   test('a leftover with no live agent keeps today\'s refusal', async () => {

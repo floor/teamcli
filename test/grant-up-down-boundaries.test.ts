@@ -491,10 +491,10 @@ describe('the approval the grant rides on', () => {
     expect(io.err).not.toContain('team approve');
     expect(io.err).not.toContain('deny');
     expect(trace.workspaces).toEqual([
-      { label: 'lead', cwd: root },
       { label: 'pilot', cwd: root },
       { label: 'worker', cwd: lobby },
     ]);
+    expect(trace.audits).toEqual([{ seat: 'lead', act: 'up' }]);
     const doctorIo = testIo(root);
     await runDoctor([], doctorIo, doctor());
     expect(doctorIo.out + doctorIo.err).not.toContain('team approve');
