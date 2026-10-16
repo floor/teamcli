@@ -248,7 +248,7 @@ describe('a file against its approval', () => {
   test('an explicit seat that differs from the approved instance is named', () => {
     approve(home);
     const fewer = text.replace(/\n    count: 2[^\n]*/, '\n    count: 3');
-    expect(approvalDifferences(team(fewer), home, home)).toEqual(['seat deepseek-acme-3 is not in the approved file']);
+    expect(approvalDifferences(team(fewer), home, home)).toEqual(['seat deepseek-acme-3 is not in the last approval']);
   });
 
   test('the record holds the ceilings and the root', () => {

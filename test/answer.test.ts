@@ -468,8 +468,9 @@ describe('team answer', () => {
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
-    // The paste renders with one character changed: the box never reads back as the line, no
-    // Enter presses it, and the delivery's stop is past the key.
+    // The paste renders with one character changed: the box never reads back as the line, so
+    // Enter is not pressed. The line this run typed is cleared with the profile's key, and
+    // the seat stays in the recovery the trust key recorded.
     host.type = (_session, _pane, value) => {
       host.typed.push(value);
       host.screen = cursorBox(value.replace('standing rules', 'stunding rules'));
@@ -477,7 +478,7 @@ describe('team answer', () => {
     };
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
-    expect(host.keys).toEqual(['a']);
+    expect(host.keys).toEqual(['a', 'ctrl+u']);
     expect(host.typed.length).toBe(1);
     expect(host.entered).toBe(0);
     expect(io.err).toBe('lead: trust sent; recovery required\n');
@@ -1204,7 +1205,7 @@ describe('team answer', () => {
       host.agents = () => [{ name: 'extra', pane: 'w1:p4', workspace: 'w1' }];
       const io = testIo(root, { kind: 'owner' });
       expect(await runAnswer([...FILE, 'extra', 'trust'], io, host)).toBe(1);
-      expect(io.err).toBe('extra: its record is not an approved seat; left as it is (the owner cleans it: team remove extra --abandon)\n');
+      expect(io.err).toBe('extra: its record is not a declared seat; left as it is (the owner cleans it: team remove extra --abandon)\n');
       expect(host.keys).toEqual([]);
       expect(host.typed).toEqual([]);
     });
@@ -1431,7 +1432,7 @@ describe('team answer', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(host.keys).toEqual([]);
-    expect(io.err).toBe('the file was never approved on this machine: run `team approve`\n');
+    expect(io.err).toBe('the file was never approved on this machine\n');
 
     await approve(root, home);
     const hanging = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -1511,7 +1512,7 @@ describe('team answer', () => {
     expect(await runAnswer([...FILE, 'gone', 'trust'], missing, refused)).toBe(1);
     expect(missing.err).toBe('gone: it is not a live seat\n');
   });
-  test('the folder check reads the trust entries of the approved copy, not the live file', async () => {
+  test('the folder check reads the live trust entries despite a stale or invalid stored copy', async () => {
     const { root, home, lobby, dir } = world();
     const live = file(lobby, 'coordinator');
     writeFileSync(join(dir, 'team.yaml'), live);
@@ -1531,17 +1532,17 @@ describe('team answer', () => {
     });
     wait(dir, 'lead');
     const io = testIo(root, { kind: 'owner' });
-    expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
-    expect(host.keys).toEqual([]);
-    expect(io.err).toBe('lead: this folder is not an exact trust entry\n');
+    expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(0);
+    expect(host.keys).toEqual(['a']);
+    expect(io.err).toBe('');
 
     const broken = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
     broken.standing = () => ({ ...standing, record: { ...standing.record, file: 'format: [' } });
     wait(dir, 'lead');
     const brokenIo = testIo(root, { kind: 'owner' });
-    expect(await runAnswer([...FILE, 'lead', 'trust'], brokenIo, broken)).toBe(1);
-    expect(broken.keys).toEqual([]);
-    expect(brokenIo.err).toBe('the approved copy of the team file cannot be read\n');
+    expect(await runAnswer([...FILE, 'lead', 'trust'], brokenIo, broken)).toBe(0);
+    expect(broken.keys).toEqual(['a']);
+    expect(brokenIo.err).toBe('');
   });
 
   test('json success and recovery are the stated objects', async () => {

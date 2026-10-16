@@ -120,7 +120,7 @@ export type CheckRunner = (account: BudgetAccount, path: string, now: number) =>
  * and why. `budgets` is the section in force: an account an unapproved edit
  * took out is not checked, and one it changed reads under the approved entry.
  * An account whose check is changed, missing or unapproved is not run at all
- * (§ 5, #45). The path handed to `run` is the approved one, hashed again
+ * (§ 5, #45). The path handed to `run` is the one the approval recorded, hashed again
  * against the approval: the file's command is never run directly.
  */
 export function checkOutcomes(

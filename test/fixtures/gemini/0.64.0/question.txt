@@ -1,0 +1,21 @@
+ > Wait for response
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+ℹ Request cancelled.
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ > Ask a question
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+╭───────────────────────────────────────────────────╮
+│ Answer Questions                                  │
+│                                                   │
+│ Which profile target should we validate first?    │
+│                                                   │
+│ ● 1.  gemini.yaml                                 │
+│       Validate the Gemini CLI profile             │
+│   2.  conformance.json                            │
+│       Run fixture conformance checks              │
+│   3.  Enter a custom value                        │
+│                                                   │
+│ Enter to select · ↑/↓ to navigate · Esc to cancel │
+╰───────────────────────────────────────────────────╯

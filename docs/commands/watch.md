@@ -3,11 +3,17 @@
 Watches a running team. Every `watch.interval` seconds it reads the session — the seats, their
 screens, the file, the approval, the machine — prints what is wrong, and removes a merged worktree
 whose end holds. A temporary seat is left as it is: the owner removes it. When a report is
-waiting, and an approval is in force, it types one fixed line into an idle seat — the nudge —
-so that seat reads the log. The operator is not that seat. A file that was never
-approved, a legacy record, and a refused record type nothing. It types nothing into a
+waiting, it types one fixed line into an idle seat — the nudge —
+so that seat reads the log. The operator is not that seat. A missing approval does not
+stop that line. It types nothing into a
 screen it can't read as an empty idle prompt, so a permission dialog and a half-typed sentence are
-left alone. A box that already holds the nudge's own line is sent, not typed into twice — and only
+left alone. `watch.nudge`, when the file sets it, is sent to each idle worker once
+`idle_first` has passed and again every `idle_repeat` when that is set. The body goes to the
+same drop file `team send` uses, and the pane receives one short line naming that file.
+When `watch.nudge` is omitted, that body is the report line. The text is taken from the
+live file, so it does not wait for an approval. The operator, the orchestrator, and the
+pane the watch itself is running in are never the target, and neither is a pane that is in
+a dialog or already holds unsent text. A box that already holds the nudge's own line is sent, not typed into twice — and only
 by the watch process that typed it: the same text from anyone else, or found after a restart, is
 its owner's, and is never sent or cleared. A screen hatch is an escape hatch for a CLI whose
 screens the data primitives cannot express. The guarantees cover what a hatch returns and what load
@@ -32,7 +38,9 @@ swap, and, when a temporary seat's end is judged, git.
 Writes `.agents/team.state.json` (the watch's pid and a heartbeat, once a pass; a temporary seat's
 `worked` and `own_commits` when it sees them; the accounts' latest screen readings and the money the
 spend checks read), `.agents/team.log` (every line it prints), and, through herdr: the nudge's text
-and Enter, and the seats' sidebar lines — the workspace title and the display line — from the file.
+and Enter, and the seats' sidebar lines — the workspace title from the file, and the display line
+from the file and the pane's screen; it paints them on its first cycle and again when the title,
+the model or the effort changes.
 
 The readings are only written when the watch's session is the file's own `session`: `up` and `add`
 count the state as the project's, so a watch on another session — `--session <other>`, which anyone
@@ -95,7 +103,7 @@ it and run `team up`.
 | --- | --- |
 | `--session <name>` | the herdr session to watch, instead of `team.session` |
 | `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
-| `--no-nudge` | the owner's. Type nothing into any pane: no report nudge and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
+| `--no-nudge` | the owner's. Type nothing into any pane: no report nudge, no work prompt and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
 | `--no-notify` | the owner's. No desktop notification for a report addressed to the operator. A report addressed to the owner is still notified, still written to the log, and still visible in `team status` |
 | `--help`, `-h` | the usage, and exit 0 |
 
@@ -142,9 +150,8 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model — <repair>` (`<declared>` is the seat's `display` spelling) | the running model or version is not the file's. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
 | `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, a workspace labelled watchdog aside |
 | `the file was never approved on this machine` | there is no approval record for this project |
-| `approved before records were signed: run \`team approve\` once` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
+| `approved before records were signed` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
 | `<why the record was refused>` | a signed record that does not verify (changed after approval, another root, a replayed or rolled-back generation): said once, and the watch keeps watching |
-| `the file differs from the approved one: <differences>` | the file is not the approved one; the differences read as `team status` prints them |
 | `the load is <n> per core, above <n>` | over `machine.load_max` |
 | `free memory is <n>%, below <n>%` | under `machine.memory_min` |
 | `free disk is <n> GB, below <n> GB` | under `machine.disk_min` |
@@ -211,17 +218,9 @@ approval, or that was never approved, is not run at all. The money a spend check
 the state with the pass's screen figures, so `up` and `add` measure the account's floor against
 it; a reading that is stale by then reads unknown there.
 
-The whole section is the owner's, like the watch's own timings: an edit to a reserve, a floor, the
-marks, `stale_after`, `check_every` or the accounts changes nothing until the owner approves it.
-Until then the reports, the check cadence and the accounts are the approved copy's — or the
-defaults', with no account at all, when nothing was approved — and the difference is reported. The
-same values are what `status`'s table and `up`'s and `add`'s launch gate read.
-
-A seat's own edit is the same kind of drift. While the approval lists a seat as changed — or as
-not in the approved file — the figures off its screen are read and reported as they are, and none
-of them is written to the readings: an unapproved edit to its `account:` must not move its figure
-into another account's bucket, where `up` and `add` would count it. Once the owner approves the
-seat, its figures fold again, under the account the file then names.
+The live file supplies the reserves, floors, marks, cadence, accounts and seat assignments.
+Edits take effect without another approval once an approval is in force; otherwise the
+budget defaults contain no accounts. The same values drive the status table and launch gates.
 
 `budget` is a check like the others: `watch.checks` turns it off. It reports, and never refuses a
 seat: the launch gate of `up` and `add` is what refuses. An account whose figure nothing counts —
@@ -355,8 +354,8 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-The file is part of the same pass. A `trust` line changed since the owner approved it is reported at
-the next one, and the team keeps running until the owner approves it again:
+The file is part of the same pass. The live file is the record, so a `trust` line changed since the
+owner approved it logs no difference, and the team keeps running:
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -395,24 +394,20 @@ seats:
 ```console
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the file differs from the approved one: `trust` changed
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
 ```
 
-The watch's own timings are the owner's too: `interval`, `idle_first`, `idle_repeat`, `team_idle`,
-`nudge_wait` and `unsent_after` are approved with the file, and an edit to one of them changes
-nothing until the owner approves it — the passes keep running with the values of the approved copy,
-or with the defaults when nothing was approved, and the difference is reported.
+The watch reads its timings and nudge settings from the live file on each pass once an
+approval is in force. Edits take effect without another approval. A file with no verified
+approval uses the default timings.
 By default an idle seat is reported once per idle period (`idle_repeat` is off). A team that wants
 repeated idle reports turns them on by setting `watch.idle_repeat` to the repeat interval (such as
 `idle_repeat: 20m`), repeating every 20 minutes while the seat stays quiet.
 
-A check the team doesn't want is turned off in `watch.checks` — a section only the owner changes,
-so it is approved like the rest of them. While that edit is unapproved, the approved list stays
-in force: nothing new is turned off, and a check the approved file turned off stays off. The
-machine below sits at 8% free memory, and this file turns that report off. The approved list left
-it on, so the report still comes, with the difference beside it.
+A check the team doesn't want is turned off in `watch.checks`. Edits to that list take effect
+on the next pass. The machine below sits at 8% free memory, and the live file turns that
+report off even though the last approval left the check on.
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -455,13 +450,11 @@ seats:
 ```console machine=tight
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the file differs from the approved one: `watch.checks` changed
-2026-10-04T09:00:00.000Z free memory is 8%, below 15%
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
 ```
 
-The owner approves it, and the next pass runs without the check:
+The live edit disables the check immediately. The owner can also record the change:
 
 ```console
 $ team approve ; echo "exit $?"

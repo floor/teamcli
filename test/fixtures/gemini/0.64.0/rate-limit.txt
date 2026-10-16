@@ -1,0 +1,22 @@
+
+
+
+ℹ Request cancelled.
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ > Check status
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+╭───────────────────────────────────────────────────╮
+│                                                   │
+│ Usage limit reached for all Pro models.           │
+│ Access resets at 2:10 PM GMT+2.                   │
+│ /stats model for usage details                    │
+│ /model to switch models.                          │
+│ /auth to switch to API key.                       │
+│                                                   │
+│                                                   │
+│ ● 1. Keep trying                                  │
+│   2. Stop                                         │
+│                                                   │
+│                                                   │
+╰───────────────────────────────────────────────────╯

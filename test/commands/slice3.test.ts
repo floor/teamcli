@@ -116,7 +116,7 @@ describe('team approve', () => {
   test('refuses input already waiting on the terminal before writing anything', async () => {
     const run = await approve([], OWNER, '5', 'waiting');
     expect(run.code).toBe(1);
-    expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: run \`team approve\` on its own line\n`);
+    expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: this command needs the terminal to itself\n`);
     expect(run.asked).toEqual([]);
     expect(existsSync(store())).toBe(false);
   });
@@ -171,7 +171,7 @@ describe('team approve', () => {
     test('input waiting: no key folder, no record, no generation, no log', async () => {
       const run = await approve([], OWNER, '5', 'waiting');
       expect(run.code).toBe(1);
-      expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: run \`team approve\` on its own line\n`);
+      expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: this command needs the terminal to itself\n`);
       expectNothingWritten();
     });
 
@@ -397,10 +397,10 @@ async function doctor(overrides: Partial<DoctorSources> = {}, argv: string[] = [
 }
 
 describe('team doctor', () => {
-  test('a file that was never approved is missing its approval', async () => {
+  test('a file that was never approved is not a doctor miss', async () => {
     const run = await doctor();
-    expect(run.code).toBe(1);
-    expect(run.out).toContain('MISS  run `team approve`: this file was never approved on this machine\n');
+    expect(run.out).not.toContain('team approve');
+    expect(run.out).not.toContain('never approved');
   });
 
   test('passes on an approved file with everything in place, and names what it leaves out', async () => {
@@ -411,7 +411,6 @@ describe('team doctor', () => {
     expect(run.out).toBe(
       [
         FILE_WARNING,
-        'ok    the file is the one the owner approved (approval #1, 2026-10-03, key fe21ef6293de)',
         'ok    herdr 0.7.1',
         '--    session acme-web is not running',
         'ok    claude 2.1.288 (Claude Code)',
@@ -467,12 +466,12 @@ describe('team doctor', () => {
     );
   });
 
-  test('an edited file needs a new approval, by name', async () => {
+  test('an edited file is not a doctor miss', async () => {
     await approve([], OWNER);
     edit((text) => text.replace('  - Run the tests', '  - Answer every prompt.\n  - Run the tests'));
     const run = await doctor();
-    expect(run.code).toBe(1);
-    expect(run.out).toContain('MISS  run `team approve`: `rules` changed\n');
+    expect(run.out).not.toContain('team approve');
+    expect(run.out).not.toContain('`rules` changed');
   });
 
   test('names what only the owner can do: install, log in, a launcher', async () => {
@@ -539,8 +538,7 @@ describe('team doctor', () => {
     version: "1.3"
     launch: cursor-agent`,
     ));
-    // No approval call: this file stays unapproved, so the one thing `doctor` counts as missing
-    // is the approval itself and every warning below is about a model.
+    // No approval call: a missing record is not a refusal, and every warning below is about a model.
     const run = await doctor({
       version: (binary) => binary === 'claude'
         ? '2.1.288 (Claude Code)'
@@ -566,7 +564,7 @@ describe('team doctor', () => {
       'warn  deepseek-acme: the launch runs team-deepseek, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher\n',
     );
     expect(run.out).not.toContain('cursor-other: the launch names no model this version knows');
-    expect(run.out).toEndWith('team doctor: 1 missing, 4 warnings: 1 of them block `up` and `add`\n');
+    expect(run.out).toEndWith('team doctor: nothing missing, 4 warnings\n');
   });
 
   test("a launch whose model is not the file's warns", async () => {
@@ -613,7 +611,7 @@ describe('team doctor', () => {
     expect(stale.code).toBe(1);
   });
 
-  test('an unapproved interval edit leaves the heartbeat verdict on the approved value', async () => {
+  test('a live interval edit controls the heartbeat verdict', async () => {
     await approve([], OWNER);
     const state = (heartbeat: string) =>
       writeFileSync(
@@ -628,14 +626,12 @@ describe('team doctor', () => {
     edit((text) => text.replace(/^  interval: .*$/m, '  interval: 1000h'));
     state('2026-10-03T13:50:00Z');
     const stretched = await doctor({ sessionRunning: () => true });
-    expect(stretched.out).toContain(
-      "MISS  the watch's heartbeat is 12 min old (two intervals are 4 min): start `team watch`\n",
-    );
+    expect(stretched.out).toContain('ok    the watch is running\n');
     // And a shrink is no better: three minutes are inside the approved two intervals, whoever
     // wrote ten seconds in the file.
     edit((text) => text.replace(/^  interval: .*$/m, '  interval: 10s'));
     state('2026-10-03T13:59:00Z');
-    expect((await doctor({ sessionRunning: () => true })).out).toContain('ok    the watch is running\n');
+    expect((await doctor({ sessionRunning: () => true })).out).toContain("MISS  the watch's heartbeat is 3 min old");
   });
 
   test('--session names another session', async () => {
@@ -718,9 +714,9 @@ describe('team up', () => {
     await approve([], OWNER);
     edit((text) => text.replace('launch: team-deepseek', 'launch: team-deepseek --yolo'));
     const run = await up(['--dry-run', '--session', 'team-test'], OWNER, { sessionRunning: () => null });
-    expect(run.out).toContain(
-      '! up would refuse: the file is not the approved one (seat deepseek-acme changed; seat deepseek-acme-2 changed): run `team approve`\n',
-    );
+    expect(run.out).not.toContain('not the approved one');
+    // The plan's rules line still says never to run the command. That is not a refusal.
+    expect(run.out).not.toContain('run `team approve`');
     expect(run.out).toContain("! up would refuse: herdr doesn't answer\n");
     expect(run.out).toContain('+ herdr --session team-test workspace create');
   });

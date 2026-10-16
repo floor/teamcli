@@ -6,13 +6,13 @@ import { join } from 'node:path';
 import { budgetsInForce, watchInForce } from '../../src/approve/approval.ts';
 import { standingSource } from '../../src/commands/status.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
-import { approvedCopy } from '../../src/store/store.ts';
 import type { AddSources } from '../../src/commands/add.ts';
 import type { CheckSources } from '../../src/check/team.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { DownLaunch, DownSources } from '../../src/commands/down.ts';
 import type { McpSources, PathStat } from '../../src/commands/mcp.ts';
 import type { RemoveSources } from '../../src/commands/remove.ts';
+import type { RestartSources } from '../../src/commands/restart.ts';
 import type { ListSources } from '../../src/commands/list.ts';
 import type { StatusSources } from '../../src/commands/status.ts';
 import type { Launch, UpSources } from '../../src/commands/up.ts';
@@ -228,6 +228,7 @@ export type World = {
   upSources(): UpSources;
   downSources(): DownSources;
   removeSources(): RemoveSources;
+  restartSources(): RestartSources;
   addSources(): AddSources;
   checkSources(): CheckSources;
   statusSources(): StatusSources;
@@ -634,6 +635,19 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         renameAgent: action.renameAgent,
       };
     },
+    restartSources(): RestartSources {
+      const down = downSources();
+      return {
+        ...down,
+        home,
+        sessionState: () => (herdr === 'none' ? null : sessionState()),
+        workspaces: () => (herdr === 'running' ? workspaces() : []),
+        foreground: (session, pane) => down.foreground?.(session, pane) ?? ['zsh'],
+        upLaunch: launch,
+        doctor: doctorSources(),
+        machine,
+      };
+    },
     addSources(): AddSources {
       return {
         home,
@@ -689,7 +703,6 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         // real herdr or a real store.
         gate: {
           standing: standingSource(home),
-          approvedCopy: (root) => approvedCopy(root, home),
           state: (dir) => readState(dir),
           agents: () => (herdr === 'running' ? agents() : []),
           sessionRunning: () => (herdr === 'none' ? null : herdr === 'running'),

@@ -198,7 +198,7 @@ describe('a legacy record, with the team\'s seats running', () => {
     expect(await runStatus(FILE, io, sources)).toBe(1);
     expect(io.out).toContain('claude-coordinator-acme');
     expect(io.out).toContain(`difference: ${LINE}\n`);
-    expect(io.out).toContain('  repair: the owner runs team approve\n');
+    expect(io.out).toContain('  repair: the live file is what the commands read\n');
     expect(io.out).not.toContain('the file was never approved on this machine');
   });
 
@@ -311,7 +311,7 @@ describe('a legacy record, with the team\'s seats running', () => {
 });
 
 describe('a record the verification refused, through the same commands', () => {
-  const WHY = 'the record does not carry a valid signature: it was changed after approval, or written without the key: run `team approve` once';
+  const WHY = 'the record does not carry a valid signature: it was changed after approval, or written without the key';
 
   test('down stops nobody, and names the refused record', async () => {
     signed();

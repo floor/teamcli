@@ -111,7 +111,7 @@ export const OVERRIDE_UNREADABLE = "the approved overrides can't be read";
 export type OverrideForce = {
   /** The approved patterns. Empty when none were approved, or the copy cannot be read. */
   profiles: ProfileOverride[];
-  /** Drift from the approved copy. Empty when the file is the approved one, or there is none. */
+  /** Drift from the last approval. Empty when the file matches it, or there is none. */
   differences: string[];
   /** The live file, when it cannot be read or parsed. Already carrying the path and the line. */
   problems: string[];
