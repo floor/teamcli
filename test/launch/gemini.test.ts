@@ -13,7 +13,7 @@ import {
   withLaunchOverrides,
 } from '../../src/profiles/profile.ts';
 import { classifyComposer, readScreen, screenData } from '../../src/watch/screen.ts';
-import { boxHoldsText } from '../../src/launch/deliver.ts';
+import { boxHoldsText, deliverRules, type Delivery } from '../../src/launch/deliver.ts';
 import { type ExitIo, typeExit } from '../../src/commands/down.ts';
 import { upPlan } from '../../src/launch/plan.ts';
 import { runningModel } from '../../src/status/statusline.ts';
@@ -227,5 +227,36 @@ describe('the plan launches gemini and delivers its rules as the first message',
       cli: 'gemini',
       line: 'Read /home/owner/.config/team/demo/rules/gemini.md',
     });
+  });
+
+  test('deliverRules types the rules line into the idle box, verifies the wrapped rows, and confirms working after Enter', async () => {
+    const rulesLine =
+      'Read /home/owner/.config/team/demo-3f9c2a8e1d7b/rules/lead.md (`5e1d0a9c4b2f`); those are your standing rules for this session. Reply ready and wait for your brief.';
+    let typed = false;
+    let entered = false;
+    let clock = 1_000_000;
+    const calls: string[] = [];
+    const io: Delivery = {
+      screen: () => (entered ? fixture('working') : typed ? fixture('rules-line') : fixture('idle')),
+      status: () => (entered ? 'working' : 'idle'),
+      type: (value) => {
+        calls.push(value);
+        typed = true;
+        return true;
+      },
+      enter: () => {
+        calls.push('enter');
+        entered = true;
+        return true;
+      },
+      file: () => true,
+      foreground: () => ['gemini'],
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    };
+    expect(await deliverRules('gemini', rulesLine, 30, io)).toBe(true);
+    expect(calls).toEqual([rulesLine, 'enter']);
   });
 });
