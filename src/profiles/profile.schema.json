@@ -379,6 +379,13 @@
             }
           ]
         },
+        "status": {
+          "description": "A box composer's status row, under its closing rule: the same shape `status_line` takes, read only for box-to-rule and only under the rule. Only a CLI whose capture shows a figure there declares it (grok's footer).",
+          "oneOf": [
+            { "$ref": "#/$defs/patternString" },
+            { "type": "array", "items": { "$ref": "#/$defs/patternString" }, "minItems": 1 }
+          ]
+        },
         "strip_suffix": { "$ref": "#/$defs/patternString" },
         "ignore_case": {
           "type": "boolean",
@@ -439,6 +446,7 @@
         { "if": { "properties": { "mode": { "const": "two-rules-footer-below" } }, "required": ["mode"] }, "then": { "required": ["rule", "footers"] } },
         { "if": { "required": ["ignore_case"] }, "then": { "properties": { "mode": { "const": "two-rules-footer-below" } } } },
         { "if": { "required": ["status_below"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
+        { "if": { "required": ["status"] }, "then": { "properties": { "mode": { "const": "box-to-rule" } } } },
         { "if": { "required": ["border"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
         { "if": { "required": ["own_rows"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } }
       ]

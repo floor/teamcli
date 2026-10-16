@@ -1,0 +1,125 @@
+# Muse Code's screen, captured from muse 1.4.9 (herdr 0.7.1). The composer is a box between two
+# rules: an opening rule that carries a label (`── Voice input (⌥ + v to start) ───…`), the input
+# row `❯ text` under it, an unlabelled closing rule of the same width, and one footer row below
+# (`  muse-wonder-1.0 · high · …/muse-ws · Auto-review`). `muse` draws on the alternate screen, so
+# the captures are `pane read --source visible`.
+format: 1
+cli: muse
+binary: muse
+# `~/.local/bin/muse` is a shell wrapper that execs `muse-bin-<version>-<build>`. herdr's
+# `pane process-info` reported `argv0: muse-bin-1.4.9-R6297.1` and the name `muse-bin-1.4.9-`:
+# macOS cuts a process name to 15 bytes, so the version is part of the cut name. A trailing `*`
+# is a prefix: it covers the next release without a profile edit.
+process_names:
+  - muse
+  - muse-bin-*
+# From a run: `muse --version` printed `Muse Code 1.4.9 (1.4.9-R6297.1)`.
+tested:
+  from: '1.4.9'
+  to: '1.4.9'
+# From a run: `muse --help` lists `--yolo` as disabling approval and the macOS sandbox and trusting
+# the workspace. Without it the sandbox treats `.agents/` as protected metadata, and a write to
+# `.agents/team.log` stops at an approval prompt (permission.txt, `touch .agents/test.txt`).
+unattended:
+  - --yolo
+# No flag appends to the system prompt, so the rules are the first message.
+rules: first-message
+login:
+  check:
+    - auth
+    - status
+  # From a run: `muse auth status` printed `Account:` and `Provider:  meta (default)`, exit 0,
+  # while logged in.
+  hint: muse login
+exit: /exit
+# An operator probe of this CLI names ctrl+u as the key that empties the composer.
+exit_clear: ctrl+u
+timeouts:
+  idle: 90s
+  exit: 30s
+# From a run: `--model <MODEL>` is the model flag (no short form). `model/list` answered four
+# user-facing ids: muse-wonder-1.0, muse-wonder-full-1.0, muse-spark-1.3 and muse-spark-1.2. A
+# contributor account routes them on the wire to `<id>-contributor`, which a launch line may
+# also name; the footer always shows the base id.
+models:
+  option:
+    - --model
+  ids:
+    - match: '^muse-wonder-full-([0-9]+(?:\.[0-9]+)*)(?:-contributor)?$'
+      ignore_case: true
+      model: 'Muse Wonder Full'
+      version: '{1}'
+    - match: '^muse-wonder-([0-9]+(?:\.[0-9]+)*)(?:-contributor)?$'
+      ignore_case: true
+      model: 'Muse Wonder'
+      version: '{1}'
+    - match: '^muse-spark-([0-9]+(?:\.[0-9]+)*)(?:-contributor)?$'
+      ignore_case: true
+      model: 'Muse Spark'
+      version: '{1}'
+# The running model is the footer row under the closing rule. Wonder Full is first, so
+# `muse-wonder-full-1.0` is not read as Wonder.
+status_model:
+  - match: '^\s+muse-wonder-full-([0-9]+(?:\.[0-9]+)*)\s+·'
+    model: 'Muse Wonder Full'
+    version: '{1}'
+    yields: ['Muse Wonder Full']
+    version_like: '^[0-9]+(?:\.[0-9]+)*$'
+  - match: '^\s+muse-wonder-([0-9]+(?:\.[0-9]+)*)\s+·'
+    model: 'Muse Wonder'
+    version: '{1}'
+    yields: ['Muse Wonder']
+    version_like: '^[0-9]+(?:\.[0-9]+)*$'
+  - match: '^\s+muse-spark-([0-9]+(?:\.[0-9]+)*)\s+·'
+    model: 'Muse Spark'
+    version: '{1}'
+    yields: ['Muse Spark']
+    version_like: '^[0-9]+(?:\.[0-9]+)*$'
+# The `/usage` box prints the two windows of the Power plan: `Current` is the 5-hour rolling
+# window and `Weekly` is the week (usage.txt). The watch reads figures from the composer's footer
+# row alone, and muse's footer carries neither, so these patterns produce a figure only on a
+# screen whose footer row says it; the `/usage` box is not read.
+quota:
+  - account: meta
+    match: 'Current\s+([0-9]+)% used'
+    used: '{1}%'
+    window: session
+  - account: meta
+    match: 'Weekly\s+([0-9]+)% used'
+    used: '{1}%'
+    window: weekly
+screen:
+  # The startup dialog without `--yolo` or `--trust-workspace`.
+  trust:
+    - all:
+        - 'Do you trust this workspace\?'
+        - '⟩\s+1\s+Trust and continue'
+        - '2\s+Quit'
+  # A tool call that needs approval, drawn in the composer's place.
+  permission:
+    - all:
+        - 'Would you like to run the following command\?'
+        - '⟩\s+1\.\s+Yes, proceed'
+        - 'No, and tell Muse Code what to do differently'
+  # The `/model` picker replaces the input row.
+  question:
+    - all:
+        - 'Choose model'
+        - '↑↓ move · enter confirm · esc go back'
+  working:
+    - any:
+        - '^\s*[◇◈]\s+.*esc to interrupt'
+  composer:
+    mode: box-to-rule
+    # The prompt glyph sits at the pane's first column on the input row.
+    prompt: '^❯'
+    # Both rules start with two `─`; the opening one carries a label between them and the run.
+    # The two are one box when they are drawn at one width.
+    rule: '^[─━]{2}(?: [^─━]+ )?[─━]{8,}$'
+    footers:
+      - '^\s{2}\S.*\s·\s.*$'
+    placeholders:
+      - equals: ''
+      # An operator's notes transcribe the fresh composer as showing this hint; the
+      # saved idle capture shows the input row empty.
+      - equals: 'Type @ to search and insert workspace file paths'
