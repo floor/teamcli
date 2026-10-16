@@ -56,7 +56,16 @@ and open nothing: the target is the file the caller's own place finds.
   session, another project or nobody at all is not read, and the pass uses the watch's own
   screen reader, so the words a seat's screen yields are the watch's own words. Nothing of the
   watch's pass, report or nudge path runs: no key is sent, no pane is typed into, no memory is
-  written.
+  written;
+- the agent registry (`<home>/.config/team/agents/`), one read of each seat's record for the
+  signing triple the commit gate checks ([the registries](../concepts/registry.md)). A seat
+  whose record signs as another model than its pane runs is a difference — `signs as X, runs Y`,
+  X in the record's own words unless the file still declares exactly what the record signs (then
+  the seat's `display` spelling stands) — with `team register <seat>` (once the drift is
+  accepted) or the relaunch beside it. The record is the launch's own declaration: a read cannot
+  change it and the check writes nothing here; the drift is re-recorded by `team register`, a
+  reload or the next launch. A team the registry holds no record for reads as before, and a
+  screen the reader cannot name a model from is never wrong.
 
 It writes nothing at all — not the state, not the store, not the `last_valid` copy `status`
 keeps beside the file it read — for every caller, the owner included.
