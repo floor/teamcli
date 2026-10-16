@@ -30,9 +30,17 @@ export function observeLabel(
   screen: string | undefined,
   rememberedEffort?: string,
 ): { line: string; effort?: string } {
-  const seen = screen === undefined || screen === '' ? undefined : effortOnScreen(seat.cli, screen);
+  const seen = observedEffort(seat.cli, screen);
   const effort = seen ?? rememberedEffort ?? (seat.effort || 'default');
   return { line: `${displayOf(seat, screen)} ${effort}`, ...(seen ? { effort: seen } : {}) };
+}
+
+/** The effort word this pane itself shows, when this version can read one — the same read the
+ *  label's line makes. `undefined` when the screen shows none, or cannot be read: absence is
+ *  not a value, and a caller comparing against the file decides what stands in its place. */
+export function observedEffort(cli: string, screen: string | undefined): string | undefined {
+  if (screen === undefined || screen === '') return undefined;
+  return effortOnScreen(cli, screen);
 }
 
 function displayOf(seat: LabelSeat, screen: string | undefined): string {

@@ -6,6 +6,7 @@ import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } from '../file/sections/lead.ts';
+import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
 import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
 import type { SeatState, SessionState } from '../state.ts';
@@ -612,7 +613,8 @@ function modelOf(
   /** The seat's record has no process identity and is ready: the repair is abandon, then up. */
   unidentified: boolean,
 ): string {
-  const running = seatModel(seat, live.screens[agent.pane]);
+  const screen = live.screens[agent.pane];
+  const running = seatModel(seat, screen);
   if (!running) {
     // A profile may say the launch line's model stands when the screen names none: its column
     // shows it labelled, and the note says where the name comes from.
@@ -623,21 +625,31 @@ function modelOf(
     notes.push(`${seat.name}: version unread (its screen doesn't show the model)`);
     return `${seat.display} (unread)`;
   }
-  if (!modelDiffers(running, seat)) return seat.display;
+  // What the pane shows against what the file promises, effort included: the word the screen
+  // prints is the observed one, and a screen printing none leaves the file's word standing —
+  // the rule the label's own line follows — so only a word actually seen can differ from it.
+  const seen = observedEffort(seat.cli, screen);
+  const modelDrifts = modelDiffers(running, seat);
+  const effortDrifts = seen !== undefined && seen !== (seat.effort ?? 'default');
+  if (!modelDrifts && !effortDrifts) return seat.display;
   const declared = declaredModel(seat);
+  const observed = `${running.model} ${running.version}${seen ? ` ${seen}` : ''}`;
+  const file = `${declared}${seat.effort ? ` ${seat.effort}` : ''}`;
   differences.push(unidentified
     ? {
-        what: `${seat.name} runs ${running.model} ${running.version}; the file says ${declared}; its process was never recorded`,
+        what: `${seat.name}: running ${observed}, file says ${file}; its process was never recorded`,
         repair: unidentifiedRepair(team, seat.name),
         needs: 'approve',
         owner: true,
       }
     : {
-        what: `${seat.name} runs ${running.model} ${running.version}; the file says ${declared}`,
+        what: `${seat.name}: running ${observed}, file says ${file}`,
         repair: modelMismatchRepair(team, seat.name),
         needs: 'approve',
       });
-  return `${running.model} ${running.version} (file: ${seat.display})`;
+  // The column is the running model's when that is what drifted; an effort alone does not
+  // change it, the model on the pane is still the file's.
+  return modelDrifts ? `${running.model} ${running.version} (file: ${seat.display})` : seat.display;
 }
 
 /** The model-mismatch repair. A lead cannot be removed, so it gets the same whole-team
