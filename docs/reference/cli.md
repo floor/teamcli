@@ -82,28 +82,6 @@ Literal: `trust`
 | --- | --- | --- |
 | `seat` | no | no |
 
-## `approve`
-
-Hidden: no
-
-Usage:
-
-    team approve [--show] [--confirm] [--file <path>]
-
-### Flags
-
-| Flag | Takes a value | Repeatable | Hidden |
-| --- | --- | --- | --- |
-| `--confirm` | no | no | no |
-| `--file` | yes | no | no |
-| `--help` | no | no | no |
-| `--show` | no | no | no |
-| `-h` | no | no | yes |
-
-### Positionals
-
-None.
-
 ## `ask-show`
 
 Hidden: no
@@ -605,6 +583,28 @@ Usage:
 | --- | --- | --- |
 | `package@version` | no | no |
 
+## `reload`
+
+Hidden: no
+
+Usage:
+
+    team reload <seat> [--file <path>]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `remove`
 
 Hidden: no
@@ -755,7 +755,7 @@ Hidden: no
 
 Usage:
 
-    team up [--dry-run] [--session <name>] [--file <path>]
+    team up [--dry-run] [--serial] [--session <name>] [--file <path>]
 
 ### Flags
 
@@ -764,6 +764,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--serial` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

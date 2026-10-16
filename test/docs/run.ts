@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { runAdd } from '../../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
 import { runAskShow } from '../../src/commands/ask-show.ts';
-import { runApprove, type Waiting } from '../../src/commands/approve.ts';
+import { runApprove, type Waiting } from '../../src/approve/command.ts';
 import { runBroker } from '../../src/commands/broker.ts';
 import { check, loadConfig } from '../../src/commands/check.ts';
 import { commits } from '../../src/commands/commits.ts';
