@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { approvalDifferences } from '../src/approve/approval.ts';
 import { fingerprints } from '../src/approve/fingerprint.ts';
 import { runTeamCheck } from '../src/check/team.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import { runUp, type UpSources } from '../src/commands/up.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { parseEfforts, shippedEfforts } from '../src/profiles/efforts.ts';

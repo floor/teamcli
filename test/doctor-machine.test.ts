@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runStatus, standingSource, type StatusSources } from '../src/commands/status.ts';
 import type { Machine } from '../src/watch/machine.ts';
