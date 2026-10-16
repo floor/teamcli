@@ -32,6 +32,7 @@ import {
   sessionStop,
   typeText,
   pressEnter,
+  sendKey,
   sessionRunning,
   sessionState,
   startServer,
@@ -137,6 +138,8 @@ export type Launch = {
   paneText(session: string, pane: string): string | null;
   typeText?(session: string, pane: string, text: string): boolean;
   pressEnter?(session: string, pane: string): boolean;
+  /** The profile's one clearing key. Absent: a failed rules read-back leaves the line. */
+  sendKey?(session: string, pane: string, key: string): boolean;
   agentStatus?(session: string, pane: string): string | null;
   /** Foreground argv0 names, or null when the pane can't be read. */
   foreground(session: string, pane: string): string[] | null;
@@ -216,6 +219,7 @@ const realLaunch: Launch = {
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
   pressEnter: (session, pane) => pressEnter(pane, aim(session)),
+  sendKey: (session, pane, key) => sendKey(pane, key, aim(session)),
   agentStatus: (session, pane) => agentStatus(pane, aim(session)),
   foreground: (session, pane) => paneForeground(pane, aim(session)),
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
@@ -1284,6 +1288,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           status: () => launch.agentStatus?.(session, pane) ?? null,
           type: (value) => launch.typeText?.(session, pane, value) ?? false,
           enter: () => launch.pressEnter?.(session, pane) ?? false,
+          ...(launch.sendKey
+            ? { key: (name: string) => launch.sendKey!(session, pane, name) }
+            : {}),
           // The last look before Enter: the file, read without following a link, must still hold
           // the text whose hash the line names.
           file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),
