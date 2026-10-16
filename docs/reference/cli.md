@@ -541,6 +541,91 @@ Usage:
 | --- | --- | --- |
 | `file` | no | no |
 
+## `proc`
+
+Hidden: no
+
+Usage:
+
+    team proc add <name> [--pid <pid>] [--note <text>]
+    team proc list [--json]
+    team proc done <name>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `add`
+
+Hidden: no
+
+Usage:
+
+    team proc add <name> [--pid <pid>] [--note <text>]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--note` | yes | no | no |
+| `--pid` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `name` | no | no |
+
+### `done`
+
+Hidden: no
+
+Usage:
+
+    team proc done <name>
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `name` | no | no |
+
+### `list`
+
+Hidden: no
+
+Usage:
+
+    team proc list [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `release`
 
 Hidden: no

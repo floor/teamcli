@@ -34,6 +34,7 @@ import { runTempo } from '../src/commands/tempo.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
+import { runProc, type ProcSources } from '../src/commands/proc.ts';
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
@@ -2645,6 +2646,79 @@ scene('unlock.unknown-holder', async (place) => {
 });
 scene('unlock.invocation', async (place) => show(await unlocked(place, [], LOCK_OWNER), 'a <name> is required'));
 scene('unlock.project', async (place) => show(await unlocked(place, ['heavy-run']), 'no team file'));
+
+/** The pid every `team proc` scene's reading calls running: the map is a stand-in, so no
+ *  assertion depends on a pid this machine happens to have. */
+const PROC_LIVE = 4243;
+const workerSeat = { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' } as const;
+
+async function proced(place: Place, argv: string[], caller: Caller = owner, over: Partial<ProcSources> = {}): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const sources: ProcSources = { home: place.home, now: () => NOW, alive: (pid) => pid === PROC_LIVE, ...over };
+  return { code: await runProc(argv, io, sources), out: io.out, err: io.err };
+}
+
+function seedProcs(place: Place, procs: Record<string, { by: string; at: string; pid?: number; note?: string }>): void {
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).procs = { ...procs };
+  });
+}
+
+scene('proc.added', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['add', 'build', '--pid', String(PROC_LIVE), '--note', 'the release build']), 'proc build: added');
+});
+scene('proc.done', async (place) => {
+  write(place, TEAM);
+  seedProcs(place, { build: { by: 'owner', at: NOW.toISOString() } });
+  return show(await proced(place, ['done', 'build']), 'proc build: done');
+});
+scene('proc.listed', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['list']), 'no processes recorded');
+});
+scene('proc.caller', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['add', 'build'], other), 'only a seat of this team or the owner records a process');
+});
+scene('proc.detached', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['add', 'build'], detachedCaller), 'only the owner runs this, from a terminal outside herdr');
+});
+scene('proc.other-seat', async (place) => {
+  write(place, TWO);
+  seedProcs(place, { build: { by: 'lead', at: NOW.toISOString(), pid: PROC_LIVE } });
+  return show(await proced(place, ['done', 'build'], workerSeat), 'only lead, a lead or the owner clears it');
+});
+scene('proc.pid', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['add', 'build', '--pid', '4244']), 'is not running');
+});
+scene('proc.taken', async (place) => {
+  write(place, TWO);
+  seedProcs(place, { build: { by: 'lead', at: NOW.toISOString(), pid: PROC_LIVE } });
+  return show(await proced(place, ['add', 'build'], workerSeat), 'is lead\'s, live since');
+});
+scene('proc.unknown', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['done', 'build']), 'no process named "build"');
+});
+scene('proc.file', async (place) => show(await proced(place, ['add', 'build']), 'no team file'));
+scene('proc.file-invalid', async (place) => {
+  write(place, 'format: [\n');
+  return show(await proced(place, ['add', 'build']), 'line');
+});
+scene('proc.invocation', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, []), 'a subcommand is required');
+});
+scene('proc.not-yours', async (place) => {
+  write(place, TEAM);
+  const ran = await proced(place, ['list'], other);
+  expect(ran.err).toBe('team proc: this team is not yours to read\n');
+  expect(ran.out).toBe('');
+  return ran;
+});
 
 async function tempo(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
   const io = testIo(place.root, caller);

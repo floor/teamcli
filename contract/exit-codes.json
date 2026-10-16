@@ -1683,6 +1683,97 @@
     },
     {
       "code": 0,
+      "command": "proc",
+      "id": "proc.added",
+      "meaning": "the process was recorded",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 0,
+      "command": "proc",
+      "id": "proc.done",
+      "meaning": "the record was cleared",
+      "trigger": "team proc done build"
+    },
+    {
+      "code": 0,
+      "command": "proc",
+      "id": "proc.listed",
+      "meaning": "the live records were listed",
+      "trigger": "team proc list"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.caller",
+      "meaning": "the caller is no seat of this team and not the owner",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.other-seat",
+      "meaning": "another seat's record, which the caller may not clear",
+      "trigger": "team proc done build"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.pid",
+      "meaning": "the pid is not running",
+      "trigger": "team proc add build --pid 4243"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.taken",
+      "meaning": "another seat holds the name, with its process live",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 1,
+      "command": "proc",
+      "id": "proc.unknown",
+      "meaning": "no record holds that name",
+      "trigger": "team proc done build"
+    },
+    {
+      "code": 2,
+      "command": "proc",
+      "id": "proc.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 2,
+      "command": "proc",
+      "id": "proc.file-invalid",
+      "meaning": "the team file can't be parsed",
+      "trigger": "team proc add build"
+    },
+    {
+      "code": 2,
+      "command": "proc",
+      "id": "proc.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team proc"
+    },
+    {
+      "code": 2,
+      "command": "proc",
+      "id": "proc.not-yours",
+      "meaning": "the caller may not read this team",
+      "trigger": "team proc list"
+    },
+    {
+      "code": 0,
       "command": "release",
       "id": "release.passed",
       "meaning": "every check passed",
