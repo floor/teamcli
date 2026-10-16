@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { admitSend, sendGrantFor, senderHeader, type AdmitTeams, type SendGrant, type SendGrantRecord } from '../src/send/admit.ts';
+import { admitSend, sendGrantFor, senderHeader, type AdmitTeams, type DeclaredSender, type SendGrant, type SendGrantRecord } from '../src/send/admit.ts';
 import type { Agent } from '../src/registry/agents.ts';
 
 // The reach every rule is decided over, and nothing else: a send is admitted only by a rule
@@ -392,6 +392,15 @@ describe('the drop file header', () => {
   test('an agent\'s header carries its id, its seat and the admitting rule', () => {
     expect(senderHeader(builder1, "a seat to its own team's orchestrator")).toBe(
       `from ${BUILDER_1} (builder-1 of teamcli, builder-1@teamcli) — admitted by: a seat to its own team's orchestrator\n`,
+    );
+  });
+
+  test('a sender the registry holds no record for is spelled as the file\'s seat, and says the record is missing', () => {
+    // The bootstrap sender: no id the registry wrote, so the header names the seat the live file
+    // declares and says outright that no record exists yet — a receiver reads why the id is absent.
+    const declared: DeclaredSender = { seat: 'helper', team: 'teamcli', role: 'implementer', declared: true };
+    expect(senderHeader(declared, "a seat to its own team's orchestrator")).toBe(
+      "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n",
     );
   });
 

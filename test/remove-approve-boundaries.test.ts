@@ -308,7 +308,7 @@ describe('a granted agent mounts the team with no approval record', () => {
 });
 
 describe('an agent the grant does not name', () => {
-  test('is told deny — the word alone, on a dry run as on a real one — and nothing mounts', async () => {
+  test('is told deny on a real run, the reason and the owner\'s own command on a dry run — and nothing mounts', async () => {
     writeFile(teamYaml());
     record({ lead: 'lead-pane' });
     const made = world();
@@ -331,10 +331,13 @@ describe('an agent the grant does not name', () => {
     expect(await runUp([], real, sources)).toBe(1);
     expect(real.err).toBe('deny\n');
     expect(real.out).toBe('');
+    // A dry run is never answered with the bare word: it names the reason and the command that
+    // unblocks it, and still mounts nothing.
     const dry = caller();
     expect(await runUp(['--dry-run'], dry, sources)).toBe(1);
-    expect(dry.err).toBe('deny\n');
-    expect(dry.out).toBe('');
+    expect(dry.err).toBe('');
+    expect(dry.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
+    expect(dry.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
     expect(made.events.filter((line) => line.startsWith('create:'))).toEqual([]);
     expect(audits).toEqual([]);
   });

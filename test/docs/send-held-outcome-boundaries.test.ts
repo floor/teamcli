@@ -34,7 +34,9 @@ describe('the feed page’s outcome list', () => {
 
   test('the line the page shows is the entry the binary writes, field for field', () => {
     const entry = HISTORY_SRC.match(/export type HistoryEntry = \{([^}]+)\}/)?.[1] ?? '';
-    const fields = [...entry.matchAll(/^\s*(\w+):/gm)].map((one) => one[1]);
+    // Required and optional alike — `ms` and `via` are declared `ms?:` and `via?:`, and the
+    // page's example line shows the full shape, both present.
+    const fields = [...entry.matchAll(/^\s*(\w+)\??:/gm)].map((one) => one[1]);
     expect(fields.length, 'the history entry lost its fields').toBeGreaterThanOrEqual(6);
     const line = FEED.match(/\{"ts":"<ISO-8601>"[^}]*\}/)?.[0] ?? '';
     expect(line, 'feed.md lost its example line').not.toBe('');

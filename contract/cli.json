@@ -1193,6 +1193,47 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "register",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team register <seat> [--session <name>] [--dry-run]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false

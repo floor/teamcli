@@ -723,6 +723,29 @@ Usage:
 
 None.
 
+## `register`
+
+Hidden: no
+
+Usage:
+
+    team register <seat> [--session <name>] [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `release`
 
 Hidden: no
