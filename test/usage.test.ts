@@ -20,6 +20,7 @@ import { mayLaunchSeats, walkCaller, type Caller } from '../src/caller.ts';
 import { runStatus } from '../src/commands/status.ts';
 import { NO_PROJECT, runUsage, USAGE } from '../src/commands/usage.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { machineAccountsPath } from '../src/information/machine-accounts.ts';
 import {
   machineUsage,
   NOTHING_COUNTED,
@@ -1862,5 +1863,59 @@ describe('team usage', () => {
     await untouched(watched, () => usageAt(root));
     writeFileSync(file, 'format: 1\nproject: acme\n');
     await untouched(watched, () => usageAt(root));
+  });
+
+  test('a borrowed account’s row names the entity it comes from, in both views and both faces', async () => {
+    withState();
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  globex: [anthropic]\n');
+    // The team names no entity of its own, so the account its seat pays with — `anthropic` — is
+    // `globex`'s. The row that counts it says so, in the parenthesised tail the pool suffix and
+    // the watch clause already sit in, so the account keeps its one line; every other row of the
+    // report is byte for byte what it was.
+    const mine = await usageAt(root, OWNER);
+    expect(mine.out).toContain('anthropic  unknown\n  acme    unknown  pace not known  (borrowed from globex)\n');
+    expect(mine.out).toContain('  acme    session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known\n');
+    // One fact, one place: the restricted reader reads the same clause, and the document carries
+    // it as its own key — absent, never null, for an account no entity claims.
+    expect((await usageAt(root, SEAT)).out).toContain('  acme    unknown  pace not known  (borrowed from globex)');
+    const doc = JSON.parse((await usageAt(root, SEAT, '--json')).out) as {
+      labs: { accounts: { account: string; teams: { borrowedFrom?: string }[] }[] }[];
+    };
+    const accounts = doc.labs.flatMap((lab) => lab.accounts);
+    const entry = accounts.find((one) => one.account === 'anthropic');
+    expect(entry?.teams.map((row) => row.borrowedFrom)).toEqual(['globex']);
+    const openai = accounts.find((one) => one.account === 'openai');
+    expect(openai?.teams.every((row) => !('borrowedFrom' in row))).toBe(true);
+  });
+
+  test('a team spending its own entity’s account borrows nothing, and --all marks each team on its own row', async () => {
+    const otherRoot = join(base, 'solar');
+    mkdirSync(join(otherRoot, '.agents'), { recursive: true });
+    // The second team names the entity the account belongs to, declares the account in its own
+    // file and pins its lobby the way such a file does, so the same account is its own there.
+    const solar = teamTextFor('solar', ['anthropic'], '')
+      .replace(root, otherRoot)
+      .replace('workspace:', 'entity: globex\nlobby: ~/.config/team/lobby\nworkspace:');
+    writeFileSync(join(otherRoot, '.agents', 'team.yaml'), solar);
+    approve(solar, { root: otherRoot });
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  globex: [anthropic]\n');
+    withState();
+
+    const all = await usageAt(root, OWNER, '--all');
+    const rows = rowsUnder(all.out, 'anthropic  unknown');
+    const borrowed = rows.filter((row) => row.includes('(borrowed from globex)'));
+    expect(borrowed).toHaveLength(1);
+    expect(borrowed[0]).toStartWith('acme');
+    // The team the entity is its own reads the same row without the clause.
+    const own = rows.find((row) => row.startsWith('solar'));
+    expect(own).not.toBeUndefined();
+    expect(own ?? '').not.toContain('borrowed');
+  });
+
+  test('with no entity key the machine list reads as one unnamed entity and the report is byte for byte what it was', async () => {
+    withState();
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  - anthropic\n');
+    const mine = await usageAt(root, OWNER);
+    expect(mine.out).toBe(`${REPORT}\n`);
   });
 });

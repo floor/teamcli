@@ -21,6 +21,26 @@ accounts:
   - cursor
 ```
 
+or keys each account by the entity whose subscription it is:
+
+```yaml
+accounts:
+  northwind: [anthropic, openai]
+  garden: [xai]
+```
+
+Both forms read the same list of machine accounts; a flat list is one unnamed entity. A map entry
+whose value is no list of names keeps the older reading — its key is an account name of the unnamed
+entity. Two entities listing one name: the first entry in the file owns it, and a name only the
+unnamed entry carries is owned by nobody, so it is never borrowed. The borrowing rule is one
+line: a team's seat spends an account, the map gives that account to an entity other than the
+team's own `entity:` (a file naming none borrows every keyed account its seats spend), and the
+team's row under the account's line ends `  (borrowed from <entity>)`. The same clause rides the
+seat's spend-account row. It is display only, in both views: the account is counted once, under
+the team that spends it, and the header count is unchanged. Nothing else moves — a borrowed
+name prints a fact both the owner and a restricted caller already read, the account from the
+machine's own file and the entity from the owner's own config.
+
 These accounts count even if no team has a budgets section, and even if there are no team stores.
 A team's approved `budgets.accounts` declaration of the same name supplies that team's account
 kind, sources and reserve. Listing a machine account does not authorize a launch or approve a

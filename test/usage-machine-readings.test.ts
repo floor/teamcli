@@ -93,6 +93,22 @@ test('machine subscriptions and a persisted reading remain visible outside any t
   expect(reportText(report)).toContain('xai  weekly  left 0%');
 });
 
+test('the entity form of the machine list counts the same figures, the zero among them', () => {
+  // The map keyed by entity is the same file the flat list is: the accounts it gives each entity
+  // are still the machine's own, counted for every team and readable outside any project, and a
+  // recorded zero is a figure, not an absence.
+  writeFileSync(join(home, '.config', 'team', 'accounts.yaml'), 'accounts:\n  northwind: [xai, google-antigravity]\n');
+  saveMachineReadings(home, figuresOf(quotaFor('grok'), statusRow('grok', grok)), NOW);
+  const view = { full: false, mine: null };
+  const machine = machineUsage(home, NOW, view);
+  expect(machine.machineAccounts).toEqual(['google-antigravity', 'xai']);
+  expect(machine.counts).toEqual({ teams: 0, labs: 2, accounts: 2 });
+  const text = reportText(reportOf(machine, view, NOW, []));
+  expect(text).toContain('xai  weekly  left 0%  used 100%  resets unknown');
+  expect(text).toContain('google-antigravity  not readable from a CLI screen');
+  expect(text).not.toContain('nothing is counted');
+});
+
 test('machine updates merge accounts and pools, reject older updates, and refresh observation age', () => {
   saveMachineReadings(home, [zero, { ...zero, account: 'google-antigravity', pool: 'gemini', left: 10, used: 90 }], NOW);
   saveMachineReadings(home, [{ ...zero, account: 'google-antigravity', pool: 'claude-gpt', left: 80, used: 20, resets: '1h' }], NOW + 1000);

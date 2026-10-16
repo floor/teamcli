@@ -14,7 +14,7 @@ import { TEAM_FILE } from '../file/load.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile, defaultBudgets } from '../file/validate.ts';
 import type { Io } from '../io.ts';
-import { machineAccountsOf, payingAccountOf, payingPoolOf } from './machine-accounts.ts';
+import { machineAccountsByEntityOf, machineAccountsOf, ownerEntityOf, payingAccountOf, payingPoolOf } from './machine-accounts.ts';
 import { readMachineReadings, type MachineReading } from './machine-readings.ts';
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
@@ -139,6 +139,12 @@ export type ProjectUsage = {
   /** The per-seat breakdown: every seat in force with the account that pays for it, in file
    *  order. The report prints it for the caller's own team, and for every team under `--all`. */
   seatAccounts: SeatAccountRow[];
+  /** The borrowing this team does: one entry per account a seat of its own pays with that the
+   *  machine's `accounts.yaml` gives to another entity — sorted by account, the owner resolved by
+   *  the file's own order (`ownerEntityOf`). A team whose file names no `entity:` borrows every
+   *  claimed account it spends; an account no entity claims, and a team spending its own entity's
+   *  account, are never here. Display only: the account counts under this team either way. */
+  borrows: Array<{ account: string; entity: string }>;
   /** The accounts this team's own seats' quota patterns (shipped, plus the overrides in force)
    *  can read: the machine report's `not readable from a CLI screen` sentence is the truth for
    *  an account neither this list nor any shipped pattern names. */
@@ -215,7 +221,7 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     // plus the state's own problem when there is one.
     const problems: TeamProblem[] = [{ kind: 'no-figures', text: NO_FIGURES }];
     if (stateProblem !== null) problems.push(stateProblem);
-    return { project: null, rows: [], whyNotCounted: null, spend: [], watch: 'not-known', staleAfter: defaultBudgets().staleAfter, accounts: [], seatAccounts: [], quotaAccounts: [], vendors: [], whys: [], problems, notes };
+    return { project: null, rows: [], whyNotCounted: null, spend: [], watch: 'not-known', staleAfter: defaultBudgets().staleAfter, accounts: [], seatAccounts: [], borrows: [], quotaAccounts: [], vendors: [], whys: [], problems, notes };
   }
   // The live file is the record for every caller: the budgets in force, the project name and
   // the seats all read from it, the owner and a caller who is not the owner alike. Before any
@@ -245,6 +251,7 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     staleAfter: budgets.staleAfter,
     accounts: declaredOf(budgets, seats, machine),
     seatAccounts: seats.map((seat) => ({ seat: seat.name, cli: seat.cli, account: payingAccountOf(seat), ...(payingPoolOf(seat) ? { pool: payingPoolOf(seat) } : {}) })),
+    borrows: borrowedBy(team, seats, home),
     quotaAccounts: [...new Set(seats.flatMap((seat) => quotaWith(seat.cli, patterns)
       .flatMap((one) => [one.account, payingAccountOf(seat)])))].sort(),
     vendors: [...new Set(seats.map((seat) => seat.vendor))],
@@ -255,6 +262,21 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     problems,
     notes,
   };
+}
+
+/** The accounts this team borrows: every account one of its seats pays with that the machine's
+ *  entity map gives to another entity (`ownerEntityOf`'s first claim decides a name two entries
+ *  list), sorted by account. A team whose file names no `entity:` borrows every claimed account
+ *  it spends; an account no entry claims, and one the team's own entity claims, are not
+ *  borrowing. An account is borrowed however the team budgets it — the map says whose
+ *  subscription it is. */
+function borrowedBy(team: TeamFile, seats: readonly Seat[], home: string): Array<{ account: string; entity: string }> {
+  const owners = ownerEntityOf(machineAccountsByEntityOf(home));
+  const accounts = [...new Set(seats.map((seat) => payingAccountOf(seat)))].sort();
+  return accounts.flatMap((account) => {
+    const entity = owners.get(account);
+    return entity === undefined || entity === team.entity ? [] : [{ account, entity }];
+  });
 }
 
 /** The account list a machine line is built from: every account the file's own budgets declare,
@@ -839,12 +861,22 @@ export type ReportRow = {
   pace: number | null;
 };
 
-export type ReportTeamRow = { team: string; root?: string; row: ReportRow };
+export type ReportTeamRow = {
+  team: string;
+  root?: string;
+  row: ReportRow;
+  /** Set when this team's row counts an account it borrows: the entity the machine's own map
+   *  gives that account to (`borrowedBy`). The same fact in both views, like the row's figures;
+   *  absent whenever the account is the team's own or no entity claims it. */
+  borrowedFrom?: string;
+};
 
 export type ReportSpendRow = {
   team: string;
   root?: string;
   reading: { amount: number; currency: string; at: string; age: string; source: 'check'; state: BudgetState };
+  /** The borrowing clause, exactly as `ReportTeamRow`'s. */
+  borrowedFrom?: string;
 };
 
 /** One machine line's entry. One entry per line, so the text and the array walk side by side. */
@@ -1139,6 +1171,13 @@ function reportSeatsOf(seats: readonly SeatAccountRow[]): ReportSeatRow[] {
   return seats.map(({ seat, cli, account, pool }) => ({ seat, cli, account, ...(pool ? { pool } : {}) }));
 }
 
+/** The entity a team's account is borrowed from, or undefined: the fact rides the team's own rows
+ *  in both views — it names an entity of the owner's own machine file and the account prints
+ *  there already, so a caller who is not the owner reads the same clause the owner does. */
+function borrowedOf(team: TeamEntry, account: string): string | undefined {
+  return team.usage.borrows.find((one) => one.account === account)?.entity;
+}
+
 /** The report's line order: subscription accounts by name first, then spend accounts by name, the
  *  windows in the table's own order inside an account (`table.ts:26`), spend last (§ 2.3). */
 function byLine(a: ReportAccount, b: ReportAccount): number {
@@ -1179,7 +1218,15 @@ function subscriptionEntryOf(
   };
   const rows = view.full && allTeams ? line.rows : line.rows.filter((one) => one.team === mineEntry);
   const teams: ReportTeamRow[] = rows
-    .map((one) => ({ team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '', ...(view.full ? { root: one.team.root } : {}), row: reportRowOf(one.row, one.pace) }))
+    .map((one) => {
+      const from = borrowedOf(one.team, account);
+      return {
+        team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '',
+        ...(view.full ? { root: one.team.root } : {}),
+        row: reportRowOf(one.row, one.pace),
+        ...(from === undefined ? {} : { borrowedFrom: from }),
+      };
+    })
     .sort((a, b) => (a.team < b.team ? -1 : 1));
   return { account, kind: 'subscription', machine, teams, readable };
 }
@@ -1222,18 +1269,22 @@ function spendEntryOf(account: MachineAccount & { kind: 'spend' }, view: UsageVi
   };
   const rows = view.full && allTeams ? account.spend.rows : account.spend.rows.filter((one) => one.team === mineEntry);
   const teams: ReportSpendRow[] = rows
-    .map((one) => ({
-      team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '',
-      ...(view.full ? { root: one.team.root } : {}),
-      reading: {
-        amount: one.reading.amount,
-        currency: one.reading.currency,
-        at: new Date(one.reading.at).toISOString(),
-        age: span(now - one.reading.at),
-        source: 'check' as const,
-        state: now - one.reading.at < one.team.usage.staleAfter * 1000 ? ('fresh' as const) : ('stale' as const),
-      },
-    }))
+    .map((one) => {
+      const from = borrowedOf(one.team, account.account);
+      return {
+        team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '',
+        ...(view.full ? { root: one.team.root } : {}),
+        reading: {
+          amount: one.reading.amount,
+          currency: one.reading.currency,
+          at: new Date(one.reading.at).toISOString(),
+          age: span(now - one.reading.at),
+          source: 'check' as const,
+          state: now - one.reading.at < one.team.usage.staleAfter * 1000 ? ('fresh' as const) : ('stale' as const),
+        },
+        ...(from === undefined ? {} : { borrowedFrom: from }),
+      };
+    })
     .sort((a, b) => (a.team < b.team ? -1 : 1));
   return { account: account.account, kind: 'spend', machine, teams };
 }
@@ -1349,11 +1400,17 @@ function watchOf(m: ReportMachine, report: UsageReport): string {
 }
 
 function teamRowText(row: ReportTeamRow): string {
-  return `  ${row.team}  ${budgetLine(row.row).slice(row.row.account.length)}  ${paceWord(row.row.pace)}`;
+  return `  ${row.team}  ${budgetLine(row.row).slice(row.row.account.length)}  ${paceWord(row.row.pace)}${borrowedClause(row.borrowedFrom)}`;
 }
 
 function spendRowText(row: ReportSpendRow): string {
-  return `  ${row.team}  spend  ${money(row.reading.amount)} ${row.reading.currency} left  read ${row.reading.age} ago  check  ${row.reading.state}`;
+  return `  ${row.team}  spend  ${money(row.reading.amount)} ${row.reading.currency} left  read ${row.reading.age} ago  check  ${row.reading.state}${borrowedClause(row.borrowedFrom)}`;
+}
+
+/** The borrowing clause a team's row carries: the owning entity, in the parenthesised tail the
+ *  `(pool)` suffix and the watch clause already sit in, so the report stays one line per row. */
+function borrowedClause(from: string | undefined): string {
+  return from === undefined ? '' : `  (borrowed from ${from})`;
 }
 
 /** One `note:` line's words: an anonymized machine problem is its fixed sentence for the count,
