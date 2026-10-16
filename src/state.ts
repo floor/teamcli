@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
+import { validLockName } from './lock/name.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
 import { cleanClassification, type Classification } from './launch/progress.ts';
 
@@ -99,6 +100,23 @@ export type WorktreeState = {
 
 export type SwapRecord = { by: string; at: string };
 
+/**
+ * One process a seat started, recorded by `team proc add`: who recorded it, when, the pid to
+ * watch, and what it is. Nothing here launches or signals a process — a record is a seat's
+ * note that something of its own is running, and a pid is how the note goes out on its own.
+ */
+export type ProcRecord = {
+  /** The seat's herdr name, or `owner` for the owner at a terminal. */
+  by: string;
+  /** ISO 8601, printed as stored, one shape everywhere. */
+  at: string;
+  /** The process id to watch. Absent when the caller recorded no pid: the note then stands
+   *  until `done` clears it. */
+  pid?: number;
+  /** One cleaned line: what the process is. */
+  note?: string;
+};
+
 export type SessionState = {
   started?: { at: string; by: string };
   seats: Record<string, SeatState>;
@@ -130,6 +148,13 @@ export type SessionState = {
    */
   watchdog?: { file: string; pane?: string };
   nudge?: { pending_since: string | null };
+  /**
+   * The processes this session's seats recorded with `team proc add`, by name. A record with a
+   * `pid` is live while that pid is; one without a pid lives until `done`. Readers never tidy
+   * the map — a dead record is skipped where it is read and leaves the file at the next write
+   * to it (`add`, `done`), because expiry is a reading, never a timer.
+   */
+  procs?: Record<string, ProcRecord>;
 };
 
 export type State = {
@@ -212,6 +237,30 @@ export function readState(dir: string): State {
     } else if (session.swapping !== undefined) {
       delete session.swapping;
     }
+    // A proc record enters from the file like every other value, and is cleaned here at the same
+    // door: a key that is not a name by the lock's rule is dropped, and so is a record that does
+    // not name who recorded it and when; a pid or note of the wrong shape goes with it. Only
+    // `add` writes a key, and it refuses anything but `validLockName` — a key that survives this
+    // door is a name that was printed by a reader, never a path.
+    if (session.procs && typeof session.procs === 'object') {
+      for (const [name, proc] of Object.entries(session.procs)) {
+        if (
+          !validLockName(name) ||
+          !proc ||
+          typeof proc !== 'object' ||
+          typeof proc.by !== 'string' ||
+          proc.by === '' ||
+          typeof proc.at !== 'string'
+        ) {
+          delete session.procs[name];
+          continue;
+        }
+        if (proc.pid !== undefined && !(Number.isInteger(proc.pid) && proc.pid > 0)) delete proc.pid;
+        if (proc.note !== undefined && typeof proc.note !== 'string') delete proc.note;
+      }
+    } else if (session.procs !== undefined) {
+      delete session.procs;
+    }
     // Read old, write new: readings used to be held under a session. They are the project's
     // (§ 4.4), so every session's records are merged to the top level here — no reader loses one,
     // and the next write persists the new shape.
@@ -261,6 +310,27 @@ function mergeSpend(
   return merged;
 }
 
+/**
+ * The `team proc` records of one session a reader may show, in name order: a record with a `pid`
+ * while that pid is alive, and one without a pid until `done`. A dead record is skipped here and
+ * taken out of the file by the next write (`pruneProcs`), never by a reader.
+ */
+export function liveProcs(session: SessionState, alive: (pid: number) => boolean = pidAlive): Array<[string, ProcRecord]> {
+  const procs = session.procs ?? {};
+  return Object.entries(procs)
+    .filter(([, proc]) => proc.pid === undefined || alive(proc.pid))
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+}
+
+/** Drops one session's records whose pid is dead — what `add` and `done` do before they write,
+ *  so a record a reader skipped is gone from the file too. */
+export function pruneProcs(session: SessionState, alive: (pid: number) => boolean = pidAlive): void {
+  if (!session.procs) return;
+  for (const [name, proc] of Object.entries(session.procs)) {
+    if (proc.pid !== undefined && !alive(proc.pid)) delete session.procs[name];
+  }
+}
+
 // Reads the state, lets `change` edit it, and writes it back, all under the lock.
 export function updateState<T>(dir: string, change: (state: State) => T): T {
   return withLock(dir, () => {
@@ -277,7 +347,9 @@ export function writeAtomic(path: string, text: string): void {
   renameSync(temporary, path);
 }
 
-function alive(pid: number): boolean {
+/** Whether a process with this pid exists. A pid owned by another user counts as alive
+ *  (`EPERM`), which is also what the lock's stale-holder rule wants. */
+export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -301,7 +373,7 @@ function takeOver(path: string, holder: number): boolean {
     return false;
   }
   const found = Number(readFileSync(aside, 'utf8').trim());
-  if (found !== holder && Number.isInteger(found) && found > 0 && alive(found)) {
+  if (found !== holder && Number.isInteger(found) && found > 0 && pidAlive(found)) {
     try {
       renameSync(aside, path);
     } catch {}
@@ -331,7 +403,7 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       } catch {
         continue; // released between the two calls
       }
-      if (Number.isInteger(holder) && holder > 0 && alive(holder)) {
+      if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) {
         if (Date.now() > deadline) throw new Error(`another team command (pid ${holder}) holds ${path}; try again when it is done`);
         pause(50);
         continue;
