@@ -4,7 +4,7 @@
 //   1. the CLI's own signal: the pane's screen, read against the seat's CLI — working, or idle
 //      at its prompt, or a screen that is neither (a dialog, a question, an error): blocked;
 //   2. herdr's own screen status;
-//   3. TeamCLI's traces within a window — the seat's last ack, commit or command: a trace this
+//   3. TeamCLI's traces within a window — the seat's last ack, message or commit: a trace this
 //      fresh means working, and it outranks an idle word from the screen or from herdr;
 //   4. otherwise unknown. Unknown past the blind threshold counts as not working, and `status`
 //      and `check` flag the seat `blind` as a must-fix.
@@ -37,8 +37,9 @@ export type SeatStateObservation = {
   screen?: Screen;
   /** herdr's own screen status for the seat's agent, when herdr reports one. */
   herdr?: string | null;
-  /** The newest TeamCLI trace of the seat, ISO 8601: its last ack, its last commit, the last
-   *  command it ran — whatever the caller's own records hold. */
+  /** The newest TeamCLI trace of the seat that carries its own instant, ISO 8601: its last
+   *  ack, message or commit — whatever the caller's own records hold. A tool row has no clock
+   *  and never stands here. */
   trace?: string | null;
 };
 
@@ -52,7 +53,7 @@ export type SeatStateReading = {
 /**
  * The reading itself. First answer wins, in the order above — save one: a trace inside the
  * window beats an idle word, from the screen or from herdr, because a seat that just committed,
- * acked or ran a command is working even while its prompt shows. An absent or unrecognised
+ * acked or was messaged is working even while its prompt shows. An absent or unrecognised
  * screen, like a herdr word that is neither `working` nor `idle`, falls through to the next
  * source. `unknown` carries `blind`: no trace at all, or none younger than the blind threshold.
  */
