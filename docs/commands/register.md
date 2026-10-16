@@ -8,10 +8,12 @@ does not record. `register` verifies such a pane and writes the record `up` woul
 it, so `team send`, `team seats`, `team watch` and `team down` can address the seat from then on.
 
 What it verifies is what herdr and the pane say: that herdr places an agent under that name in the
-session's own workspace, that the pane holds a CLI in front of the pane's own shell, and that the
-screen is the seat at its prompt — `idle` or `working`. A dialog, a CLI that has exited, or a
-reading this version does not recognise is not a seat to record. Nothing is typed into the pane,
-and no workspace is created, closed or renamed.
+session's own workspace, that the pane holds a process in front of the pane's own shell and that
+the process is the one the seat's CLI profile names — the file's `cli` is the authority, herdr's
+`argv0` the reading — and that the screen is the seat at its prompt — `idle` or `working`. A
+dialog, a CLI that has exited, another CLI in front, or a reading this version does not recognise
+is not a seat to record. Nothing is typed into the pane, and no workspace is created, closed or
+renamed.
 
 What it does not write is what only a launch knows: the state's `model`, `version`, `effort` and
 `launch_line` are what a launch declared, and a pane started by hand declares nothing this run can
@@ -49,7 +51,8 @@ owner's own act.
 | the owner | run it, from a terminal outside herdr; `--session` is the owner's own |
 | a run with no terminal | nothing, unless an active create-grant covers this project: `team register: only the owner runs this, from a terminal outside herdr` |
 | a caller the file's `delegates` section names for `up` | run it: a delegate gate that passes admits the record write, exactly as it admits the launch that would have written it |
-| anyone else | nothing: `team register: only the owner, or a delegate this file names for \`up\`, registers a running seat; this call is <caller>` |
+| the seat the file's `grant` names for `up` | run it: the grant gate that admits the owner's `team up` admits the record write, and `--session` is refused in the grant's words — the owner's flag |
+| anyone else | nothing: `team register: only the owner, a delegate this file names for \`up\`, or the seat a grant names for it registers a running seat; this call is <caller>` |
 
 ## Output and exit codes
 
@@ -69,8 +72,10 @@ owner's own act.
 | `team register: line <n>: <message>` / `team register: <message>` — the team file can't be read or parsed, or the folder is not inside a git repository | 2 |
 | `team register: only the owner runs this, from a terminal outside herdr` | 1 |
 | `team register: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
-| `team register: only the owner, or a delegate this file names for \`up\`, registers a running seat; this call is <caller>` | 1 |
+| `team register: --session is the owner's; the granted seat cannot use it` | 1 |
+| `team register: only the owner, a delegate this file names for \`up\`, or the seat a grant names for it registers a running seat; this call is <caller>` | 1 |
 | ``team register: only the owner or the approved delegate runs `up`; this call is <caller>`` — the file's `delegates` section decided, and refused | 1 |
+| `team register: only the seat the grant names runs this: this call is <caller>` / ``team register: the grant does not list `up` `` / `team register: a grant needs a verified approval: <why>` — the file's `grant` decided, and refused | 1 |
 | `team register: the file has no seat "<name>"` | 1 |
 | `team register: <name> is stopped in this file; the owner clears \`stopped\` and starts the team` | 1 |
 | `team register: session can't be "default", herdr's own session` | 1 |
@@ -81,6 +86,7 @@ owner's own act.
 | `team register: session "<session>" has <n> agents named <name>; registering one would guess` | 1 |
 | ``team register: <name> is already recorded on pane <pane>, not on <pane>; the owner stops the team and starts it again (`team down`, then `team up`)`` | 1 |
 | `team register: <name>: pane <pane> holds no process in front of its shell; nothing was registered` | 1 |
+| `team register: <name>: pane <pane> holds no \`<cli>\` process; nothing was registered` | 1 |
 | `team register: <name>: its pane is not the seat at its prompt (<reading>); nothing was registered` | 1 |
 
 ## Example
@@ -154,7 +160,7 @@ exit 1
 
 ```console caller=claude-beacon
 $ team register claude-keeper ; echo "exit $?"
-team register: only the owner, or a delegate this file names for `up`, registers a running seat; this call is claude-beacon
+team register: only the owner, a delegate this file names for `up`, or the seat a grant names for it registers a running seat; this call is claude-beacon
 exit 1
 ```
 

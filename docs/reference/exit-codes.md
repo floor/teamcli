@@ -281,8 +281,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `register.dry-run` | `register` | 0 | the seat would be registered; nothing was written | `team register worker --dry-run` |
 | `register.ready` | `register` | 0 | the running seat's record was written | `team register worker` |
 | `register.caller` | `register` | 1 | --session is the owner's | `team register worker --session other` |
+| `register.cli` | `register` | 1 | the pane holds no process the seat's CLI profile names | `team register worker` |
 | `register.delegate` | `register` | 1 | the caller is not the approved delegate for up | `team register worker` |
 | `register.detached` | `register` | 1 | a run with no terminal | `team register worker` |
+| `register.grant` | `register` | 1 | the caller is not the seat the file's grant names for up | `team register worker` |
+| `register.grant-flag` | `register` | 1 | --session is the owner's for a granted seat | `team register worker --session other` |
 | `register.herdr` | `register` | 1 | herdr doesn't answer | `team register worker` |
 | `register.many-agents` | `register` | 1 | the session has more than one agent with that name | `team register worker` |
 | `register.no-agent` | `register` | 1 | no agent of that name is running in the session | `team register worker` |
@@ -290,7 +293,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `register.no-profile` | `register` | 1 | the seat has no launch profile | `team register worker` |
 | `register.no-seat` | `register` | 1 | the file has no such seat | `team register missing` |
 | `register.no-session` | `register` | 1 | the herdr session is not running | `team register worker` |
-| `register.not-owner` | `register` | 1 | the caller is not the owner or a delegate this file names for up | `team register worker` |
+| `register.not-owner` | `register` | 1 | the caller is not the owner, a delegate this file names for up, or the seat its grant names | `team register worker` |
 | `register.recorded` | `register` | 1 | the state records another pane for that seat | `team register worker` |
 | `register.screen` | `register` | 1 | the pane is not the seat at its prompt | `team register worker` |
 | `register.session-file` | `register` | 1 | the session was launched from another team file | `team register worker --session other` |

@@ -1929,6 +1929,13 @@
     {
       "code": 1,
       "command": "register",
+      "id": "register.cli",
+      "meaning": "the pane holds no process the seat's CLI profile names",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
       "id": "register.delegate",
       "meaning": "the caller is not the approved delegate for up",
       "trigger": "team register worker"
@@ -1939,6 +1946,20 @@
       "id": "register.detached",
       "meaning": "a run with no terminal",
       "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.grant",
+      "meaning": "the caller is not the seat the file's grant names for up",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.grant-flag",
+      "meaning": "--session is the owner's for a granted seat",
+      "trigger": "team register worker --session other"
     },
     {
       "code": 1,
@@ -1993,7 +2014,7 @@
       "code": 1,
       "command": "register",
       "id": "register.not-owner",
-      "meaning": "the caller is not the owner or a delegate this file names for up",
+      "meaning": "the caller is not the owner, a delegate this file names for up, or the seat its grant names",
       "trigger": "team register worker"
     },
     {

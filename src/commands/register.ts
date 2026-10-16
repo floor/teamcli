@@ -19,9 +19,10 @@ import { callerLabel, describeCaller, detachedRefusal, mayLaunchSeats, sessionOw
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
-import { entityGrantAdmits } from '../grant.ts';
-import { agentList, paneProcesses, paneRead, sessionState, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
+import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
+import { agentList, paneForeground, paneProcesses, paneRead, sessionState, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
+import { reportedLiveAgent } from '../launch/agent.ts';
 import { launchedIdentity } from '../launch/identity.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
@@ -45,9 +46,12 @@ export type RegisterSources = {
   agents: (session: string) => HerdrAgent[] | null;
   /** Null when herdr can't read the pane's processes. */
   processInfo: (session: string, pane: string) => PaneProcesses | null;
+  /** argv0 of each foreground process in the pane, or null when herdr can't read them. */
+  foreground: (session: string, pane: string) => string[] | null;
   paneText: (session: string, pane: string) => string | null;
   screen?: (cli: string, text: string | undefined) => Screen;
   delegateGate?: typeof delegateGate;
+  grantGate?: typeof grantGate;
   now: () => Date;
 };
 
@@ -56,6 +60,7 @@ const realSources: RegisterSources = {
   sessionState: (session) => sessionState(session),
   agents: (session) => agentList(session),
   processInfo: (session, pane) => paneProcesses(pane, session),
+  foreground: (session, pane) => paneForeground(pane, session),
   paneText: (session, pane) => paneRead(pane, 200, session),
   now: () => new Date(),
 };
@@ -93,9 +98,21 @@ function delegateRefused(out: Io, message: string): number {
   return 1;
 }
 
+function grantRefused(out: Io, message: string): number {
+  out.stderr(`team register: ${plainText(message)}\n`);
+  // exit: register.grant
+  return 1;
+}
+
+function grantFlagRefused(out: Io): number {
+  out.stderr("team register: --session is the owner's; the granted seat cannot use it\n");
+  // exit: register.grant-flag
+  return 1;
+}
+
 function notOwnerRefused(out: Io, caller: Caller): number {
   out.stderr(
-    `team register: only the owner, or a delegate this file names for \`up\`, registers a running seat; this call is ${plainLine(describeCaller(caller))}\n`,
+    `team register: only the owner, a delegate this file names for \`up\`, or the seat a grant names for it registers a running seat; this call is ${plainLine(describeCaller(caller))}\n`,
   );
   // exit: register.not-owner
   return 1;
@@ -172,6 +189,14 @@ function noCliRefused(out: Io, name: string, pane: string): number {
   return 1;
 }
 
+function cliRefused(out: Io, name: string, pane: string, cli: string): number {
+  out.stderr(
+    `team register: ${plainLine(name)}: pane ${plainLine(pane)} holds no \`${plainLine(cli)}\` process; nothing was registered\n`,
+  );
+  // exit: register.cli
+  return 1;
+}
+
 function screenRefused(out: Io, name: string, kind: string): number {
   out.stderr(
     `team register: ${plainLine(name)}: its pane is not the seat at its prompt (${plainLine(kind)}); nothing was registered\n`,
@@ -220,18 +245,14 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // refused here, before a session or a pane is read.
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
   if (detached !== undefined && !createGranted) return detachedExit(out, detached);
-  // `--session` picks the herdr session the pane is verified in: where the record it writes will
-  // point `send`, `watch` and `down`. It is the owner's, refused before the session is read.
-  if (args.values.session !== undefined && !mayLaunchSeats(walked) && !createGranted) {
-    return callerRefused(out, sessionOwnerRefusal(walked));
-  }
 
   // The gate, `up`'s own: the owner, a delegate this file names for `up` — the act that
-  // would have written this record in the first place — or the create-granted runner. The run
-  // launches nothing, so no launch is granted; but the record is what lets `team send` type
-  // into the pane, so it is the owner's authority, judged by the same gate and in the same
-  // order: the ordinary rule first, and the delegate gate only where it refused and the file
-  // has a delegates section to read.
+  // would have written this record in the first place — the seat the file's `grant` names for
+  // `up`, or the create-granted runner. The run launches nothing, so no launch is granted; but
+  // the record is what lets `team send` type into the pane, so it is the owner's authority,
+  // judged by the same gate and in the same order: the ordinary rule first, the delegate gate
+  // only where it refused and the file has a delegates section to read, and the grant only
+  // where no delegate took the run and the file has a `grant` at all.
   const verdict =
     mayLaunchSeats(walked) || detached !== undefined || !team.delegates
       ? null
@@ -245,7 +266,24 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
           home: sources.home,
         });
   const delegated = verdict?.kind === 'passed' ? verdict.pane : null;
-  const named = mayLaunchSeats(walked) || delegated !== null || createGranted;
+  // `up`'s own fallback: a delegate refusal that is not the plain "not a listed pane" is final,
+  // and a file that omits `grant` does not ask.
+  const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
+  const grantSaid =
+    delegateMissed && !mayLaunchSeats(walked) && !createGranted && team.grant !== null
+      ? (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home })
+      : null;
+  const grantedSeat = grantSaid?.kind === 'passed' ? grantSaid.grant.seat : null;
+  const named = mayLaunchSeats(walked) || delegated !== null || createGranted || grantedSeat !== null;
+  // `--session` picks the herdr session the pane is verified in: where the record it writes will
+  // point `send`, `watch` and `down`. It is the owner's: a granted seat is refused in the grant's
+  // own words, and everyone else — a delegate that aimed it included — before the named session
+  // is read.
+  if (args.values.session !== undefined && !mayLaunchSeats(walked) && !createGranted) {
+    if (grantedSeat !== null) return grantFlagRefused(out);
+    return callerRefused(out, sessionOwnerRefusal(walked));
+  }
+  if (!named && grantSaid?.kind === 'refused') return grantRefused(out, grantSaid.text);
   if (!named && verdict?.kind === 'refused') return delegateRefused(out, verdict.text);
   if (!named) return notOwnerRefused(out, walked);
 
@@ -257,7 +295,8 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) return unknownRefused(out, name);
   if (seat.stopped) return stoppedRefused(out, name);
-  if (!profileFor(seat.cli)) {
+  const profile = profileFor(seat.cli);
+  if (!profile) {
     return noProfileRefused(out, `no launch profile for \`${plainLine(seat.cli)}\` in this version`);
   }
 
@@ -294,12 +333,16 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     return recordedRefused(out, name, found.pane, held.pane);
   }
 
-  // What the pane is: a CLI in front of the pane's own shell, and a screen the seat's profile
-  // reads as the seat at its prompt. A dialog, a CLI that has exited, or a reading this version
-  // does not recognise is not a seat to record; neither is a shell behind a name herdr still
-  // lists for it.
+  // What the pane is: a process in front of the pane's own shell that the seat's CLI profile
+  // names — the file's `cli` is the authority, and herdr's argv0 the reading — and a screen the
+  // seat's profile reads as the seat at its prompt. A dialog, a CLI that has exited, another
+  // CLI in front, or a reading this version does not recognise is not a seat to record;
+  // neither is a shell behind a name herdr still lists for it.
   const identity = launchedIdentity(sources.processInfo(session, found.pane));
   if (identity === null) return noCliRefused(out, name, found.pane);
+  if (!reportedLiveAgent(sources.foreground(session, found.pane), profile.processNames)) {
+    return cliRefused(out, name, found.pane, seat.cli);
+  }
   const text = sources.paneText(session, found.pane) ?? undefined;
   const screen = sources.screen ? sources.screen(seat.cli, text) : readScreen(seat.cli, text);
   if (screen.kind !== 'idle' && screen.kind !== 'working') {
@@ -342,8 +385,10 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session }, seat, found.pane, id);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);
   noteLaunchedPane(sources.home, path, found.pane, session);
-  // The audit line a delegated act writes, naming the authority (`up`) it was run under.
+  // The audit line a delegated act writes, naming the authority (`up`) it was run under; a
+  // granted seat writes the grant's own line.
   if (delegated !== null) logDelegated(dir, delegated, 'up', now, 'register');
+  if (grantedSeat !== null) logGranted(dir, grantedSeat, 'up', now, 'register');
   logLine(dir, 'register', callerLabel(walked), `${name}: registered ${id} — pane ${found.pane}`, now);
   out.stdout(`${plainLine(name)}: registered — pane ${plainLine(found.pane)}; nothing was launched\n`);
   // exit: register.ready

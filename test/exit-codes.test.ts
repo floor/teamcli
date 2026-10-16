@@ -3122,9 +3122,7 @@ scene('send.refused', async (place) => {
 });
 scene('send.held', async (place) => {
   write(place, TEAM);
-  // No socket file: a held message is the typed path's own refusal, and a taken frame on a
-  // present socket would deliver before the pane was ever read for a dialog.
-  const host = sendHost(place, { socket: false });
+  const host = sendHost(place);
   host.native.paneText = () => `${'─'.repeat(30)}\n❯ draft in box\n${'─'.repeat(30)}`;
   return show(await sent(place, ['lead', 'hello'], owner, host), 'held');
 });
@@ -3134,9 +3132,7 @@ scene('send.unreachable', async (place) => {
 });
 scene('send.not-submitted', async (place) => {
   write(place, TEAM);
-  // No socket file: the trigger not being taken is the typed path's refusal, reached after the
-  // socket was missing and the message fell back to it.
-  const host = sendHost(place, { socket: false });
+  const host = sendHost(place);
   host.native.status = () => 'idle';
   return show(await sent(place, ['lead', 'hello'], owner, host), 'not-submitted');
 });
@@ -3146,7 +3142,7 @@ scene('send.delivered', async (place) => {
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via its cross-session socket, falling back to a 0600 drop file and one trigger line; nothing was written');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written');
 });
 scene('send.answered', async (place) => {
   write(place, TEAM);
@@ -3565,6 +3561,8 @@ function registerSources(place: Place, over: Partial<RegisterSources> = {}): Reg
     agents: () => [],
     // A CLI in front of the pane's own shell: the identity a launch would have recorded.
     processInfo: () => ({ shell: 400, foreground: [401] }),
+    // The process herdr reports is the one the seat's profile names (`claude-code`).
+    foreground: () => ['claude'],
     paneText: () => IDLE,
     now: () => NOW,
     ...over,
@@ -3585,6 +3583,9 @@ async function registered(
  *  and herdr answers a scene gives. */
 const registerGate = (place: Place, over: DelegateSources = {}): Partial<RegisterSources> => gateAt(place, over);
 
+/** The same file with a grant naming the lead seat for `up`: register's second fallback. */
+const REGISTER_GRANT = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - up\n`;
+
 scene('register.usage', async (place) => show(await registered(place, []), 'a seat name is required'));
 scene('register.file', async (place) => show(await registered(place, ['lead']), 'no team file'));
 scene('register.detached', async (place) => {
@@ -3597,11 +3598,21 @@ scene('register.caller', async (place) => {
 });
 scene('register.not-owner', async (place) => {
   write(place, TEAM);
-  return show(await registered(place, ['lead'], other), 'only the owner, or a delegate this file names for `up`');
+  return show(await registered(place, ['lead'], other), 'only the owner, a delegate this file names for `up`, or the seat a grant names');
 });
 scene('register.delegate', async (place) => {
   approve(place, `${TEAM}${DELEGATES}`);
   return show(await registered(place, ['lead'], other, registerGate(place, { agents: () => [] })), 'only the owner or the approved delegate runs');
+});
+scene('register.grant', async (place) => {
+  approve(place, REGISTER_GRANT);
+  recordLead(place);
+  return show(await registered(place, ['lead'], other, { agents: () => [agent('lead')] }), 'only the seat the grant names');
+});
+scene('register.grant-flag', async (place) => {
+  approve(place, REGISTER_GRANT);
+  recordLead(place);
+  return show(await registered(place, ['lead', '--session', 'other'], leadSeat, { agents: () => [agent('lead')] }), 'the granted seat cannot use it');
 });
 scene('register.no-seat', async (place) => {
   write(place, TEAM);
@@ -3647,6 +3658,13 @@ scene('register.no-cli', async (place) => {
     agents: () => [agent('lead')],
     processInfo: () => ({ shell: 400, foreground: [] }),
   }), 'holds no process in front of its shell');
+});
+scene('register.cli', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, {
+    agents: () => [agent('lead')],
+    foreground: () => ['node'],
+  }), 'holds no `claude-code` process');
 });
 scene('register.screen', async (place) => {
   write(place, TEAM);

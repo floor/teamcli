@@ -674,11 +674,13 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         sessionState: () => (herdr === 'none' ? null : sessionState()),
         agents: () => (herdr === 'running' ? agents() : []),
         // Every agent herdr lists holds a CLI in front of the pane's own shell: one shell pid
-        // and one process beside it, per pane, so identity reads as a launched pane.
+        // and one process beside it, per pane, so identity reads as a launched pane; the
+        // foreground argv0 is the one the seat's `claude-code` profile names.
         processInfo: (_session, pane) => {
           const index = slots.findIndex((slot) => slot.pane === pane);
           return { shell: 5000 + index, foreground: [5001 + index] };
         },
+        foreground: () => ['claude'],
         paneText: (_session, pane) => action.paneText('', pane),
         now,
       };
