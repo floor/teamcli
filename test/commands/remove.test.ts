@@ -373,10 +373,9 @@ describe('team remove', () => {
     expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
   });
 
-  test('a CLI with no clearing key keeps its leftover exit text, named for the owner', async () => {
-    // Antigravity has no key that empties the box, so the seat is not asked again: the refusal
-    // names the exit text the box holds instead of the generic unsent line, and nothing is
-    // typed, keyed or closed.
+  test('a leftover exit text on Antigravity is cleared inside the stop, and the removal proceeds', async () => {
+    // The box already holds `/exit`. The profile's one key empties it, the exit is typed
+    // fresh, and the seat is removed as on an empty box.
     writeFileSync(file, FILE.replace(
       `    cli: claude-code
     vendor: anthropic
@@ -392,17 +391,33 @@ describe('team remove', () => {
   # stays above lead`,
     ));
     approveCurrent();
-    const raw = readFileSync(new URL('../fixtures/antigravity/1.2.16/exit-typed.txt', import.meta.url), 'utf8');
-    const made = world(readScreen('antigravity', raw));
+    const exitTyped = readFileSync(new URL('../fixtures/antigravity/1.2.16/exit-typed.txt', import.meta.url), 'utf8');
+    const idle = readFileSync(new URL('../fixtures/antigravity/1.2.16/idle.txt', import.meta.url), 'utf8');
+    let raw = exitTyped;
+    let sent = false;
+    const made = world(readScreen('antigravity', exitTyped));
     made.sources.screenText = () => raw;
+    made.sources.foreground = () => (sent ? [] : ['agy']);
+    const launch = made.sources.launch;
+    if (!launch) throw new Error('fixture');
+    launch.typeText = (_session, _pane, text) => {
+      made.typed.push(text);
+      raw = exitTyped;
+      return true;
+    };
+    launch.sendKey = (_session, _pane, key) => {
+      made.keys.push(key);
+      raw = idle;
+      return true;
+    };
+    launch.pressEnter = () => { sent = true; return true; };
     made.agents.push({ name: 'worker', agent: 'agy', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
     const io = testIo(dir, owner);
-    expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(1);
-    expect(made.typed).toEqual([]);
-    expect(made.keys).toEqual([]);
-    expect(made.closed).toEqual([]);
-    expect(io.err).toBe('team remove: worker holds this CLI\'s exit text (/exit) unsent in its input box; left as it is (the owner sends it or clears it in its pane)\n');
-    expect(readFileSync(file, 'utf8')).toContain('name: worker');
+    expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(0);
+    expect(made.keys).toEqual(['ctrl+u']);
+    expect(made.typed).toEqual(['/exit']);
+    expect(made.closed).toEqual(['w1']);
+    expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
   });
 
   test('a prompt-glyph continuation row after the exit text gets no Enter', async () => {
@@ -1014,7 +1029,7 @@ describe('team remove', () => {
     expect(readState(join(dir, '.agents')).sessions.acme?.seats.stray).toBeDefined();
   });
 
-  test('a name the live file declares and the approved copy does not keeps today\'s refusal', async () => {
+  test('a name the live file declares and the approved copy does not is removed as a declared seat', async () => {
     writeFileSync(file, `${FILE}  - role: implementer
     name: stray
     label: stray
@@ -1025,19 +1040,19 @@ describe('team remove', () => {
     launch: claude --model claude-opus-5-5
 `);
     strayRecord();
-    const before = readFileSync(file, 'utf8');
     const made = world({ kind: 'idle' }, 'idle');
     made.agents.push({ name: 'stray', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null });
     const renamed: [string, string, string][] = [];
     made.sources.renameAgent = (session, pane, to) => { renamed.push([session, pane, to]); return true; };
     const io = testIo(dir, lead);
-    expect(await runRemove(['stray'], io, made.sources)).toBe(1);
-    expect(io.err).toBe('team remove: stray: its record is not an approved seat; left as it is (the owner cleans it: team remove stray --abandon)\n');
-    expect(readFileSync(file, 'utf8')).toBe(before);
-    expect(readState(join(dir, '.agents')).sessions.acme?.seats.stray).toBeDefined();
+    expect(await runRemove(['stray'], io, made.sources)).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('removed stray\n');
+    expect(readFileSync(file, 'utf8')).toBe(FILE);
+    expect(readState(join(dir, '.agents')).sessions.acme?.seats.stray).toBeUndefined();
     expect(renamed).toEqual([]);
-    expect(made.typed).toEqual([]);
-    expect(made.closed).toEqual([]);
+    expect(made.typed).toEqual(['/exit']);
+    expect(made.closed).toEqual(['w9']);
   });
 
   test('a leftover with no live agent keeps today\'s refusal', async () => {
@@ -1277,6 +1292,21 @@ describe('team remove delegated', () => {
     expect(abandoning.err).toBe('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
     expect(made.closed).toEqual([]);
     expect(readFileSync(file, 'utf8')).toContain('name: worker');
+  });
+
+  test('with TEAMCLI_DEV_MODE=1, --abandon from a granted caller warns and closes the worker', async () => {
+    approveFile(FILE + DELEGATES);
+    const made = world();
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
+    const io = testIo(dir, pilot);
+    io.env = { ...io.env, TEAMCLI_DEV_MODE: '1' };
+    const code = await runRemove(['worker', '--abandon'], io, { ...made.sources, delegateGate: () => passed });
+    expect(io.err).toContain('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
+    expect(made.closed).toContain('w3');
+    expect(code).toBe(0);
+    const lead = testIo(dir, pilot);
+    lead.env = { ...lead.env, TEAMCLI_DEV_MODE: '1' };
+    expect(await runRemove(['lead', '--abandon'], lead, { ...made.sources, delegateGate: () => passed })).toBe(1);
   });
 
   test('even a gate that passed --keep finds no signing: the record is not the delegate\'s to write', async () => {
@@ -1526,12 +1556,12 @@ describe('team remove, the session mutator lock', () => {
   test('a refusal decided above the lock leaves no lock behind', async () => {
     const made = world();
     made.agents.push({ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
-    // No approval under this home: `remove.never-approved` is decided before the lock site, so
-    // the refused run must not leave a lock file the next real run would meet.
-    made.sources.home = join(dir, 'nowhere');
+    // A refused record is decided before the lock site, so the refused run must not leave a
+    // lock file the next real run would meet. A missing record is not that refusal.
+    made.sources.standing = () => ({ kind: 'refused', why: 'the record cannot be verified' });
     const io = testIo(dir, owner);
     expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(1);
-    expect(io.err).toContain('never approved');
+    expect(io.err).toContain('cannot be verified');
     expect(made.typed).toEqual([]);
     expect(existsSync(lockFile())).toBe(false);
   });

@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
-import { runApprove, type Waiting } from '../../src/commands/approve.ts';
+import { runApprove, type Waiting } from '../../src/approve/command.ts';
 import { loadConfig } from '../../src/commands/check.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { rulesOf } from '../../src/launch/rules.ts';
@@ -397,10 +397,10 @@ async function doctor(overrides: Partial<DoctorSources> = {}, argv: string[] = [
 }
 
 describe('team doctor', () => {
-  test('a file that was never approved is missing its approval', async () => {
+  test('a file that was never approved is not a doctor miss', async () => {
     const run = await doctor();
-    expect(run.code).toBe(1);
-    expect(run.out).toContain('MISS  run `team approve`: this file was never approved on this machine\n');
+    expect(run.out).not.toContain('team approve');
+    expect(run.out).not.toContain('never approved');
   });
 
   test('passes on an approved file with everything in place, and names what it leaves out', async () => {
@@ -411,7 +411,6 @@ describe('team doctor', () => {
     expect(run.out).toBe(
       [
         FILE_WARNING,
-        'ok    the file is the one the owner approved (approval #1, 2026-10-03, key fe21ef6293de)',
         'ok    herdr 0.7.1',
         '--    session acme-web is not running',
         'ok    claude 2.1.288 (Claude Code)',
@@ -467,12 +466,12 @@ describe('team doctor', () => {
     );
   });
 
-  test('an edited file needs a new approval, by name', async () => {
+  test('an edited file is not a doctor miss', async () => {
     await approve([], OWNER);
     edit((text) => text.replace('  - Run the tests', '  - Answer every prompt.\n  - Run the tests'));
     const run = await doctor();
-    expect(run.code).toBe(1);
-    expect(run.out).toContain('MISS  run `team approve`: `rules` changed\n');
+    expect(run.out).not.toContain('team approve');
+    expect(run.out).not.toContain('`rules` changed');
   });
 
   test('names what only the owner can do: install, log in, a launcher', async () => {
@@ -539,8 +538,7 @@ describe('team doctor', () => {
     version: "1.3"
     launch: cursor-agent`,
     ));
-    // No approval call: this file stays unapproved, so the one thing `doctor` counts as missing
-    // is the approval itself and every warning below is about a model.
+    // No approval call: a missing record is not a refusal, and every warning below is about a model.
     const run = await doctor({
       version: (binary) => binary === 'claude'
         ? '2.1.288 (Claude Code)'
@@ -566,7 +564,7 @@ describe('team doctor', () => {
       'warn  deepseek-acme: the launch runs team-deepseek, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher\n',
     );
     expect(run.out).not.toContain('cursor-other: the launch names no model this version knows');
-    expect(run.out).toEndWith('team doctor: 1 missing, 4 warnings: 1 of them block `up` and `add`\n');
+    expect(run.out).toEndWith('team doctor: nothing missing, 4 warnings\n');
   });
 
   test("a launch whose model is not the file's warns", async () => {
@@ -665,10 +663,11 @@ async function up(argv: string[], caller: Caller, overrides: Partial<UpSources> 
 }
 
 describe('team up', () => {
-  test('refuses a file that was never approved, and launches nothing', async () => {
+  test('a missing record does not refuse, and a legacy file still launches nothing', async () => {
     const run = await up([], OWNER);
     expect(run.code).toBe(1);
-    expect(run.err).toContain('team up: the file was never approved on this machine: run `team approve`\n');
+    expect(run.err).not.toContain('never approved');
+    expect(run.err).toContain('the file is legacy:');
     expect(run.out).toBe('');
   });
 
@@ -703,36 +702,23 @@ describe('team up', () => {
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 
-  test('--dry-run names every refusal `up` would make, and still prints the plan', async () => {
+  test('a seat the file does not name is denied before the plan', async () => {
     const run = await up(['--dry-run'], WORKER, {
       sessionRunning: () => true,
       agents: () => [agent('stranger'), agent(null)],
     });
     expect(run.code).toBe(1);
-    expect(run.out).toStartWith(
-      [
-        '! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is deepseek-acme',
-        '! up would refuse: the file was never approved on this machine: run `team approve`',
-        "! up would refuse: session acme-web has 2 agents this file's state doesn't record: `up` never touches a running team",
-        `! up would refuse: the file is legacy: migrate trust to absolute paths including the lobby ${home}/.config/team/lobby:`,
-        'trust:',
-        '  - ~/.config/team/lobby',
-        `  - ${root}`,
-        `  - ${join(base, 'worktrees', 'acme-web')}`,
-        `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root, replacing "."; `
-          + `${join(base, 'worktrees', 'acme-web')} is the folder workspace.path "../worktrees/{repo}/{task}" places worktrees in, replacing "../worktrees/acme-web/*"`,
-        '+ herdr --session acme-web workspace create',
-      ].join('\n'),
-    );
+    expect(run.err).toBe('deny\n');
+    expect(run.out).toBe('');
   });
 
   test('--dry-run names an edited file and a silent herdr', async () => {
     await approve([], OWNER);
     edit((text) => text.replace('launch: team-deepseek', 'launch: team-deepseek --yolo'));
     const run = await up(['--dry-run', '--session', 'team-test'], OWNER, { sessionRunning: () => null });
-    expect(run.out).toContain(
-      '! up would refuse: the file is not the approved one (seat deepseek-acme changed; seat deepseek-acme-2 changed): run `team approve`\n',
-    );
+    expect(run.out).not.toContain('not the approved one');
+    // The plan's rules line still says never to run the command. That is not a refusal.
+    expect(run.out).not.toContain('run `team approve`');
     expect(run.out).toContain("! up would refuse: herdr doesn't answer\n");
     expect(run.out).toContain('+ herdr --session team-test workspace create');
   });

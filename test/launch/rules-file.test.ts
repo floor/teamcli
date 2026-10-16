@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { validateTeamFile } from '../../src/file/validate.ts';
-import { notInForce, verifiedOf } from '../../src/approve/approval.ts';
+import { verifiedOf } from '../../src/approve/approval.ts';
 import type { TeamFile } from '../../src/file/types.ts';
 import {
   checkRulesFile, removeRulesFile, rulesDeliveryOf, rulesFileHash, rulesFilePath, rulesFilePathOf, rulesLine, typeablePath, writeRulesFile,
@@ -471,11 +471,9 @@ describe('the seat name where the path is built', () => {
 });
 
 describe('one seat\'s delivery', () => {
-  test('a standing that is not an approval in force is the function\'s own refusal', () => {
-    // The function decides what text a seat is told to obey, so the approval check is its own,
-    // not a gate a caller happens to put in front: no record, a legacy one, a record the
-    // verification refused — each refused with the line the commands print, nothing written,
-    // nothing typed.
+  test('a standing that is not an approval in force still delivers the live file', () => {
+    // The live file is the text a seat is told to obey. No record, a legacy one, a record the
+    // verification refused: each still delivers, and nothing is written by the delivery itself.
     const home = mkdtempSync(join(tmpdir(), 'team-rules-home-'));
     try {
       const { team, seat } = codexSeat();
@@ -485,12 +483,13 @@ describe('one seat\'s delivery', () => {
         { kind: 'refused', why: 'the record was not signed by this machine' } as const,
       ];
       for (const standing of standings) {
-        expect(rulesDeliveryOf(standing, team, seat, '/nowhere', home)).toEqual({ refusal: notInForce(standing) });
+        const delivery = rulesDeliveryOf(standing, team, seat, '/nowhere', home);
+        if ('refusal' in delivery) throw new Error(delivery.refusal);
+        expect(delivery.text).toBe(rulesOf(team, seat, '/nowhere'));
+        const livePath = rulesFilePath(team.project, '/nowhere', home, seat.name);
+        expect(livePath).toBe(delivery.path);
       }
-      expect(rulesDeliveryOf({ kind: 'none' }, team, seat, '/nowhere', home)).toEqual({
-        refusal: 'the file was never approved on this machine: run `team approve`',
-      });
-      expect(existsSync(join(home, '.config'))).toBe(false); // nothing was written anywhere
+      expect(existsSync(join(home, '.config'))).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -509,24 +508,23 @@ describe('one seat\'s delivery', () => {
     expect(rulesDeliveryOf(standing, team, claude, '/nowhere', '/home/owner')).toEqual({ refusal: 'its rules travel as a launch option' });
   });
 
-  test('the text is the approved copy\'s, not the live file\'s, once they differ', () => {
-    // The drift gate out of the way — a live team object edited after the approval — the file
-    // and the hash the line carries are still the approved copy's. This is the test the
-    // mutation "take the rules from the live object" fails.
+  test('the text is the live file\'s, once it differs from the stored copy', () => {
     const { team, seat } = codexSeat();
     const standing = verifiedOf(team, EXAMPLE, '/nowhere');
     const edited: TeamFile = { ...team, rules: [...team.rules, 'A rule added after the approval.'] };
-    const approvedText = rulesOf(team, seat, '/nowhere');
+    const liveText = rulesOf(edited, seat, '/nowhere');
     const delivery = rulesDeliveryOf(standing, edited, seat, '/nowhere', '/home/owner');
     if ('refusal' in delivery) throw new Error(`unexpected refusal: ${delivery.refusal}`);
-    expect(delivery.text).toBe(approvedText);
-    expect(delivery.text).not.toBe(rulesOf(edited, seat, '/nowhere'));
-    expect(delivery.line).toBe(rulesLine(delivery.path, rulesFileHash(approvedText)));
-    // A seat the approved copy does not hold has no approved rules: refused, nothing written.
+    expect(delivery.text).toBe(liveText);
+    expect(delivery.text).not.toBe(rulesOf(team, seat, '/nowhere'));
+    expect(delivery.line).toBe(rulesLine(delivery.path, rulesFileHash(liveText)));
+    // A seat the stored copy does not hold is still delivered from the live file.
     const added = { ...seat, name: 'added-after-approval' };
-    expect(rulesDeliveryOf(standing, { ...edited, seats: [...edited.seats, added] }, added, '/nowhere', '/home/owner')).toEqual({
-      refusal: 'its rules are not in the approved copy of the team file',
-    });
+    const withSeat: TeamFile = { ...edited, seats: [...edited.seats, added] };
+    const addedDelivery = rulesDeliveryOf(standing, withSeat, added, '/nowhere', '/home/owner');
+    if ('refusal' in addedDelivery) throw new Error(addedDelivery.refusal);
+    expect(addedDelivery.text).toBe(rulesOf(withSeat, added, '/nowhere'));
+    expect(addedDelivery.path.endsWith(join('rules', 'added-after-approval.md'))).toBe(true);
   });
 
   test('a seat whose path can\'t be typed is refused before anything is written or typed', () => {
@@ -546,11 +544,9 @@ describe('one seat\'s delivery', () => {
     }
   });
 
-  test('a renamed project keeps one path everywhere: the approved copy\'s', () => {
-    // A project rename is not approval drift (the project is not an owner section), so nothing
-    // refuses it — and the file, the line, the checks and the removal must all keep naming one
-    // file: the one in the approved copy's state folder. Resolved from the live file's new
-    // name, the line a seat obeys would point where `status` and `doctor` never look.
+  test('a renamed project keeps one path everywhere: the live file\'s', () => {
+    // A project rename is not a refusal. The file, the line, the check and the removal name
+    // one path: the live project's. The stored copy's folder is not written.
     const home = mkdtempSync(join(tmpdir(), 'team-rules-home-'));
     mkdirSync(join(home, '.config'), { recursive: true });
     try {
@@ -559,18 +555,16 @@ describe('one seat\'s delivery', () => {
       const renamed: TeamFile = { ...team, project: 'acme-renamed' };
       const delivery = rulesDeliveryOf(standing, renamed, seat, '/nowhere', home);
       if ('refusal' in delivery) throw new Error(`unexpected refusal: ${delivery.refusal}`);
-      // The approved copy's project names the folder; the live file's new name nothing.
-      expect(rulesFilePathOf(standing, seat.name, '/nowhere', home)).toBe(delivery.path);
-      expect(basename(dirname(dirname(delivery.path)))).toMatch(/^acme-web-/);
-      // The writer puts the text exactly there, the check reads exactly there, the removal
-      // takes it from exactly there — and nothing exists under the renamed project's folder.
-      expect(writeRulesFile(standing, seat.name, '/nowhere', home, delivery.text, rulesFileHash(delivery.text)).ok).toBe(true);
+      const livePath = rulesFilePath('acme-renamed', '/nowhere', home, seat.name);
+      expect(livePath).toBe(delivery.path);
+      expect(basename(dirname(dirname(delivery.path)))).toMatch(/^acme-renamed-/);
+      expect(writeRulesFile(standing, seat.name, '/nowhere', home, delivery.text, rulesFileHash(delivery.text), undefined, 'acme-renamed').ok).toBe(true);
       expect(checkRulesFile(delivery.path, delivery.text)).toEqual({ ok: true });
-      removeRulesFile(standing, seat.name, '/nowhere', home);
+      removeRulesFile(standing, seat.name, '/nowhere', home, 'acme-renamed');
       expect(existsSync(delivery.path)).toBe(false);
-      const renamedPath = rulesFilePath('acme-renamed', '/nowhere', home, seat.name);
-      expect(renamedPath).not.toBeNull();
-      if (renamedPath !== null) expect(existsSync(dirname(renamedPath))).toBe(false);
+      const stored = rulesFilePathOf(standing, seat.name, '/nowhere', home);
+      expect(stored).not.toBe(delivery.path);
+      if (stored !== null) expect(existsSync(dirname(stored))).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

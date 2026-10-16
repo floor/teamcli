@@ -2,11 +2,11 @@ import { closeSync, constants, fstatSync, openSync, readdirSync, readSync, readl
 import { homedir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { approvedFingerprints, approvalOf, ceilingsOf } from '../approve/approval.ts';
+import { approvedFingerprints, approvalOf, ceilingsOf } from './approval.ts';
 import { checkDrift, resolveChecks } from '../budgets/checks.ts';
-import { formatDiff } from '../approve/diff.ts';
-import { compare, describe, fingerprints } from '../approve/fingerprint.ts';
-import { approveFingerprint, ownerAuthorized } from '../approve/owner-token.ts';
+import { formatDiff } from './diff.ts';
+import { compare, describe, fingerprints } from './fingerprint.ts';
+import { approveFingerprint, ownerAuthorized } from './owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources } from '../delegate.ts';
