@@ -124,10 +124,20 @@ describe("the profiles' schema", () => {
     expect(errors(doc)).toEqual([]);
   });
 
-  test('the five shipped profiles pass it', () => {
-    for (const name of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok']) {
+  test('the six shipped profiles pass it', () => {
+    for (const name of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini']) {
       expect([name, errors(profile(name))]).toEqual([name, []]);
     }
+  });
+
+  test('unread_model takes launch alone, the loader’s one value', () => {
+    const doc = (unreadModel: unknown): unknown => ({
+      format: 1, cli: 'sample', unread_model: unreadModel,
+      screen: { composer: COMPOSER },
+    });
+    expect(errors(doc('launch'))).toEqual([]);
+    expect(errors(doc('screen')).length).toBeGreaterThan(0);
+    expect(errors(doc(true)).length).toBeGreaterThan(0);
   });
 
   test('a rule may carry on_footer and without_rule, the loader’s flags', () => {

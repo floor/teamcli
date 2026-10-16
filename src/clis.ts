@@ -8,6 +8,7 @@ export const PROFILES: Profile[] = [
   { cli: 'cursor', processes: ['cursor-agent'] },
   { cli: 'grok', processes: ['grok'] },
   { cli: 'antigravity', processes: ['agy'] },
+  { cli: 'gemini', processes: ['gemini'] },
 ];
 
 export const CLIS: string[] = PROFILES.map((profile) => profile.cli);
