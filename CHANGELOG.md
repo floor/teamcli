@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `team register <seat>`: writes the record for one seat that is already running — a pane herdr
+  places under that name, holding a CLI at the seat's prompt — so `team send`, `team seats`,
+  `team watch` and `team down` can address it. It types nothing into the pane and never
+  overwrites a record that names another pane; `--dry-run` prints the line the real run would
+  print and writes nothing. The owner, or a delegate the file approves for `up`.
+
+### Changed
+
+- `team up --dry-run` is never answered with the bare word `deny`: for a caller the run does not
+  admit it prints `! up would refuse:` with the reason, `! to unblock:` with the owner's own run
+  of this folder, and — when no flag kept the file unread — the plan, and exits 1.
+- `team send`'s no-record refusals name `team up` as the command that records the seat it
+  launches, and a sender or target the registry holds no agent for is judged as the seat the live
+  team file declares for it — the bootstrap a seat herdr placed, before `up` or `add` first
+  recorded it, is reachable by that seat's name and role.
+- A send records the send-to-outcome milliseconds and the path the send took — `socket` or
+  `typed` — as the history line's optional `ms` and `via` fields, shown by `team feed` after the
+  outcome; a line written before this build keeps the six required fields alone.
+- A claude-code seat's cross-session socket address is recorded in the registry when `add`,
+  `reload` or `restart` launches the pane, so a send can address the seat without re-reading
+  herdr.
+
 ## [0.3.5] - 2026-10-07
 
 A release about a seat whose screen nobody can read: a caller other than the owner can now let
