@@ -140,7 +140,7 @@ describe('an approved file', () => {
   test('each difference reads as one line', () => {
     expect(describeDifference({ kind: 'section', name: 'rules' })).toBe('`rules` changed');
     expect(describeDifference({ kind: 'seat-changed', name: 'a' })).toBe('seat a changed');
-    expect(describeDifference({ kind: 'seat-new', name: 'a' })).toBe('seat a is not in the approved file');
+    expect(describeDifference({ kind: 'seat-new', name: 'a' })).toBe('seat a is not in the last approval');
   });
 });
 

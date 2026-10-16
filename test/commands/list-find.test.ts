@@ -165,13 +165,13 @@ test('the registry directory wins over a store that names the same session', () 
   });
 });
 
-test('approved.yaml is the fallback, a live file wins, and a link is not the live file', () => {
+test('only a regular live file supplies a session, despite any stored copy', () => {
   withFixture((base) => {
     const fallbackRoot = join(base, 'fallback');
     mkdirSync(fallbackRoot);
     const fallback = writeStore(base, 'fallback-000000000001', JSON.stringify({ root: fallbackRoot }));
     writeFileSync(join(fallback, 'approved.yaml'), teamYaml('from-approved', 'kept'));
-    expect(findTeam('kept', null, base)).toEqual(found('from-approved', fallbackRoot));
+    expect(findTeam('kept', null, base)).toBeNull();
 
     const liveRoot = join(base, 'live');
     writeTeam(liveRoot, teamYaml('from-live', 'shown'));
@@ -186,13 +186,13 @@ test('approved.yaml is the fallback, a live file wins, and a link is not the liv
     symlinkSync(target, join(linkedRoot, '.agents', 'team.yaml'));
     const linked = writeStore(base, 'linked-000000000003', JSON.stringify({ root: linkedRoot }));
     writeFileSync(join(linked, 'approved.yaml'), teamYaml('from-approved', 'linked'));
-    expect(findTeam('linked', null, base)).toEqual(found('from-approved', linkedRoot));
+    expect(findTeam('linked', null, base)).toBeNull();
 
     const otherRoot = join(base, 'other');
     writeTeam(otherRoot, teamYaml('someone-else', 'someone'));
     const other = writeStore(base, 'other-000000000004', JSON.stringify({ root: otherRoot }));
     writeFileSync(join(other, 'approved.yaml'), teamYaml('from-approved', 'wanted'));
-    expect(findTeam('wanted', null, base)).toEqual(found('from-approved', otherRoot));
+    expect(findTeam('wanted', null, base)).toBeNull();
     expect(findTeam('someone', null, base)).toEqual(found('someone-else', otherRoot));
 
     const linkOnly = join(base, 'link-only');
