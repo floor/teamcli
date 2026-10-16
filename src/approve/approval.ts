@@ -42,11 +42,10 @@ export type NotVerified = Exclude<Standing, { kind: 'verified' }>;
 
 /**
  * The one line a command that needs an approval in force refuses on: never
- * approved, the legacy record's one-line repair, or the case the verification
- * refused. Each names the owner's single step.
+ * approved, the legacy record's line, or the case the verification refused.
  */
 export function notInForce(standing: NotVerified): string {
-  if (standing.kind === 'none') return 'the file was never approved on this machine: run `team approve`';
+  if (standing.kind === 'none') return 'the file was never approved on this machine';
   if (standing.kind === 'legacy') return LEGACY_LINE;
   return standing.why;
 }

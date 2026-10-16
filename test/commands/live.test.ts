@@ -433,11 +433,10 @@ describe('team up, live', () => {
       expect(code).toBe(1);
       expect(seat?.stage).toBe('named');
       expect(seat?.rules).toBeUndefined();
-      // Same reading as the Codex case: the box still shows the line, unsent.
-      // Antigravity has no clearing key established (its trust dialog blocks the composer), so
-      // the advice names no key.
+      // Same reading as the Codex case: the box still shows the line, unsent. Enter was
+      // pressed, so the clearing key is named and not sent.
       expect(io.out).toContain('gemini-acme: left out: rules typed, not sent: its box still holds the line after Enter; '
-        + 'press Enter in its pane to send it, or clear the box, then run up again\n');
+        + 'press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again\n');
     } else {
       expect(code).toBe(1);
       expect(sent).toEqual([]);
@@ -4289,7 +4288,7 @@ describe('team up, the pause', () => {
       expect(made.renames).not.toContain('cursor-acme');
       expect(seat?.stage).toBe('launched');
       expect(io.out).toContain(
-        'cursor-acme: left out: runs GPT Sol 5.6; the file says Grok 4.7; left at launched, not named. Add --model grok-4.7-high to its launch, or correct the file\'s model and version and run `team approve`\n',
+        'cursor-acme: left out: runs GPT Sol 5.6; the file says Grok 4.7; left at launched, not named. Add --model grok-4.7-high to its launch, or correct the file\'s model and version\n',
       );
       return;
     }
@@ -5104,10 +5103,14 @@ describe('team up, delegated', () => {
 });
 
 describe('team down, live', () => {
-  beforeEach(() => approve());
+  let liveSeat = 'deepseek-acme';
+  beforeEach(() => {
+    liveSeat = 'deepseek-acme';
+    return approve();
+  });
 
   function seat(status = 'idle'): HerdrAgent {
-    return agent('deepseek-acme', 'w3:p1', status);
+    return agent(liveSeat, 'w3:p1', status);
   }
 
   function harness(screen: Screen, status = 'idle') {
@@ -5691,10 +5694,9 @@ describe('team down, live', () => {
     expect(io.out).toContain('deepseek-acme: its exit was not confirmed; the clearing key (ctrl+c) was not delivered; the text was left; left running (team down --abandon closes it)\n');
   });
 
-  test("a CLI with no clearing key names its leftover exit text and leaves it", async () => {
-    // Antigravity has no key that empties the box, so the seat cannot be asked again this run:
-    // the skip line says the box holds this CLI's own exit text, and the owner sends it or
-    // clears it in the pane.
+  test('a leftover exit text on Antigravity is cleared with the profile key, typed fresh, and stopped', async () => {
+    // The box already holds `/exit`. The profile's one key empties it, the exit is typed
+    // fresh, and the seat is stopped as on an empty box.
     writeFileSync(join(root, '.agents/team.yaml'), EXAMPLE.replace(
       /  - role: implementer\n    name: deepseek-acme[\s\S]*?count: 2[^\n]*\n/,
       ['  - role: implementer', '    name: gemini-acme', '    cli: antigravity', '    vendor: google',
@@ -5702,19 +5704,29 @@ describe('team down, live', () => {
     ));
     await approve();
     const exitTyped = readFileSync(new URL('../fixtures/antigravity/1.2.16/exit-typed.txt', import.meta.url), 'utf8');
+    const idle = readFileSync(new URL('../fixtures/antigravity/1.2.16/idle.txt', import.meta.url), 'utf8');
     const run = harness(readScreen('antigravity', exitTyped));
     run.setBox(exitTyped);
+    run.launch.sendKey = (_session, _pane, key) => {
+      run.keys.push(key);
+      run.setBox(idle);
+      return true;
+    };
+    run.launch.typeText = (_session, _pane, text) => {
+      run.typed.push(text);
+      run.setBox(exitTyped);
+      return true;
+    };
     const io = testIo(root, { kind: 'owner' });
     const code = await runDown(FILE, io, run.sourcesOf({
       agents: () => [agent('gemini-acme', 'w3:p1', 'idle')],
     }));
     expect(code).toBe(0);
-    expect(run.typed).toEqual([]);
-    expect(run.keys).toEqual([]);
-    expect(run.entered).toEqual([]);
-    expect(run.stopped).toEqual([]);
-    expect(io.out).toContain("gemini-acme: holds this CLI's exit text (/exit) unsent in its input box; left running (the owner sends it or clears it in its pane)\n");
-    expect(io.out).toContain('session acme-web: not stopped, 1 agent left in it\n');
+    expect(run.keys).toEqual(['ctrl+u']);
+    expect(run.typed).toEqual(['/exit']);
+    expect(run.entered).toEqual(['enter']);
+    expect(run.closed).toEqual(['w3']);
+    expect(io.out).toContain('gemini-acme: stopped\n');
   });
 
   // The refused shapes on the exit path, on both CLIs: the read-back before the Enter must
@@ -5933,16 +5945,17 @@ describe('team down, live', () => {
     expect(run.typed).toEqual(['/exit']);
   });
 
-  // The live file renamed the seat after the copy was approved. The stop list is that copy, so
-  // the seat is still stopped under the name and CLI the copy carries.
+  // The live file renamed the seat after the copy was approved. The stop list is the live file, so
+  // the seat is stopped under the name and CLI the live file carries.
   function renamedSeat(cli?: string) {
+    liveSeat = 'relay-acme';
     writeFileSync(join(root, '.agents/team.yaml'), EXAMPLE.replace('name: deepseek-acme', 'name: relay-acme'));
     const recorded = cli === undefined ? { stage: 'ready' } : { stage: 'ready', cli };
     writeFileSync(
       join(root, '.agents/team.state.json'),
       JSON.stringify({
         format: 1,
-        sessions: { 'acme-web': { seats: { 'deepseek-acme': recorded }, worktrees: {} } },
+        sessions: { 'acme-web': { seats: { 'relay-acme': recorded }, worktrees: {} } },
       }),
     );
   }
@@ -5957,7 +5970,7 @@ describe('team down, live', () => {
     expect(run.entered).toEqual(['enter']);
     expect(run.closed).toEqual(['w3']);
     expect(run.stopped).toEqual(['acme-web']);
-    expect(io.out).toContain('deepseek-acme: stopped\n');
+    expect(io.out).toContain('relay-acme: stopped\n');
   });
 
   test('a renamed seat with no live agent in its pane is not typed into', async () => {
@@ -5969,7 +5982,7 @@ describe('team down, live', () => {
     expect(run.typed).toEqual([]);
     expect(run.entered).toEqual([]);
     expect(run.closed).toEqual([]);
-    expect(io.out).toContain('deepseek-acme: no live agent in its pane; its exit was not typed (team down --abandon closes it)\n');
+    expect(io.out).toContain('relay-acme: no live agent in its pane; its exit was not typed (team down --abandon closes it)\n');
   });
 
   test('a renamed seat at a permission prompt is not typed into', async () => {
@@ -5982,7 +5995,7 @@ describe('team down, live', () => {
     expect(run.entered).toEqual([]);
     expect(run.closed).toEqual([]);
     expect(run.stopped).toEqual([]);
-    expect(io.out).toContain('deepseek-acme: is blocked at a prompt');
+    expect(io.out).toContain('relay-acme: is blocked at a prompt');
   });
 
   test('a seat whose state predates the CLI record is stopped under the copy\'s CLI', async () => {
@@ -5994,7 +6007,7 @@ describe('team down, live', () => {
     expect(run.typed).toEqual(['/exit']);
     expect(run.entered).toEqual(['enter']);
     expect(run.closed).toEqual(['w3']);
-    expect(io.out).toContain('deepseek-acme: stopped\n');
+    expect(io.out).toContain('relay-acme: stopped\n');
   });
 
   test('an agent neither the file nor the state records is left entirely alone', async () => {
