@@ -1,10 +1,11 @@
-# The agent and team registries
+# The agent, team and project registries
 
-Two records hold who the fleet is: one file per agent under `~/.config/team/agents/`, and one teams
-file. `team` writes them — registration happens at a seat's first launch by `up`, `add`, `restart`
-or `reload` — and routing, [team list](../commands/list.md) and
-[team send](../commands/send.md) read them. The team file (`.agents/team.yaml`) stays the seed and
-the projection; the registries are the live truth that `up` and routing read.
+Three records hold who the fleet is: one file per agent under `~/.config/team/agents/`, one teams
+file, and one projects file. `team` writes them — registration happens at a seat's first launch by
+`up`, `add`, `restart` or `reload` — and routing, [team list](../commands/list.md),
+[team send](../commands/send.md) and [team projects](../commands/projects.md) read them. The team
+file (`.agents/team.yaml`) stays the seed and the projection; the registries are the live truth
+that `up` and routing read.
 
 ## The agent record
 
@@ -35,12 +36,29 @@ of the SHA-256 of the root's real path, so two stores of one root are one team:
 
 | Field | Meaning |
 | --- | --- |
-| `project`, `entity` | the project's name, and the entity it belongs to — the entity whose lobby the team lives in |
+| `project`, `entity` | the team's own name — today's `project:` key in the team file, not the project it sits in — and the entity it belongs to, the entity whose lobby the team lives in |
+| `project_id` | the project the team sits in, by project ID, or `null`: a team no project names is its own project; written from the team file's `in_project` |
 | `session` | the herdr session |
 | `root`, `lobby` | the checkout, and the lobby folder |
-| `roster` | one `{agent, seat, role}` per seat |
+| `roster` | one `{agent, seat, role, leads}` per seat: `leads` is the file's lead capability — the one seat `leads: true` marks — readable without a role name, and a line written before the field existed reads as not leading |
 | `lifecycle` | `defined`, `running`, `stopped` or `archived` |
 | `provenance` | including when the record was last updated |
+
+## The project record
+
+`~/.config/team/projects.yaml`, one entry per project, keyed by the project ID — the display name
+lowercased, every run of characters outside letters, digits, `.`, `_` and `-` written as one `-`,
+nothing left at either end: `TeamCLI` is `teamcli`, `Team CLI` is `team-cli`. A team file's
+`in_project` writes the display name, and the id is the key it reaches. The id is minted when the
+project is first written and never moves: a rename writes `name`.
+
+| Field | Meaning |
+| --- | --- |
+| `name` | the display name — what people and team files call the project (`TeamCLI`) |
+| `entity` | the entity the project belongs to |
+| `lead` | the project lead, by agent ID — never a seat or a role name |
+| `teams` | the team IDs the project groups |
+| `provenance` | who registered the record, and when it was registered and last updated |
 
 ## The id is the identity
 
