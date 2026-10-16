@@ -40,6 +40,7 @@ import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
 import { runProc, type ProcSources } from '../src/commands/proc.ts';
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
+import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
@@ -3408,7 +3409,7 @@ scene('reload.grant-file', async (place) => {
 
 // Outcomes that are listed and kept, and that no scene can produce. An edit the earlier checks
 // have already validated reads here (add.prepared, add.locked, add.not-restored), and so do
-// answer.action and up.delegate-placement. add.no-profile and
+// answer.action and up.delegate-placement. add.no-profile, register.no-profile and
 // remove.no-profile joined them when grok's profile shipped: the file loader accepts exactly the
 // CLIs this version knows, and every one of them now has a launch profile, so no team file can
 // reach the refusals — they stand, rows and exit sites whole, for a CLI listed before its profile
@@ -3550,6 +3551,122 @@ scene('restart.ready', async (place) => {
   return show(await restarted(place, ['lead'], owner), 'restarted lead');
 });
 
+// `team register`: the record for a seat that is already running. The gate is `up`'s, run by the
+// command itself; only the reads this harness has no herdr for are stood in — the session, its
+// agents, a pane's processes and a pane's text.
+function registerSources(place: Place, over: Partial<RegisterSources> = {}): RegisterSources {
+  return {
+    home: place.home,
+    sessionState: () => 'running',
+    agents: () => [],
+    // A CLI in front of the pane's own shell: the identity a launch would have recorded.
+    processInfo: () => ({ shell: 400, foreground: [401] }),
+    paneText: () => IDLE,
+    now: () => NOW,
+    ...over,
+  };
+}
+
+async function registered(
+  place: Place,
+  argv: string[],
+  caller: Caller = owner,
+  over: Partial<RegisterSources> = {},
+): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return runCompared(place, argv, (args) => runRegister(args, io, registerSources(place, over)), io);
+}
+
+/** The delegate gate's own reads, as the `up` scenes stand them in: this harness's approval store,
+ *  and herdr answers a scene gives. */
+const registerGate = (place: Place, over: DelegateSources = {}): Partial<RegisterSources> => gateAt(place, over);
+
+scene('register.usage', async (place) => show(await registered(place, []), 'a seat name is required'));
+scene('register.file', async (place) => show(await registered(place, ['lead']), 'no team file'));
+scene('register.detached', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], detachedCaller), SENTENCE);
+});
+scene('register.caller', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead', '--session', 'other'], leadSeat), "--session is the owner's");
+});
+scene('register.not-owner', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], other), 'only the owner, or a delegate this file approves for `up`');
+});
+scene('register.delegate', async (place) => {
+  approve(place, `${TEAM}${DELEGATES}`);
+  return show(await registered(place, ['lead'], other, registerGate(place, { agents: () => [] })), 'only the owner or the approved delegate runs');
+});
+scene('register.no-seat', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['missing']), 'no seat "missing"');
+});
+scene('register.stopped', async (place) => {
+  write(place, TWO);
+  return show(await registered(place, ['worker']), 'is stopped in this file');
+});
+scene('register.herdr', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, { sessionState: () => null }), "doesn't answer");
+});
+scene('register.no-session', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, { sessionState: () => 'stopped' }), 'is not running');
+});
+scene('register.session-file', async (place) => {
+  write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).launched_file = join(place.base, 'other', 'team.yaml');
+  });
+  return show(await registered(place, ['lead']), 'was launched from');
+});
+scene('register.no-agent', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, { agents: () => [] }), 'no agent named');
+});
+scene('register.many-agents', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead'), agent('lead')] }), 'agents named');
+});
+scene('register.recorded', async (place) => {
+  write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w9:p1' };
+  });
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'is already recorded on pane w9:p1');
+});
+scene('register.no-cli', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, {
+    agents: () => [agent('lead')],
+    processInfo: () => ({ shell: 400, foreground: [] }),
+  }), 'holds no process in front of its shell');
+});
+scene('register.screen', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, {
+    agents: () => [agent('lead')],
+    screen: () => ({ kind: 'permission' }),
+  }), 'not the seat at its prompt');
+});
+scene('register.dry-run', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead', '--dry-run'], owner, { agents: () => [agent('lead')] }), 'would register');
+});
+scene('register.already', async (place) => {
+  write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'already registered — pane w1:p1');
+});
+scene('register.ready', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'registered — pane w1:p1; nothing was launched');
+});
+
 // Authority management shares the owner-only editor; each public wrapper owns its exits.
 for (const [name, command, args, invalidArgs] of [
   ['grant', runGrant, ['lead', '--scope', 'up,down'], ['lead', '--scope', 'trust']],
@@ -3580,7 +3697,7 @@ for (const [name, command, args, invalidArgs] of [
   });
 }
 
-const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
+const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
 
 const contract = loadContract();
 for (const row of contract.rows) {
@@ -3625,7 +3742,7 @@ function refusalCore(text: string): string {
     .replace(/acme-[0-9a-f]{8,}/g, 'acme-<id>');
 }
 
-for (const command of ['up', 'down', 'add'] as const) {
+for (const command of ['up', 'down', 'add', 'register'] as const) {
   test(`${command}: a refused dry run exits as the real run`, async () => {
     const ids = refusalIds(command);
     expect(ids.length).toBeGreaterThan(0);

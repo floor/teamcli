@@ -21,6 +21,7 @@ import { runFeed } from '../../src/commands/feed.ts';
 import { runHold } from '../../src/commands/hold.ts';
 import { runInit } from '../../src/commands/init.ts';
 import { runMcp } from '../../src/commands/mcp.ts';
+import { runRegister } from '../../src/commands/register.ts';
 import { runRemove } from '../../src/commands/remove.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
@@ -238,6 +239,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runInit(rest, io, fixture.home, undefined, { loggedIn: () => false });
     case 'mcp':
       return runMcp(rest, io, world.mcpSources());
+    case 'register':
+      return runRegister(rest, io, world.registerSources());
     case 'remove':
       return runRemove(rest, io, world.removeSources());
     case 'restart':

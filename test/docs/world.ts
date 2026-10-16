@@ -12,6 +12,7 @@ import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { DownLaunch, DownSources } from '../../src/commands/down.ts';
 import type { McpSources, PathStat } from '../../src/commands/mcp.ts';
 import type { RemoveSources } from '../../src/commands/remove.ts';
+import type { RegisterSources } from '../../src/commands/register.ts';
 import type { RestartSources } from '../../src/commands/restart.ts';
 import type { ListSources } from '../../src/commands/list.ts';
 import type { StatusSources } from '../../src/commands/status.ts';
@@ -236,6 +237,7 @@ export type World = {
   removeSources(): RemoveSources;
   restartSources(): RestartSources;
   addSources(): AddSources;
+  registerSources(): RegisterSources;
   checkSources(): CheckSources;
   statusSources(): StatusSources;
   listSources(): ListSources;
@@ -664,6 +666,21 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         machine,
         now,
         launch,
+      };
+    },
+    registerSources(): RegisterSources {
+      return {
+        home,
+        sessionState: () => (herdr === 'none' ? null : sessionState()),
+        agents: () => (herdr === 'running' ? agents() : []),
+        // Every agent herdr lists holds a CLI in front of the pane's own shell: one shell pid
+        // and one process beside it, per pane, so identity reads as a launched pane.
+        processInfo: (_session, pane) => {
+          const index = slots.findIndex((slot) => slot.pane === pane);
+          return { shell: 5000 + index, foreground: [5001 + index] };
+        },
+        paneText: (_session, pane) => action.paneText('', pane),
+        now,
       };
     },
     statusSources(): StatusSources {

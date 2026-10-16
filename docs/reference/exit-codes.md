@@ -277,6 +277,26 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `proc.file-invalid` | `proc` | 2 | the team file can't be parsed | `team proc add build` |
 | `proc.invocation` | `proc` | 2 | the invocation can't be read | `team proc` |
 | `proc.not-yours` | `proc` | 2 | the caller may not read this team | `team proc list` |
+| `register.already` | `register` | 0 | the seat is already recorded on that pane | `team register worker` |
+| `register.dry-run` | `register` | 0 | the seat would be registered; nothing was written | `team register worker --dry-run` |
+| `register.ready` | `register` | 0 | the running seat's record was written | `team register worker` |
+| `register.caller` | `register` | 1 | --session is the owner's | `team register worker --session other` |
+| `register.delegate` | `register` | 1 | the caller is not the approved delegate for up | `team register worker` |
+| `register.detached` | `register` | 1 | a run with no terminal | `team register worker` |
+| `register.herdr` | `register` | 1 | herdr doesn't answer | `team register worker` |
+| `register.many-agents` | `register` | 1 | the session has more than one agent with that name | `team register worker` |
+| `register.no-agent` | `register` | 1 | no agent of that name is running in the session | `team register worker` |
+| `register.no-cli` | `register` | 1 | the pane holds no CLI in front of its shell | `team register worker` |
+| `register.no-profile` | `register` | 1 | the seat has no launch profile | `team register worker` |
+| `register.no-seat` | `register` | 1 | the file has no such seat | `team register missing` |
+| `register.no-session` | `register` | 1 | the herdr session is not running | `team register worker` |
+| `register.not-owner` | `register` | 1 | the caller is not the owner or a delegate this file approves for up | `team register worker` |
+| `register.recorded` | `register` | 1 | the state records another pane for that seat | `team register worker` |
+| `register.screen` | `register` | 1 | the pane is not the seat at its prompt | `team register worker` |
+| `register.session-file` | `register` | 1 | the session was launched from another team file | `team register worker --session other` |
+| `register.stopped` | `register` | 1 | the seat is stopped in the file | `team register worker` |
+| `register.file` | `register` | 2 | the team file can't be read or parsed, or not inside a git repository | `team register worker` |
+| `register.usage` | `register` | 2 | the invocation can't be read | `team register` |
 | `release.passed` | `release` | 0 | every check passed | `team release check material@3.0.2` |
 | `release.missing` | `release` | 1 | a check is missing | `team release check material@3.0.2` |
 | `release.unknown` | `release` | 2 | a check is unknown | `team release check material@3.0.2` |
