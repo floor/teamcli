@@ -7,7 +7,6 @@ import { description, version } from './version.ts';
 // Each command is loaded only when it is called. A slice adds its line here. The table is exported
 // so a test can walk it: every command, `--help`, `-h` and a usage line.
 export const commands: Record<string, () => Promise<{ default: Command; USAGE: string }>> = {
-  approve: () => import('./commands/approve.ts'),
   check: () => import('./commands/check.ts'),
   commits: () => import('./commands/commits.ts'),
   doctor: () => import('./commands/doctor.ts'),
@@ -34,6 +33,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   release: () => import('./commands/release.ts'),
   usage: () => import('./commands/usage.ts'),
   lock: () => import('./commands/lock.ts'),
+  tempo: () => import('./commands/tempo.ts'),
   unlock: () => import('./commands/unlock.ts'),
   broker: () => import('./commands/broker.ts'),
   mcp: () => import('./commands/mcp.ts'),

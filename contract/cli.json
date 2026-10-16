@@ -138,47 +138,6 @@
       "flags": [
         {
           "hidden": false,
-          "name": "--confirm",
-          "repeatable": false,
-          "takesValue": false
-        },
-        {
-          "hidden": false,
-          "name": "--file",
-          "repeatable": false,
-          "takesValue": true
-        },
-        {
-          "hidden": false,
-          "name": "--help",
-          "repeatable": false,
-          "takesValue": false
-        },
-        {
-          "hidden": false,
-          "name": "--show",
-          "repeatable": false,
-          "takesValue": false
-        },
-        {
-          "hidden": true,
-          "name": "-h",
-          "repeatable": false,
-          "takesValue": false
-        }
-      ],
-      "hidden": false,
-      "name": "approve",
-      "positionals": [],
-      "subcommands": [],
-      "usage": [
-        "team approve [--show] [--confirm] [--file <path>]"
-      ]
-    },
-    {
-      "flags": [
-        {
-          "hidden": false,
           "name": "--ask",
           "repeatable": false,
           "takesValue": true
@@ -470,6 +429,24 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--audit",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--briefs",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--follow",
           "repeatable": false,
           "takesValue": false
@@ -510,7 +487,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team feed [--seat <name>] [--limit <n>] [--follow] [--json]"
+        "team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]"
       ]
     },
     {
@@ -597,6 +574,12 @@
         },
         {
           "hidden": false,
+          "name": "--seats",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--watch",
           "repeatable": false,
           "takesValue": false
@@ -613,7 +596,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team list [--all] [--watch] [--json]"
+        "team list [--all] [--seats] [--watch] [--json]"
       ]
     },
     {
@@ -1227,6 +1210,35 @@
         }
       ],
       "hidden": false,
+      "name": "tempo",
+      "positionals": [
+        {
+          "name": "word",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team tempo <word>"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
       "name": "unlock",
       "positionals": [
         {
@@ -1262,6 +1274,12 @@
         },
         {
           "hidden": false,
+          "name": "--serial",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -1278,7 +1296,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team up [--dry-run] [--session <name>] [--file <path>]"
+        "team up [--dry-run] [--serial] [--session <name>] [--file <path>]"
       ]
     },
     {

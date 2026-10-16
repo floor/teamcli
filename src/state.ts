@@ -113,11 +113,13 @@ export type SessionState = {
    */
   launched_file?: string;
   /**
-   * The team file `up` resolved, and the watchdog pane that may read it. Written before that
-   * pane's command runs, and left in place when the watch process exits: a flagless watch in
-   * the pane's folder would miss this file or read another one. Any other non-owner is refused.
+   * The team file `up` resolved, and who may read it. Written before the watch process is
+   * spawned, and left in place when that process exits: a flagless watch started in the project
+   * folder would miss this file or read another one. `pane` is set only for a watch an older
+   * `up` started in a pane. The process `up` records on `watch.pid`, or that pane, may read it.
+   * Any other non-owner is refused.
    */
-  watchdog?: { file: string; pane: string };
+  watchdog?: { file: string; pane?: string };
   nudge?: { pending_since: string | null };
 };
 

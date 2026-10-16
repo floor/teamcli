@@ -8,6 +8,7 @@ import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
+import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { appendHistory } from '../send/history.ts';
@@ -417,23 +418,51 @@ async function deliverNative(
       appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'held' });
       return held(io, dir, who, seatName, `the composer already holds unsent text; the drop file is at ${path}`, host, report);
     }
+    let readBackFailed = false;
+    const checkBeforeEnter = (): boolean => {
+      const preEnterScreen = host.native.paneText?.(session, pane) ?? null;
+      if (preEnterScreen === null || dialogKind(cli, preEnterScreen) !== null) return false;
+      if (readScreen(cli, preEnterScreen).kind === 'unsent' && !boxHoldsText(cli, trigger, preEnterScreen)) {
+        readBackFailed = true;
+        return true;
+      }
+      return false;
+    };
     // One read of the pane. It is asked before a second Enter, and again only when that
     // second Enter was never reached, so a dialog is never given another key.
     let looked = false;
     let kind: string | null = null;
+    let midScreen: string | null = null;
     const look = (): string | null => {
       if (looked) return kind;
       looked = true;
-      kind = dialogKind(cli, host.native.paneText?.(session, pane) ?? null);
+      midScreen = host.native.paneText?.(session, pane) ?? null;
+      kind = dialogKind(cli, midScreen);
       return kind;
     };
-    const outcome = await submitTrigger(host.native, session, pane, trigger, () => look() !== null);
+    const outcome = await submitTrigger(
+      host.native,
+      session,
+      pane,
+      trigger,
+      () => look() !== null || (midScreen !== null && !boxHoldsText(cli, trigger, midScreen)),
+      checkBeforeEnter,
+    );
+    if (readBackFailed) {
+      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'held' });
+      return held(io, dir, who, seatName, `the composer read-back did not match the trigger; the drop file is at ${path}`, host, report);
+    }
     const shown = look();
     if (shown !== null) {
       appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
       return unreachable(io, dir, who, seatName, `not reached; the screen reads ${shown}; the drop file is at ${path}`, host, report);
     }
     if (!outcome.ok) {
+      const endScreen = host.native.paneText?.(session, pane) ?? null;
+      if (endScreen !== null && boxHoldsText(cli, trigger, endScreen)) {
+        appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'held' });
+        return held(io, dir, who, seatName, `the trigger stayed unsent in the composer; the drop file is at ${path}`, host, report);
+      }
       appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
       return unreachable(io, dir, who, seatName, `${outcome.reason}; the drop file is at ${path}`, host, report);
     }

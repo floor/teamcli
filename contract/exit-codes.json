@@ -584,244 +584,6 @@
     },
     {
       "code": 0,
-      "command": "approve",
-      "id": "approve.approved",
-      "meaning": "the owner approved the file",
-      "trigger": "team approve"
-    },
-    {
-      "code": 0,
-      "command": "approve",
-      "id": "approve.show",
-      "meaning": "the comparison was printed",
-      "trigger": "team approve --show"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.answer",
-      "meaning": "the answer was not the number of seats",
-      "trigger": "team approve --confirm"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.check",
-      "meaning": "an approved check cannot be resolved",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.delegate",
-      "meaning": "the caller is neither the owner nor the approved delegate",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.delegate-approval",
-      "meaning": "delegation needs a verified approval",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.delegate-approved-copy",
-      "meaning": "delegation needs a readable approved copy",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.delegate-command",
-      "meaning": "the approved delegate may not run `approve`",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.delegate-evidence",
-      "meaning": "delegation cannot verify its placement or seats",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.delegate-flag",
-      "meaning": "a flag of the owner's was passed to the approved delegate",
-      "trigger": "team approve --file <path>"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.delegate-not-ordinary",
-      "meaning": "the change moves an owner section a delegate may not: it needs the owner",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.delegate-placement",
-      "meaning": "the approved delegate must be an external non-seat pane",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.detached",
-      "meaning": "a run with no terminal",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.grant-another-pane",
-      "meaning": "the granted seat is not on its recorded pane",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.grant-approval",
-      "meaning": "a grant needs a verified approval",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.grant-approved-copy",
-      "meaning": "a grant needs a readable approved copy",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.grant-caller",
-      "meaning": "only the seat the grant names runs this",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.grant-flag",
-      "meaning": "a granted seat cannot aim --file",
-      "trigger": "team approve --file other"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.grant-no-pane",
-      "meaning": "no pane is recorded for the granted seat",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.grant-not-ordinary",
-      "meaning": "this change needs the owner",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.grant-scope",
-      "meaning": "the grant does not list approve",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.input-unreadable",
-      "meaning": "the terminal could not be read to check for input waiting",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.input-waiting",
-      "meaning": "input was waiting on the terminal",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.key",
-      "meaning": "the signing key can't be read",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.key-changed",
-      "meaning": "the signing key changed while the file was being approved",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.not-owner",
-      "meaning": "a seat ran it",
-      "trigger": "team approve"
-    },
-    {
-      "code": 1,
-      "command": "approve",
-      "id": "approve.store",
-      "meaning": "the approval store sits where seats work",
-      "trigger": "team approve"
-    },
-    {
-      "code": 2,
-      "command": "approve",
-      "id": "approve.file",
-      "meaning": "the team file can't be read",
-      "trigger": "team approve --file missing.yaml"
-    },
-    {
-      "code": 2,
-      "command": "approve",
-      "id": "approve.file-invalid",
-      "meaning": "the team file can't be parsed",
-      "trigger": "team approve --file team.yaml"
-    },
-    {
-      "code": 2,
-      "command": "approve",
-      "id": "approve.invocation",
-      "meaning": "the invocation can't be read",
-      "trigger": "team approve extra"
-    },
-    {
-      "code": 2,
-      "command": "approve",
-      "id": "approve.not-a-repo",
-      "meaning": "not inside a git repository",
-      "trigger": "team approve"
-    },
-    {
-      "code": 2,
-      "command": "approve",
-      "id": "approve.overrides",
-      "meaning": "the overrides file can't be parsed",
-      "trigger": "team approve"
-    },
-    {
-      "code": 2,
-      "command": "approve",
-      "id": "approve.placed",
-      "meaning": "a path would trust the project's parent",
-      "trigger": "team approve"
-    },
-    {
-      "code": 2,
-      "command": "approve",
-      "id": "approve.revalidate",
-      "meaning": "the file does not validate",
-      "trigger": "team approve"
-    },
-    {
-      "code": 0,
       "command": "ask-show",
       "id": "ask-show.shown",
       "meaning": "the question is printed",
@@ -2712,6 +2474,62 @@
     },
     {
       "code": 0,
+      "command": "tempo",
+      "id": "tempo.set",
+      "meaning": "the tempo was written",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 0,
+      "command": "tempo",
+      "id": "tempo.unchanged",
+      "meaning": "the tempo was already that word",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 1,
+      "command": "tempo",
+      "id": "tempo.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 1,
+      "command": "tempo",
+      "id": "tempo.not-owner",
+      "meaning": "not the owner",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 2,
+      "command": "tempo",
+      "id": "tempo.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 2,
+      "command": "tempo",
+      "id": "tempo.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team tempo"
+    },
+    {
+      "code": 2,
+      "command": "tempo",
+      "id": "tempo.not-a-repo",
+      "meaning": "not inside a git repository",
+      "trigger": "team tempo urgent"
+    },
+    {
+      "code": 2,
+      "command": "tempo",
+      "id": "tempo.word",
+      "meaning": "the word is not a tempo",
+      "trigger": "team tempo faster"
+    },
+    {
+      "code": 0,
       "command": "unlock",
       "id": "unlock.released",
       "meaning": "the lock was released",
@@ -2846,6 +2664,13 @@
     {
       "code": 1,
       "command": "up",
+      "id": "up.deny",
+      "meaning": "deny",
+      "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
       "id": "up.detached",
       "meaning": "a run with no terminal",
       "trigger": "team up --session elsewhere"
@@ -2959,7 +2784,7 @@
       "code": 1,
       "command": "up",
       "id": "up.not-owner",
-      "meaning": "only the owner runs up",
+      "meaning": "deny",
       "trigger": "team up"
     },
     {
@@ -3106,7 +2931,7 @@
       "code": 1,
       "command": "watch",
       "id": "watch.watchdog",
-      "meaning": "only the recorded watchdog pane may read the file up recorded",
+      "meaning": "only the recorded watch may read the file up recorded",
       "trigger": "team watch --session acme"
     },
     {

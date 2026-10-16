@@ -5,7 +5,8 @@ import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
-import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
+import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } from '../file/sections/lead.ts';
+import { usesLauncher } from '../launch/line.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { readScreen } from '../watch/screen.ts';
 import { modelDiffers, seatModel } from './statusline.ts';
@@ -149,11 +150,21 @@ export function compare(
       if (continuity !== 'restored' && (verdict === 'gone' || verdict === 'replaced')) {
         const found = verdict === 'gone'
           ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
-          : cannotTie(seat, agent.pane, live.screens[agent.pane]);
+          : cannotTie(seat, agent.pane, live.screens[agent.pane], team);
         rows.push({ ...found.row, ...idField });
         differences.push(found.difference);
         if (found.note) notes.push(found.note);
         continue;
+      }
+      // The conversation came back without the program the launch line names. Said here; the
+      // seat is still the running one, and nothing in this report starts it.
+      if (continuity === 'restored' && usesLauncher(seat)) {
+        differences.push({
+          what: `${seat.name}: its launch line starts a launcher, and the process in its pane is not the one team launched`,
+          repair: seatRestartRepair(team, seat.name),
+          needs: 'approve',
+          owner: true,
+        });
       }
       // A ready seat with no identity is not relaunched by `up` when its model differs. A seat
       // still at launch is: `up` finishes it, so that repair stays `team up`. A bare shell is
@@ -199,6 +210,7 @@ export function compare(
       // watch's unsent check covers both (`pass.ts`). The report reads them the same way.
       const quiet = agent.status === 'idle' || agent.status === 'done';
       const isUnsent = quiet && screen.kind === 'unsent';
+      const isPermission = screen.kind === 'permission' || screen.kind === 'trust';
       // A quiet seat on a screen no profile reads: herdr's word alone would show a bare done (the
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
@@ -246,6 +258,13 @@ export function compare(
           });
         }
       }
+      if (isPermission) {
+        differences.push({
+          what: `${seat.name} waits at a permission prompt: its owner's to answer`,
+          repair: 'the owner answers it in the pane',
+          owner: true,
+        });
+      }
       if (recorded?.rules === 'undelivered') {
         differences.push({
           what: `${seat.name}: its rules were not delivered`,
@@ -283,7 +302,7 @@ export function compare(
     }
     if (held && verdict === 'replaced') {
       claimed.add(held);
-      const found = cannotTie(seat, held, live.screens[held]);
+      const found = cannotTie(seat, held, live.screens[held], team);
       rows.push({ ...found.row, ...idField });
       differences.push(found.difference);
       if (found.note) notes.push(found.note);
@@ -382,7 +401,8 @@ export function compare(
       // nothing, and the suffix is true then too.
       const likeCli = likeSeat?.cli ?? '';
       const quiet = agent.status === 'idle' || agent.status === 'done';
-      const unread = quiet && readScreen(likeCli, live.screens[agent.pane]).kind === 'unknown';
+      const tempScreen = readScreen(likeCli, live.screens[agent.pane]);
+      const unread = quiet && tempScreen.kind === 'unknown';
       rows.push({
         name,
         ...idField,
@@ -391,6 +411,13 @@ export function compare(
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
       });
+      if (tempScreen.kind === 'permission' || tempScreen.kind === 'trust') {
+        differences.push({
+          what: `${name} waits at a permission prompt: its owner's to answer`,
+          repair: 'the owner answers it in the pane',
+          owner: true,
+        });
+      }
       notes.push(`${name} is temporary, until ${recorded.temporary.until}`);
     } else {
       differences.push({ what: `${name}: a temporary seat is recorded and is not running`, repair: `team remove ${name}` });
@@ -436,23 +463,59 @@ function cannotTie(
   seat: Seat,
   pane: string,
   screen: string | undefined,
+  team: TeamFile,
 ): { row: Row; difference: Difference; note?: string } {
   const running = seatModel(seat, screen);
+  const launcher = usesLauncher(seat);
+  const shown = running
+    ? `${seat.name}: its pane runs ${running.model} ${running.version}; that process is not the one team launched`
+    : undefined;
+  const differs = running !== null && modelDiffers(running, seat);
+  const row: Row = {
+    name: seat.name,
+    state: 'restored, not launched by team',
+    model: '-',
+    pane,
+  };
+  // A model that is not the file's, or a launch line that names a launcher, is the report.
+  // The row stays `-`: the declared model is not shown as the one running. Nothing starts the seat.
+  if (differs || launcher) {
+    return {
+      row,
+      difference: {
+        what: restoredProcessWhat(seat, running, launcher),
+        repair: seatRestartRepair(team, seat.name),
+        needs: 'approve',
+        owner: true,
+      },
+    };
+  }
   return {
-    row: {
-      name: seat.name,
-      state: 'restored, not launched by team',
-      model: '-',
-      pane,
-    },
+    row,
     difference: {
       what: `${seat.name}: its pane holds a process this record cannot tie to the launch`,
       repair: 'look at the pane',
     },
-    ...(running
-      ? { note: `${seat.name}: its pane runs ${running.model} ${running.version}; that process is not the one team launched` }
-      : {}),
+    ...(shown ? { note: shown } : {}),
   };
+}
+
+/** What a pane team did not launch is doing: a model that is not the file's, a launcher the
+ *  process is not, or both. */
+function restoredProcessWhat(
+  seat: Seat,
+  running: { model: string; version: string } | null,
+  launcher: boolean,
+): string {
+  const tail = 'the process in its pane is not the one team launched';
+  const differs = running !== null && modelDiffers(running, seat);
+  if (differs && running && launcher) {
+    return `${seat.name} runs ${running.model} ${running.version}; the file says ${declaredModel(seat)}; its launch line starts a launcher; ${tail}`;
+  }
+  if (differs && running) {
+    return `${seat.name} runs ${running.model} ${running.version}; the file says ${declaredModel(seat)}; ${tail}`;
+  }
+  return `${seat.name}: its launch line starts a launcher, and ${tail}`;
 }
 
 function notLaunched(

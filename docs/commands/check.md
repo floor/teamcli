@@ -35,7 +35,7 @@ refusal every command gives them and exit 1.
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | nothing needs acting on | `team check: nothing wrong`, over the line naming what the check cannot see: `not known: work sent and unread, a lead waiting on a seat, a landing not recorded` | 0 |
-| something needs acting on | one `difference:` line per finding with its `  repair:` line under it, then `team check: <n> difference(s), <n> for the owner` | 1 |
+| something needs acting on | one `difference:` line per finding with its `  repair:` line under it, then `team check: <n> difference(s)`, and `, <n> for the owner` when any finding is the owner's | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | the check can't run (the loader's, the state's or herdr's own text), the invocation can't be read, or the caller may not check this team | `team check: <problem>`, or the one fixed sentence | 2 |
 

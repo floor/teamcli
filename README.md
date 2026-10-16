@@ -264,6 +264,7 @@ check, and this build acts on what the commands below read.
 | `team list` | lists the herdr sessions on this machine, running ones by default; `--all` includes stopped sessions; `--json` prints a stable array, empty when there is nothing; an orphan session and an unreadable seat do not fail it | anyone, from any folder; read only |
 | `team up` / `team down` | starts / stops the session and its seats | `up`: the owner; `down`: the owner, the coordinator or the operator seat |
 | `team watch` | watches the session, reports idle seats and nudges the operator; `--no-nudge` and `--no-notify` are the owner's and do not silence a report addressed to the owner | anyone, one per session; it types only a fixed line into an empty idle prompt: the report nudge, or `Team: run team messages` when a message is already waiting |
+| `team tempo <word>` | sets the team's tempo to relaxed, normal or urgent, which scales the watch's idle and nudge waits; normal is the file with the key omitted | the owner |
 | `team messages` | verifies a message that is already waiting, prints its body and writes the receipt; no command writes a message record — `team send` writes to a seat's cross-session socket, not to this mailbox — and a report still leaves as the watch's nudge | anyone |
 | `team send` | writes one message to one seat, confirming `delivered`, `answered`, `timeout`, `unreachable` or `refused`. A Claude Code seat takes a frame on the cross-session socket; a native CLI (codex, cursor, grok, antigravity) gets the body in a mode-0600 drop file and one short trigger, and `delivered` means herdr reported the seat working. `--wait [--timeout <s>]` blocks for a Claude Code seat's reply (120 seconds by default) and is refused for a native seat. `--json` prints one result document, `--file` reads the body from a file, `--dry-run` names the channel, writes no drop file, and types nothing (it appends one team.log line), and `--list` prints the addressable seats and sends nothing. Broadcast is not in this build | the owner, or the coordinator from its own seat (`--list`: anyone) |
 | `team issues` | lists the typed records in the one file the team file names. The source is a file the owner committed. A broker source is read by `team next`, never from here: this command connects to no broker, holds no tracker credential, and has no seat gate. The broker runs as the same OS principal as the seat: that is integrity, not authenticity, and this command does not isolate anything. `title` and `description` are the owner's text. They are not scrubbed. The list is file order. A priority is shown and does not reorder. A listing is not a claim and not the intake rule. `team plan` prints the takeable queue and claims nothing. `repos` and `needs` are shown when the file has them. They are not a grant, and they are not checked. The watch's ring is unchanged: `Team: run team messages` | anyone |
@@ -278,7 +279,9 @@ check, and this build acts on what the commands below read.
 
 Each command has its own page in [docs/commands](https://github.com/floor/teamcli/tree/main/docs/commands): the synopsis, what it reads and
 writes, who may run it, every flag, the refusals with their exact text, the exit codes, and examples
-that `bun run ci` runs against a fixture team.
+that `bun run ci` runs against a fixture team. [herdr as a team uses
+it](https://github.com/floor/teamcli/blob/main/docs/reference/herdr.md) — the session, the
+workspaces and panes a team lives in, and the two names a seat shows — is the reference beside them.
 
 The owner is a terminal outside herdr with no agent process above it. `approve` and `up` read the
 processes above the call and refuse a seat — or a script a seat runs — that makes it: a guard
