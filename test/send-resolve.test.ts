@@ -16,6 +16,7 @@ import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, senderHeader } from '../src/send/admit.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { isRegistrySpec, resolveTarget, type LiveAgent } from '../src/send/resolve.ts';
+import { updateState } from '../src/state.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 const OWNER = { kind: 'owner' as const };
@@ -90,6 +91,14 @@ function agent(home: string, init: { name: string; role: string; cli: string; te
 
 function team(home: string, id: string, project: string, session: string, root: string, roster: { agent: string; seat: string; role: string }[]): void {
   upsertTeam(home, id, { project, entity: project, session, root, lobby: join(home, 'lobby'), roster, lifecycle: 'running' });
+}
+
+/** The state record `up` leaves for a launched seat: the pane herdr placed it on. The placement
+ *  check reads this, so a caller judged as the file's declared seat is placed here. */
+function place(root: string, session: string, seat: string, pane: string): void {
+  updateState(join(root, '.agents'), (state) => {
+    state.sessions[session] = { seats: { [seat]: { stage: 'launched', pane, workspace: 'w1' } }, worktrees: {} };
+  });
 }
 
 /** The rule the real admission returns for this target: what the drop's header must carry. */
@@ -366,7 +375,9 @@ describe('the whole command on a registry-resolved spec', () => {
     team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: target.id, seat: 'builder-1', role: 'builder' }]);
     const builderPane = scripted(['idle', 'working']);
     const host = sendHost(alpha, 'alpha', { lead: { pane: 'pane-alpha-lead', paneStatus: scripted(['idle']) }, 'builder-1': { pane: 'pane-builder', paneStatus: builderPane } });
-    // The caller stands on the orchestrator's pane, and has no agent record of its own.
+    // The state records the caller on the orchestrator's pane — the placement the declared
+    // judgement asks — and it has no agent record of its own.
+    place(alpha.root, 'alpha', 'lead', 'pane-alpha-lead');
     const caller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-alpha-lead', session: 'alpha' };
     const io = testIo(alpha.root, caller);
 
@@ -390,6 +401,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const host = sendHost(beta, 'beta', { chief: { pane: 'pane-beta-chief', paneStatus: chiefPane } });
     // A record-less caller is judged as the file's seat for its own team's rules only: another
     // team's seat is out of the declared identity's reach until a record exists for it.
+    place(alpha.root, 'alpha', 'lead', 'pane-alpha-lead');
     const io = testIo(alpha.root, { kind: 'seat', name: 'lead', pane: 'pane-alpha-lead', session: 'alpha' });
 
     const code = await runSend([chief.id, BODY], io, host);

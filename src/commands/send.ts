@@ -222,18 +222,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // The authority rule, `admitSend` over the registry's records, default deny, judging the
   // resolved target when there is one. A sender the store holds no record for is judged as the
   // seat the live file declares for it: this team's rules alone reach it — a target in another
-  // team, and the grant store, both wait for the record `team up` writes. The declared-seat path
-  // checks placement first — the owner, or a seat on the pane the state records for it, the same
-  // verdict `answer` asks, with the two repairable refusals it can name — and judges the seat the
-  // caller's team was asked for; a registry-resolved send is bound to its caller's agent record
-  // instead, and needs no pane in the state. All of it runs before the message is read and before
-  // any seat is probed.
+  // team, and the grant store, both wait for the record `team up` writes. That declared judgement
+  // asks placement first, whatever the spec resolved to — the owner, or a seat on the pane the
+  // state records for it, in the session judged, the same verdict `answer` asks, with the two
+  // repairable refusals it can name — so the seat is judged only where the state records it
+  // standing; a registry-resolved send by a sender the store does hold a record for is bound to
+  // that record instead, and needs no pane in the state. All of it runs before the message is
+  // read and before any seat is probed.
+  const standing = standingOf(dir, judged.session, caller);
   let to: Aim;
   let admission: Admission;
   if (hit === null) {
-    const placement = placementProblemOf(caller, standingOf(dir, judged.session, caller));
+    const placement = placementProblemOf(caller, standing);
     if (placement) return refuse(io, dir, who, placement, host, report);
-    admission = admissionOf(caller, team, null, seatName, host.home, fileTeamId, () => host.now());
+    admission = admissionOf(caller, team, null, seatName, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
     const configured = team.seats.find((seat) => seat.name === seatName);
     if (!configured) {
@@ -241,7 +243,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     to = { seat: seatName, session: team.session, cli: configured.cli, pane: null, address: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now());
+    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
     // A resolved spec is addressed by its record: its pane, its session and its CLI, under the
     // receiving team's own folder; across teams this run's daemon is skipped, so the send is
@@ -718,6 +720,23 @@ function placementProblemOf(caller: Caller, at?: SeatStanding): string | null {
   return null;
 }
 
+/**
+ * Why a caller judged as the file's declared seat does not pass the placement check: the two pane
+ * reasons above, and the session — a call placed in another session than the one the seat is
+ * judged in, or carrying none, is not that seat. The placement check is a precondition of the
+ * declared judgement, so it is asked wherever that judgement is reached, and this is the one
+ * place the refusal for a session the caller is not placed in is written.
+ */
+function declaredPlacementProblem(caller: Caller, name: string, at: SeatStanding): string | null {
+  const verdict = callerVerdict(caller, name, at);
+  if (verdict.kind === 'no-pane') return noPaneRefusal(verdict.name);
+  if (verdict.kind === 'another-pane') return anotherPaneRefusal(verdict.name, verdict.recordedPane);
+  if (verdict.kind === 'refused') {
+    return `seat ${name} stands in session ${at.session}, and this call is not placed in it: a caller of another session is not that seat`;
+  }
+  return null;
+}
+
 /** Why the send is admitted, and the rule that admitted it — or why it is not. */
 type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'owner' } | { ok: false; why: string };
 
@@ -730,11 +749,13 @@ type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'own
  * addressing crosses teams.
  *
  * A caller the store holds no record for is judged as the seat the live file declares, when the
- * file declares it and the caller is a placed seat: the bootstrap case, where a team that has
- * never been registered talks to itself before any record exists. That judgement reaches only
- * its own team — the declared seat has no id to carry across teams — and it is never granted:
- * a grant names a record's identity. A caller the file does not declare, and any send that
- * would leave the file's team, stays refused with the commands that write the record.
+ * file declares it and the caller stands where the state records that seat — its pane, in the
+ * session judged: the bootstrap case, where a team that has never been registered talks to itself
+ * before any record exists. A caller the file declares but the state does not record standing is
+ * refused by the placement check, with the two repairs the state can name. That judgement reaches
+ * only its own team — the declared seat has no id to carry across teams — and it is never
+ * granted: a grant names a record's identity. A caller the file does not declare, and any send
+ * that would leave the file's team, stays refused with the commands that write the record.
  *
  * The last rule is read only once the registry's own rules have refused: the owner's send-grants
  * folder, and, only when it holds a record, the clock that decides expiry — the same order `up`
@@ -750,12 +771,20 @@ function admissionOf(
   home: string,
   fileTeamId: string,
   now: () => Date,
+  at: SeatStanding,
 ): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
   const record = recordFor(home, team.session, caller.kind === 'seat' ? caller.name : '');
   const declared = record === null ? declaredSenderOf(caller, team, fileTeamId) : null;
   const sender = record ?? declared;
   if (sender === null) return { ok: false, why: noAgentRecord(caller, declared) };
+  // The declared seat is a reading of the caller, not a record: it is judged as that seat only
+  // where the state records the seat standing. The declared-target path asks this up front; asked
+  // here too, a resolved spec asks it whatever the target's record state.
+  if (declared !== null) {
+    const placement = declaredPlacementProblem(caller, declared.seat, at);
+    if (placement !== null) return { ok: false, why: placement };
+  }
   // The team the sender's own rules are read in: the record's own team, or, for a declared
   // sender, the live file's.
   const ownTeam = record === null ? fileTeamId : record.reach.team;
@@ -795,8 +824,9 @@ function noAgentRecord(caller: Caller, declared: DeclaredSender | null): string 
 }
 
 /** The seat the live file declares for a caller the store holds no record for: its own name, the
- *  file's team id, and the role the file gives it. Null for a caller that is not a placed seat,
- *  or a name the file does not declare. */
+ *  file's team id, and the role the file gives it. Null for a caller that is not a seat, or a
+ *  name the file does not declare; whether the caller stands where the state records that seat is
+ *  asked beside this judgement, never read from the name alone. */
 function declaredSenderOf(caller: Caller, team: TeamFile, fileTeamId: string): DeclaredSender | null {
   if (caller.kind !== 'seat') return null;
   const seat = team.seats.find((one) => one.name === caller.name);
