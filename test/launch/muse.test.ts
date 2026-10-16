@@ -219,6 +219,9 @@ describe('the plan launches muse and delivers its rules as the first message', (
       command: 'AGENT_UNATTENDED=1 muse --model muse-wonder-1.0 --yolo',
     });
     expect(plan.find((step) => step.do?.do === 'idle')?.do).toMatchObject({ do: 'idle', cli: 'muse', seconds: 90 });
+    // The naming step carries the CLI: herdr's agent list never names a Muse pane, so the seat is
+    // adopted off the profile's process names alone (test/launch/adopt-by-process.test.ts).
+    expect(plan.find((step) => step.do?.do === 'rename')?.do).toMatchObject({ do: 'rename', cli: 'muse' });
     expect(plan.find((step) => step.do?.do === 'deliver')?.do).toMatchObject({
       do: 'deliver',
       seat: 'muse',

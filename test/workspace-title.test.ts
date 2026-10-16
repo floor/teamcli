@@ -162,7 +162,7 @@ describe('the pane display', () => {
     const repair = '`team down` then `team up` (to restart the whole team)';
     const steps: Step[] = [
       { kind: 'run', argv: [], do: { do: 'create', seat: 'lead', label: 'Priam · coordinator', cwd: '/work', repairLine: repair } },
-      { kind: 'run', argv: [], do: { do: 'rename', seat: 'lead', label: 'Priam · coordinator', seconds: 1, rules: 'message', displayAgent: 'Claude Opus 5.5 high' } },
+      { kind: 'run', argv: [], do: { do: 'rename', seat: 'lead', label: 'Priam · coordinator', seconds: 1, rules: 'message', cli: 'claude', displayAgent: 'Claude Opus 5.5 high' } },
       { kind: 'run', argv: [], do: { do: 'launch', seat: 'lead', label: 'Priam · coordinator', command: 'claude' } },
     ];
     await executePlan(steps, 'acme', host);

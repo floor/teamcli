@@ -1,4 +1,5 @@
 import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
+import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, versionVerdict } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, seatModel, type Running } from '../status/statusline.ts';
@@ -88,6 +89,10 @@ export type Host = {
   shellBack?(session: string, pane: string): boolean | null;
   /** The pane's process identity, read to record it for the seat; null when herdr can't tell. */
   processInfo?(session: string, pane: string): PaneProcesses | null;
+  /** The pane's foreground programs' argv0, in herdr's order; null when the pane can't be read.
+   *  The second reading the naming step takes: herdr's agent list is asked first, and this is
+   *  what stands in for it when the list does not name the pane. */
+  foreground?(session: string, pane: string): string[] | null;
   sleep(ms: number): Promise<void>;
   now(): number;
   /** Null when this seat may launch. A string is the reason it may not. */
@@ -1036,11 +1041,19 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'has no pane to name; left at launched' });
           break;
         }
+        // The list, or the pane's own foreground process. herdr names an agent only for a CLI
+        // whose process it knows: Muse execs `muse-bin-<version>-<build>`, so its pane is never in
+        // the list, and waiting only on the list left every Muse seat at launched. A pane whose
+        // foreground is the launched CLI is the seat's own — that is the same reading the rules
+        // delivery and the exit key use — and `agent rename` takes it from there: on a pane the
+        // list does not name it answers with the agent it has just registered.
+        const names = profileFor(op.cli)?.processNames ?? [];
         const seen = await until(
           op.seconds,
           2000,
           host,
-          () => host.agentPanes(session)?.includes(here.pane) === true,
+          () => host.agentPanes(session)?.includes(here.pane) === true
+            || reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, names),
           sharedSleep,
           () => stopped,
         );

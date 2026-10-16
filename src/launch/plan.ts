@@ -68,6 +68,10 @@ export type Op =
       label: string;
       seconds: number;
       rules: 'option' | 'message';
+      /** The seat's CLI. The naming step's second reading of the pane: a foreground process
+       *  matching this profile's process names is the seat's own, even when herdr's agent list
+       *  does not name the pane. */
+      cli: string;
       pane?: string;
       /** Sidebar line 2, reported once this rename has named the seat. A failure is one line. */
       displayAgent?: string;
@@ -599,6 +603,7 @@ export function upPlan(input: UpInput): Step[] {
           label: seat.label,
           seconds: profile.idleTimeout,
           rules,
+          cli: seat.cli,
           pane: seat.pane,
           ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
         },

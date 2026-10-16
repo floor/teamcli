@@ -32,7 +32,7 @@ function seatSteps(name: string, cli: 'claude-code' | 'codex', seconds = 90): St
     {
       kind: 'run',
       argv: [],
-      do: { do: 'rename', seat: name, label: name, seconds, rules },
+      do: { do: 'rename', seat: name, label: name, seconds, rules, cli },
     },
   ];
   if (rules === 'message') {
