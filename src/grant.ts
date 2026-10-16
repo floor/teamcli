@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { approvedFingerprints, notInForce } from './approve/approval.ts';
 import { compare, describe, fingerprints } from './approve/fingerprint.ts';
-import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf } from './caller.ts';
+import { anotherPaneRefusal, callerAncestors, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf } from './caller.ts';
 import { ORDINARY_SECTIONS } from './delegate.ts';
 import { loadTeamFile } from './file/load.ts';
 import type { GrantScope, LoadResult, TeamFile } from './file/types.ts';
@@ -28,6 +28,8 @@ export type EntityCreateGrant = {
   session: string | null;
   paths: string[];
   expires: string;
+  /** Process names one of a caller's parent processes may carry for it to be admitted outside herdr; empty when the record names none. */
+  runners: string[];
 };
 
 const UNSAFE_PATH_CHARS = /[*?[\]{}\x00-\x1f\x7f`]/;
@@ -107,12 +109,21 @@ export function readEntityCreateGrants(home: string = homedir()): EntityCreateGr
       if (typeof rawExpires !== 'string' || rawExpires.trim() === '') continue;
       const expires = rawExpires.trim();
       if (!Number.isFinite(Date.parse(expires))) continue;
-      out.push({ entity, agent, session, paths, expires });
+      out.push({ entity, agent, session, paths, expires, runners: runnersOf(record) });
     } catch {
       continue;
     }
   }
   return out;
+}
+
+/** The record's `runner` (one name) or `runners` (a list of names); anything else names none. */
+function runnersOf(record: Record<string, unknown>): string[] {
+  if (typeof record.runner === 'string' && record.runner.trim() !== '') return [record.runner.trim()];
+  if (Array.isArray(record.runners) && record.runners.length > 0 && record.runners.every((item) => typeof item === 'string' && item.trim() !== '')) {
+    return (record.runners as string[]).map((item) => item.trim());
+  }
+  return [];
 }
 
 function grantMatchesCaller(
@@ -130,7 +141,13 @@ function grantMatchesCaller(
   if (caller.kind === 'pane') {
     return grant.session !== null && caller.session === grant.session && caller.pane === grant.agent;
   }
-  return false;
+  // Outside herdr: the holder's own runner, named by a parent process. A caller under herdr, and
+  // the owner at a terminal, are never matched this way.
+  const outside = caller.kind === 'owner-no-tty' || (caller.kind === 'unplaced' && caller.reason !== 'it runs under herdr');
+  if (!outside || grant.runners.length === 0) return false;
+  const ancestors = callerAncestors(io);
+  if (!ancestors || ancestors.some((process) => process.name === 'herdr')) return false;
+  return ancestors.some((process) => grant.runners.includes(process.name));
 }
 
 function hasDotTraversal(raw: string): boolean {
