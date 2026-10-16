@@ -10,6 +10,7 @@ import { launchedTeamFile } from '../file/launched-file.ts';
 import { findRoot, loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { noteTeam } from '../registry/teams.ts';
+import { registerEnd, registerSessionEnd } from '../registry/sync.ts';
 import {
   agentList,
   agentStatus,
@@ -621,6 +622,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     const unrecorded = noteTeam(sources.home, root, team, 'stopped', describeCaller(caller));
     if (unrecorded) io.stderr(`team down: ${unrecorded}\n`);
   };
+  // A session found already stopped has no agent left in it: the registry's agents that were
+  // launched there are stopped, with their panes cleared. A seat closed by the run below is
+  // ended one by one as it is dropped, so a seat left running is never marked stopped.
+  const noteSessionEmpty = (): void => {
+    if (dry || callerRefused || abandonRefused || sources.home === undefined) return;
+    const unrecorded = registerSessionEnd({ home: sources.home, team, root, by: describeCaller(caller), session });
+    if (unrecorded) io.stderr(`team down: ${unrecorded.note}\n`);
+  };
 
   const running = sources.sessionRunning(session);
   if (running === null) {
@@ -633,6 +642,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     io.stdout(`session ${session} is not running: nothing to stop${dry ? '\ndry run: nothing was run' : ''}\n`);
     remember();
     noteStopped();
+    noteSessionEmpty();
     // exit: down.idle
     return 0;
   }
@@ -985,10 +995,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       running() {},
       drop(name) {
         let pane: string | undefined;
+        let temporaryDropped = false;
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[name];
           pane = prior?.pane;
+          temporaryDropped = Boolean(prior?.temporary);
           if (prior?.id && !prior.temporary) {
             (current.retained_seats ??= {})[name] = {
               id: prior.id,
@@ -998,6 +1010,15 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           delete current.seats[name];
         });
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
+        // The registry: the seat's agent ends with its pane. A temporary seat is gone for good.
+        if (sources.home !== undefined) {
+          const ended = registerEnd(
+            { home: sources.home, team, root, by: describeCaller(caller), session },
+            name,
+            temporaryDropped ? 'retired' : 'stopped',
+          );
+          if (ended) io.stderr(`team down: ${ended.note}\n`);
+        }
       },
       say: (line) => io.stdout(line),
       log: (who, what) => logLine(dir, 'down', describeCaller(caller), `${who}: ${what}`, now()),

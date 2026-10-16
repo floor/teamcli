@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DoctorSources } from '../src/commands/doctor.ts';
-import type { DownLaunch } from '../src/commands/down.ts';
+import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
 import { registerEnd, registerLaunch, registerRun, type RegistryTeam } from '../src/registry/sync.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import type { Launch } from '../src/commands/up.ts';
@@ -283,6 +283,120 @@ describe('the session the command launched in is the session the registry addres
     const agent = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })!;
     expect(agent.reach).toMatchObject({ session: 'alternate', pane: 'pane-new' });
     expect(getTeam(fixture.home, teamIdOf(fixture.root))?.session).toBe('alternate');
+  });
+});
+
+describe('team down ends the agents it stops', () => {
+  const NAMES = ['lead', 'worker'] as const;
+
+  function downSources(fixture: Fixture, opts: { running: boolean }): { sources: DownSources; closed: string[] } {
+    const closed: string[] = [];
+    const alive = new Set<string>(opts.running ? NAMES : []);
+    const shelled = new Set<string>();
+    const boxes = new Map<string, string>();
+    const listed = (): HerdrAgent[] => NAMES.filter((name) => alive.has(name)).map((name) => ({
+      name, agent: 'claude-code', pane: `pane-${name}`, workspace: `ws-${name}`, status: 'idle', cwd: fixture.root,
+    }));
+    const launch: DownLaunch = {
+      typeText: (_session, pane, text) => { boxes.set(pane, claudeBox(text)); return true; },
+      sendKey: () => true,
+      pressEnter: (_session, pane) => { shelled.add(pane); return true; },
+      agentPanes: () => listed().map((agent) => agent.pane),
+      closeWorkspace(_session, workspace) {
+        closed.push(workspace);
+        alive.delete(workspace.replace('ws-', ''));
+        return true;
+      },
+      stopSession: () => true,
+      deleteSession: () => true,
+      kill: () => true,
+      sleep: async () => {},
+      now: () => NOW,
+    };
+    const sources: DownSources = {
+      home: fixture.home,
+      sessionRunning: () => opts.running,
+      agents: () => listed(),
+      alive: () => true,
+      screen: () => ({ kind: 'idle' }),
+      screenText: (_session, pane) => boxes.get(pane) ?? claudeBox(''),
+      status: () => 'idle',
+      foreground: (_session, pane) => (shelled.has(pane) ? ['zsh'] : ['claude']),
+      now: () => NOW,
+      sleep: async () => {},
+      launch,
+    };
+    return { sources, closed };
+  }
+
+  function registerBoth(fixture: Fixture, session?: string): { lead: string; worker: string } {
+    const input = { ...registryOf(fixture), ...(session ? { session } : {}) };
+    const seat = (name: string) => input.team.seats.find((item) => item.name === name)!;
+    return {
+      lead: (registerLaunch(input, seat('lead'), 'pane-lead') as { id: string }).id,
+      worker: (registerLaunch(input, seat('worker'), 'pane-worker') as { id: string }).id,
+    };
+  }
+
+  function seedState(fixture: Fixture): void {
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.launched_file = fixture.file;
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.worker = { stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker' };
+    });
+  }
+
+  test('acceptance: after up, down leaves the team and its roster agents stopped, with no pane', async () => {
+    const fixture = makeFixture();
+    const ids = registerBoth(fixture);
+    seedState(fixture);
+    const { sources, closed } = downSources(fixture, { running: true });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    const code = await runDown([], io, sources);
+    expect({ code, err: io.err }).toEqual({ code: 0, err: '' });
+    expect(io.out).toContain('worker: stopped');
+    expect(closed.sort()).toEqual(['ws-lead', 'ws-worker']);
+
+    expect(getTeam(fixture.home, teamIdOf(fixture.root))?.lifecycle).toBe('stopped');
+    for (const id of [ids.lead, ids.worker]) {
+      expect(getAgent(fixture.home, id)).toMatchObject({ lifecycle: 'stopped', reach: { pane: null } });
+    }
+    // The roster keeps both seats: the file still names them, and they come back as the same agents.
+    expect(getTeam(fixture.home, teamIdOf(fixture.root))?.roster.map((item) => item.agent).sort()).toEqual([ids.lead, ids.worker].sort());
+  });
+
+  test('a session found already dead stops the agents that were launched in it, and only those', async () => {
+    const fixture = makeFixture();
+    const ids = registerBoth(fixture);
+    const elsewhere = registerBoth(fixture, 'alternate');
+    // Same seats, same team, launched in another session: `registerLaunch` found the live agent
+    // and re-pointed it, so both sets are one pair of agents now living in `alternate`.
+    expect(elsewhere).toEqual(ids);
+    registerLaunch(registryOf(fixture), registryOf(fixture).team.seats.find((seat) => seat.name === 'lead')!, 'pane-lead');
+    const { sources } = downSources(fixture, { running: false });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runDown([], io, sources)).toBe(0);
+    expect(io.out).toContain('is not running: nothing to stop');
+
+    // `lead` is in the file's session again and is stopped; `worker` is in `alternate` and is left.
+    expect(getAgent(fixture.home, ids.lead)).toMatchObject({ lifecycle: 'stopped', reach: { pane: null } });
+    expect(getAgent(fixture.home, ids.worker)).toMatchObject({ lifecycle: 'running', reach: { session: 'alternate', pane: 'pane-worker' } });
+  });
+
+  test('a dry run, and a run given no home, end nothing', async () => {
+    const fixture = makeFixture();
+    const ids = registerBoth(fixture);
+    seedState(fixture);
+    const dry = downSources(fixture, { running: true });
+    expect(await runDown(['--dry-run'], testIo(fixture.root, { kind: 'owner' }), dry.sources)).toBe(0);
+    expect(getAgent(fixture.home, ids.lead)?.lifecycle).toBe('running');
+
+    const idle = downSources(fixture, { running: false });
+    const { home: _home, ...noHome } = idle.sources;
+    expect(await runDown([], testIo(fixture.root, { kind: 'owner' }), noHome)).toBe(0);
+    expect(getAgent(fixture.home, ids.lead)?.lifecycle).toBe('running');
+    expect(getAgent(fixture.home, ids.worker)?.lifecycle).toBe('running');
   });
 });
 
