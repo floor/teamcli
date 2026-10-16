@@ -1122,6 +1122,35 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "projects",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team projects [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -1607,6 +1636,12 @@
         },
         {
           "hidden": false,
+          "name": "--project",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -1623,7 +1658,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team status [--session <name>] [--file <path>] [--all] [--json]"
+        "team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]"
       ]
     },
     {

@@ -277,6 +277,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `proc.file-invalid` | `proc` | 2 | the team file can't be parsed | `team proc add build` |
 | `proc.invocation` | `proc` | 2 | the invocation can't be read | `team proc` |
 | `proc.not-yours` | `proc` | 2 | the caller may not read this team | `team proc list` |
+| `projects.listed` | `projects` | 0 | the projects are listed | `team projects` |
+| `projects.invocation` | `projects` | 2 | the invocation can't be read | `team projects extra` |
 | `register.already` | `register` | 0 | the seat is already recorded on that pane | `team register worker` |
 | `register.dry-run` | `register` | 0 | the seat would be registered; nothing was written | `team register worker --dry-run` |
 | `register.ready` | `register` | 0 | the running seat's record was written | `team register worker` |
@@ -410,8 +412,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.configuration` | `send` | 2 | the team file can't be read | `team send worker hello --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
+| `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |
 | `status.file-owner` | `status` | 1 | --file is the owner's | `team status --file .agents/team.yaml` |
+| `status.project-unknown` | `status` | 1 | no project is named that | `team status --project nope` |
 | `status.session-owner` | `status` | 1 | --session is the owner's | `team status --session team` |
 | `status.file` | `status` | 2 | the team file can't be read | `team status --file missing.yaml` |
 | `status.file-invalid` | `status` | 2 | the team file can't be parsed | `team status --file team.yaml` |

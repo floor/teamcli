@@ -39,6 +39,7 @@ import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
 import { runProc, type ProcSources } from '../src/commands/proc.ts';
+import { runProjects, type ProjectSources, type ProjectView } from '../src/commands/projects.ts';
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
@@ -62,6 +63,7 @@ import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
 import type { Key, Terminal } from '../src/launch/terminal.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
+import { upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
@@ -389,6 +391,32 @@ function statusSources(live: Live | null, standing: Standing = { kind: 'none' })
     branch: () => 'main',
     standing: () => standing,
     now: () => NOW,
+  };
+}
+
+// The two teams of the fixture project, by team ID: the ID a team record is stored under and the
+// ID a project's own `teams` list names.
+const TEAM_A = '1a2b3c4d5e6f';
+const TEAM_B = '6f5e4d3c2b1a';
+
+const PROJECTS: ProjectView[] = [
+  {
+    id: '4f2a1b7c9d0e',
+    name: 'TeamCLI',
+    entity: 'floor',
+    lead: 'agt_2b9f',
+    teams: [TEAM_A, TEAM_B],
+    provenance: { registered_by: 'test', registered_at: NOW.toISOString(), updated_at: NOW.toISOString() },
+  },
+];
+
+/** The registry the project views read: one project of two teams, through the same three reads
+ *  the real sources bind to. */
+function projectSources(): ProjectSources {
+  return {
+    list: () => PROJECTS,
+    byName: (key) => PROJECTS.find((project) => project.name === key) ?? null,
+    ofTeam: (teamId) => PROJECTS.find((project) => project.teams.includes(teamId)) ?? null,
   };
 }
 
@@ -1657,6 +1685,39 @@ scene('status.not-yours', async (place) => {
   expect(ran.err).toBe('team status: this team is not yours to read\n');
   expect(ran.out).toBe('');
   return ran;
+});
+scene('status.project-listed', async (place) => {
+  // One of the project's two teams is registered; the other is not, and is said as such. The
+  // project path reads the registry wherever the run stands: no team file is written.
+  upsertTeam(place.home, TEAM_A, {
+    project: 'TeamCLI',
+    session: 'teamcli',
+    root: place.root,
+    roster: [{ agent: 'agt_1', seat: 'lead', role: 'coordinator' }],
+  });
+  const ran = await status(place, ['--project', 'TeamCLI'], { ...statusSources(quiet), projects: projectSources(), home: place.home });
+  expect(ran.out).toContain('project TeamCLI  4f2a1b7c9d0e');
+  expect(ran.out).toContain(`  ${TEAM_A}  session "teamcli"  defined  1 seat(s)`);
+  expect(ran.out).toContain(`  ${TEAM_B}  not registered`);
+  return show(ran, 'lead agt_2b9f');
+});
+scene('status.project-unknown', async (place) => show(
+  await status(place, ['--project', 'nope'], { ...statusSources(quiet), projects: projectSources(), home: place.home }),
+  'no project named "nope"',
+));
+
+async function projects(place: Place, argv: string[], sources: ProjectSources, caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runProjects(argv, io, sources), out: io.out, err: io.err };
+}
+
+scene('projects.invocation', async (place) => show(await projects(place, ['extra'], projectSources()), 'unexpected'));
+scene('projects.listed', async (place) => {
+  const ran = await projects(place, [], projectSources());
+  expect(ran.out).toContain('TeamCLI');
+  expect(ran.out).toContain(TEAM_A);
+  expect(ran.out).toContain(TEAM_B);
+  return show(ran, '4f2a1b7c9d0e');
 });
 
 async function seats(place: Place, argv: string[], sources: SeatsSources, caller: Caller = owner): Promise<Ran> {

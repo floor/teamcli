@@ -12,6 +12,7 @@ import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
+import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { liveSocketOf } from '../send/address.ts';
 import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
 import { readSendGrants } from '../send/grants.ts';
@@ -40,7 +41,8 @@ owner; an orchestrator to an orchestrator, in any teams; an assistant seat to it
 entity's coordinator; any seat to its own team's orchestrator; or an owner-signed
 grant naming send. The drop file's first line
 names the sender and the rule that admitted it. --list sends nothing: it prints
-the file's seats and needs no caller check. --dry-run resolves the seat and the
+the file's seats, each with the project its team sits in, and needs no caller
+check. --dry-run resolves the seat and the
 channel, writes no drop file, and types nothing. It appends one line to the team
 log.
 
@@ -98,6 +100,9 @@ export type SendHost = {
   native: NativePane;
   now(): Date;
   home: string;
+  /** The project registry, for the project each seat's team sits in. The real one when absent;
+   *  a test stands in for it. */
+  projects?: ProjectSources;
   /** Optional override for the per-project send daemon socket path. */
   daemonSocket?: string;
 };
@@ -120,6 +125,7 @@ export const realHost: SendHost = {
   },
   now: () => new Date(),
   home: homedir(),
+  projects: realProjectSources,
 };
 
 const send: Command = (argv, io) => runSend(argv, io, realHost);
@@ -584,14 +590,24 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return configuration(io, message || 'the team file cannot be read', report);
   }
-  const seats = loaded.team.seats.map((seat) => ({ name: seat.name, cli: seat.cli, role: seat.role, stopped: seat.stopped === true }));
+  // Phase 0b: every row carries the project its team sits in — the registry project whose teams
+  // name this team, else the team's own project name (a team the registry places in none is its
+  // own project).
+  const project = host.projects?.ofTeam(teamIdOf(loaded.root))?.name ?? loaded.team.project;
+  const seats = loaded.team.seats.map((seat) => ({
+    name: seat.name,
+    cli: seat.cli,
+    role: seat.role,
+    stopped: seat.stopped === true,
+    project,
+  }));
   if (report.json) {
     io.stdout(document({ seat: null, status: 'listed', exit: 0, ids: { sent: null, reply: null }, seats }));
   } else if (seats.length === 0) {
     io.stdout('(no seats)\n');
   } else {
     for (const seat of seats) {
-      io.stdout(`${seat.name}  ${seat.cli}  ${seat.role}${seat.stopped ? '  (stopped)' : ''}\n`);
+      io.stdout(`${seat.name}  ${seat.cli}  ${seat.role}  ${seat.project}${seat.stopped ? '  (stopped)' : ''}\n`);
     }
   }
   return 0; // exit: send.listed

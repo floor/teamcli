@@ -34,7 +34,7 @@ such line. `--json` carries the same reading as a `procs` array, absent when the
 
 ## Synopsis
 
-    team status [--session <name>] [--file <path>] [--all] [--json]
+    team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
 
 ## Flags
 
@@ -42,6 +42,7 @@ such line. `--json` carries the same reading as a `procs` array, absent when the
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
+| `--project` | `<name>` | cover the project the name holds — its teams, read from the registry — instead of one team's reading; anyone may aim it, from any folder |
 | `--all` | — | render the expanded seat registry columns (`SEAT`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `LAST ACTIVE`, `PANE`) and include those fields in `--json` rows |
 | `--json` | — | the same reading as one JSON document instead of the table, the notes and the repairs |
 | `--help`, `-h` | — | the usage, and exit 0 |
@@ -60,6 +61,11 @@ such line. `--json` carries the same reading as a `procs` array, absent when the
 this, from a terminal outside herdr` for a run with no terminal — and exit 1. And herdr has to
 answer once the caller has passed the gate: without it, `status` can't say anything and exits 2.
 
+`--project` is the exception to that gate: it reads the project level, out of the registry — no
+team file, no herdr, no caller check — the way [team projects](projects.md) reads. `--session`
+and `--file` name one team's readings and do not apply beside it: aiming them together is the
+invocation refusal, exit 2.
+
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |
@@ -67,6 +73,8 @@ answer once the caller has passed the gate: without it, `status` can't say anyth
 | no difference | the seats table, the `budgets:` table when the file names an account or a reading is stored, one `note:` line per note, then `0 difference(s)` | 0 |
 | at least one difference | the same, then one `difference:` line with its `  repair:` line under it per difference, and the count: `1 difference(s)`, or `2 difference(s), 1 for the owner` when a repair is the owner's | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
+| `--project` with a name no project holds | `team status: no project named "<name>"; nothing to show` | 1 |
+| `--project` covering a project | the project's name, id, entity and lead, then one line per team: its session, lifecycle and seat count, or `not registered` for a team no record holds | 0 |
 | the invocation or the team file can't be read, herdr doesn't answer, or the caller may not read this team | `team status: <problem>`, `team status: herdr doesn't answer; is it installed and running?`, or the one fixed sentence | 2 |
 
 `--json` prints the same reading as one document and nothing else, with the same exit code; a caller
@@ -190,6 +198,31 @@ budgets:
 difference: claude-keeper is in the file and is not running
   repair: team add claude-keeper
 1 difference(s)
+exit 1
+```
+
+`--project` covers the teams the registry lists under a project, wherever they run. A team no
+record holds reads as `not registered`; `--json` prints the project record and each team's
+reading as one document instead:
+
+```yaml file=../../.config/team/projects.yaml
+projects:
+  beacon:
+    name: Beacon
+    entity: acme
+    lead: null
+    teams: ["7a8b9c0d1e2f", "3d4e5f607182"]
+    provenance: { registered_by: team, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
+```
+
+```console
+$ team status --project Beacon ; echo "exit $?"
+project Beacon  beacon  entity acme  lead -
+  7a8b9c0d1e2f  not registered
+  3d4e5f607182  not registered
+exit 0
+$ team status --project nope ; echo "exit $?"
+team status: no project named "nope"; nothing to show
 exit 1
 ```
 

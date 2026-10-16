@@ -15,6 +15,7 @@ import type { RemoveSources } from '../../src/commands/remove.ts';
 import type { RegisterSources } from '../../src/commands/register.ts';
 import type { RestartSources } from '../../src/commands/restart.ts';
 import type { ListSources } from '../../src/commands/list.ts';
+import type { ProjectSources } from '../../src/commands/projects.ts';
 import type { StatusSources } from '../../src/commands/status.ts';
 import type { Launch, UpSources } from '../../src/commands/up.ts';
 import type { WatchSources } from '../../src/commands/watch.ts';
@@ -25,6 +26,7 @@ import type { HerdrAgent } from '../../src/herdr.ts';
 import type { Live } from '../../src/status/compare.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor } from '../../src/profiles/index.ts';
+import * as projectRegistry from '../../src/registry/projects.ts';
 import { readScreen } from '../../src/watch/screen.ts';
 import type { ScreenKind, Spec, ToolState } from './spec.ts';
 
@@ -33,6 +35,18 @@ export const WATCH_PID = 4242;
 
 /** The pid a `team watch` run in a page has: never the recorded one, as a person's is not. */
 export const RUN_WATCH_PID = 9001;
+
+/** The project registry's reads, bound to one home: what a page's `~/.config/team/projects.yaml`
+ *  holds. `team projects`, `team status --project` and `team send --list` read the fixture's own
+ *  registry file through this, so a page's `yaml file=../../.config/team/projects.yaml` fence is
+ *  the registry its examples are read against. */
+export function projectsAt(home: string): ProjectSources {
+  return {
+    list: () => projectRegistry.list(home),
+    byName: (name) => projectRegistry.byName(home, name),
+    ofTeam: (team) => projectRegistry.ofTeam(home, team),
+  };
+}
 
 /** One live agent, or a workspace herdr made before its agent started. */
 type Slot = {
@@ -695,6 +709,7 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         now,
         home,
         machine,
+        projects: projectsAt(home),
       };
     },
     listSources(): ListSources {
