@@ -309,7 +309,7 @@ function answerHost(): AnswerHost {
   };
 }
 
-const NEVER_APPROVED = 'the file was never approved on this machine: run `team approve`';
+const NEVER_APPROVED = 'the file was never approved on this machine';
 
 // The two refusal tails the commands share, each with the command's own name in front.
 const NO_PANE = (name: string) =>
@@ -589,7 +589,7 @@ for (const command of COMMANDS) {
         // probe-seat is not in the file. That refusal comes before trust or the approval record.
         expect(run.code).toBe(1);
         expect(run.out).toBe('');
-        expect(run.err).toBe('team add: the approved file has no seat "probe-seat"\n');
+        expect(run.err).toBe('team add: the file has no seat "probe-seat"\n');
         expect(run.err).not.toContain('never approved');
         expect(readFileSync(file, 'utf8')).toBe(run.before);
         return;
@@ -607,7 +607,7 @@ for (const command of COMMANDS) {
       if (command.name === 'add') {
         expect(run.code).toBe(1);
         expect(run.out).toBe('');
-        expect(run.err).toBe('team add: the approved file has no seat "probe-seat"\n');
+        expect(run.err).toBe('team add: the file has no seat "probe-seat"\n');
         expect(run.err).not.toContain('never approved');
         return;
       }
@@ -1159,7 +1159,7 @@ describe('remove and a record that is not in force', () => {
     {
       name: 'a legacy record',
       sources: () => removeSources({ standing: () => ({ kind: 'legacy' }) }),
-      why: 'team remove: approved before records were signed: run `team approve` once\n',
+      why: 'team remove: approved before records were signed\n',
     },
     {
       name: 'a record the verification refused',

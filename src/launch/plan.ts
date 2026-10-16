@@ -50,6 +50,8 @@ export type Op =
       notice?: string;
       model?: string;
       version?: string;
+      /** The file's effort word for this launch. Absent when the file sets none. */
+      effort?: string;
       /** The team file's repair for this seat (`relaunchRepair`, markdown text): what every
        *  refusal of this seat that names a repair prints — for a lead seat, only `team down`
        *  then `team up`, which its file accepts. */
@@ -86,6 +88,12 @@ export type Op =
        *  The close re-reads that difference. `way` is the caller's own way out when the seat
        *  is working and nothing is closed. */
       drift?: { model: string; version: string; way: string };
+      /**
+       * The declared model or effort differs from the launch record. The close re-reads the
+       * pane and closes only at an idle prompt: not while working, and not while the box
+       * holds unsent text. `detail` is the audit line's difference.
+       */
+      reload?: { detail: string };
     }
   | { do: 'spawn-watch'; command: string; cwd: string; file?: string }
   | {
@@ -153,6 +161,8 @@ export interface UpSeat {
   /** The file's model and version, compared with the screen after the idle wait. */
   model?: string;
   version?: string;
+  /** The file's effort word. Absent when the file sets none; the launch record then drops it. */
+  effort?: string;
   /** Set when a running session is being resumed. Omitted: launch from the start. */
   stage?: 'launched' | 'named' | 'ready';
   pane?: string;
@@ -192,6 +202,8 @@ export interface UpSeat {
     /** The pane still holds the launched process and the model on its screen is not the file's.
      *  The close re-reads the screen; `way` is what the refusal names for this caller. */
     drift?: { way: string };
+    /** Set by `team reload`: close only at an idle prompt, then launch the file's line. */
+    reload?: { detail: string };
   };
   /** A ready seat whose model drifted and that this `up` will not close: herdr reports it
    *  working, or its screen shows a running turn. The record stays ready. */
@@ -495,15 +507,18 @@ export function upPlan(input: UpInput): Step[] {
       // the seat, so it is closed with no key and no text, and everything after this step
       // launches the seat from the beginning, in a workspace of its own.
       if (seat.repair) {
-        const drift = seat.repair.drift && seat.model !== undefined && seat.version !== undefined
+        const drift = !seat.repair.reload && seat.repair.drift && seat.model !== undefined && seat.version !== undefined
           ? { model: seat.model, version: seat.version, way: seat.repair.drift.way }
           : undefined;
+        const reload = seat.repair.reload;
         steps.push({
           kind: 'run',
           argv: herdr(session, 'workspace', 'close', seat.repair.workspace),
-          note: drift
-            ? 'closed without input: its model drifted from the file'
-            : 'closed without input: its pane no longer holds the process team launched',
+          note: reload
+            ? 'closed without input, at an idle prompt: its declared model or effort differs from the launch'
+            : drift
+              ? 'closed without input: its model drifted from the file'
+              : 'closed without input: its pane no longer holds the process team launched',
           do: {
             do: 'repair',
             seat: seat.name,
@@ -512,6 +527,7 @@ export function upPlan(input: UpInput): Step[] {
             workspace: seat.repair.workspace,
             launched: seat.repair.launched,
             ...(drift ? { drift } : {}),
+            ...(reload ? { reload } : {}),
           },
         });
       }
@@ -559,7 +575,9 @@ export function upPlan(input: UpInput): Step[] {
           pane: seat.pane,
           workspace: seat.workspace,
           repairLine: seat.repairLine,
-          ...(seat.model !== undefined && seat.version !== undefined ? { model: seat.model, version: seat.version } : {}),
+          ...(seat.model !== undefined && seat.version !== undefined
+            ? { model: seat.model, version: seat.version, ...(seat.effort ? { effort: seat.effort } : {}) }
+            : {}),
           ...(said ? { notice: said } : {}),
           ...(waiting ? { waiting: { record: waiting, ...(seat.waitingLaunched ? { launched: seat.waitingLaunched } : {}) } } : {}),
           ...(seat.resumeGap ? { resumeGap: seat.resumeGap } : {}),

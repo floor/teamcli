@@ -9,7 +9,7 @@ import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } fro
 import { usesLauncher } from '../launch/line.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { readScreen } from '../watch/screen.ts';
-import { modelDiffers, seatModel } from './statusline.ts';
+import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
 // `processes` each seat pane's process identity, where it was read, and null where herdr can't
@@ -24,15 +24,15 @@ export type Live = {
 
 export type Row = { name: string; id?: string; state: string; model: string; pane: string; stored?: string; start_cwd?: string };
 
-/** The repair of the one precondition `status` knows: the file is not the approved one. The
+/** The repair of the one precondition `status` knows: the file's approval is not in force. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
-export const APPROVAL_REPAIR = 'the owner runs team approve';
+export const APPROVAL_REPAIR = 'the live file is what the commands read';
 
 /**
  * One disagreement, with the two facts about its repair that the renderer needs and must not
  * re-derive from the repair's wording, both set where the difference is created:
  *
- * - `needs`: the repair names a command that refuses while the file is not the approved one.
+ * - `needs`: the repair names a command that refuses while no approval is in force.
  *   Confirmed from the commands themselves: `team up` (`up.ts`), `team add` (`add.ts`), and
  *   `team worktree` (`worktree.ts`) each refuse on the standing before they do anything. Such a
  *   repair waits for `APPROVAL_REPAIR`, and is printed with `(after: …)` while the approval
@@ -103,7 +103,8 @@ export function orderAndAnnotateDifferences(differences: Difference[]): Differen
 }
 
 // Compares the file and the state with the live session. Pure: every input is handed in.
-// `watch` is the watch values in force — the approved ones — so an unapproved edit can't move a verdict.
+// `watch` is the watch values in force — the live file's under a verified standing, the defaults
+// under none — so the verdict reads one object.
 export function compare(
   team: TeamFile,
   session: string,
@@ -428,7 +429,7 @@ export function compare(
     if (claimed.has(agent.pane) || labels.get(agent.workspace) === WATCH_LABEL) continue;
     differences.push({
       what: `${agent.name ?? `an unnamed ${agent.agent ?? 'agent'}`} (${agent.pane}) is running and is not in the file`,
-      repair: 'add the seat to the file and run team approve, or close it',
+      repair: 'add the seat to the file, or close it',
     });
   }
 
@@ -569,6 +570,12 @@ function modelOf(
 ): string {
   const running = seatModel(seat, live.screens[agent.pane]);
   if (!running) {
+    // A profile may say the launch line's model stands when the screen names none: its column
+    // shows it labelled, and the note says where the name comes from.
+    if (launchModelWhenUnread(seat.cli)) {
+      notes.push(`${seat.name}: its screen shows no model; the launch line's ${seat.display} stands`);
+      return `${seat.display} (from launch)`;
+    }
     notes.push(`${seat.name}: version unread (its screen doesn't show the model)`);
     return `${seat.display} (unread)`;
   }
@@ -596,7 +603,7 @@ function modelMismatchRepair(team: TeamFile, name: string): string {
   const command = isLeadSeat(team, name)
     ? relaunchRepair(team, name, 'plain')
     : `team remove ${name} --keep, then team add ${name}`;
-  return `restart the seat on the file's model (${command}), or correct the file and run team approve`;
+  return `restart the seat on the file's model (${command}), or correct the file`;
 }
 
 /** A pane that holds only a shell, on a record that never stored the process team launched.
