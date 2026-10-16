@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { byName, get, list, ofTeam, projectsFile, ProjectsError, readProjects, upsertProject } from '../../src/registry/projects.ts';
+import { byName, get, list, ofTeam, projectIdOf, projectsFile, ProjectsError, readProjects, upsertProject } from '../../src/registry/projects.ts';
 
 const AT = '2026-10-17T00:30:00.000Z';
 
@@ -296,5 +296,28 @@ describe('upsertProject', () => {
     writeProjects('projects: [1]\n');
     expect(() => upsertProject(home, 'teamcli', { name: 'TeamCLI' })).toThrow(ProjectsError);
     expect(readFileSync(projectsFile(home), 'utf8')).toBe('projects: [1]\n');
+  });
+});
+
+describe('projectIdOf', () => {
+  test('lowercases the name and writes every other run as one dash', () => {
+    expect(projectIdOf('teamcli')).toBe('teamcli');
+    expect(projectIdOf('TeamCLI')).toBe('teamcli');
+    expect(projectIdOf('Team CLI')).toBe('team-cli');
+    expect(projectIdOf('TeamCLI.io')).toBe('teamcli.io');
+    expect(projectIdOf('  Team  CLI  ')).toBe('team-cli');
+    expect(projectIdOf('A')).toBe('a');
+  });
+
+  test('the ID derives the same every time, and a name with nothing to keep is refused', () => {
+    expect(projectIdOf('Team CLI')).toBe(projectIdOf('Team CLI'));
+    expect(() => projectIdOf('***')).toThrow(ProjectsError);
+    expect(() => projectIdOf('***')).toThrow('"***" is not a project name');
+  });
+
+  test("the ID is the key a team file's in_project name reaches, and the record it mints answers by the name as written", () => {
+    upsertProject(home, projectIdOf('Team CLI'), { name: 'Team CLI', lead: 'agt_0123456789ab', at: AT });
+    expect(get(home, 'team-cli')?.name).toBe('Team CLI');
+    expect(byName(home, 'Team CLI')?.id).toBe('team-cli');
   });
 });

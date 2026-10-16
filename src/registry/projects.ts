@@ -99,6 +99,20 @@ export function ofTeam(home: string, teamId: string): ProjectRecord | null {
   return found[0] ?? null;
 }
 
+/** The ID a project name gets: the name lowercased, every run of characters outside letters,
+ *  digits, `.`, `_` and `-` written as one `-`, and no `-` left at either end. `TeamCLI` is
+ *  `teamcli`, `Team CLI` is `team-cli`. This is the bridge a team file's `in_project` name crosses
+ *  to reach the record's key, so it must derive the same ID every time; a name with nothing left
+ *  to keep is refused rather than minted an empty key. */
+export function projectIdOf(name: string): string {
+  const id = name
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!id) throw new ProjectsError(`"${name}" is not a project name`);
+  return id;
+}
+
 /** What `upsertProject` takes: any of the record's fields, and who is writing and when. A project
  *  not yet registered needs `name` at least. The id and the provenance are the writer's own. */
 export type ProjectPatch = Partial<Omit<ProjectRecord, 'id' | 'provenance'>> & { by?: string; at?: string };
