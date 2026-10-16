@@ -824,6 +824,13 @@ function ruleRun(composer: { rule: RegExp }, line: string): string | null {
   return hit === null ? null : hit[0];
 }
 
+/** Two rule rows of one box: the same run, or — for a CLI whose opening rule carries a label in
+ *  its run — the same number of columns. */
+function sameRuleWidth(top: string | null, bottom: string | null): boolean {
+  if (top === null || bottom === null) return false;
+  return top === bottom || [...top].length === [...bottom].length;
+}
+
 function boxToRule(lines: string[], styled: string[], composer: Extract<ScreenData['composer'], { mode: 'box-to-rule' }>, tick: () => boolean): Hit {
   // The frame first, as the captures draw it (unsent-typed-ansi.txt): a rule is an unbroken run
   // from the pane's first column — the profile's rule pattern is anchored to it — and the box's
@@ -853,7 +860,7 @@ function boxToRule(lines: string[], styled: string[], composer: Extract<ScreenDa
   let from: number;
   if (open >= 0) {
     // The two rules of one box are drawn at one width (53 columns in unsent-typed-ansi.txt).
-    if (ruleRun(composer, lines[close] ?? '') !== ruleRun(composer, lines[open] ?? '')) return { kind: 'unknown' };
+    if (!sameRuleWidth(ruleRun(composer, lines[open] ?? ''), ruleRun(composer, lines[close] ?? ''))) return { kind: 'unknown' };
     // The input row is the box's first row under its opening frame, and it carries the prompt
     // at the capture's own column. A row there that does not is not this box's input — the read
     // fails closed rather than take some later row whose content begins with a prompt glyph,
