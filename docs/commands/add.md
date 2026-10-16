@@ -2,8 +2,9 @@
 
 Starts one seat of a running team: a seat the file declares but nothing runs for — `team up` started
 the others — or a temporary seat beside the team, which the file does not declare at all. A declared
-seat the file marks `stopped: true`, or that `team remove` took out, is put back from the stored
-copy first. It never touches the seats that are already running.
+seat the file marks `stopped: true` — what `team remove --keep` leaves behind — is put back into
+the file first: the run clears the mark and starts it. A seat a plain `team remove` took out of
+the file is the owner's to declare again. It never touches the seats that are already running.
 
 The one seat starts where `up` would start it: the orchestrator's and the operator's seat starts in
 the project folder, every other seat in the team's lobby outside repositories, verified by the
@@ -18,8 +19,8 @@ needs it, and refuses the same folders `up` refuses, before it writes anything.
 
 ## What it reads and writes
 
-Reads the team file (or the one `--file` names), this machine's approval store (the record, and the
-stored copy the seat is put back from), the session's state (`.agents/team.state.json`, including
+Reads the team file (or the one `--file` names), this machine's approval store (the record), the
+session's state (`.agents/team.state.json`, including
 the project's stored budget readings), herdr (the session's state, its agents and their workspaces),
 the seat's CLI's own config under the seat's home when the seat is about to start in the lobby,
 and, like `up`: the doctor's findings and the machine's load, free memory, free disk and free swap.
