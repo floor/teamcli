@@ -124,8 +124,8 @@ describe("the profiles' schema", () => {
     expect(errors(doc)).toEqual([]);
   });
 
-  test('the five shipped profiles pass it', () => {
-    for (const name of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok']) {
+  test('the six shipped profiles pass it', () => {
+    for (const name of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini']) {
       expect([name, errors(profile(name))]).toEqual([name, []]);
     }
   });
