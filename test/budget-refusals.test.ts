@@ -843,7 +843,8 @@ describe('an unapproved edit to the budgets', () => {
     const dry = await up(['--dry-run'], world());
     expect(dry.out).toContain(`skip worker: would refuse: ${TAIL}`);
     expect(dry.out).not.toContain('not the approved one');
-    expect(dry.out).not.toContain('team approve');
+    // The plan's rules line still says never to run the command. That is not a refusal.
+    expect(dry.out).not.toContain('run `team approve`');
     const refused = await up([], world());
     expect(refused.code).toBe(1);
     expect(refused.labels).toEqual([]);

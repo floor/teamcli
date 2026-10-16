@@ -718,7 +718,8 @@ describe('team up', () => {
     edit((text) => text.replace('launch: team-deepseek', 'launch: team-deepseek --yolo'));
     const run = await up(['--dry-run', '--session', 'team-test'], OWNER, { sessionRunning: () => null });
     expect(run.out).not.toContain('not the approved one');
-    expect(run.out).not.toContain('team approve');
+    // The plan's rules line still says never to run the command. That is not a refusal.
+    expect(run.out).not.toContain('run `team approve`');
     expect(run.out).toContain("! up would refuse: herdr doesn't answer\n");
     expect(run.out).toContain('+ herdr --session team-test workspace create');
   });
