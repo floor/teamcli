@@ -83,6 +83,27 @@ describe('a team file written before the project level', () => {
     expect(result.team.lobby).toBe('~/work/lobby');
   });
 
+  test('every team file the repository keeps as a fixture loads unchanged', () => {
+    // The v0.1.2 copies, loaded in place: project name, lead, roster size and the one
+    // deprecation each carries are the file's own, and nothing in this phase moves them.
+    const cases = [
+      { file: 'team.yaml', project: 'team', lead: 'claude-coordinator', seats: 9 },
+      { file: 'example.yaml', project: 'acme-web', lead: 'claude-coordinator-acme', seats: 5 },
+      { file: 'examples-team.yaml', project: 'beacon', lead: 'claude-keeper', seats: 7 },
+    ] as const;
+    for (const one of cases) {
+      const result = loadTeamFile(import.meta.dir, { file: join(import.meta.dir, 'fixtures', 'legacy', 'v0.1.2', one.file) });
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect(result.team.project).toBe(one.project);
+      expect(result.team.orchestrator).toBe(one.lead);
+      expect(result.team.seats).toHaveLength(one.seats);
+      for (const warning of result.warnings) {
+        expect(warning.message).toContain('`coordinator:` is now `leads: true`');
+      }
+    }
+  });
+
   test('an older file spelling the lead `coordinator:` still loads, with the warning that names it', () => {
     write(before().replace('    leads: true', '') .replace('operator: lead\n', 'coordinator: lead\noperator: lead\n'));
     const result = loaded();
