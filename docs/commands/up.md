@@ -40,8 +40,9 @@ caller's parent processes, the base name of what `ps -o comm=` prints for it. Th
 `up` on the paths the record covers, before it expires. A name that is not in the ancestry, an
 expired record, a folder outside the covered paths or one reached through a `..` segment or a
 symlink, and a record with no `runner` all keep the answer above; a caller under herdr is never
-admitted this way, where the approved file's `grant` decides. The record's shape, with one
-example: [team init](init.md).
+admitted by `runner`, where the approved file's `grant` decides. The other way a record names a
+caller — `agent`, a seat or pane under herdr — and the record's shape, with one example:
+[team init](init.md).
 
 ## Output and exit codes
 

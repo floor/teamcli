@@ -26,25 +26,36 @@ well. A file that already exists is never overwritten.
 | a run with no terminal | nothing, unless a create-grant's `runner` names the caller: `team init: only the owner runs this, from a terminal outside herdr` |
 | a seat, or an agent-run CLI a runner record does not name | nothing: `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` |
 
-## A create-grant's runner
+## Who a create-grant admits
 
-A create-grant — a record in `~/.config/team/grants/` — admits a caller outside herdr, with or
-without a terminal, when its `runner` field (or `runners: [<name>, …]` for several) names one of
-the caller's parent processes. The name is the base name of what `ps -o comm=` prints for it:
+A create-grant is a record in `~/.config/team/grants/`, and two kinds of line name its callers.
+Only a record that carries the first kind counts: a record with no line naming a **seat or pane
+under herdr** — `agent`, `seat` or `pane` — is skipped, and admits nobody, its `runner` names or
+not. The second kind, `runner` (or `runners: [<name>, …]` for several), names **callers outside
+herdr**, so one record can admit both.
+
+- **`agent`** (or `seat`, or `pane`) names a **seat or pane under herdr**: the caller running as
+  that seat, or in that pane, is admitted. A record's `session` narrows a seat to one session; a
+  **pane** is matched only when the record names the session too, a pane being unique only within
+  it. `agent: <session>/<agent>` is the same record spelled on one line.
+- **`runner`** (or `runners: [<name>, …]` for several) names a **caller outside herdr**, with or
+  without a terminal: it is admitted when one of its parent processes carries that name — the base
+  name of what `ps -o comm=` prints for it.
 
 ```text
-agent: gemini-beacon
+agent: beacon-runner
+session: dispatch
 paths:
   - ~/Code/beacon
 expires: "2026-10-17T00:00:00Z"
-runner: gemini
+runner: gemini-beacon
 ```
 
-That caller runs `init` — the skeleton, never `--restore` — on a folder under `paths`, before
+That runner runs `init` — the skeleton, never `--restore` — on a folder under `paths`, before
 `expires`. Every other case keeps its refusal: a name that is not in the ancestry, an expired
 record, a folder outside the covered paths or one reached through a `..` segment or a symlink, and
-a record with no `runner`. A caller under herdr is never admitted this way, and the owner needs no
-record.
+a record with no `runner`. A caller under herdr is never admitted by `runner`: there, the seat or
+pane it has to match is the record's `agent`. The owner needs no record.
 
 ## Output and exit codes
 
