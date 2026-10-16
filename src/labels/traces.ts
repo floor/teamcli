@@ -130,17 +130,32 @@ export function messageTrace(project: string, root: string, seat: string, home: 
  * The last tool row the pane shows, when the CLI's captures hold one: Claude Code prints
  * `⏺ Tool(args)` rows in its transcript (`⏺ Write(notes.txt)`, `⏺ Explore(Survey project for
  * README)` — `test/fixtures/claude-code`), and an assistant's prose row (`⏺ One, two, three…`)
- * is not one. The other CLIs' captures hold no such row, so they have no trace rather than a
+ * is not one. Antigravity prints `● Tool(args)` (1.2.16: `Read`, `Bash`, `Create`, `Edit`) and
+ * `● Ran (args)` (1.3.5), either with a ` (ctrl+o to expand)` hint that is trimmed off — both
+ * in `test/fixtures/antigravity`, whose permission dialogs echo the row without the marker and
+ * stay unread. The other CLIs' captures hold no such row, so they have no trace rather than a
  * guess. The screen carries no clock: the read's own instant stands as the trace's time.
  */
 export function toolTrace(cli: string, screen: string | undefined, at: Date): SeatTrace | null {
-  if (cli !== 'claude-code') return null;
+  if (cli !== 'claude-code' && cli !== 'antigravity') return null;
   if (screen === undefined || screen === '') return null;
   let found: SeatTrace | null = null;
   for (const row of stripSgr(screen).split('\n')) {
-    const hit = /^⏺ ([A-Za-z][A-Za-z0-9_]*)\((.*)\)$/.exec(row.trim());
-    if (!hit) continue;
-    found = { kind: 'tool', at: at.toISOString(), what: `${hit[1]}(${hit[2]})` };
+    const what = toolRow(cli, row.trim());
+    if (what !== null) found = { kind: 'tool', at: at.toISOString(), what };
   }
   return found;
+}
+
+/** One trimmed screen line's tool row as its own words, or null: the shape gate that keeps
+ *  prose — a bullet that merely holds parentheses — out of the trace. */
+function toolRow(cli: string, line: string): string | null {
+  if (cli === 'claude-code') {
+    const hit = /^⏺ ([A-Za-z][A-Za-z0-9_]*)\((.*)\)$/.exec(line);
+    return hit === null ? null : `${hit[1]}(${hit[2]})`;
+  }
+  const named = /^● ([A-Za-z][A-Za-z0-9_]*)\((.*?)\)(?: \(ctrl\+o to expand\))?$/.exec(line);
+  if (named !== null) return `${named[1]}(${named[2]})`;
+  const ran = /^● Ran \((.*?)\)(?: \(ctrl\+o to expand\))?$/.exec(line);
+  return ran === null ? null : `Ran(${ran[1]})`;
 }
