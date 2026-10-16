@@ -659,9 +659,10 @@ function admissionOf(
   return { ok: false, why: verdict.why };
 }
 
-/** Why a caller with no registry record is refused. */
+/** Why a caller with no registry record is refused, with the one command that writes the record:
+ *  `up` registers every seat its run leaves standing, so the seat is judged by its own row. */
 function noAgentRecord(caller: Caller): string {
-  return `${describeCaller(caller)}: no agent record on this machine, so no rule admits the send (${RULE_SUMMARY})`;
+  return `${describeCaller(caller)}: no agent record on this machine, so no rule admits the send (${RULE_SUMMARY}); \`team up\` registers a seat it leaves standing`;
 }
 
 /** The seat the live file declares for a caller the store holds no record for: its own name, the
