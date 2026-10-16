@@ -56,7 +56,21 @@ and open nothing: the target is the file the caller's own place finds.
   session, another project or nobody at all is not read, and the pass uses the watch's own
   screen reader, so the words a seat's screen yields are the watch's own words. Nothing of the
   watch's pass, report or nudge path runs: no key is sent, no pane is typed into, no memory is
-  written;
+  written. The same pass reads the two sidebar lines each file seat's pane carries — its herdr
+  workspace label and the display line under it — and a line that reads as neither the file's own
+  text nor one the watch may paint is a difference whose repair is `team register <seat>`,
+  re-applying both lines from the file without a relaunch;
+- the project and team registries (`~/.config/team/projects.yaml`, `~/.config/team/teams.yaml`),
+  for the team's place ([the registries](../concepts/registry.md)). A team two projects name is a
+  difference that repeats the registry's own refusal, naming both, with fixing the registry file
+  as its repair, and a registry that cannot be read is a difference in the same shape; a team no
+  project names is its own project, never a difference. When this team's file declares
+  `project_lead: true`, the project's other teams are read through the team registry — their
+  `root`, then their file, text only — and a second declaring team is a difference:
+  `the project <name> has <n> lead teams: <names>`, repaired with `take "project_lead: true" off
+  all but one of them`. A sibling the registries cannot answer for — no record, no readable file,
+  or one naming another project — is not counted, and a team that declares no lead reads no
+  sibling at all. A check with no home reads no registry;
 - the agent registry (`<home>/.config/team/agents/`), one read of each seat's record for the
   signing triple the commit gate checks ([the registries](../concepts/registry.md)). A seat
   whose record signs as another model than its pane runs is a difference — `signs as X, runs Y`,
