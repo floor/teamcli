@@ -484,7 +484,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // says it. A `miss` joins the doctor findings below, for a seat this `add` would launch.
   // A seat whose pane holds a process team did not launch is never adopted into that pane:
   // it is closed and launched fresh, so no stray is looked for.
-  const stray = repair ? undefined : unnamedIn(recorded.seats[built.name]?.workspace, agents);
+  const stray =
+    repair || (held?.launched !== undefined && verdict !== 'same')
+      ? undefined
+      : unnamedIn(built.name, recorded.seats, agents);
   const resumeCwd = recorded.seats[built.name]?.start_cwd;
   const line = !stray
     ? launchLineFinding(prepared.team, built.seat, root, {
@@ -845,6 +848,7 @@ function seatPlan(
     displayAgent: displayAgent(seat),
     model: seat.model,
     version: seat.version,
+    ...(seat.effort ? { effort: seat.effort } : {}),
     // The team file's own repair for this seat — a lead seat is told only the whole-team
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
@@ -857,9 +861,23 @@ function seatPlan(
   };
 }
 
-function unnamedIn(workspace: string | undefined, agents: readonly HerdrAgent[]): HerdrAgent | undefined {
+function unnamedIn(
+  seatName: string,
+  seats: Readonly<Record<string, SeatState>>,
+  agents: readonly HerdrAgent[],
+): HerdrAgent | undefined {
+  const held = seats[seatName];
+  const workspace = held?.workspace;
   if (!workspace) return undefined;
-  return agents.find((agent) => !agent.name && agent.workspace === workspace);
+  const shared = Object.entries(seats).some(
+    ([name, other]) =>
+      name !== seatName
+      && (other.workspace === workspace || (held.pane !== undefined && other.pane === held.pane)),
+  );
+  if (shared) return undefined;
+  return agents.find(
+    (agent) => !agent.name && agent.workspace === workspace && (held.pane === undefined || agent.pane === held.pane),
+  );
 }
 
 function runningOf(agents: readonly HerdrAgent[], team: TeamFile, state: SessionState): Running[] {
@@ -869,9 +887,12 @@ function runningOf(agents: readonly HerdrAgent[], team: TeamFile, state: Session
     if (!agent.name) continue;
     const seat = seats.get(agent.name);
     const known = state.seats[agent.name];
-    if (!seat && !known?.temporary) continue;
     const like = known?.temporary ? seats.get(known.temporary.like) : undefined;
-    running.push({ name: agent.name, vendor: seat?.vendor ?? like?.vendor ?? 'unknown', temporary: Boolean(known?.temporary) });
+    running.push({
+      name: agent.name,
+      vendor: seat?.vendor ?? like?.vendor ?? 'unknown',
+      temporary: !seat || Boolean(known?.temporary),
+    });
   }
   return running;
 }
@@ -884,7 +905,7 @@ function ceilingProblem(ceilings: Ceilings, running: readonly Running[], seat: S
   }
   const cap = ceilings.vendors[seat.vendor];
   if (cap !== undefined) {
-    const vendors = running.filter((item) => item.vendor === seat.vendor).length + 1;
+    const vendors = running.filter((item) => item.vendor === seat.vendor || item.vendor === 'unknown').length + 1;
     if (vendors > cap) return `the approval allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
   }
   return null;
@@ -1049,7 +1070,8 @@ function hostOf(input: {
           }
         }
         // `waiting: null` removes the field alone; anything else written replaces it.
-        const { waiting: written, ...rest } = patch;
+        // `effort: null` is a launch that set no word: the stored word goes with it.
+        const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,
           ...rest,
@@ -1065,6 +1087,8 @@ function hostOf(input: {
         };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;
+        if (patchedEffort === null) delete seatState.effort;
+        else if (patchedEffort !== undefined) seatState.effort = patchedEffort;
         current.seats[name] = seatState;
         if (patch.pane) {
           replaced = prior.pane !== patch.pane ? prior.pane : undefined;
