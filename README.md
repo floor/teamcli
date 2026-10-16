@@ -181,7 +181,7 @@ empty again. Nothing writes a lab's config or an `AGENTS.md`. `/exit` is sent on
 seat. Workspace-trust screens are reported and closed without input; the owner trusts the folder
 before relaunching. Other unrecognised layouts stay unknown.
 
-The Gemini profile is tested with CLI 0.64.0. It adds `--approval-mode yolo` for unattended
+The Gemini profile is tested with CLI 0.64.0 to 0.64.0. It adds `--approval-mode yolo` for unattended
 execution. It has no non-interactive login check of its own: `gemini --help` offers none, and
 `team doctor --login` prints `gemini: the login is not checked in this version`. A run with no
 credentials asks how to authenticate — `Sign in with Google`, `Use Gemini API Key`, `Vertex AI` —
