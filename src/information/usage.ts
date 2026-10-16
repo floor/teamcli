@@ -98,8 +98,9 @@ export type UsageRow = { row: BudgetRow; changedAt: number | null; pace: number 
 /** One account a team's file in force declares, as the machine view reads it: the kind a machine
  *  line is built by, and the lab the design's rule (§ 2.3) puts it under — the vendor of the first
  *  in-force seat that draws on it (`payingAccountOf`, the CLI-and-launcher rule,
- *  `machine-accounts.ts`), else the account's own name. */
-export type DeclaredAccount = { account: string; kind: 'subscription' | 'spend'; lab: string };
+ *  `machine-accounts.ts`), else the account's own name. Machine-only subscriptions are marked
+ *  as fallbacks so an explicit declaration in any team takes precedence. */
+export type DeclaredAccount = { account: string; kind: 'subscription' | 'spend'; lab: string; fallback?: true };
 
 /** One row of the per-team breakdown: a seat, its CLI, and the account that pays for it. */
 export type SeatAccountRow = { seat: string; cli: string; account: string; pool?: 'gemini' | 'claude-gpt' };
@@ -293,7 +294,7 @@ function declaredOf(budgets: TeamFile['budgets'], seats: readonly Seat[], machin
   for (const account of machine) {
     if (named.has(account)) continue;
     // The machine's file names subscriptions only: it is the owner's own list of them.
-    declared.push({ account, kind: 'subscription', lab: labOfAccount(account, seats) });
+    declared.push({ account, kind: 'subscription', lab: labOfAccount(account, seats), fallback: true });
   }
   return declared.sort((a, b) => (a.account < b.account ? -1 : 1));
 }
@@ -632,13 +633,14 @@ export function machineUsage(home: string, now: number, view: UsageView): Machin
     entries.push({ kind: 'team', root: view.mine, usage: projectUsage(view.mine, { home, now, restricted }) });
   }
   const teams = entries.filter((entry): entry is TeamEntry => entry.kind === 'team');
-  // The labs: every declared account under the lab its own team's rule gives it, and every vendor
-  // a seat puts in use. One account keeps one lab — the first team in walk order decides — so two
-  // teams that map a shared account differently cannot print it twice. Each lab also keeps the
-  // teams it is carried by: the teams declaring one of its accounts, and the teams putting it in
-  // use as a seat's vendor. The restricted view prints a lab, and its lines, only for a lab the
-  // caller's own team carries.
-  const labOf = new Map<string, string>();
+  // An explicit budget declaration decides an account's kind and lab before any machine
+  // fallback, regardless of store order. Among explicit declarations, the first team still
+  // decides: an account appears once even when teams give it different labs.
+  const declarationOf = new Map<string, DeclaredAccount>();
+  for (const team of teams) for (const declared of team.usage.accounts) {
+    const known = declarationOf.get(declared.account);
+    if (known === undefined || (known.fallback && !declared.fallback)) declarationOf.set(declared.account, declared);
+  }
   type LabSlot = { accounts: Map<string, { account: string; kind: 'subscription' | 'spend'; declaring: TeamEntry[] }>; carried: TeamEntry[] };
   const labs = new Map<string, LabSlot>();
   const labSlot = (lab: string): LabSlot => {
@@ -650,11 +652,10 @@ export function machineUsage(home: string, now: number, view: UsageView): Machin
   };
   for (const team of teams) {
     for (const declared of team.usage.accounts) {
-      const lab = labOf.get(declared.account) ?? declared.lab;
-      labOf.set(declared.account, lab);
-      const slot = labSlot(lab);
+      const preferred = declarationOf.get(declared.account) ?? declared;
+      const slot = labSlot(preferred.lab);
       if (!slot.carried.includes(team)) slot.carried.push(team);
-      const account = slot.accounts.get(declared.account) ?? { account: declared.account, kind: declared.kind, declaring: [] };
+      const account = slot.accounts.get(declared.account) ?? { account: declared.account, kind: preferred.kind, declaring: [] };
       account.declaring.push(team);
       slot.accounts.set(declared.account, account);
     }
@@ -665,7 +666,7 @@ export function machineUsage(home: string, now: number, view: UsageView): Machin
   }
   // A subscription is machine-wide even before the first team is approved.
   for (const account of machineAccounts) {
-    const slot = labSlot(labOf.get(account) ?? account);
+    const slot = labSlot(declarationOf.get(account)?.lab ?? account);
     if (!slot.accounts.has(account)) slot.accounts.set(account, { account, kind: 'subscription', declaring: [] });
   }
   const accountNames = new Set<string>();
