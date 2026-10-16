@@ -3212,7 +3212,7 @@ scene('send.delivered', async (place) => {
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via its cross-session socket, falling back to a 0600 drop file and one trigger line; nothing was written');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written');
 });
 scene('send.answered', async (place) => {
   write(place, TEAM);
@@ -3839,10 +3839,10 @@ function refusalIds(command: string): string[] {
 function refusalCore(text: string): string {
   const line = text.split('\n').map((item) => item.trim()).find(Boolean) ?? '';
   return line
-    .replace(/^! (?:up|down|add) would refuse: /, '')
+    .replace(/^! (?:up|down|add|register) would refuse: /, '')
     .replace(/^team add: refused: /, '')
     .replace(/^[^:\n]+: would refuse: /, '')
-    .replace(/^team (?:up|down|add): /, '')
+    .replace(/^team (?:up|down|add|register): /, '')
     .replace(/\/(?:private\/)?tmp\/team-exit-\w+/g, '<place>')
     .replace(/acme-[0-9a-f]{8,}/g, 'acme-<id>');
 }

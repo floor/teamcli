@@ -19,11 +19,17 @@ import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type Admit
 import { readSendGrants } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
-import { bindPane, deliverTrigger, type DeliverResult } from '../send/deliver.ts';
-import { dropMessage, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { bindPane, deliverTrigger, showsHeldFrameDialog, type DeliverResult } from '../send/deliver.ts';
+import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../send/uds.ts';
+
+/** Whether a plain send to a Claude Code seat takes the cross-session socket before the typed
+ *  trigger. Off: a frame can land at the receiving session's held-message dialog, where the box
+ *  is blocked, so the typed trigger is the default again until the owner decides on attestation.
+ *  The socket stays --wait's channel either way; one constant flips the plain-send default back. */
+const SOCKET_FIRST = false;
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -54,9 +60,10 @@ The outcome is one of seven, and none of them is silent:
                was not one of the dialogs listed above
   answered     --wait to a Claude Code seat: the reply came back; the reply follows
                on stdout (exit 0)
-  held         the message is safely on disk, and the pane was left untouched because
-               the seat remained busy, locked, in a dialog, or holding an unsent draft
-               (exit 1)
+  held         the message is safe — on disk, or in the frame a Claude Code seat's
+               held-message dialog keeps, printed held (socket) — and the pane was
+               left untouched because the seat remained busy, locked, in a dialog,
+               or holding an unsent draft (exit 1)
   not-submitted the line was typed and the seat never took it (exit 1): Enter was
                pressed up to three times, and only to a box still holding exactly the
                trigger; the message names what the box holds, faint suggestions not
@@ -77,7 +84,9 @@ The outcome is one of seven, and none of them is silent:
 the reply listener needs that frame, and blocks for the reply at this process's own
 <sockets dir>/<pid>.sock, for --timeout seconds (default 120; --timeout is only
 meaningful with --wait). A successful write says the frame was sent on the socket,
-not that it was delivered. --wait to any other seat is refused and nothing is
+not that it was delivered. A frame the receiving session holds at its held-message
+dialog ends the run at once as held (socket); nothing is typed while it stands.
+--wait to any other seat is refused and nothing is
 written. --json prints one result document instead of the lines:
 {seat, status, exit, reply?, error?, ids}. --file reads the body from a file instead
 of the one <message> argument.
@@ -305,20 +314,23 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
   }
   if (dry) {
-    const how = to.cli === 'claude-code'
+    const how = to.cli === 'claude-code' && SOCKET_FIRST
       ? 'its cross-session socket, falling back to a 0600 drop file and one trigger line'
       : 'a 0600 drop file and one trigger line';
     return dryRun(io, dir, who, to.seat, `${to.cli} via ${how}; nothing was written`, host, report);
   }
 
-  // Phase 1: a Claude Code seat takes the frame on its cross-session socket by default —
-  // nothing is typed. The registry's recorded address while it is live, else the pane's own
-  // processes; a socket that is missing or refuses falls back to the typed trigger below,
-  // and the outcome line keeps the reason it fell (delivered (typed, socket <reason>)).
+  // Phase 1, while SOCKET_FIRST holds: a Claude Code seat takes the frame on its cross-session
+  // socket before the typed trigger — nothing is typed. The registry's recorded address while it
+  // is live, else the pane's own processes; a socket that is missing or refuses falls back to the
+  // typed trigger below, and the outcome line keeps the reason it fell
+  // (delivered (typed, socket <reason>)). A frame the receiving session's own dialog holds comes
+  // back held: the box is blocked while that dialog is up, so nothing is typed into it.
   let socketNote: string | null = null;
-  if (to.cli === 'claude-code') {
+  if (to.cli === 'claude-code' && SOCKET_FIRST) {
     const attempt = await deliverSocketFrame(dir, who, from, to, body, msgId, host, report, startedAt);
-    if (attempt.kind === 'done') return delivered(io, to.seat, report, 'socket');
+    if (attempt.kind === 'delivered') return delivered(io, to.seat, report, 'socket');
+    if (attempt.kind === 'held') return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
     socketNote = `typed, socket ${attempt.reason}`;
     logLine(dir, 'send', who, `${to.seat}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
   }
@@ -466,6 +478,14 @@ async function deliverSocket(
       // The log keeps the seat and the frame's size; never the message's text, and never
       // the word delivered: the socket accepted the write, which is all this run knows.
       logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
+      // The frame can land at the receiving session's held-message dialog: the seat shows it
+      // when it was busy, the box is blocked while it is up, and no typed line gets through it.
+      // Read the pane for about a second after the write; the dialog, not the reply window, is
+      // the outcome then.
+      if (await heldAtDialog(to.session, pane, host)) {
+        appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'socket' });
+        return held(io, dir, who, to.seat, HELD_FRAME_REASON, host, report, 'socket');
+      }
       const outcome = await listener.wait(timeoutS * 1000);
       if (outcome.kind === 'answered') {
         const read = readReply(outcome.line);
@@ -647,7 +667,29 @@ function frameFor(body: string, msgId: string): string {
   return `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;
 }
 
-type SocketAttempt = { kind: 'done' } | { kind: 'fallback'; reason: string };
+type SocketAttempt = { kind: 'delivered' } | { kind: 'held'; reason: string } | { kind: 'fallback'; reason: string };
+
+/** The one sentence a held socket frame reports: the pane, the frame's state, and why nothing
+ *  further is typed. */
+const HELD_FRAME_REASON =
+  'the session holds the socket frame at its held-message dialog ("Held message from another session"): the box is blocked while it is up, and nothing further is typed';
+
+/** How long a socket write's pane is read for the held-message dialog, in all. */
+const HELD_READ_MS = 1000;
+
+/** Reads the target pane until the held-message dialog shows, or ~1s passes: the dialog renders
+ *  right after the write lands, and a write the session holds is not a delivery. A host with no
+ *  pane reader keeps the write's own answer — there is nothing to look at. */
+async function heldAtDialog(session: string, pane: string, host: SendHost): Promise<boolean> {
+  const reader = host.native.paneText;
+  if (reader === undefined) return false;
+  if (showsHeldFrameDialog(reader(session, pane))) return true;
+  for (let waited = 0; waited < HELD_READ_MS; waited += POLL_MS) {
+    await host.native.wait(POLL_MS);
+    if (showsHeldFrameDialog(reader(session, pane))) return true;
+  }
+  return false;
+}
 
 /**
  * The default path's first leg: one frame on the target's cross-session socket, nothing typed.
@@ -696,8 +738,12 @@ async function deliverSocketFrame(
   }
   if (!taken.ok) return { kind: 'fallback', reason: taken.reason };
   logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
+  if (await heldAtDialog(to.session, found.pane, host)) {
+    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'socket' });
+    return { kind: 'held', reason: HELD_FRAME_REASON };
+  }
   appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket' });
-  return { kind: 'done' };
+  return { kind: 'delivered' };
 }
 
 /** The address a send tries: the registry's recorded one while it is still live — its pid among
@@ -934,13 +980,16 @@ function timedOut(io: Io, seat: string, seconds: number, report: Report): number
   return 1; // exit: send.timeout
 }
 
-/** The message is on disk, and the pane was left untouched. Exit 1, always. */
-function held(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
-  logLine(dir, 'send', who, `${seat}: held: ${reason}`, host.now());
+/** The message is on disk — or, on the socket's path, in the frame the session's own
+ *  held-message dialog keeps — and the pane was left untouched. Exit 1, always. The note names
+ *  the path, in the delivery lines' own shape (`socket`). */
+function held(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report, note?: string): number {
+  const label = note === undefined ? 'held' : `held (${note})`;
+  logLine(dir, 'send', who, `${seat}: ${label}: ${reason}`, host.now());
   if (report.json) {
     io.stdout(document({ seat, status: 'held', exit: 1, error: reason, ids: { sent: report.sent, reply: null } }));
   } else {
-    io.stderr(`team send: ${seat}: held: ${reason}\n`);
+    io.stderr(`team send: ${seat}: ${label}: ${reason}\n`);
   }
   return 1; // exit: send.held
 }

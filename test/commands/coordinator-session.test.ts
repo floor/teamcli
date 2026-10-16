@@ -889,13 +889,15 @@ describe('the sessions the check lets in', () => {
   });
 });
 
-// The dry runs fail the same way as the real runs: the refusal itself where the gate sits before
-// the plan (`add`, and any `--session` the caller may not aim), and the `! down would refuse:`
-// line over the plan where `down` prints a refusal the plan stage found, exiting as the real run.
+// The dry runs fail the same way as the real runs, and explain instead of refusing bare: `add`
+// prints its `! add would refuse:` line and the unblocking command, and `down` prints a refusal
+// the plan stage found over the plan, each exiting as the real run.
 describe('a dry run of the no-pane refusal', () => {
-  test('add --dry-run is refused: the gate sits before the dry run', async () => {
+  test('add --dry-run explains the refusal and exits 1: the gate sits before the dry run', async () => {
     const run = await byName('add').run(placed(SESSION, COORDINATOR, COORDINATOR_PANE), ['--dry-run'], { state: null });
-    expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err: byName('add').noPane(COORDINATOR) });
+    expect({ code: run.code, err: run.err }).toEqual({ code: 1, err: '' });
+    expect(run.out).toContain(`! add would refuse: ${byName('add').noPane(COORDINATOR).replace(/^team add: /, '').trimEnd()}`);
+    expect(run.out).toContain('! to unblock:');
     expect(readFileSync(file, 'utf8')).toBe(run.before);
   });
 
