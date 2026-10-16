@@ -3122,7 +3122,9 @@ scene('send.refused', async (place) => {
 });
 scene('send.held', async (place) => {
   write(place, TEAM);
-  const host = sendHost(place);
+  // No socket file: a held message is the typed path's own refusal, and a taken frame on a
+  // present socket would deliver before the pane was ever read for a dialog.
+  const host = sendHost(place, { socket: false });
   host.native.paneText = () => `${'─'.repeat(30)}\n❯ draft in box\n${'─'.repeat(30)}`;
   return show(await sent(place, ['lead', 'hello'], owner, host), 'held');
 });
@@ -3132,7 +3134,9 @@ scene('send.unreachable', async (place) => {
 });
 scene('send.not-submitted', async (place) => {
   write(place, TEAM);
-  const host = sendHost(place);
+  // No socket file: the trigger not being taken is the typed path's refusal, reached after the
+  // socket was missing and the message fell back to it.
+  const host = sendHost(place, { socket: false });
   host.native.status = () => 'idle';
   return show(await sent(place, ['lead', 'hello'], owner, host), 'not-submitted');
 });
@@ -3142,7 +3146,7 @@ scene('send.delivered', async (place) => {
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via its cross-session socket, falling back to a 0600 drop file and one trigger line; nothing was written');
 });
 scene('send.answered', async (place) => {
   write(place, TEAM);
