@@ -797,10 +797,11 @@
               "down",
               "approve",
               "init",
-              "reload"
+              "reload",
+              "swap"
             ]
           },
-          "$comment": "non-empty, distinct, order kept: up, down, approve, init, reload"
+          "$comment": "non-empty, distinct, order kept: up, down, approve, init, reload, swap"
         }
       },
       "$comment": "the orchestrator seat's grant. session is the file's session, seat is the orchestrator, scope names acts. omitted means no grant. any other key is refused"
@@ -832,13 +833,14 @@
                 "down",
                 "add",
                 "remove",
-                "approve"
+                "approve",
+                "swap"
               ]
             }
           }
         }
       },
-      "$comment": "the panes that may run these of up, down, add, remove and approve. Omitted means no delegate"
+      "$comment": "the panes that may run these of up, down, add, remove and approve; swap admits remove --keep and add of a lead seat. Omitted means no delegate"
     }
   }
 }
