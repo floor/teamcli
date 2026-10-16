@@ -38,7 +38,9 @@ swap, and, when a temporary seat's end is judged, git.
 Writes `.agents/team.state.json` (the watch's pid and a heartbeat, once a pass; a temporary seat's
 `worked` and `own_commits` when it sees them; the accounts' latest screen readings and the money the
 spend checks read), `.agents/team.log` (every line it prints), and, through herdr: the nudge's text
-and Enter, and the seats' sidebar lines — the workspace title and the display line — from the file.
+and Enter, and the seats' sidebar lines — the workspace title from the file, and the display line
+from the file and the pane's screen; it paints them on its first cycle and again when the title,
+the model or the effort changes.
 
 The readings are only written when the watch's session is the file's own `session`: `up` and `add`
 count the state as the project's, so a watch on another session — `--session <other>`, which anyone
