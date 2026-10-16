@@ -8,9 +8,9 @@
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
-import { approvalCase, watchInForceOf } from '../approve/approval.ts';
+import { notInForce, watchInForceOf } from '../approve/approval.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
-import { approvalDrift, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
+import { approvalCaseRow, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
@@ -152,7 +152,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...comparison.differences,
     ...attentionDifferences(team, state, live),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
-    ...approvalDrift(approvalCase(standing, team)),
+    // The same row `status` prints: a legacy record or one the verification refused still says what
+    // it is; a machine that never approved the file is the ordinary file now, and nothing to repair.
+    ...approvalCaseRow(standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null),
     ...overrideDrift(overrides),
     ...rulesFileDifferences(standing, team, root, sources.home),
   ]);

@@ -115,7 +115,6 @@ test('a pane the approved file names reads', async () => {
     standing: () => verifiedOf(checked.team, delegated, dir, NOW),
     gate: {
       standing: () => verifiedOf(checked.team, delegated, dir, NOW),
-      approvedCopy: () => delegated,
       agents: () => [],
     },
   }));
@@ -124,18 +123,20 @@ test('a pane the approved file names reads', async () => {
   expect(result.err).not.toBe(SENTENCE);
 });
 
-test('a pane only the live file names gets the fixed sentence', async () => {
+test('a pane only the live file names reads', async () => {
   const dir = folder(delegated);
   const approved = validateTeamFile(example);
   if (!approved.ok) throw new Error(JSON.stringify(approved.errors));
-  refused(await run(dir, [], { kind: 'pane', pane: 'w9:p1', session: 'foreign' }, sources(dir, {
+  const result = await run(dir, [], { kind: 'pane', pane: 'w9:p1', session: 'foreign' }, sources(dir, {
     standing: () => verifiedOf(approved.team, example, dir, NOW),
     gate: {
       standing: () => verifiedOf(approved.team, example, dir, NOW),
-      approvedCopy: () => example,
-      agents: () => { throw new Error('herdr was read for a drifted file'); },
+      agents: () => [],
     },
-  })));
+  }));
+  expect(result.code).not.toBe(2);
+  expect(result.out).toContain('team acme-web, session "acme-web"');
+  expect(result.err).not.toBe(SENTENCE);
 });
 
 test('an unplaced caller gets the fixed sentence', async () => {

@@ -116,7 +116,7 @@ describe('team approve', () => {
   test('refuses input already waiting on the terminal before writing anything', async () => {
     const run = await approve([], OWNER, '5', 'waiting');
     expect(run.code).toBe(1);
-    expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: run \`team approve\` on its own line\n`);
+    expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: this command needs the terminal to itself\n`);
     expect(run.asked).toEqual([]);
     expect(existsSync(store())).toBe(false);
   });
@@ -171,7 +171,7 @@ describe('team approve', () => {
     test('input waiting: no key folder, no record, no generation, no log', async () => {
       const run = await approve([], OWNER, '5', 'waiting');
       expect(run.code).toBe(1);
-      expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: run \`team approve\` on its own line\n`);
+      expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: this command needs the terminal to itself\n`);
       expectNothingWritten();
     });
 
@@ -438,20 +438,16 @@ describe('team doctor', () => {
     await approve([], OWNER);
     writeRulesFiles();
     const path = rulesFilePath('acme-web', root, home, 'codex-acme') as string;
-    writeFileSync(path, 'not the approved rules');
+    writeFileSync(path, 'not the file\'s rules');
     const differs = await doctor();
     expect(differs.out).toContain(
-      'warn  codex-acme: its rules file differs from the approved rules; run `team remove codex-acme --keep` then `team add codex-acme` '
-        + '(or `team down` then `team up` for the whole team)\n',
+      "warn  codex-acme: its rules file differs from the team file's rules; run team reload codex-acme\n",
     );
     // The check never repairs by itself: the file is left exactly as it was.
-    expect(readFileSync(path, 'utf8')).toBe('not the approved rules');
+    expect(readFileSync(path, 'utf8')).toBe('not the file\'s rules');
     rmSync(path);
     const missing = await doctor();
-    expect(missing.out).toContain(
-      'warn  codex-acme: its rules file is missing; run `team remove codex-acme --keep` then `team add codex-acme` '
-        + '(or `team down` then `team up` for the whole team)\n',
-    );
+    expect(missing.out).toContain('warn  codex-acme: its rules file is missing; run team reload codex-acme\n');
     expect(missing.code).toBe(0);
   });
 
@@ -460,10 +456,7 @@ describe('team doctor', () => {
     writeRulesFiles();
     chmodSync(rulesFilePath('acme-web', root, home, 'codex-acme') as string, 0o644);
     const run = await doctor();
-    expect(run.out).toContain(
-      'warn  codex-acme: its rules file has mode 0644, not 0600; run `team remove codex-acme --keep` then `team add codex-acme` '
-        + '(or `team down` then `team up` for the whole team)\n',
-    );
+    expect(run.out).toContain('warn  codex-acme: its rules file has mode 0644, not 0600; run team reload codex-acme\n');
   });
 
   test('an edited file is not a doctor miss', async () => {
@@ -611,7 +604,7 @@ describe('team doctor', () => {
     expect(stale.code).toBe(1);
   });
 
-  test('an unapproved interval edit leaves the heartbeat verdict on the approved value', async () => {
+  test('a live interval edit controls the heartbeat verdict', async () => {
     await approve([], OWNER);
     const state = (heartbeat: string) =>
       writeFileSync(
@@ -626,14 +619,12 @@ describe('team doctor', () => {
     edit((text) => text.replace(/^  interval: .*$/m, '  interval: 1000h'));
     state('2026-10-03T13:50:00Z');
     const stretched = await doctor({ sessionRunning: () => true });
-    expect(stretched.out).toContain(
-      "MISS  the watch's heartbeat is 12 min old (two intervals are 4 min): start `team watch`\n",
-    );
+    expect(stretched.out).toContain('ok    the watch is running\n');
     // And a shrink is no better: three minutes are inside the approved two intervals, whoever
     // wrote ten seconds in the file.
     edit((text) => text.replace(/^  interval: .*$/m, '  interval: 10s'));
     state('2026-10-03T13:59:00Z');
-    expect((await doctor({ sessionRunning: () => true })).out).toContain('ok    the watch is running\n');
+    expect((await doctor({ sessionRunning: () => true })).out).toContain("MISS  the watch's heartbeat is 3 min old");
   });
 
   test('--session names another session', async () => {
@@ -702,14 +693,16 @@ describe('team up', () => {
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 
-  test('a seat the file does not name is denied before the plan', async () => {
+  test('a seat the file does not name: the dry run names the placement, the owner\'s command and the plan', async () => {
     const run = await up(['--dry-run'], WORKER, {
       sessionRunning: () => true,
       agents: () => [agent('stranger'), agent(null)],
     });
     expect(run.code).toBe(1);
-    expect(run.err).toBe('deny\n');
-    expect(run.out).toBe('');
+    expect(run.err).toBe('');
+    expect(run.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is deepseek-acme\n');
+    expect(run.out).toContain('! to unblock: the owner runs `team up --file .agents/team.yaml` from this folder, at a terminal outside herdr\n');
+    expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 
   test('--dry-run names an edited file and a silent herdr', async () => {

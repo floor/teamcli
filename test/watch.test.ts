@@ -264,7 +264,7 @@ describe('a pass of the watch', () => {
     const { labels, ...rest } = pass({
       team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(),
     });
-    expect(rest).toEqual({ reports: [], nudge: null, work: [], fallback: null, ring: null, mailboxNote: null, readings: [] });
+    expect(rest).toEqual({ reports: [], nudge: null, work: [], fallback: null, ring: null, mailboxNote: null, readings: [], machineReadings: [] });
     expect(labels.length).toBe(5);
   });
 
@@ -711,11 +711,12 @@ describe('a pass of the watch', () => {
   test('a file that differs from the approved one is the owner\'s, reported once', () => {
     const memory = newMemory();
     const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory, approval: ['`rules` changed'] });
-    expect(first.reports).toEqual([{ key: 'approval', text: 'the file differs from the approved one: `rules` changed', to: 'owner' }]);
+    expect(first.reports).toEqual([{ key: 'approval', text: 'the file has changed since the last approval: `rules` changed', to: 'owner' }]);
     expect(pass({
       team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: MIN, memory, approval: ['`rules` changed'],
     }).reports).toEqual([]);
-    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(), approval: null }).reports[0]?.text).toBe('the file was never approved on this machine');
+    // Neither spelling of "no difference is recorded" is a report of its own.
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(), approval: null }).reports).toEqual([]);
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(), approval: [] }).reports).toEqual([]);
   });
 
@@ -1056,7 +1057,7 @@ describe('team watch', () => {
     const waits: number[] = [];
     const code = await runWatch(['--file', file], io, sources(1, {
       // What the owner approved: the same file with a five-second interval. The file on disk
-      // says 120s, so the section has drifted — and the approved values are what runs.
+      // says 120s, and the live values are what runs.
       standing: (root) => {
         const approvedText = example.replace('  interval: 120s', '  interval: 5s');
         const parsed = validateTeamFile(approvedText);
@@ -1066,9 +1067,9 @@ describe('team watch', () => {
       wait: async (seconds) => { waits.push(seconds); return false; },
     }));
     expect(code).toBe(0);
-    // The file says 120s; the values in force say 5s, and the wait between passes is theirs.
-    expect(io.out).toContain('watching the session "acme-web" every 5s');
-    expect(waits).toEqual([5]);
+    // The live file says 120s, so both the announcement and wait use it.
+    expect(io.out).toContain('watching the session "acme-web" every 120s');
+    expect(waits).toEqual([120]);
     expect(io.out).not.toContain('the file differs from the approved one');
   });
 

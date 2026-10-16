@@ -6,13 +6,13 @@ import { join } from 'node:path';
 import { budgetsInForce, watchInForce } from '../../src/approve/approval.ts';
 import { standingSource } from '../../src/commands/status.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
-import { approvedCopy } from '../../src/store/store.ts';
 import type { AddSources } from '../../src/commands/add.ts';
 import type { CheckSources } from '../../src/check/team.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { DownLaunch, DownSources } from '../../src/commands/down.ts';
 import type { McpSources, PathStat } from '../../src/commands/mcp.ts';
 import type { RemoveSources } from '../../src/commands/remove.ts';
+import type { RegisterSources } from '../../src/commands/register.ts';
 import type { RestartSources } from '../../src/commands/restart.ts';
 import type { ListSources } from '../../src/commands/list.ts';
 import type { StatusSources } from '../../src/commands/status.ts';
@@ -124,6 +124,12 @@ const RELEASE_ANSWERS: Record<string, Attempt> = {
     status: 200,
     body: JSON.stringify({ attestations: [{ predicateType: 'https://slsa.dev/provenance/v1' }] }),
   },
+  // The page's material example warns: its `next` tag is a patch behind `latest`.
+  'https://registry.npmjs.org/-/package/material/dist-tags': {
+    kind: 'http',
+    status: 200,
+    body: JSON.stringify({ latest: '3.0.2', next: '3.0.1' }),
+  },
   'https://api.github.com/repos/floor/material': { kind: 'http', status: 200, body: JSON.stringify({ full_name: 'floor/material', default_branch: 'main' }) },
   'https://api.github.com/repos/floor/material/git/ref/tags/v3.0.2': {
     kind: 'http',
@@ -231,6 +237,7 @@ export type World = {
   removeSources(): RemoveSources;
   restartSources(): RestartSources;
   addSources(): AddSources;
+  registerSources(): RegisterSources;
   checkSources(): CheckSources;
   statusSources(): StatusSources;
   listSources(): ListSources;
@@ -661,6 +668,25 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         launch,
       };
     },
+    registerSources(): RegisterSources {
+      return {
+        home,
+        sessionState: () => (herdr === 'none' ? null : sessionState()),
+        agents: () => (herdr === 'running' ? agents() : []),
+        // Every agent herdr lists holds a CLI in front of the pane's own shell: one shell pid
+        // and one process beside it, per pane, so identity reads as a launched pane; the
+        // foreground argv0 is the one the seat's `claude-code` profile names.
+        processInfo: (_session, pane) => {
+          const index = slots.findIndex((slot) => slot.pane === pane);
+          return { shell: 5000 + index, foreground: [5001 + index] };
+        },
+        foreground: () => ['claude'],
+        paneText: (_session, pane) => action.paneText('', pane),
+        // The address a register records: the fixture runs no sockets, so the stub answers null.
+        refreshAddress: () => ({ address: null }),
+        now,
+      };
+    },
     statusSources(): StatusSources {
       return {
         live: () => live(),
@@ -704,7 +730,6 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         // real herdr or a real store.
         gate: {
           standing: standingSource(home),
-          approvedCopy: (root) => approvedCopy(root, home),
           state: (dir) => readState(dir),
           agents: () => (herdr === 'running' ? agents() : []),
           sessionRunning: () => (herdr === 'none' ? null : herdr === 'running'),

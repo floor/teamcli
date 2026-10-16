@@ -2,8 +2,9 @@
 
 Sets the team's tempo. `relaxed` doubles the watch's idle and nudge waits, `urgent` halves
 them, and `normal` leaves them as written. The five waits stay as the file wrote them; the
-word is what scales them, and `relaxed` or `urgent` takes effect when the file is approved.
-The owner alone runs it, from a terminal outside herdr.
+word is what scales them, and `relaxed` or `urgent` takes effect when the watch reads the live file.
+The owner runs it from a terminal outside herdr. With `TEAMCLI_DEV_MODE=1`, other callers
+may continue with a warning; the orchestrator and operator seats remain refused.
 
 ## Synopsis
 
@@ -29,7 +30,7 @@ as it is. A line that already says that word is not rewritten.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the word was written, or it was already that word | `tempo: <word>`. A written `relaxed` or `urgent` also says it takes effect when the file is approved | 0 |
+| the word was written, or it was already that word | `tempo: <word>` | 0 |
 | refused: not the owner | `team tempo: only the owner runs tempo, from a terminal outside herdr; this call is <caller>` | 1 |
 | it can't run: a bad word, a missing word, or the team file can't be read | `team tempo: <problem>`, with the usage for a bad word | 2 |
 
@@ -64,7 +65,6 @@ The owner sets it:
 ```console
 $ team tempo urgent ; echo "exit $?"
 tempo: urgent
-team tempo: it takes effect when the file is approved
 exit 0
 ```
 

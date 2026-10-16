@@ -33,12 +33,12 @@ const CHECKS = `budgets:
     deepseek: { kind: spend, floor: 5 USD, sources: [check], check: .agents/deepseek-balance }
 `;
 
-// One claude seat (a CLI with no quota patterns) and one codex seat (whose profile ships an
-// `openai` pattern): the account a pattern can read, and the one nothing can.
+// Claude and Codex have quota patterns; the unmatched account has none.
 const UNREADABLE = `budgets:
   marks: [50, 75, 90]
   accounts:
     anthropic: { kind: subscription, reserve: 10%, sources: [status_line] }
+    unreadable: { kind: subscription, reserve: 10%, sources: [status_line] }
     openai: { kind: subscription, reserve: 10%, sources: [status_line] }
     deepseek: { kind: spend, floor: 5 USD, sources: [check], check: .agents/deepseek-balance }
 `;
@@ -244,9 +244,8 @@ describe('accounts nothing can read', () => {
     script('deepseek-balance', 'echo "6.20 USD"\n');
     approve(source(UNREADABLE, CODEX_SEAT));
     const { io, code } = await doctor({ kind: 'owner' }, () => '6.20 USD\n');
-    // anthropic is read by a claude-code seat, whose profile ships no quota pattern; openai's
-    // codex seat has one; deepseek is read only by its check, which is fine.
-    expect(io.out).toContain('warn  anthropic: no pattern can read this account');
+    expect(io.out).toContain('warn  unreadable: no pattern can read this account');
+    expect(io.out).not.toContain('anthropic: no pattern');
     expect(io.out).not.toContain('openai: no pattern');
     expect(io.out).not.toContain('deepseek: no pattern');
     expect(code).toBe(0);

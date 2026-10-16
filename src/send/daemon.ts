@@ -37,8 +37,9 @@ import { logLine } from '../log.ts';
 import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
-import { appendHistory } from './history.ts';
-import { dropMessage, POLL_LIMIT, POLL_MS, sawSubmission, SETTLE_MS, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
+import { appendHistory, type HistoryEntry } from './history.ts';
+import { bindPane, deliverTrigger } from './deliver.ts';
+import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from './uds.ts';
 
@@ -112,6 +113,19 @@ export type DaemonSendResponse =
       outcome: 'held' | 'unreachable' | 'timeout' | 'refused';
       detail: string;
       drop_path?: string;
+    }
+  | {
+      v: 1;
+      ok: false;
+      id: string;
+      seat: string;
+      /** The trigger was typed and the seat never took it. `box` is what the input box held, not
+       *  counting faint text, or null when it could not be read. */
+      outcome: 'not-submitted';
+      detail: string;
+      box: string | null;
+      tries: number;
+      drop_path: string;
     };
 
 export type DaemonResponse =
@@ -746,6 +760,8 @@ async function executeQueuedSend(
   const who = from === 'owner' ? 'owner' : from === team.orchestrator ? 'orchestrator' : 'seat';
   const body = request.body;
   const msgId = request.id ?? randomUUID();
+  // Send to outcome is measured from here: the daemon's own handling, not the requester's wait.
+  const startedAt = Date.now();
   const configured = team.seats.find((s) => s.name === seatName);
   if (!configured) {
     const names = team.seats.map((s) => s.name);
@@ -788,6 +804,7 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason };
   }
@@ -803,6 +820,7 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
   }
@@ -849,34 +867,41 @@ async function executeQueuedSend(
     };
   }
 
-  const recordHeld = (detail: string): DaemonSendResponse => {
-    appendHistory(team.project, root, host.home, {
+  const recordHeld = (detail: string, via?: 'typed'): DaemonSendResponse => {
+    const entry: HistoryEntry = {
       ts: host.now().toISOString(),
       from,
       to: seatName,
       body,
       id: msgId,
       outcome: 'held',
-    });
+      ms: Date.now() - startedAt,
+    };
+    // The path is named only once the trigger had been typed, never for a refusal before it.
+    if (via !== undefined) entry.via = via;
+    appendHistory(team.project, root, host.home, entry);
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail, drop_path: dropPath };
   };
 
-  const recordUnreachable = (detail: string): DaemonSendResponse => {
-    appendHistory(team.project, root, host.home, {
+  const recordUnreachable = (detail: string, via?: 'typed'): DaemonSendResponse => {
+    const entry: HistoryEntry = {
       ts: host.now().toISOString(),
       from,
       to: seatName,
       body,
       id: msgId,
       outcome: 'unreachable',
-    });
+      ms: Date.now() - startedAt,
+    };
+    // The path is named only once the trigger had been typed, never for a refusal before it.
+    if (via !== undefined) entry.via = via;
+    appendHistory(team.project, root, host.home, entry);
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail, drop_path: dropPath };
   };
 
   // Bounded wait loop: wait for `acquireSeatLock` and for the seat to finish any running turn (`working`).
   const deadline = Date.now() + waitMs;
   let lock: { release(): void } | null = null;
-  let beforeStatus: string | null = null;
 
   try {
     for (;;) {
@@ -933,89 +958,46 @@ async function executeQueuedSend(
         continue;
       }
 
-      beforeStatus = status;
       break;
     }
 
-    if (!host.native.typeText(team.session, pane, trigger)) {
-      return recordUnreachable(`the pane did not take the trigger; the drop file is at ${dropPath}`);
+    // The last mile is the one `team send` itself takes: the box read with its styling, the line
+    // typed, and `delivered` only once the trigger has left the box and the seat is working.
+    const result = await deliverTrigger(bindPane(host.native, team.session), pane, trigger, configured.cli);
+    const where = `the drop file is at ${dropPath}`;
+    if (result.dialog !== undefined) return recordHeld(`the screen reads ${result.dialog}; ${where}`, 'typed');
+    if (result.outcome === 'held') return recordHeld(`${result.reason ?? 'the composer holds text'}; ${where}`, 'typed');
+    if (result.outcome === 'unreachable') return recordUnreachable(`${result.reason ?? 'the seat was not reached'}; ${where}`, 'typed');
+    if (result.outcome === 'not-submitted') {
+      appendHistory(team.project, root, host.home, {
+        ts: host.now().toISOString(),
+        from,
+        to: seatName,
+        body,
+        id: msgId,
+        outcome: 'not-submitted',
+        ms: Date.now() - startedAt,
+        via: 'typed',
+      });
+      return {
+        v: 1,
+        ok: false,
+        id: msgId,
+        seat: seatName,
+        outcome: 'not-submitted',
+        detail: `the seat did not take the trigger; ${where}`,
+        box: result.box ?? null,
+        tries: result.tries,
+        drop_path: dropPath,
+      };
     }
-    await host.native.wait(SETTLE_MS);
-
-    // Composer read-back before Enter when screen text is available.
-    const preEnterScreen = host.native.paneText?.(team.session, pane) ?? null;
-    let verifiedInBox = false;
-    if (preEnterScreen !== null) {
-      const dialog = dialogKind(configured.cli, preEnterScreen);
-      if (dialog !== null) {
-        return recordHeld(`the screen reads ${dialog}; the drop file is at ${dropPath}`);
-      }
-      const preKind = readScreen(configured.cli, preEnterScreen).kind;
-      if (preKind === 'unsent') {
-        if (!boxHoldsText(configured.cli, trigger, preEnterScreen)) {
-          return recordHeld(`the composer read-back did not match the trigger; the drop file is at ${dropPath}`);
-        }
-        verifiedInBox = true;
-      }
-    }
-
-    if (!host.native.pressEnter(team.session, pane)) {
-      return recordUnreachable(`the Enter was not taken; the drop file is at ${dropPath}`);
-    }
-
-    const pollSubmission = async (): Promise<string | null> => {
-      const samples: string[] = [];
-      for (let i = 0; i < POLL_LIMIT; i++) {
-        await host.native.wait(POLL_MS);
-        const sample = host.native.status(team.session, pane);
-        if (sample === null) return null;
-        samples.push(sample);
-        if (sawSubmission(beforeStatus, samples)) return sample;
-        if (verifiedInBox) {
-          const afterScreen = host.native.paneText?.(team.session, pane) ?? null;
-          if (afterScreen !== null && dialogKind(configured.cli, afterScreen) === null) {
-            if (readScreen(configured.cli, afterScreen).kind === 'idle') return sample;
-          }
-        }
-      }
-      return null;
-    };
-
-    let submittedStatus = await pollSubmission();
-    if (submittedStatus === null) {
-      const midScreen = host.native.paneText?.(team.session, pane) ?? null;
-      const midDialog = dialogKind(configured.cli, midScreen);
-      if (midDialog !== null) {
-        return recordHeld(`the screen reads ${midDialog}; the drop file is at ${dropPath}`);
-      }
-      // Send a second Enter only when paneText is not wired or when the composer still holds the trigger on a non-dialog screen.
-      const mayRetryEnter = midScreen === null || boxHoldsText(configured.cli, trigger, midScreen);
-      if (mayRetryEnter) {
-        if (!host.native.pressEnter(team.session, pane)) {
-          return recordUnreachable(`the Enter was not taken; the drop file is at ${dropPath}`);
-        }
-        submittedStatus = await pollSubmission();
-      }
-    }
-
-    const endScreen = host.native.paneText?.(team.session, pane) ?? null;
-    const endDialog = dialogKind(configured.cli, endScreen);
-    if (endDialog !== null) {
-      return recordHeld(`the screen reads ${endDialog}; the drop file is at ${dropPath}`);
-    }
-
-    if (submittedStatus === null) {
-      if (endScreen !== null && boxHoldsText(configured.cli, trigger, endScreen)) {
-        return recordHeld(`the trigger stayed unsent in the composer; the drop file is at ${dropPath}`);
-      }
-      return recordUnreachable(`herdr did not report the seat working; the drop file is at ${dropPath}`);
-    }
+    const submittedStatus = result.status ?? 'working';
 
     logLine(
       dir,
       'send',
       who,
-      `${seatName}: delivered (drop ${String(body.length)} characters, herdr status ${submittedStatus})`,
+      `${seatName}: delivered (drop ${String(body.length)} characters, ${result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${submittedStatus}`})`,
       host.now(),
     );
     appendHistory(team.project, root, host.home, {
@@ -1025,6 +1007,8 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'delivered',
+      ms: Date.now() - startedAt,
+      via: 'typed',
     });
     return {
       v: 1,
@@ -1057,6 +1041,8 @@ async function executeSocketSend(
   host: DaemonHost,
   alive: (pid: number) => boolean,
 ): Promise<DaemonSendResponse> {
+  // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.
+  const startedAt = Date.now();
   const frame = `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;
   if (frame.length > FRAME_LIMIT) {
     return {
@@ -1081,6 +1067,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason };
   }
@@ -1094,6 +1081,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: "the pane's processes could not be read" };
   }
@@ -1107,6 +1095,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
   }
@@ -1129,6 +1118,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'held',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail };
   }
@@ -1149,6 +1139,8 @@ async function executeSocketSend(
           body,
           id: msgId,
           outcome: 'unreachable',
+          ms: Date.now() - startedAt,
+          via: 'socket',
         });
         return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: taken.reason };
       }
@@ -1164,6 +1156,8 @@ async function executeSocketSend(
           body,
           id: msgId,
           outcome: 'answered',
+          ms: Date.now() - startedAt,
+          via: 'socket',
         });
         return { v: 1, ok: true, id: msgId, seat: seatName, outcome: 'answered', reply: read.reply, reply_id: read.msg_id };
       }
@@ -1175,6 +1169,8 @@ async function executeSocketSend(
         body,
         id: msgId,
         outcome: 'timeout',
+        ms: Date.now() - startedAt,
+        via: 'socket',
       });
       return {
         v: 1,

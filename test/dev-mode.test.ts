@@ -1,23 +1,27 @@
 // TEAMCLI_DEV_MODE=1 turns the no-approval refusal, the approved-copy mismatch, and the
-// caller-placement refusal into one warning and mounts the live file. `team down` turns its
-// caller-placement refusal into the same kind of warning. Unset, each refusal stands.
-// The run writes no approval, no signing key and no grant.
+// caller-placement refusal into one warning and mounts the live file. `team down`, `team tempo`
+// and `team broker` turn their caller-placement refusal into the same kind of warning — the
+// file's own orchestrator and operator excepted, refused in every mode. Unset, each refusal
+// stands. The run writes no approval, no signing key and no grant.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
+import { runBroker } from '../src/commands/broker.ts';
 import { runDown, type DownSources } from '../src/commands/down.ts';
+import { runTempo } from '../src/commands/tempo.ts';
+import { brokerSocket } from '../src/broker/protocol.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { keyFolder } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { readState } from '../src/state.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const NOW = new Date('2026-10-15T12:00:00Z');
 const UNPLACED = { kind: 'unplaced' as const, reason: 'it runs under herdr' };
 
@@ -49,14 +53,14 @@ seats:
 `;
 }
 
-function repo(): { root: string; home: string } {
+function repo(builder: (root: string) => string = file): { root: string; home: string } {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-dev-mode-')));
   dirs.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home, { recursive: true });
-  writeFileSync(join(root, '.agents', 'team.yaml'), file(root));
+  writeFileSync(join(root, '.agents', 'team.yaml'), builder(root));
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, env: gitEnv(), stdio: 'ignore' });
   return { root, home };
 }
@@ -326,4 +330,137 @@ function downSources(home: string, stopped: { n: number }): DownSources {
       now: () => NOW,
     },
   };
+}
+
+/** The file with a Linear task source, the one shape `team broker` will serve. */
+function linear(root: string): string {
+  return `${file(root)}tasks:
+  source: linear
+  linear:
+    project: 01234567-89ab-cdef-0123-456789abcdef
+    keychainService: team.linear.acme
+`;
+}
+
+test('team tempo refuses an unplaced caller, and the same call writes the word when TEAMCLI_DEV_MODE=1', async () => {
+  const placement = 'only the owner runs tempo, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
+  const refused = repo();
+  const refusedPath = join(refused.root, '.agents', 'team.yaml');
+  const refusedIo = testIo(refused.root, UNPLACED);
+  expect(await runTempo(['urgent'], refusedIo, { home: refused.home })).toBe(1);
+  expect(refusedIo.err).toBe(`team tempo: ${placement}\n`);
+  expect(readFileSync(refusedPath, 'utf8')).not.toContain('tempo:');
+
+  const mounted = repo();
+  const mountedPath = join(mounted.root, '.agents', 'team.yaml');
+  const mountedIo = testIo(mounted.root, UNPLACED);
+  mountedIo.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(await runTempo(['urgent'], mountedIo, { home: mounted.home })).toBe(0);
+  expect(mountedIo.err).toContain(`team tempo: warning: ${placement}; dev mode continues\n`);
+  expect(readFileSync(mountedPath, 'utf8')).toContain('tempo: urgent');
+
+  // The file's own orchestrator and operator stay refused in every mode.
+  const lead = repo();
+  const leadPath = join(lead.root, '.agents', 'team.yaml');
+  const leadIo = testIo(lead.root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+  leadIo.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(await runTempo(['urgent'], leadIo, { home: lead.home })).toBe(1);
+  expect(leadIo.err).toBe('team tempo: only the owner runs tempo, from a terminal outside herdr; this call is lead\n');
+  expect(readFileSync(leadPath, 'utf8')).not.toContain('tempo:');
+});
+
+test('team broker refuses an unplaced caller, and the same call reaches the socket when TEAMCLI_DEV_MODE=1', async () => {
+  const placement = 'only the owner runs `broker`, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
+  const keyReader = async () => ({ ok: true as const, key: 'test-key-not-real' });
+  // A regular file where the socket belongs: a run past every gate ends on that one line, and
+  // the credential read stands between the placement gate and it.
+  const refused = repo(linear);
+  writeFileSync(brokerSocket(refused.root), 'not a socket');
+  const reads = { n: 0 };
+  const refusedIo = testIo(refused.root, UNPLACED);
+  expect(await runBroker([], refusedIo, {
+    home: refused.home,
+    keyReader: async () => {
+      reads.n += 1;
+      return { ok: true as const, key: 'test-key-not-real' };
+    },
+  })).toBe(1);
+  expect(refusedIo.err).toBe(`team broker: ${placement}\n`);
+  expect(reads.n).toBe(0);
+
+  const mounted = repo(linear);
+  writeFileSync(brokerSocket(mounted.root), 'not a socket');
+  const mountedIo = testIo(mounted.root, UNPLACED);
+  mountedIo.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(await runBroker([], mountedIo, {
+    home: mounted.home,
+    keyReader: async () => {
+      reads.n += 1;
+      return { ok: true as const, key: 'test-key-not-real' };
+    },
+  })).toBe(1);
+  expect(mountedIo.err).toContain(`team broker: warning: ${placement}; dev mode continues\n`);
+  expect(mountedIo.err).toContain('team broker: the socket could not be bound\n');
+  expect(reads.n).toBe(1);
+
+  // The file's own orchestrator and operator stay refused in every mode, before the credential.
+  const lead = repo(linear);
+  writeFileSync(brokerSocket(lead.root), 'not a socket');
+  const leadIo = testIo(lead.root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+  leadIo.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(await runBroker([], leadIo, { home: lead.home, keyReader })).toBe(1);
+  expect(leadIo.err).toBe('team broker: only the owner runs `broker`, from a terminal outside herdr; this call is lead\n');
+  expect(reads.n).toBe(1);
+});
+
+function separateOperator(root: string): string {
+  return file(root).replace('operator: lead', 'operator: operator') + `  - role: operator
+    name: operator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+}
+
+for (const name of ['lead', 'operator']) {
+  test(`dev mode keeps ${name}'s own tempo and broker placement guards`, async () => {
+    const made = repo(separateOperator);
+    const path = join(made.root, '.agents', 'team.yaml');
+    const before = readFileSync(path, 'utf8');
+    const caller = { kind: 'seat' as const, name, pane: 'w1:p1', session: 'acme' };
+    const tempoIo = testIo(made.root, caller);
+    tempoIo.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runTempo(['urgent'], tempoIo, { home: made.home })).toBe(1);
+    expect(tempoIo.err).toContain(`this call is ${name}`);
+    expect(tempoIo.err).not.toContain('dev mode continues');
+    expect(readFileSync(path, 'utf8')).toBe(before);
+
+    const brokerIo = testIo(made.root, caller);
+    brokerIo.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runBroker([], brokerIo, {
+      home: made.home,
+      keyReader: async () => { throw new Error('a refused seat read credentials'); },
+    })).toBe(1);
+    expect(brokerIo.err).toContain(`this call is ${name}`);
+    expect(brokerIo.err).not.toContain('dev mode continues');
+  });
+}
+
+for (const value of ['', '0', 'true']) {
+  test(`dev mode ${JSON.stringify(value)} does not waive tempo or broker placement`, async () => {
+    const made = repo();
+    const tempoIo = testIo(made.root, UNPLACED);
+    tempoIo.env = { TEAMCLI_DEV_MODE: value };
+    expect(await runTempo(['urgent'], tempoIo, { home: made.home })).toBe(1);
+    expect(tempoIo.err).not.toContain('dev mode continues');
+    const brokerIo = testIo(made.root, UNPLACED);
+    brokerIo.env = { TEAMCLI_DEV_MODE: value };
+    expect(await runBroker([], brokerIo, {
+      home: made.home,
+      keyReader: async () => { throw new Error('a refused caller read credentials'); },
+    })).toBe(1);
+    expect(brokerIo.err).not.toContain('dev mode continues');
+  });
 }

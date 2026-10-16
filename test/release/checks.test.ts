@@ -216,7 +216,7 @@ describe('the tag check', () => {
   test('a 404 on the ref is missing, and no downstream tag read is requested', async () => {
     const { result, requested } = await run(withAnswer(happy(), URLS.ref, json({}, 404)));
     expect(result.tag).toEqual({ status: 'missing', detail: 'GitHub has no tag v3.0.2' });
-    expect(requested).toEqual([URLS.npm, URLS.attest, URLS.repo, URLS.ref, URLS.release, URLS.changelog]);
+    expect(requested).toEqual([URLS.npm, URLS.attest, URLS.tags, URLS.repo, URLS.ref, URLS.release, URLS.changelog]);
   });
 
   test('a tag object 404 is missing', async () => {
@@ -316,7 +316,7 @@ describe('the tag check', () => {
     const { result, requested } = await run(withAnswer(happy(), URLS.repo, json({}, 404)));
     expect(result.tag).toEqual({ status: 'missing', detail: 'GitHub has no repository floor/material' });
     expect(result.changelog.status).toBe('missing');
-    expect(requested).toEqual([URLS.npm, URLS.attest, URLS.repo, URLS.ref, URLS.release]);
+    expect(requested).toEqual([URLS.npm, URLS.attest, URLS.tags, URLS.repo, URLS.ref, URLS.release]);
   });
 
   test('a repository record without a default branch is unknown for tag and changelog', async () => {
@@ -438,6 +438,57 @@ describe('the changelog check', () => {
   });
 });
 
+describe('the stale next warning', () => {
+  const STALE = "npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next";
+  const tags = (latest: unknown, next: unknown): Answers => withAnswer(happy(), URLS.tags, json({ latest, next }));
+  const everyCheckPasses = (result: ReleaseResult): void => {
+    for (const check of Object.values(result)) if (typeof check !== 'string') expect(check.status).toBe('pass');
+  };
+
+  test('a next tag behind latest warns once, naming the exact npm command, and no check changes', async () => {
+    const { result, requested } = await run(tags('3.0.2', '3.0.1'));
+    expect(result.warning).toBe(STALE);
+    expect(requested).toContain(URLS.tags);
+    everyCheckPasses(result);
+  });
+
+  test('a next tag level with or ahead of latest is silent', async () => {
+    const cases: [string, string][] = [['3.0.2', '3.0.2'], ['3.0.2', '3.0.3'], ['3.0.2', '4.0.0'], ['4.0.0', '5.0.0-rc.1']];
+    for (const [latest, next] of cases) expect((await run(tags(latest, next))).result.warning).toBeUndefined();
+  });
+
+  test('the prerelease order decides: 3.0.0-rc.1 is behind 3.0.0', async () => {
+    const behind = await run(tags('3.0.0', '3.0.0-rc.1'));
+    expect(behind.result.warning).toBe(
+      "npm's next dist-tag points at 3.0.0-rc.1, older than latest 3.0.0: run npm dist-tag add material@3.0.0 next",
+    );
+    expect((await run(tags('3.0.0-rc.1', '3.0.0'))).result.warning).toBeUndefined();
+  });
+
+  test('tags that cannot be compared are no warning: absent, non-string, or not a version', async () => {
+    const cases: [unknown, unknown][] = [
+      [undefined, '3.0.1'], ['3.0.2', undefined], ['3.0.2', null], [3.02, '3.0.1'], ['3.0.2', 301],
+      ['3.0.2', 'latest'], ['3.0.2', 'v3.0.1'], ['not-a-version', '3.0.1'],
+    ];
+    for (const [latest, next] of cases) expect((await run(tags(latest, next))).result.warning).toBeUndefined();
+  });
+
+  test('a dist-tags read that fails is silent: a 404, and a 500 twice', async () => {
+    const stale = { latest: '3.0.2', next: '3.0.1' };
+    const absent = await run(withAnswer(happy(), URLS.tags, json(stale, 404)));
+    expect(absent.result.warning).toBeUndefined();
+    const twice = await run(withAnswer(happy(), URLS.tags, [json(stale, 500), json(stale, 500)]));
+    expect(twice.result.warning).toBeUndefined();
+    // The failed read is still a read: it is retried once, like every other endpoint.
+    expect(twice.requested.filter((url) => url === URLS.tags).length).toBe(2);
+  });
+
+  test('a body that is not the JSON document is silent too', async () => {
+    const garbage = await run(withAnswer(happy(), URLS.tags, { kind: 'http', status: 200, body: 'not json' }));
+    expect(garbage.result.warning).toBeUndefined();
+  });
+});
+
 describe('the network contract', () => {
   test('a 500 is retried exactly once: 500 then 200 passes, 500 twice is unknown', async () => {
     const answers = happy();
@@ -537,13 +588,13 @@ describe('the network contract', () => {
     expect(retried({ kind: 'undecodable', status: 200 })).toBe(false);
   });
 
-  test('the maximal run stays inside the caps: eleven reads, twenty-two attempts', async () => {
+  test('the maximal run stays inside the caps: twelve reads, twenty-four attempts', async () => {
     // Trusted publishing and a chain of four tag objects: every endpoint read there is, each
     // answered 500 then 200, so every read costs both its attempts.
     const shas = ['b', 'c', 'd', 'e'].map((letter) => letter.repeat(40));
     const chain = [TAG_OBJECT, ...shas];
     const urls = [
-      URLS.npm, URLS.attest, URLS.repo, URLS.ref,
+      URLS.npm, URLS.attest, URLS.tags, URLS.repo, URLS.ref,
       ...chain.slice(0, 4).map((sha) => `https://api.github.com/repos/floor/material/git/tags/${sha}`),
       `https://api.github.com/repos/floor/material/compare/${shas[3]}...main`,
       URLS.release, URLS.changelog,
@@ -551,6 +602,7 @@ describe('the network contract', () => {
     const ok = new Map<string, Record<string, unknown>>([
       [URLS.npm, fixture('npm-version.json')],
       [URLS.attest, fixture('npm-attestations.json')],
+      [URLS.tags, { latest: '3.0.2', next: '3.0.2' }],
       [URLS.repo, fixture('github-repo.json')],
       [URLS.ref, fixture('github-tag-ref-annotated.json')],
       [URLS.release, fixture('github-release.json')],
@@ -564,9 +616,10 @@ describe('the network contract', () => {
     const answers: Answers = new Map(urls.map((url) => [url, [json({}, 500), json(ok.get(url) as Record<string, unknown>)]]));
     const { result, requested } = await run(answers);
     expect(new Set(requested)).toEqual(new Set(urls));
-    expect(urls.length).toBe(11);
-    expect(requested.length).toBe(22);
-    for (const check of Object.values(result)) expect(check.status).toBe('pass');
+    expect(urls.length).toBe(12);
+    expect(requested.length).toBe(24);
+    expect(result.warning).toBeUndefined();
+    for (const check of Object.values(result)) if (typeof check !== 'string') expect(check.status).toBe('pass');
   });
 
   test('a read that would exceed the read cap is not made, and its checks are unknown', async () => {
@@ -593,6 +646,7 @@ describe('the encoding', () => {
     // Every read fails and is retried here; the assertion is on the URLs themselves.
     expect(requested).toContain('https://registry.npmjs.org/%40scope%2Fname/1.2.3');
     expect(requested).toContain('https://registry.npmjs.org/-/npm/v1/attestations/%40scope%2Fname%401.2.3');
+    expect(requested).toContain('https://registry.npmjs.org/-/package/%40scope%2Fname/dist-tags');
     for (const url of requested) expect(url).not.toContain('@scope');
   });
 
@@ -621,7 +675,7 @@ describe('the compound rule', () => {
   test('no short-circuit after a missing condition: independent reads are still made', async () => {
     const { result, requested } = await run(withAnswer(happy(), URLS.npm, json({}, 404)));
     expect(result.npm.status).toBe('missing');
-    expect(requested).toEqual([URLS.npm, URLS.attest, URLS.repo, URLS.ref, URLS.compare, URLS.release, URLS.changelog]);
+    expect(requested).toEqual([URLS.npm, URLS.attest, URLS.tags, URLS.repo, URLS.ref, URLS.compare, URLS.release, URLS.changelog]);
     expect(result.tag.status).toBe('pass');
     expect(result.github.status).toBe('pass');
     expect(result.changelog.status).toBe('pass');
@@ -633,6 +687,6 @@ describe('the compound rule', () => {
     const { result, requested } = await run(answers);
     expect(result.tag.status).toBe('unknown');
     expect(requested).not.toContain(URLS.compare);
-    expect(requested).toEqual([URLS.npm, URLS.attest, URLS.repo, URLS.ref, URLS.ref, URLS.release, URLS.changelog]);
+    expect(requested).toEqual([URLS.npm, URLS.attest, URLS.tags, URLS.repo, URLS.ref, URLS.ref, URLS.release, URLS.changelog]);
   });
 });

@@ -23,10 +23,10 @@ import { emptySession, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import type { DownLaunch } from '../../src/commands/down.ts';
 import type { Launch } from '../../src/commands/up.ts';
-import { claudeBox, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-15T09:00:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 let base: string;
 let project: string;
@@ -277,19 +277,24 @@ describe('remove --keep and add between two approvals', () => {
     expect(ownerSectionsHeld(project, home)).toBe(true);
   });
 
-  test('the add restores a plain-removed seat from B, and B is what the file and the approval hold', async () => {
+  test('add does not restore a plain-removed seat from the stored copy of B', async () => {
     // B is approved with the worker in it and the limits changed; a plain remove then
-    // takes the stanza out of the live file and re-signs nothing, so the seat can come
-    // back only from the approved copy.
+    // takes the stanza out of the live file and re-signs nothing. The stored stanza
+    // cannot make the seat eligible for add: it must be declared in the live file.
     const b = fileA().replace('  seats: 6', '  seats: 32');
     approveFile(b);
     record({ lead: 'lead-pane', worker: 'w1:p1' });
     const stop = testIo(project, owner);
     expect(await runRemove(['worker'], stop, removeSources([WORKER_AGENT])), `${stop.out}${stop.err}`).toBe(0);
     expect(liveText()).not.toContain('name: worker');
+    const removed = liveText();
+    const stored = storedFile();
+    expect(stored).toContain('name: worker');
     const add = testIo(project, owner);
-    expect(await runAdd(['worker'], add, addSources(world())), `${add.out}${add.err}`).toBe(0);
-    expect(liveText()).toContain('name: worker');
+    expect(await runAdd(['worker'], add, addSources(world())), `${add.out}${add.err}`).toBe(1);
+    expect(add.err).toContain('the file has no seat "worker"');
+    expect(liveText()).toBe(removed);
+    expect(storedFile()).toBe(stored);
     expectOwnerSections(liveText(), b, ['  seats: 6']);
     expectOwnerSections(storedFile(), b, ['  seats: 6']);
     expect(ownerSectionsHeld(project, home)).toBe(true);

@@ -1,7 +1,7 @@
-// The two record checks that gate a `worktree remove`, at the sentences the internal page
-// carries — a page no test walks. Each row tampers the unsigned state the way the guard exists
-// for, and proves three things at once: the refusal is the page's whole line, the exit is 1,
-// and "nothing was removed" is literal — the folder and the record both survive as they were.
+// The checks that gate a `worktree remove`: the recorded path, and the branch. The branch is the
+// worktree's own, read from `git worktree list --porcelain` — the record's branch is a hint, and
+// the workspace pattern derives nothing. Each refusal scene proves the page's whole line, the exit,
+// and that "nothing was removed" is literal — the folder and the record both survive as they were.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -101,44 +101,49 @@ beforeEach(() => {
 
 afterEach(() => rmSync(base, { recursive: true, force: true }));
 
-describe('the record checks that gate a worktree remove', () => {
-  test('a recorded branch wiped empty is refused with the page\'s whole line, and nothing is removed', async () => {
-    await make('select-width');
-    tamper('select-width', { branch: '' });
+describe('the path check, and the branch the worktree really is on', () => {
+  test('a tampered recorded branch blocks nothing: the branch read from git is the one named', async () => {
+    for (const branch of ['', 'main', 'fix/other-task']) {
+      await make('select-width');
+      tamper('select-width', { branch });
 
-    const io = testIo(project, owner);
-    expect(await runWorktree(['remove', 'select-width'], io, sources)).toBe(1);
-    expect(io.err).toBe(
-      'team worktree: the recorded branch "" does not match "{kind}/{task}" for "select-width"; nothing was removed\n',
-    );
-    // "Nothing was removed" is literal: the folder stands and the record stands, tampered field and all.
-    expect(existsSync(join(base, 'worktrees', 'acme', 'select-width', 'README.md'))).toBe(true);
-    expect(record('select-width')?.branch).toBe('');
+      const io = testIo(project, owner);
+      expect(await runWorktree(['remove', 'select-width'], io, sources), `recorded branch ${JSON.stringify(branch)}`).toBe(0);
+      expect(io.out).toBe('removed select-width; the branch fix/select-width is kept\n');
+      expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
+      expect(record('select-width')).toBeUndefined();
+      git(project, 'branch', '-D', 'fix/select-width');
+    }
   });
 
-  test('a recorded branch pointed at the base is refused with the page\'s whole line', async () => {
+  test('a branch renamed in the worktree is the branch read and named', async () => {
     await make('select-width');
-    tamper('select-width', { branch: 'main' });
+    git(join(base, 'worktrees', 'acme', 'select-width'), 'branch', '-m', 'fix/select-width', 'fix/size-of-pane');
 
     const io = testIo(project, owner);
-    expect(await runWorktree(['remove', 'select-width'], io, sources)).toBe(1);
+    expect(await runWorktree(['remove', 'select-width'], io, sources)).toBe(0);
+    expect(io.out).toBe('removed select-width; the branch fix/size-of-pane is kept\n');
+  });
+
+  test('--branch naming another branch is refused with the page\'s whole line, and nothing is removed', async () => {
+    await make('select-width');
+
+    const io = testIo(project, owner);
+    expect(await runWorktree(['remove', 'select-width', '--branch', 'fix/other'], io, sources)).toBe(1);
     expect(io.err).toBe(
-      'team worktree: the recorded branch "main" does not match "{kind}/{task}" for "select-width"; nothing was removed\n',
+      'team worktree: --branch "fix/other" does not name the branch this worktree is on ("fix/select-width"); nothing was removed\n',
     );
+    // "Nothing was removed" is literal: the folder stands and so does the record.
+    expect(existsSync(join(base, 'worktrees', 'acme', 'select-width', 'README.md'))).toBe(true);
     expect(record('select-width')).toBeDefined();
   });
 
-  test('a branch that fills the pattern for another task does not fill it for this one', async () => {
+  test('--branch naming the branch the worktree is on removes it', async () => {
     await make('select-width');
-    await make('other-task');
-    tamper('select-width', { branch: 'fix/other-task' });
 
     const io = testIo(project, owner);
-    expect(await runWorktree(['remove', 'select-width'], io, sources)).toBe(1);
-    expect(io.err).toBe(
-      'team worktree: the recorded branch "fix/other-task" does not match "{kind}/{task}" for "select-width"; nothing was removed\n',
-    );
-    expect(record('select-width')?.branch).toBe('fix/other-task');
+    expect(await runWorktree(['remove', 'select-width', '--branch', 'fix/select-width'], io, sources)).toBe(0);
+    expect(io.out).toBe('removed select-width; the branch fix/select-width is kept\n');
   });
 
   test('a record wrong on both counts answers the path sentence alone', async () => {
@@ -151,8 +156,8 @@ describe('the record checks that gate a worktree remove', () => {
     expect(io.err).toBe(
       'team worktree: the recorded path "../worktrees/acme/other-task" is not "../worktrees/acme/select-width"; nothing was removed\n',
     );
-    // The path check speaks first; the branch check never adds its sentence beside it.
-    expect(io.err).not.toContain('does not match');
+    // The path check speaks first; the branch read never adds a sentence beside it.
+    expect(io.err).not.toContain('does not name the branch');
     expect(record('select-width')?.path).toBe('../worktrees/acme/other-task');
     expect(existsSync(join(base, 'worktrees', 'acme', 'other-task', 'README.md'))).toBe(true);
   });

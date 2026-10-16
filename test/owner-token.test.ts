@@ -207,21 +207,26 @@ describe('team up with an out-of-band owner token', () => {
     return { code, out: io.out, err: io.err };
   }
 
-  test('a matching token drops the "only the owner" refusal; a wrong or absent token keeps it', async () => {
+  test('a matching token drops the "only the owner" refusal; a wrong or absent token keeps it, in the dry run\'s words', async () => {
     const p = place();
     const team = approvedPlace(p, TEXT);
     const standing = verified(team, TEXT, p.root);
     const fp = upFingerprint(fingerprints(team), 1);
 
+    // A dry run is never answered with the bare word: the caller the run does not admit is told
+    // the reason and the owner's own command instead, through the same refusal the real run
+    // denies on (this file's real runs are the boundary scenes').
     const without = await upDry(p, SEAT, {}, standing);
     expect(without.code).toBe(1);
-    expect(without.err).toBe('deny\n');
-    expect(without.out).toBe('');
+    expect(without.err).toBe('');
+    expect(without.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
+    expect(without.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
 
     const wrong = await upDry(p, SEAT, { TEAM_OWNER_APPROVAL: `${fp}00` }, standing);
     expect(wrong.code).toBe(1);
-    expect(wrong.err).toBe('deny\n');
-    expect(wrong.out).toBe('');
+    expect(wrong.err).toBe('');
+    expect(wrong.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
+    expect(wrong.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
 
     const withToken = await upDry(p, SEAT, { TEAM_OWNER_APPROVAL: fp }, standing);
     expect(withToken.err).toBe('');
