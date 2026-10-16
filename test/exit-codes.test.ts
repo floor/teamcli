@@ -70,6 +70,7 @@ import type { Machine } from '../src/watch/machine.ts';
 import { analyze, loadContract, problems, render, type ExitRow } from '../scripts/exit-codes.ts';
 import { runRelease } from '../src/commands/release.ts';
 import type { KeyReader } from '../src/release/keychain.ts';
+import { skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
 import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/world.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
@@ -521,6 +522,10 @@ function spendReading(): Seen {
   };
 }
 
+// A local run may narrow the scenes to the ids the diff touches (`TEAM_EXIT_IDS`). The map
+// stays complete under a filter — the invariants below read it — and the filter only
+// narrows which scenes get a test registered.
+const wanted = wantedScenes(process.env.TEAM_EXIT_IDS);
 const scenes = new Map<string, Scene>();
 const bare = new Set<string>();
 function scene(id: string, run: Scene, repo = true): void {
@@ -3728,8 +3733,15 @@ for (const [name, command, args, invalidArgs] of [
 const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
 
 const contract = loadContract();
+if (wanted !== null) {
+  const runnable = [...wanted].filter((id) => scenes.has(id)).length;
+  console.error(
+    `exit-codes: selected ${String(runnable)} of ${String(scenes.size)} scenes; analyzer probes skipped (the checks against this repo still run)`,
+  );
+}
 for (const row of contract.rows) {
   if (defensive.has(row.id)) continue;
+  if (skipsScene(wanted, row.id)) continue;
   test(row.id, async () => {
     const run = scenes.get(row.id);
     expect(run, row.id).toBeDefined();
@@ -3772,8 +3784,11 @@ function refusalCore(text: string): string {
 
 for (const command of ['up', 'down', 'add', 'register'] as const) {
   test(`${command}: a refused dry run exits as the real run`, async () => {
-    const ids = refusalIds(command);
-    expect(ids.length).toBeGreaterThan(0);
+    const all = refusalIds(command);
+    expect(all.length).toBeGreaterThan(0);
+    // A local filter narrows which refusals this run proves; CI runs every one of them.
+    const ids = all.filter((id) => !skipsScene(wanted, id));
+    if (ids.length === 0) return;
     const drySite = analyze().sites.find((site) => site.ids.includes(`${command}.dry-run`));
     expect(drySite?.codes).toEqual([0]);
     expect(drySite?.ids).toEqual([`${command}.dry-run`]);
@@ -3821,11 +3836,22 @@ test('every listed outcome has a run', () => {
   expect(scenes.size + defensive.size).toBe(ids.length);
 });
 
+test('the filter names only ids the contract has', () => {
+  expect(unknownScenes(wanted, contract.rows.map((row) => row.id)), 'TEAM_EXIT_IDS names an id with no contract row').toEqual([]);
+});
+
 test('the exit-code check is clean', () => {
   expect(problems()).toEqual([]);
 });
 
-test('a new return that reuses a code fails the check', () => {
+// The analyzer's own probes: crafted fixtures fed to the analyzer, never this repo's files. A
+// filtered local run (`TEAM_EXIT_IDS`) skips them — a feature diff cannot change what they feed
+// the analyzer — and CI runs every one of them. The checks above read this repo and always run.
+const analyzerTest = (name: string, fn: () => void): void => {
+  if (wanted === null) test(name, fn);
+};
+
+analyzerTest('a new return that reuses a code fails the check', () => {
   const text = readFileSync(new URL('../src/commands/doctor.ts', import.meta.url), 'utf8');
   const next = text.replace('return missing ? 1 : 0;\n}', 'return missing ? 1 : 0;\n  return 1;\n}');
   const found = problems({ files: new Map([['src/commands/doctor.ts', next]]) });
@@ -3840,13 +3866,13 @@ function canon(rows: readonly ExitRow[]): string {
   }, null, 2)}\n`;
 }
 
-test('removing a row fails the check', () => {
+analyzerTest('removing a row fails the check', () => {
   const rows = contract.rows.filter((row) => row.id !== 'doctor.clear');
   const found = problems({ contractText: canon(rows), page: render(rows) });
   expect(found.some((line) => line.includes('doctor.clear') && line.includes('no contract row'))).toBe(true);
 });
 
-test('changing a returned code fails the check', () => {
+analyzerTest('changing a returned code fails the check', () => {
   const text = readFileSync(new URL('../src/commands/doctor.ts', import.meta.url), 'utf8');
   const next = text.replace('return missing ? 1 : 0;', 'return missing ? 3 : 0;');
   const found = problems({ files: new Map([['src/commands/doctor.ts', next]]) });
@@ -3865,24 +3891,24 @@ function rejects(files: Map<string, string>): boolean {
   return problems({ files }).some((line) => line.includes('src/commands/doctor.ts') && line.includes(UNREADABLE));
 }
 
-test('an implicit arrow return fails the check', () => {
+analyzerTest('an implicit arrow return fails the check', () => {
   const files = withDoctor("  const reviewGateProbe = (): 1 => 1;\n  if (argv[0] === '--gate-probe') return reviewGateProbe();\n");
   expect(rejects(files)).toBe(true);
 });
 
-test('an identifier return fails the check', () => {
+analyzerTest('an identifier return fails the check', () => {
   const files = withDoctor("  const probeCode = 1;\n  if (argv[0] === '--gate-probe') return probeCode;\n");
   expect(rejects(files)).toBe(true);
 });
 
-test('a throw in an imported helper is covered by team.command-threw', () => {
+analyzerTest('a throw in an imported helper is covered by team.command-threw', () => {
   const files = withDoctor("  if (argv[0] === '--gate-probe') gateThrow();\n", "import { gateThrow } from './gate-throw.ts';\n");
   files.set('src/commands/gate-throw.ts', "export function gateThrow(): void {\n  throw new Error('gate');\n}\n");
   expect(problems({ files })).toEqual([]);
   expect(analyze(files).coveredThrows.some((item) => item.file === 'src/commands/gate-throw.ts' && item.id === 'team.command-threw')).toBe(true);
 });
 
-test('a default-parameter call fails the check', () => {
+analyzerTest('a default-parameter call fails the check', () => {
   const files = withDoctor(
     "  if (argv[0] === '--gate-probe') return probeDefault();\n",
     'function hidden(): number { return 1; }\nfunction probeDefault(code = hidden()): number { return code; }\n',
@@ -3890,7 +3916,7 @@ test('a default-parameter call fails the check', () => {
   expect(rejects(files)).toBe(true);
 });
 
-test('an awaited helper return fails the check', () => {
+analyzerTest('an awaited helper return fails the check', () => {
   const files = withDoctor(
     "  if (argv[0] === '--gate-probe') return await later();\n",
     'async function later(): Promise<number> { return 1; }\n',
@@ -3899,7 +3925,7 @@ test('an awaited helper return fails the check', () => {
   expect(found.some((line) => line.includes('exit site has no row'))).toBe(true);
 });
 
-test('a switch that falls through fails the check', () => {
+analyzerTest('a switch that falls through fails the check', () => {
   const files = withDoctor(
     "  if (argv[0] === '--gate-probe') return switched(argv[0] ?? '');\n",
     "function switched(flag: string): number {\n  let value = 1;\n  switch (flag) {\n    case 'a':\n      value = 1;\n    default:\n      return value;\n  }\n}\n",
@@ -3907,7 +3933,7 @@ test('a switch that falls through fails the check', () => {
   expect(rejects(files)).toBe(true);
 });
 
-test('return void 0 ?? 1 fails the check', () => {
+analyzerTest('return void 0 ?? 1 fails the check', () => {
   const files = withDoctor("  if (argv[0] === '--gate-probe') return void 0 ?? 1;\n");
   expect(rejects(files)).toBe(true);
 });
@@ -3916,17 +3942,17 @@ function namesLine(files: Map<string, string>, file: string): boolean {
   return problems({ files }).some((line) => new RegExp(`${file}:\\d+:`).test(line));
 }
 
-test('process.exit with no argument fails the check', () => {
+analyzerTest('process.exit with no argument fails the check', () => {
   const files = withDoctor("  if (argv[0] === '--gate-probe') process.exit();\n");
   expect(namesLine(files, 'src/commands/doctor.ts')).toBe(true);
 });
 
-test('a module-level process.exit fails the check', () => {
+analyzerTest('a module-level process.exit fails the check', () => {
   const files = withDoctor('', "if (process.env.GATE_PROBE === '1') process.exit(17);\n");
   expect(namesLine(files, 'src/commands/doctor.ts')).toBe(true);
 });
 
-test('a default call that is not the command table fails the check', () => {
+analyzerTest('a default call that is not the command table fails the check', () => {
   const text = readFileSync(new URL('../src/cli.ts', import.meta.url), 'utf8');
   const next = text.replace(
     'return command.default(rest, io);',
@@ -3936,7 +3962,7 @@ test('a default call that is not the command table fails the check', () => {
   expect(namesLine(files, 'src/cli.ts')).toBe(true);
 });
 
-test('a function name declared twice fails the check', () => {
+analyzerTest('a function name declared twice fails the check', () => {
   const files = withDoctor(
     "  function probeShadow(): number { return 17; }\n  if (argv[0] === '--gate-probe') return probeShadow();\n",
     'function probeShadow(): number { return runDoctor(); }\n',
@@ -3944,7 +3970,7 @@ test('a function name declared twice fails the check', () => {
   expect(namesLine(files, 'src/commands/doctor.ts')).toBe(true);
 });
 
-test('a followed helper with no return fails the check', () => {
+analyzerTest('a followed helper with no return fails the check', () => {
   const files = withDoctor(
     "  if (argv[0] === '--gate-probe') return noReturn() as never;\n",
     'function noReturn(): never {}\n',
@@ -3962,7 +3988,7 @@ function withTable(line: string, added: readonly (readonly [string, string])[] =
   return new Map([['src/cli.ts', next], ...added]);
 }
 
-test('a re-exported command fails the check', () => {
+analyzerTest('a re-exported command fails the check', () => {
   const files = withTable(
     "probe: () => import('./commands/probe.ts'),",
     [['src/commands/probe.ts', "export { default, USAGE } from './doctor.ts';\n"]],
@@ -3970,7 +3996,7 @@ test('a re-exported command fails the check', () => {
   expect(problems({ files }).some((line) => line.includes('src/commands/probe.ts') && line.includes(UNROOTED))).toBe(true);
 });
 
-test('a command file with no default export fails the check', () => {
+analyzerTest('a command file with no default export fails the check', () => {
   const files = withTable(
     "probeEmpty: () => import('./commands/probe-empty.ts'),",
     [['src/commands/probe-empty.ts', "export const USAGE = 'probe';\n"]],
@@ -3978,13 +4004,13 @@ test('a command file with no default export fails the check', () => {
   expect(problems({ files }).some((line) => line.includes('src/commands/probe-empty.ts') && line.includes(UNROOTED))).toBe(true);
 });
 
-test('a table entry outside src/commands fails the check', () => {
+analyzerTest('a table entry outside src/commands fails the check', () => {
   const files = withTable("probe: () => import('./outside.ts'),");
   const found = problems({ files });
   expect(found.some((line) => line.includes('probe') && line.includes('src/outside.ts') && line.includes("an entry in the commands table whose module the gate didn't walk"))).toBe(true);
 });
 
-test('a default export imported from another file fails the check', () => {
+analyzerTest('a default export imported from another file fails the check', () => {
   const files = withTable(
     "probeAlias: () => import('./commands/probe-alias.ts'),",
     [['src/commands/probe-alias.ts', "import run from './doctor.ts';\nexport default run;\n"]],
@@ -3992,20 +4018,20 @@ test('a default export imported from another file fails the check', () => {
   expect(problems({ files }).some((line) => line.includes('src/commands/probe-alias.ts') && line.includes(UNROOTED))).toBe(true);
 });
 
-test('a walked command file missing from the table fails the check', () => {
+analyzerTest('a walked command file missing from the table fails the check', () => {
   const text = readFileSync(new URL('../src/cli.ts', import.meta.url), 'utf8');
   const next = text.replace("  add: () => import('./commands/add.ts'),\n", '');
   const found = problems({ files: new Map([['src/cli.ts', next]]) });
   expect(found.some((line) => line.includes('src/commands/add.ts') && line.includes('a walked file that is in no table entry'))).toBe(true);
 });
 
-test('a second table key for one file fails the check', () => {
+analyzerTest('a second table key for one file fails the check', () => {
   const files = withTable("probe: () => import('./commands/doctor.ts'),");
   const found = problems({ files });
   expect(found.some((line) => line.includes('doctor and probe load src/commands/doctor.ts'))).toBe(true);
 });
 
-test('a table key that is not the module name fails the check', () => {
+analyzerTest('a table key that is not the module name fails the check', () => {
   const text = readFileSync(new URL('../src/cli.ts', import.meta.url), 'utf8');
   const next = text.replace(
     "  doctor: () => import('./commands/doctor.ts'),\n",
@@ -4239,7 +4265,8 @@ const unreadForms: { name: string; files: Map<string, string>; needle: string; e
     { name: 'reportFailure returns a helper', files: failureMoved(), needle: 'says code 1, the site returns 2' },
 ];
 
-test.each(unreadForms)('$name fails the check', (row) => {
+// The unreadable-form fixtures are analyzer probes too, skipped under a filter for the reason above.
+test.each(wanted === null ? unreadForms : [])('$name fails the check', (row) => {
   const found = problems(row.extra
     ? { files: row.files, contractText: canon([...contract.rows, ...row.extra]), page: render([...contract.rows, ...row.extra]) }
     : { files: row.files });
