@@ -15,7 +15,8 @@ import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import type { Problem, TeamFile } from '../file/types.ts';
+import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
+import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
@@ -24,6 +25,7 @@ import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { emptySession, readState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
+import { observeLabel } from '../labels/observe.ts';
 import { seatModel } from '../status/statusline.ts';
 import type { Standing } from '../store/store.ts';
 import type { Attention } from '../watch/check.ts';
@@ -157,6 +159,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...comparison.differences,
     ...signingDifferences(team, live, root, sources.home),
     ...attentionDifferences(team, state, live),
+    ...labelDifferences(team, state, live),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same row `status` prints: a legacy record or one the verification refused still says what
     // it is; a machine that never approved the file is the ordinary file now, and nothing to repair.
@@ -248,6 +251,69 @@ function attentionDifferences(team: TeamFile, state: SessionState, live: Live): 
     if (view) out.push(view);
   }
   return out;
+}
+
+/**
+ * The two herdr sidebar lines a file seat carries, as differences when they read as neither the
+ * file's own text nor a line the watch is entitled to paint. Line 1 is exactly
+ * `workspaceLabel(seat)` — nothing else writes it — so any other label is drift. Line 2 is the
+ * watch's (`src/labels/observe.ts`): it may carry the model the pane shows in place of the file's
+ * display, and an effort word read from a screen, so a line the observation explains is left
+ * alone. The repair is `team register <seat>`, which re-applies both lines from the file without
+ * a relaunch. One pane per seat, the one this project's state records — the same read the
+ * attention report makes.
+ */
+function labelDifferences(team: TeamFile, state: SessionState, live: Live): Difference[] {
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    const recorded = state.seats[seat.name]?.pane;
+    if (recorded === undefined) continue;
+    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    if (!agent || agent.pane !== recorded) continue;
+    const title = live.workspaces.find((workspace) => workspace.id === agent.workspace)?.label;
+    if (title !== undefined && title !== workspaceLabel(seat)) {
+      out.push({
+        what: `${seat.name}: its herdr workspace label reads "${title}", the file says "${workspaceLabel(seat)}"`,
+        repair: `team register ${seat.name}`,
+      });
+    }
+    const line = agent.displayAgent;
+    // A pane herdr holds no display for is not drift: many panes never had one reported, and the
+    // file does not say a pane must carry one. Only a line something else wrote is named.
+    if (line !== undefined && !displayLineMatches(seat, line, live.screens[recorded])) {
+      out.push({
+        what: `${seat.name}: its herdr display reads "${line}", the file's line is "${displayAgent(seat)}"`,
+        repair: `team register ${seat.name}`,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Every effort word the `observeLabel` readers can print from a list, lowercased
+ * (`src/labels/observe.ts`). A grok pane's word is whatever sits in its parens, so it is not
+ * checked against this set.
+ */
+const EFFORT_WORDS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'none', 'minimal']);
+
+/**
+ * Whether a live line 2 is one the file or the watch could have written. The watch's line is
+ * `observeLabel(seat, screen)` (src/labels/observe.ts): the file's display, replaced by the model
+ * the pane shows when the screen names a different one, and the file's effort or one a screen
+ * showed. The effort the watch read from an *earlier* screen in its own process is not readable
+ * here, so any word those readers can print is accepted beside the line it would paint now.
+ */
+function displayLineMatches(seat: Seat, line: string, screen: string | undefined): boolean {
+  const observed = observeLabel(seat, screen).line;
+  if (line === observed) return true;
+  const cut = line.lastIndexOf(' ');
+  const model = cut < 0 ? line : line.slice(0, cut);
+  const effort = cut < 0 ? '' : line.slice(cut + 1);
+  const observedCut = observed.lastIndexOf(' ');
+  if (model !== (observedCut < 0 ? observed : observed.slice(0, observedCut))) return false;
+  if (effort === (seat.effort || 'default')) return true;
+  return seat.cli === 'grok' || EFFORT_WORDS.has(effort);
 }
 
 /**

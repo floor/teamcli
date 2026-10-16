@@ -14,6 +14,12 @@ export type HerdrAgent = {
   cwd: string | null;
   /** Herdr's `agent_session`, when the integration reported one. Absent when it did not. */
   session?: string;
+  /**
+   * Sidebar line 2 as herdr holds it, when it holds one: the text `reportDisplayAgent` wrote
+   * under the `team` source. Absent on a pane whose display was never reported. `agent list`
+   * returns it beside the other fields (probed 2026-10-17 against herdr 0.7.1).
+   */
+  displayAgent?: string;
 };
 
 export type HerdrRun = (args: string[], session?: string) => unknown;
@@ -35,6 +41,7 @@ export function agentList(session?: string): HerdrAgent[] | null {
     const result = run(['agent', 'list'], session) as { agents?: Record<string, unknown>[] };
     return (result.agents ?? []).map((agent) => {
       const session = typeof agent.agent_session === 'string' && agent.agent_session ? agent.agent_session : undefined;
+      const displayAgent = typeof agent.display_agent === 'string' && agent.display_agent ? agent.display_agent : undefined;
       return {
         name: typeof agent.name === 'string' && agent.name ? agent.name : null,
         agent: typeof agent.agent === 'string' ? agent.agent : null,
@@ -43,6 +50,7 @@ export function agentList(session?: string): HerdrAgent[] | null {
         status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
         cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
         ...(session ? { session } : {}),
+        ...(displayAgent ? { displayAgent } : {}),
       };
     });
   } catch {
