@@ -6,16 +6,17 @@
 // messages.jsonl entries through the send history's own writer.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { commitTrace, messageTrace, seatTraces, seatWorktree, toolTrace } from '../src/labels/traces.ts';
-import { appendHistory } from '../src/send/history.ts';
+import { appendHistory, historyPath } from '../src/send/history.ts';
 import { emptySession } from '../src/state.ts';
 import type { SessionState } from '../src/state.ts';
 import { gitEnv } from './helpers.ts';
 
 const claudeAnsi = readFileSync(new URL('./fixtures/claude-code/2.1.289/permission-create-wide-ansi.txt', import.meta.url), 'utf8');
+const claudeWide = readFileSync(new URL('./fixtures/claude-code/2.1.289/permission-read-wide-plain.txt', import.meta.url), 'utf8');
 const claudeProse = readFileSync(new URL('./fixtures/claude-code/2.1.299/working.txt', import.meta.url), 'utf8');
 const codexIdle = readFileSync(new URL('./fixtures/codex/0.157.0/idle.txt', import.meta.url), 'utf8');
 
@@ -127,6 +128,13 @@ describe('the seat traces', () => {
     message('orchestrator', 'builder-1', 'delivered', '2026-10-17T08:00:00Z');
     expect(messageTrace('acme-web', root, 'builder-2', home)).toBeNull();
     expect(messageTrace('other-project', root, 'builder-1', home)).toBeNull();
+    // The log exists and holds builder-1's message, but a symbolic link stands in its place:
+    // the read refuses it rather than following it, so the message is not a trace either.
+    const log = historyPath('acme-web', root, home);
+    writeFileSync(join(base, 'elsewhere.jsonl'), '');
+    rmSync(log);
+    symlinkSync(join(base, 'elsewhere.jsonl'), log);
+    expect(messageTrace('acme-web', root, 'builder-1', home)).toBeNull();
   });
 
   test("a tool row is the pane's last one, read through its colours", () => {
@@ -139,6 +147,18 @@ describe('the seat traces', () => {
     });
     const two = '❯ hi\n⏺ Bash(bun test)\n  ⎿  ok\n⏺ Read(src/state.ts)\n';
     expect(toolTrace('claude-code', two, AT)?.what).toBe('Read(src/state.ts)');
+  });
+
+  test('the tool row of a real capture stands even when prose rows follow it', () => {
+    // `permission-read-wide-plain.txt`: `⏺ Explore(Survey project for README)` is the capture's
+    // one tool call, and every later `⏺` line is the assistant's prose. A read that took the
+    // last line carrying the glyph would answer with prose; the row's own `Tool(args)` shape is
+    // what tells the two apart.
+    expect(toolTrace('claude-code', claudeWide, AT)).toEqual({
+      kind: 'tool',
+      at: '2026-10-17T10:00:00.000Z',
+      what: 'Explore(Survey project for README)',
+    });
   });
 
   test('an assistant\'s prose row is not a tool call, and prose that mentions one is not the row', () => {
