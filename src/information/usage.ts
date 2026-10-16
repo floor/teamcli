@@ -63,7 +63,7 @@ export const NOTHING_COUNTED = "not known: this team's file declares no account,
  *  other caller gets this one fixed sentence instead, so no reason text reaching a non-owner can
  *  carry a path or a root. It is the whole of the restricted view's answer for a refusal — one
  *  `Standing` carries one opaque `why`, so the sentence replaces it as a whole. */
-export const NOT_VERIFIED = 'the approval on this machine does not verify for this project: the owner runs `team approve`';
+export const NOT_VERIFIED = 'the approval on this machine does not verify for this project';
 
 /** The line a block shows a caller who is not the owner in place of a stored reading that names
  *  an account the approved team in force does not. The state file is signed by nothing — it is a

@@ -228,9 +228,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   const abandon = args.flags.has('abandon');
   if (abandon && caller.kind !== 'owner') {
-    io.stderr('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
-    // exit: remove.abandon
-    return 1;
+    // Set to exactly `1`. Dev mode says the owner-only line once, as a warning, and the abandon continues.
+    if (io.env.TEAMCLI_DEV_MODE !== '1') {
+      io.stderr('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
+      // exit: remove.abandon
+      return 1;
+    }
+    io.stderr('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
   }
   if ((name === team.orchestrator || name === team.operator) && caller.kind !== 'owner') {
     io.stderr(`team remove: only the owner removes the orchestrator's or the operator's seat; this call is ${describeCaller(caller)}\n`);
@@ -268,18 +272,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // exit: remove.never-approved
     return 1;
   }
-  let copySeat: Seat | undefined;
-  if (standing.kind === 'none') {
-    copySeat = team.seats.find((seat) => seat.name === name);
-  } else {
-    const approved = validateTeamFile(standing.record.file);
-    if (!approved.ok) {
-      io.stderr('team remove: the approved copy of the team file cannot be read\n');
-      // exit: remove.approved-copy
-      return 1;
-    }
-    copySeat = approved.team.seats.find((seat) => seat.name === name);
-  }
+  // The live file names the seat. A stored copy is not a second roster.
+  const copySeat = team.seats.find((seat) => seat.name === name);
   const temporary = Boolean(recorded?.temporary) && copySeat === undefined;
   if (args.flags.has('keep') && temporary) {
     io.stderr('team remove: a temporary seat is not in the file; there is nothing to keep\n');
@@ -507,9 +501,9 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // A temporary seat's rules file goes with the seat: nothing of it is left in the state
     // folder. A declared seat's stays — a stopped seat comes back to its own file. No home set
     // is a test that stands in for no store at all. The remover builds the path itself, from the
-    // approval in force and the seat's name, and walks the writer's checked chain.
+    // live project and the seat's name, and walks the writer's checked chain.
     if (temporary && sources.home) {
-      removeRulesFile(sources.standing?.(root) ?? approvalStanding(root, sources.home), name, root, sources.home);
+      removeRulesFile(sources.standing?.(root) ?? approvalStanding(root, sources.home), name, root, sources.home, team.project);
     }
     // The leave's last act: rename the agent out of the seat's name, best effort, so the pane no
     // longer answers a `remove` or a stray-name report as this seat. One attempt on a name the

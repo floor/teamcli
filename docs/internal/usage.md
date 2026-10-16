@@ -42,7 +42,7 @@ approved whose `budgets` section is the approved one is read as it stands; a fil
 section differs is answered from the copy the approval stored, and one why-line says the file
 differs; a file never approved on this machine has no budgets in force at all, and says so:
 
-    the file was never approved on this machine: run `team approve`
+    the file was never approved on this machine
     the file differs from the approved one: `budgets` changed
 
 A file that does not load, or cannot be read, cannot be resolved as the caller's own project — a
@@ -234,7 +234,7 @@ a state that cannot be read reads the tool's own reason with the project's own r
 approval — a record in the store that does not verify for this project — reads one fixed sentence
 in place of the store's own words, which carry absolute paths:
 
-    note: the approval on this machine does not verify for this project: the owner runs `team approve`
+    note: the approval on this machine does not verify for this project
 
 ## The JSON
 
