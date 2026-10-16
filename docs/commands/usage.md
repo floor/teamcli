@@ -25,6 +25,20 @@ accounts:
   - xai
 ```
 
+or key each account by the entity whose subscription it is:
+
+```text
+accounts:
+  globex: [openai, xai]
+```
+
+A flat list is one unnamed entity and reads exactly as before. A keyed account a team's seat spends
+that belongs to another entity is borrowed: the team's row under the account's line names the
+entity — `  beacon    weekly  left 70%  …  pace 1.2%/h  (borrowed from globex)` — the way the
+`(pool)` suffix rides the account's own line. The account still counts once, under the team that
+spends it, so the header count does not change. A team file's `entity:` names the team's own
+entity; a file that names none borrows every keyed account its seats spend.
+
 These accounts appear even outside a project, with no teams or budgets configured. A team's `budgets.accounts` entry of the same name supplies
 its sources and reserve. The watch stores observations in `~/.config/team/usage/readings.json`,
 including their observation time and reset when known. It records screen figures even
