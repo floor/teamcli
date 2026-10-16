@@ -105,12 +105,15 @@ state:
 
 The state holds one reading for the `session` window, taken from the check two minutes before the
 read, and the watch for this session is alive, so no watch clause follows the line. The seat
-`claude-keeper` draws on `anthropic`, shown in the seat breakdown. Run from the seat's own pane, the report is the restricted view:
+`claude-keeper` spends `anthropic`, which no budget here declares: that lab is in use with no
+account for it yet, and the seat breakdown names it all the same. Run from the seat's own pane,
+the report is the restricted view:
 
 ```console
 $ team usage ; echo "exit $?"
 usage on this machine, 1 team, 2 labs, 1 account
 
+anthropic  not known (no team declares an account for it yet)
 openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known
   beacon    session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known
 

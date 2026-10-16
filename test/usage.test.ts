@@ -22,7 +22,7 @@ import { NO_PROJECT, runUsage, USAGE } from '../src/commands/usage.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import {
   machineUsage,
-  NO_COPY,
+  NOTHING_COUNTED,
   NOT_VERIFIED,
   reportOf,
   reportText,
@@ -705,22 +705,26 @@ describe('team usage', () => {
     expectNoDerivedPath([mine.out, raw]);
   });
 
-  test('a file without accounts has no declaration note, and a seat reads no leftover rows', async () => {
-    // The file the owner approved names no account, so the budgets in force name none either.
+  test('a file that names no account prints why nothing is counted, and a seat reads no leftover rows', async () => {
+    // The file the owner approved names no account, so the budgets in force name none either, and
+    // no machine account covers it: the sentence says why nothing is counted.
     const text = withoutBudgets();
     writeFileSync(file, text);
     approve(text);
 
-    // No readings at all: the lab the seat's vendor keeps in use, and the sentence.
+    // No readings at all: the lab the seat's vendor keeps in use, the sentence, and the team's
+    // own seat breakdown.
     withoutReadings();
     const bare = await usageAt(root);
     expect(bare.code).toBe(0);
     expect(bare.out).toBe([
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
+      'anthropic  not known (no team declares an account for it yet)',
       '',
       'acme',
       '  lead  claude-code  anthropic',
+      `note: acme: ${NOTHING_COUNTED}`,
     ].join('\n') + '\n');
 
     // A state that still holds readings: a caller who is not the owner reads none of them — the
@@ -734,14 +738,16 @@ describe('team usage', () => {
     expect(mine.out).toBe([
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
+      'anthropic  not known (no team declares an account for it yet)',
       '',
       'acme',
       '  lead  claude-code  anthropic',
+      `note: acme: ${NOTHING_COUNTED}`,
       `note: acme: ${UNBOUND_ACCOUNT}`,
     ].join('\n') + '\n');
     expect(doc.counts).toEqual({ teams: 1, labs: 1, accounts: 0 });
     expect(doc.labs).toEqual([{ lab: 'anthropic', accounts: [] }]);
-    expect(doc.notes).toEqual([{ scope: 'acme', why: UNBOUND_ACCOUNT }]);
+    expect(doc.notes).toEqual([{ scope: 'acme', why: NOTHING_COUNTED }, { scope: 'acme', why: UNBOUND_ACCOUNT }]);
 
     // The owner reads the account the state holds — the report is keyed by declarations, so it
     // gets no line and no lab, and it is counted all the same — and no "not shown" line.
@@ -751,16 +757,18 @@ describe('team usage', () => {
     expect(owner.out).toBe([
       'usage on this machine, 1 team, 1 lab, 1 account',
       '',
+      'anthropic  not known (no team declares an account for it yet)',
       '',
       'acme',
       '  lead  claude-code  anthropic',
+      `note: acme: ${NOTHING_COUNTED}`,
     ].join('\n') + '\n');
     expect(held.counts).toEqual({ teams: 1, labs: 1, accounts: 1 });
     expect(held.labs).toEqual([{ lab: 'anthropic', accounts: [] }]);
-    expect(held.notes).toEqual([]);
+    expect(held.notes).toEqual([{ scope: 'acme', why: NOTHING_COUNTED }]);
   });
 
-  test('a file whose accounts are not the approved ones prints the why-line, rows or no rows', async () => {
+  test('an unverified file explains missing budgets and verified files use live accounts', async () => {
     // Never approved: the store holds no record for this project, so the file's accounts — which
     // it declares — are not in force, and the tool's own why-line for that standing prints.
     rmSync(storePath('acme', root, home), { recursive: true, force: true });
@@ -769,6 +777,7 @@ describe('team usage', () => {
     expect(bare.out).toBe([
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
+      'anthropic  not known (no team declares an account for it yet)',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -784,6 +793,7 @@ describe('team usage', () => {
     expect(mine.out).toBe([
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
+      'anthropic  not known (no team declares an account for it yet)',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -800,33 +810,23 @@ describe('team usage', () => {
     expect(owner.out).toBe([
       'usage on this machine, 1 team, 1 lab, 1 account',
       '',
+      'anthropic  not known (no team declares an account for it yet)',
       '',
       'acme',
       '  lead  claude-code  anthropic',
       'note: acme: the file was never approved on this machine',
     ].join('\n') + '\n');
 
-    // Verified, but the copy the owner approved names no account: the budgets in force are the
-    // approved copy's, so the file's own accounts count nothing and `status`'s line for a file
-    // that differs from the approved one prints — for both views, one sentence each.
+    // A verified standing allows the accounts added to the live file immediately.
     const text = withoutBudgets();
     writeFileSync(file, text);
     approve(text);
     writeFileSync(file, teamText());
-    const differs = 'the file differs from the approved one: `budgets` changed';
-    const moved = await usageAt(root, SEAT);
-    expect(moved.code).toBe(0);
-    expect(moved.out).toBe([
-      'usage on this machine, 1 team, 1 lab, 0 accounts',
-      '',
-      '',
-      'acme',
-      '  lead  claude-code  anthropic',
-      `note: acme: ${differs}`,
-      `note: acme: ${UNBOUND_ACCOUNT}`,
-    ].join('\n') + '\n');
-    const ownerMoved = await usageAt(root, OWNER);
-    expect(ownerMoved.out).toContain(`note: acme: ${differs}`);
+    for (const caller of [SEAT, OWNER]) {
+      const moved = await usageAt(root, caller);
+      expect(moved.code).toBe(0);
+      expect(moved.out).toBe(`${REPORT}\n`);
+    }
   });
 
   test("a refused approval's own words are the owner's: one fixed sentence for a seat, every reason", async () => {
@@ -941,15 +941,13 @@ describe('team usage', () => {
   test("a file that exists and does not load is the loader's message for the owner, one fixed sentence for anyone else", async () => {
     writeFileSync(file, 'format: 1\nproject: acme\n');
 
-    // The owner reads every note with the file's absolute path, one per problem, and — because
-    // the store's record still names this project — the machine's lines for it: the member the
-    // walk read out of the store, the labs the approved copy declares, and the why-lines for the
-    // accounts nothing counts. (A run of this branch showed exactly this face.)
+    // The owner sees loader details, but invalid live YAML supplies no roster or accounts.
     const owner = await usageAt(root, OWNER);
     expect(owner.code).toBe(0);
     expect(owner.out).toContain(`note: ${file} line 1: seats is required`);
     expect(owner.out).toContain(`note: ${file} line 1: the file has no seat that leads`);
-    expect(owner.out).toContain('anthropic  unknown\n');
+    expect(owner.out).toContain('no figures (the file could not be read)');
+    expect(owner.out).not.toContain('anthropic');
 
     // A caller who is not the owner reads one fixed sentence per line instead — this project's
     // own path, the line, and the owner as the reader of the reason — and never a body: the loader's bodies can name
@@ -959,15 +957,16 @@ describe('team usage', () => {
     const mine = await usageAt(root, SEAT);
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 2 labs, 2 accounts',
+      'usage on this machine, 1 team, 0 labs, 0 accounts',
       '',
       'note: .agents/team.yaml does not load (line 1): the owner reads the reason',
+      'note: 1 team has no figures (its file could not be read)',
     ].join('\n') + '\n');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { mine: string | null; labs: unknown[]; notes: unknown[] };
     expect(doc.mine).toBeNull();
     expect(doc.labs).toEqual([]);
-    expect(doc.notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml does not load (line 1): the owner reads the reason' }]);
+    expect(doc.notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml does not load (line 1): the owner reads the reason' }, { scope: 'another', why: 'its file could not be read' }]);
     expectNoDerivedPath([mine.out, raw]);
   });
 
@@ -989,12 +988,13 @@ describe('team usage', () => {
     const mine = await usageAt(root, SEAT);
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 2 labs, 2 accounts',
+      'usage on this machine, 1 team, 0 labs, 0 accounts',
       '',
       'note: .agents/team.yaml cannot be read: the owner reads the reason',
+      'note: 1 team has no figures (its file could not be read)',
     ].join('\n') + '\n');
     const raw = (await usageAt(root, SEAT, '--json')).out;
-    expect((JSON.parse(raw) as { notes: unknown[] }).notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml cannot be read: the owner reads the reason' }]);
+    expect((JSON.parse(raw) as { notes: unknown[] }).notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml cannot be read: the owner reads the reason' }, { scope: 'another', why: 'its file could not be read' }]);
     expectNoDerivedPath([mine.out, raw]);
   });
 
@@ -1132,13 +1132,15 @@ describe('team usage', () => {
     expect(mine.out).toBe([
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
+      'anthropic  not known (no team declares an account for it yet)',
       '',
       'acme',
       '  lead  claude-code  anthropic',
+      `note: acme: ${NOTHING_COUNTED}`,
       `note: acme: ${UNBOUND_ACCOUNT}`,
     ].join('\n') + '\n');
     expect(doc.labs).toEqual([{ lab: 'anthropic', accounts: [] }]);
-    expect(doc.notes).toEqual([{ scope: 'acme', why: UNBOUND_ACCOUNT }]);
+    expect(doc.notes).toEqual([{ scope: 'acme', why: NOTHING_COUNTED }, { scope: 'acme', why: UNBOUND_ACCOUNT }]);
     for (const face of [mine.out, raw]) {
       expect(face).not.toContain('STATE-ACCOUNT-LEAK');
       expect(face).not.toContain('STATE-SEAT-LEAK');
@@ -1154,7 +1156,7 @@ describe('team usage', () => {
     expect(owner.code).toBe(0);
     expect(owner.out).toContain('usage on this machine, 1 team, 1 lab, 1 account\n');
     expect(ownerDoc.counts).toEqual({ teams: 1, labs: 1, accounts: 1 });
-    expect(ownerDoc.notes).toEqual([]);
+    expect(ownerDoc.notes).toEqual([{ scope: 'acme', why: NOTHING_COUNTED }]);
     for (const face of [owner.out, ownerRaw]) {
       expect(face).not.toContain('STATE-ACCOUNT-LEAK');
       expect(face).not.toContain('STATE-SEAT-LEAK');
@@ -1162,12 +1164,8 @@ describe('team usage', () => {
     }
   });
 
-  test('a vendor only the live file writes does not bind a stored reading', async () => {
-    // The third read's case, accepted: the permitted accounts took the approved `budgets` and
-    // were then widened with `seat.account ?? seat.vendor` read from the LIVE team, so an edit
-    // nobody approved bound a stored reading by name. The reviewer approved a file whose lead
-    // spends `anthropic`, changed only the live file's `vendor:` to a path-like string, stored a
-    // reading under that name, and `usage --json` as a seat printed it with no "not shown" note.
+  test('a vendor only the live file writes binds a stored reading', async () => {
+    // The live vendor name binds a cached reading even when the saved roster names another vendor.
     const LIVE_VENDOR = '/LIVE-VENDOR-LEAK';
     const live = teamText().replace('    vendor: anthropic', `    vendor: ${LIVE_VENDOR}`);
     // The route's own precondition, pinned: the edited file still loads, so the live file is the
@@ -1180,16 +1178,15 @@ describe('team usage', () => {
       } as never;
     });
 
-    // A caller who is not the owner reads no line under that name, in either face: it is not an
-    // account the budgets in force name, and not one a seat in force resolves to, so the reading
-    // is not rendered and the one fixed line stands where its line would be.
+    // The live seat account binds this name for either view.
     const mine = await usageAt(root, SEAT);
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 2 labs, 2 accounts',
+      'usage on this machine, 1 team, 3 labs, 3 accounts',
       '',
+      `${LIVE_VENDOR}  not known (no team declares an account for it yet)`,
       'anthropic  unknown',
       '  acme    unknown  pace not known',
       'openai  unknown',
@@ -1198,29 +1195,24 @@ describe('team usage', () => {
       '',
       'acme',
       '  lead  claude-code  anthropic',
-      `note: acme: ${UNBOUND_ACCOUNT}`,
     ].join('\n') + '\n');
-    expect(doc.counts).toEqual({ teams: 1, labs: 2, accounts: 2 });
-    expect(doc.notes).toEqual([{ scope: 'acme', why: UNBOUND_ACCOUNT }]);
-    for (const face of [mine.out, raw]) expect(face).not.toContain('LIVE-VENDOR-LEAK');
+    expect(doc.counts).toEqual({ teams: 1, labs: 3, accounts: 3 });
+    expect(doc.notes).toEqual([]);
+    for (const face of [mine.out, raw]) expect(face).toContain('LIVE-VENDOR-LEAK');
 
     // The owner reads it as today: the live vendor's own lab and the reading by its own name, and
     // no "not shown" line.
     const owner = await usageAt(root, OWNER);
     const ownerRaw = (await usageAt(root, OWNER, '--json')).out;
     expect(owner.code).toBe(0);
-    expect(owner.out).not.toContain('no team declares an account');
+    expect(owner.out).toContain(`${LIVE_VENDOR}  not known (no team declares an account for it yet)\n`);
+    expect(owner.out).toContain(`${LIVE_VENDOR}  not known`);
     expect(ownerRaw).toContain(LIVE_VENDOR);
     for (const face of [owner.out, ownerRaw]) expect(face).not.toContain('not shown');
   });
 
-  test('a seat only the live file names does not hold a stored reading', async () => {
-    // The rule's other half, in the brief's words: the permitted seat names come from the
-    // approved copy in force too, never from the live file. Only the live file names `ghost`,
-    // and the state holds a reading carrying that seat under an account the approved budgets do
-    // name — so only the seat is in question. Unfixed, the line printed `ghost`; now the reading
-    // keeps its figures and prints with no seat, as any reading whose seat the seats in force do
-    // not name (`a seat's name is not that wide`).
+  test('a seat only the live file names holds its stored reading', async () => {
+    // A newly declared live seat retains its name on cached readings.
     const live = teamText() + [
       '  - role: member',
       '    name: ghost',
@@ -1248,14 +1240,15 @@ describe('team usage', () => {
       '',
       'anthropic  unknown',
       '  acme    unknown  pace not known',
-      'openai  weekly  left 5%  used 95%  resets in 44m  -  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known  (no watch is recording for acme)',
-      '  acme    weekly  left 5%  used 95%  resets in 44m  -  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known',
+      'openai  weekly  left 5%  used 95%  resets in 44m  ghost  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known  (no watch is recording for acme)',
+      '  acme    weekly  left 5%  used 95%  resets in 44m  ghost  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known',
       '',
       'acme',
       '  lead  claude-code  anthropic',
+      '  ghost  claude-code  anthropic',
     ].join('\n') + '\n');
-    expect(doc.labs.flatMap((lab) => lab.accounts).map((entry) => entry.machine.seat)).toEqual([undefined, null]);
-    for (const face of [mine.out, raw]) expect(face).not.toContain('ghost');
+    expect(doc.labs.flatMap((lab) => lab.accounts).map((entry) => entry.machine.seat)).toEqual([undefined, 'ghost']);
+    for (const face of [mine.out, raw]) expect(face).toContain('ghost');
 
     // The owner sees the reading's own seat, exactly as the state holds it.
     const owner = await usageAt(root, OWNER);
@@ -1265,12 +1258,8 @@ describe('team usage', () => {
     expect(ownerRaw).toContain('ghost');
   });
 
-  test('the live project name does not stand in for the approved one', async () => {
-    // The second lab's (xAI) second finding, accepted: `teamInForceOf` merged `project` in from
-    // the LIVE file whatever the standing, and that field is not an owner section — so a rename
-    // is not drift and the approval stays verified — so a caller who is not the owner read a name
-    // nobody approved in the header, the watch clause and `--json`'s `mine`. Both of the route's
-    // preconditions are pinned here: the edited file loads, and the standing is still verified.
+  test('both views use the live project name', async () => {
+    // A live project rename updates the header, watch clause and JSON identity for both views.
     const LIVE_PROJECT = 'a-project-nobody-approved';
     const live = teamText().replace('project: acme', `project: ${LIVE_PROJECT}`);
     expect(validateTeamFile(live, { home, root }).ok).toBe(true);
@@ -1278,14 +1267,13 @@ describe('team usage', () => {
     expect(approvalStanding(root, home).kind).toBe('verified');
     withState();
 
-    // A caller who is not the owner reads the copy in force's project, and nothing else: the
-    // whole report is the approved file's, byte for byte, and `mine` is the approved name.
+    // Both views use the live project identity.
     const mine = await usageAt(root, SEAT);
     const raw = (await usageAt(root, SEAT, '--json')).out;
     expect(mine.code).toBe(0);
-    expect(mine.out).toBe(`${REPORT}\n`);
-    expect((JSON.parse(raw) as { mine: string }).mine).toBe('acme');
-    for (const face of [mine.out, raw]) expect(face).not.toContain(LIVE_PROJECT);
+    expect(mine.out).toBe(`${REPORT.replaceAll('acme', LIVE_PROJECT)}\n`);
+    expect((JSON.parse(raw) as { mine: string }).mine).toBe(LIVE_PROJECT);
+    for (const face of [mine.out, raw]) expect(face).toContain(LIVE_PROJECT);
 
     // The owner reads the live name as today: the view this command had before the restricted
     // path, and the name the file has now.
@@ -1296,17 +1284,8 @@ describe('team usage', () => {
     expect((JSON.parse(ownerRaw) as { mine: string }).mine).toBe(LIVE_PROJECT);
   });
 
-  test('an approved copy that cannot be read hides the project too, though the live file carries one', async () => {
-    // The fourth read's case, release-blocking, and the last of this boundary: the record's
-    // fingerprints are a valid approval's — the live file is what the owner approved, `project:`
-    // aside, and the live project here is a name nobody approved — but the stored `file:` is
-    // invalid, so the copy in force cannot be read. The fingerprint shortcut in
-    // `budgetsInForceOf` then took the LIVE file's budgets whenever they matched the record's,
-    // and `boundReadings` permitted their names: the reviewer approved a budget naming
-    // `/APPROVED-ACCOUNT`, stored a reading under that account, and `usage --json` as a seat
-    // printed it with no note. The ruling: the whole allow-list comes from ONE validated in-force
-    // copy, and a copy that cannot be read binds nothing. The second lab found the same absence
-    // must cover `project` too: nothing is shown by name, and the live name stands in for nothing.
+  test('an unreadable stored copy does not hide the live project and accounts', async () => {
+    // A verified record with invalid stored YAML must not replace the valid live project and accounts.
     const name = '/APPROVED-ACCOUNT';
     const LIVE_PROJECT = 'a-project-nobody-approved';
     const text = teamText().replace('    openai:', `    ${name}:`).replace('project: acme', `project: ${LIVE_PROJECT}`);
@@ -1330,28 +1309,18 @@ describe('team usage', () => {
       state.sessions['acme-web'] = { ...emptySession() } as never;
     });
 
-    // A caller who is not the owner reads no name at all: no declared line, no stored reading, no
-    // project — the counts say what the machine holds, `mine` is null, and the two fixed lines
-    // name the reasons.
+    // Both views read the live project's declared accounts despite an invalid stored copy.
     const mine = await usageAt(root, SEAT);
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[]; mine: string | null };
     expect(mine.code).toBe(0);
-    expect(mine.out).toBe([
-      'usage on this machine, 1 team, 0 labs, 0 accounts',
-      '',
-      'note: no figures (the file could not be read)',
-      `note: ${NO_COPY}`,
-    ].join('\n') + '\n');
-    expect(doc.counts).toEqual({ teams: 1, labs: 0, accounts: 0 });
-    expect(doc.labs).toEqual([]);
-    expect(doc.notes).toEqual([{ scope: 'mine', why: 'no figures (the file could not be read)' }, { scope: 'mine', why: NO_COPY }]);
-    expect(doc.mine).toBeNull();
+    expect(doc.counts).toEqual({ teams: 1, labs: 2, accounts: 2 });
+    expect(doc.notes).toEqual([]);
+    expect(doc.mine).toBe(LIVE_PROJECT);
     for (const face of [mine.out, raw]) {
-      expect(face).not.toContain(name);
-      expect(face).not.toContain('anthropic');
-      expect(face).not.toContain(LIVE_PROJECT);
-      expect(face).not.toContain('acme');
+      expect(face).toContain(name);
+      expect(face).toContain('anthropic');
+      expect(face).toContain(LIVE_PROJECT);
     }
 
     // The owner reads the live file's own names as today — exactly what `status` still shows —

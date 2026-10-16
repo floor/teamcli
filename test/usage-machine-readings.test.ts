@@ -77,7 +77,10 @@ test('a watch persists a Grok zero without team budgets; usage counts machine su
   expect(usage.out).toContain('2m ago');
   expect(usage.out).toContain('google-antigravity  not readable from a CLI screen');
   expect(usage.out).toContain('lead  grok  xai');
-  expect(usage.out).not.toContain('declares');
+  // The seat's own vendor forms a lab with no account under it, and says so; the machine's
+  // readings are counted, so the "nothing is counted" sentence never prints.
+  expect(usage.out).toContain('wrong-vendor  not known (no team declares an account for it yet)');
+  expect(usage.out).not.toContain('nothing is counted');
 });
 
 test('machine subscriptions and a persisted reading remain visible outside any team', () => {
