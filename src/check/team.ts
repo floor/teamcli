@@ -13,13 +13,18 @@ import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../c
 import { approvalCaseRow, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
+import { declaredModel } from '../file/model.ts';
+import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import { mayReadTeam } from '../read-gate.ts';
+import { findAgent } from '../registry/agents.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { emptySession, readState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
+import { seatModel } from '../status/statusline.ts';
 import type { Standing } from '../store/store.ts';
 import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
@@ -150,6 +155,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
+    ...signingDifferences(team, live, root, sources.home),
     ...attentionDifferences(team, state, live),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same row `status` prints: a legacy record or one the verification refused still says what
@@ -182,6 +188,44 @@ function notYours(io: Io): number {
   io.stderr('team check: this team is not yours to check\n');
   // exit: check.not-yours
   return 2;
+}
+
+/**
+ * The registry's signing triple against the pane: a seat whose agent record says it signs as
+ * `<model> <version>` while its screen runs another model would sign commits with a model it does
+ * not run, so the two things are named side by side with the re-record and the relaunch beside
+ * them. The record is the launch's own declaration (`src/registry/sync.ts`), and nothing here
+ * updates it: an accepted drift is re-recorded by `team register`, or the seat is relaunched on
+ * the record's model. A team the registry holds no record for reads as before, and a screen the
+ * reader cannot name a model from — unread, or another maker's through Claude Code — is never
+ * wrong.
+ */
+function signingDifferences(team: TeamFile, live: Live, root: string, home: string | undefined): Difference[] {
+  if (home === undefined) return [];
+  const out: Difference[] = [];
+  const teamId = teamIdOf(root);
+  for (const seat of team.seats) {
+    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    if (!agent) continue;
+    const running = seatModel(seat, live.screens[agent.pane]);
+    if (!running) continue;
+    const record = findAgent(home, { team: teamId, seat: seat.name });
+    if (!record) continue;
+    const { model, version } = record.signing;
+    if (running.model === model && running.version === version) continue;
+    // The record's own words, unless the file still declares exactly what the record signs: then
+    // the seat's display spelling is the record's, the spelling every other line gives it.
+    const signs = seat.model === model && seat.version === version ? declaredModel(seat) : `${model} ${version}`;
+    const command = isLeadSeat(team, seat.name)
+      ? relaunchRepair(team, seat.name, 'plain')
+      : `team remove ${seat.name} --keep, then team add ${seat.name}`;
+    out.push({
+      what: `${seat.name}: signs as ${signs}, runs ${running.model} ${running.version}`,
+      repair: `re-record the seat once the drift is accepted (team register ${seat.name}), or relaunch it on the record's model (${command})`,
+      needs: 'approve',
+    });
+  }
+  return out;
 }
 
 /**
