@@ -27,6 +27,7 @@ import { launchedIdentity } from '../launch/identity.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
+import { shellQuote } from '../profiles/profile.ts';
 import { registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
@@ -92,8 +93,15 @@ function detachedExit(out: Io, message: string): number {
   return 1;
 }
 
-function callerRefused(out: Io, message: string): number {
-  out.stderr(`team register: ${plainText(message)}\n`);
+function callerRefused(out: Io, message: string, dry = false, unblock?: string): number {
+  if (dry) {
+    // A dry run is never denied bare: what would refuse it is said as what it is, and the
+    // command that unblocks it is named beside it — `up`'s own dry words.
+    out.stdout(`! register would refuse: ${plainText(message)}\n`);
+    if (unblock !== undefined) out.stdout(`! to unblock: ${plainText(unblock)}\n`);
+  } else {
+    out.stderr(`team register: ${plainText(message)}\n`);
+  }
   // exit: register.caller
   return 1;
 }
@@ -116,10 +124,19 @@ function grantFlagRefused(out: Io): number {
   return 1;
 }
 
-function notOwnerRefused(out: Io, caller: Caller): number {
-  out.stderr(
-    `team register: only the owner, a delegate this file names for \`up\`, or the seat a grant names for it registers a running seat; this call is ${plainLine(describeCaller(caller))}\n`,
-  );
+/** The caller gate's sentence: who may run it, and what this call is. */
+function notOwnerLine(caller: Caller): string {
+  return `only the owner, a delegate this file names for \`up\`, or the seat a grant names for it registers a running seat; this call is ${plainLine(describeCaller(caller))}`;
+}
+
+function notOwnerRefused(out: Io, caller: Caller, dry = false, unblock?: string): number {
+  const line = notOwnerLine(caller);
+  if (dry) {
+    out.stdout(`! register would refuse: ${plainText(line)}\n`);
+    if (unblock !== undefined) out.stdout(`! to unblock: ${plainText(unblock)}\n`);
+  } else {
+    out.stderr(`team register: ${line}\n`);
+  }
   // exit: register.not-owner
   return 1;
 }
@@ -232,6 +249,19 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   }
   const name = args.rest[0] ?? '';
   const dry = args.flags.has('dry-run');
+  // Set to exactly `1`. Anything else, including unset, leaves every refusal where it is. Dev
+  // mode folds the caller gate — and only it — into a warning and the run continues, the shape
+  // `up` keeps for its own caller lines; the seat's placement in herdr, the pane's own CLI, the
+  // screen and every write stay enforced.
+  const dev = io.env.TEAMCLI_DEV_MODE === '1';
+  const warning: string[] = [];
+  // The caller gate is the one refusal with a command of its own behind it: nothing in the file
+  // changes who may run this, the owner's own run does. `up`'s sentence, for this command.
+  const unblock = (values: { session?: string }): string => {
+    const words = ['team register', shellQuote(name)];
+    if (values.session !== undefined) words.push('--session', shellQuote(values.session));
+    return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+  };
 
   const walked = walkCaller(io);
   const detached = detachedRefusal(walked);
@@ -287,11 +317,25 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // is read.
   if (args.values.session !== undefined && !mayLaunchSeats(walked) && !createGranted) {
     if (grantedSeat !== null) return grantFlagRefused(out);
-    return callerRefused(out, sessionOwnerRefusal(walked));
+    const line = sessionOwnerRefusal(walked);
+    if (dev) warning.push(line);
+    else return callerRefused(out, line, dry, unblock(args.values));
   }
   if (!named && grantSaid?.kind === 'refused') return grantRefused(out, grantSaid.text);
   if (!named && verdict?.kind === 'refused') return delegateRefused(out, verdict.text);
-  if (!named) return notOwnerRefused(out, walked);
+  if (!named) {
+    // The caller gate, the one dev mode lifts; a dry run keeps it as the refusal it is, with
+    // the owner's own command beside it. The grant's and the delegate's own refusals stay
+    // refusals either way, as they do for `up`.
+    const line = notOwnerLine(walked);
+    if (dev) warning.push(line);
+    else return notOwnerRefused(out, walked, dry, unblock(args.values));
+  }
+  if (warning.length > 0) {
+    const line = [...new Set(warning)].join('; ');
+    if (dry) out.stdout(`! warning: ${plainText(line)}\n`);
+    else out.stderr(`team register: warning: ${plainText(line)}\n`);
+  }
 
   const session = args.values.session ?? team.session;
   if (session === 'default') {
