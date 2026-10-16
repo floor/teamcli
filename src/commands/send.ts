@@ -36,9 +36,9 @@ owner; an orchestrator to any seat of its own team or to an orchestrator in any
 teams; an assistant seat to its entity's coordinator; any seat to its own team's
 orchestrator; or an owner-signed grant naming send. The drop file's first line
 names the sender and the rule that admitted it. --list sends nothing: it prints
-the file's seats and needs no
-caller check. --dry-run resolves the seat and the channel, writes no drop file, and
-types nothing. It appends one line to the team log.
+the file's seats and needs no caller check. --dry-run resolves the seat and the
+channel, writes no drop file, and types nothing. It appends one line to the team
+log.
 
 The outcome is one of six, and none of them is silent:
   delivered    the drop path (exit 0): herdr reported the seat working — or done or
