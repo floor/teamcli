@@ -1,0 +1,256 @@
+// `team register`'s acceptance scenes (its own design note): a seat herdr already runs is
+// adopted where it stands, never relaunched.
+//
+// (a) a running seat is registered: the state, the registry record and the pane pointer are
+//     written, the pane both now name is herdr's own reading of the live pane, and the process
+//     identity and agent session are exactly that reading;
+// (b) the run only reads: the sources this file injects are reads alone — the interface has no
+//     channel to create, close or rename a workspace or to type into a pane, so "nothing was
+//     launched" is what the scene is built on, and every call taken is on the pane herdr named;
+// (c) registers herdr does not place as that seat are refused, and nothing at all is written:
+//     no agent of the name in the session, two agents of the name, a pane holding a shell, and
+//     a screen the file-cli's reader does not know;
+// (d) the run is repeatable: the second run says `already registered` without reading the pane
+//     again, and `--dry-run` verifies the same way and writes nothing.
+// Fake herdr throughout, a temporary home and a pinned caller: no live session is read.
+import { afterEach, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runRegister, type RegisterSources } from '../src/commands/register.ts';
+import type { HerdrAgent } from '../src/herdr.ts';
+import { lobbyDir } from '../src/lobby/gate.ts';
+import { AGENT_ID_PATTERN, findAgent, readAgents } from '../src/registry/agents.ts';
+import { readTeams, teamIdOf } from '../src/registry/teams.ts';
+import { LOG_FILE, readState, SEAT_ID_PATTERN, STATE_FILE } from '../src/state.ts';
+import { CLAUDE_IDLE, testIo } from './helpers.ts';
+
+const NOW = new Date('2026-10-16T21:00:00Z');
+const OWNER = { kind: 'owner' as const };
+// The pane the fake herdr places the seat in, and the pointer the run writes for it.
+const PANE = 'w1:p1';
+const WORKSPACE = 'ws-1';
+
+const made: string[] = [];
+afterEach(() => {
+  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+type World = { base: string; home: string; root: string; dir: string };
+
+/** A temporary home and one root with `.agents/team.yaml` — the shape `team register` reads. */
+function world(cli = 'claude-code'): World {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'reg-acc-')));
+  made.push(base);
+  const home = join(base, 'h');
+  mkdirSync(lobbyDir(home), { recursive: true });
+  const root = join(base, 'acme');
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+  writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1
+project: acme
+coordinator: lead
+operator: lead
+session: acme
+trust:
+  - ${lobbyDir(home)}
+  - ${root}
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    label: lead
+    cli: ${cli}
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`);
+  return { base, home, root, dir: join(root, '.agents') };
+}
+
+/** The agent herdr reports for the seat: a pane running a program in front of its own shell. */
+function agent(name: string): HerdrAgent {
+  return { name, agent: 'claude', pane: PANE, workspace: WORKSPACE, status: 'idle', cwd: null, session: 'claude-session-1' };
+}
+
+type Ledger = string[];
+
+/** Every herdr read `register` makes, recorded: the scene can show what was read and on which
+ *  pane, and the interface offers nothing else that could reach a pane. */
+function sources(w: World, led: Ledger = [], over: Partial<RegisterSources> = {}): RegisterSources {
+  return {
+    home: w.home,
+    sessionState: (session) => {
+      led.push(`session ${session}`);
+      return 'running';
+    },
+    agents: (session) => {
+      led.push(`agents ${session}`);
+      return [agent('lead')];
+    },
+    processInfo: (session, pane) => {
+      led.push(`processes ${session} ${pane}`);
+      return { shell: 400, foreground: [401] };
+    },
+    paneText: (session, pane) => {
+      led.push(`text ${session} ${pane}`);
+      return CLAUDE_IDLE;
+    },
+    now: () => NOW,
+    ...over,
+  };
+}
+
+async function register(
+  w: World,
+  argv: string[],
+  over: Partial<RegisterSources> = {},
+): Promise<{ code: number; out: string; err: string; led: Ledger }> {
+  const io = testIo(w.root, OWNER);
+  const led: Ledger = [];
+  const code = await runRegister(argv, io, sources(w, led, over));
+  return { code, out: io.out, err: io.err, led };
+}
+
+/** What the run left on disk: the state file, agent records, the log and the pane pointers. */
+function written(w: World): { state: boolean; agents: number; log: boolean; panes: boolean } {
+  return {
+    state: existsSync(join(w.dir, STATE_FILE)),
+    agents: readAgents(w.home).length,
+    log: existsSync(join(w.dir, LOG_FILE)),
+    panes: existsSync(join(w.home, '.config', 'team', 'panes')),
+  };
+}
+
+const NOTHING = { state: false, agents: 0, log: false, panes: false };
+
+function panesDir(w: World): string {
+  return join(w.home, '.config', 'team', 'panes');
+}
+
+describe('a running seat', () => {
+  test('is registered where it stands, on the pane herdr names, and only that pane is read', async () => {
+    const w = world();
+    const r = await register(w, ['lead']);
+
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('lead: registered — pane w1:p1; nothing was launched');
+    // The whole verification, and nothing else: reads of the session, its agents and the one
+    // pane herdr named the seat on — no second pane, and no call anything like a write.
+    expect(r.led).toEqual(['session acme', 'agents acme', 'processes acme w1:p1', 'text acme w1:p1']);
+
+    const held = readState(w.dir).sessions.acme?.seats.lead;
+    expect(held?.stage).toBe('ready');
+    expect(held?.pane).toBe(PANE);
+    expect(held?.workspace).toBe(WORKSPACE);
+    expect(held?.cli).toBe('claude-code');
+    expect(held?.id).toMatch(SEAT_ID_PATTERN);
+    expect(held?.last_active).toBe(NOW.toISOString());
+    // The pane's own reading, recorded as it was: the shell in front of which the cli runs, and
+    // the cli's pid. Unchanged is the point — an adoption reads, it does not restart.
+    expect(held?.launched).toEqual({ shell: 400, cli: [401] });
+    expect(held?.agent_session).toBe('claude-session-1');
+    // Only a launch can know these: an adoption must not invent them.
+    expect(held?.model).toBeUndefined();
+    expect(held?.version).toBeUndefined();
+    expect(held?.effort).toBeUndefined();
+    expect(held?.launch_line).toBeUndefined();
+
+    const record = findAgent(w.home, { team: teamIdOf(w.root), seat: 'lead' });
+    expect(record?.id).toMatch(AGENT_ID_PATTERN);
+    expect(record?.seat_handle).toBe(held?.id);
+    expect(record?.reach.pane).toBe(PANE);
+    expect(record?.reach.session).toBe('acme');
+    expect(record?.lifecycle).toBe('running');
+    expect(record?.cli).toBe('claude-code');
+    expect(record?.launch).toContain('claude --model claude-opus-5-5');
+
+    const roster = readTeams(w.home)[teamIdOf(w.root)]?.roster ?? [];
+    expect(roster).toHaveLength(1);
+    expect(roster[0]?.agent).toBe(record?.id);
+    expect(roster[0]?.seat).toBe('lead');
+    expect(roster[0]?.role).toBe('coordinator');
+
+    expect(written(w)).toEqual({ state: true, agents: 1, log: true, panes: true });
+    const log = readFileSync(join(w.dir, LOG_FILE), 'utf8');
+    expect(log).toContain('lead: registered seat_');
+    expect(log).toContain(PANE);
+
+    // The pointer `team send` resolves the team file from: written for this session and pane,
+    // naming the file that registered it.
+    const panes = readdirSync(panesDir(w));
+    expect(panes).toHaveLength(1);
+    expect(readFileSync(join(panesDir(w), panes[0]!), 'utf8').trim()).toBe(join(w.root, '.agents', 'team.yaml'));
+  });
+
+  test('registered twice: the second run says so without reading the pane again', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+    const before = readState(w.dir).sessions.acme?.seats.lead;
+
+    const second = await register(w, ['lead'], {
+      processInfo: () => {
+        throw new Error('the pane must not be read again');
+      },
+    });
+
+    expect(second.code).toBe(0);
+    expect(second.out).toContain('lead: already registered — pane w1:p1; nothing was written');
+    expect(second.led).toEqual(['session acme', 'agents acme']);
+    expect(readState(w.dir).sessions.acme?.seats.lead).toEqual(before);
+    expect(readAgents(w.home)).toHaveLength(1);
+  });
+
+  test('--dry-run verifies the pane the same way and writes nothing', async () => {
+    const w = world();
+    const r = await register(w, ['lead', '--dry-run']);
+
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('lead: would register — pane w1:p1; nothing would be launched');
+    expect(r.led).toEqual(['session acme', 'agents acme', 'processes acme w1:p1', 'text acme w1:p1']);
+    expect(written(w)).toEqual(NOTHING);
+  });
+});
+
+describe('a pane herdr does not place as that seat', () => {
+  test('is refused when herdr names no agent of the seat in the session', async () => {
+    const w = world();
+    const r = await register(w, ['lead'], { agents: () => [] });
+
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('no agent named lead is running in session "acme"; nothing was registered');
+    expect(written(w)).toEqual(NOTHING);
+  });
+
+  test('is refused when herdr names two agents of the seat: registering one would guess', async () => {
+    const w = world();
+    const r = await register(w, ['lead'], { agents: () => [agent('lead'), agent('lead')] });
+
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('2 agents named lead; registering one would guess');
+    expect(written(w)).toEqual(NOTHING);
+  });
+
+  test('is refused when the pane holds a shell and no cli in front of it', async () => {
+    const w = world();
+    const r = await register(w, ['lead'], { processInfo: () => ({ shell: 400, foreground: [] }) });
+
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('holds no process in front of its shell; nothing was registered');
+    expect(written(w)).toEqual(NOTHING);
+  });
+});
+
+describe('a cli mismatch', () => {
+  test('is refused when the screen is one the file-cli\'s own reader does not know', async () => {
+    const w = world();
+    const r = await register(w, ['lead'], { paneText: () => '$ ls -la\ntotal 0\n$ ' });
+
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('not the seat at its prompt (unknown); nothing was registered');
+    expect(written(w)).toEqual(NOTHING);
+  });
+});
