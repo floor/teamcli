@@ -57,9 +57,10 @@ when no team file names it, and hidden while it is stopped unless `--all` is set
 `team list` reads the team registry (`~/.config/team/teams.yaml`) beside the live sessions. A row
 the registry records is served by it, and its `source` is `registry`; a session with no record is
 discovered as above, and its `source` is `discovered`. The registry row carries the entity, the
-team/session, the project and the lobby, the seat count, and three state words: `DEFINED` (the team
-file validates), `APPROVED` (the live file loads and validates — nothing else records a file, since
-approve was removed) and `RUNNING` (herdr holds the session). `team list [<entity>]` filters to one
+team/session, the project and the lobby, the seat count, and three state words: `DEFINED` (the
+registry holds a record for the team — a session nothing registered is not defined), `APPROVED`
+(the team file at the record's root loads and validates) and `RUNNING` (herdr holds the session).
+`team list [<entity>]` filters to one
 entity, and rows are grouped by entity. `--json` carries the same fields per row, `source` and the
 three state words included.
 
