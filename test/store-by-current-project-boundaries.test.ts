@@ -60,7 +60,7 @@ describe('the only matching folder', () => {
     projectFile(root, 'beta');
     const store = storePath('beta', root, home);
     mkdirSync(store, { recursive: true });
-    writeFileSync(join(store, 'team.log'), '2026-10-03T14:02:00Z | a line\n');
+    writeFileSync(join(store, 'ledger.json'), '[]\n');
     expect(findStore(root, home)).toBe(store);
     expect(approvalStanding(root, home).kind).toBe('none');
     expect(otherMatchingStores(root, home)).toEqual([]);
@@ -76,7 +76,8 @@ describe('a broken record in the current folder', () => {
     const current = approve('beta', root, text);
     // Tamper with the current project's own record after it was written.
     const record = JSON.parse(readFileSync(join(current, 'approval.json'), 'utf8')) as Record<string, unknown>;
-    record.approval = { ...(record.approval as object), root: '/another/root' };
+    expect(record.root).toBe(root);
+    record.root = '/another/root';
     writeFileSync(join(current, 'approval.json'), JSON.stringify(record));
     expect(findStore(root, home)).toBe(current);
     const standing = approvalStanding(root, home);
