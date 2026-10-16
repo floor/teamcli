@@ -45,8 +45,11 @@ function writeRoster(input: RegistryTeam, teamId: string, seat: string, entry: {
   const leadSeat = input.team.orchestrator;
   const roster = (getTeam(input.home, teamId)?.roster ?? [])
     .filter((item) => item.seat !== seat)
-    .map((item) => ({ ...item, leads: item.seat === leadSeat }));
-  if (entry) roster.push({ agent: entry.agent, seat, role: entry.role, leads: seat === leadSeat });
+    .map(({ leads: _stale, ...item }) => (item.seat === leadSeat ? { ...item, leads: true } : item));
+  if (entry) {
+    const line = { agent: entry.agent, seat, role: entry.role };
+    roster.push(seat === leadSeat ? { ...line, leads: true } : line);
+  }
   setRoster(input.home, teamId, roster);
 }
 

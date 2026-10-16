@@ -116,7 +116,7 @@ describe('registry writers: the shared register-or-repoint rule', () => {
     expect(agent.signing).toEqual({ model: 'Claude Opus', version: '5.5', role: 'implementer' });
     expect(agent.lab).toBe('anthropic');
     expect(agent.cli).toBe('claude-code');
-    expect(getTeam(fixture.home, teamId)?.roster).toEqual([{ agent: id, seat: 'worker', role: 'implementer', leads: false }]);
+    expect(getTeam(fixture.home, teamId)?.roster).toEqual([{ agent: id, seat: 'worker', role: 'implementer' }]);
     expect(getTeam(fixture.home, teamId)?.lifecycle).toBe('running');
 
     const second = registerLaunch(input, worker, 'pane-2');
@@ -133,16 +133,16 @@ describe('registry writers: the shared register-or-repoint rule', () => {
     const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
     const leadId = (registerLaunch(input, lead, 'pane-lead') as { id: string }).id;
     const workerId = (registerLaunch(input, worker, 'pane-worker') as { id: string }).id;
-    // The file leads with `lead` (`coordinator: lead`), so only that line carries the capability.
+    // The file leads with `lead` (`coordinator: lead`), so only that line says so.
     expect(getTeam(fixture.home, teamIdOf(fixture.root))?.roster).toEqual([
       { agent: leadId, seat: 'lead', role: 'coordinator', leads: true },
-      { agent: workerId, seat: 'worker', role: 'implementer', leads: false },
+      { agent: workerId, seat: 'worker', role: 'implementer' },
     ]);
     // The file moves its lead mark to the worker: the next write re-resolves every line.
     const moved = { ...input, team: { ...input.team, orchestrator: 'worker' } };
     registerLaunch(moved, worker, 'pane-worker-2');
     expect(getTeam(fixture.home, teamIdOf(fixture.root))?.roster).toEqual([
-      { agent: leadId, seat: 'lead', role: 'coordinator', leads: false },
+      { agent: leadId, seat: 'lead', role: 'coordinator' },
       { agent: workerId, seat: 'worker', role: 'implementer', leads: true },
     ]);
   });
@@ -275,7 +275,7 @@ describe('team restart: the agent keeps its id and its address re-points', () =>
     expect(agents[0]?.reach).toMatchObject({ seat: 'worker', pane: 'pane-new', session: 'acme' });
     expect(agents[0]?.lifecycle).toBe('running');
     expect(getTeam(fixture.home, teamIdOf(fixture.root))?.roster).toEqual([
-      { agent: agents[0]!.id, seat: 'worker', role: 'implementer', leads: false },
+      { agent: agents[0]!.id, seat: 'worker', role: 'implementer' },
     ]);
   });
 });
