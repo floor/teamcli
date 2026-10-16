@@ -109,11 +109,11 @@ export function seatRegistryRows(
     const launchLine = recorded?.launch_line ?? declared?.launch ?? likeSeat?.launch ?? null;
     let model = row.model;
     if (model.endsWith('(unread)') && launchLine) {
-      const prof = profileFor(cli);
-      const named = prof?.modelOf(launchLine);
-      if (named) {
-        model = `${named.model}${named.version ? ` ${named.version}` : ''} (from launch)`;
-      }
+      // The same words `status` prints: the seat's declared display, and only without one the
+      // model the launch line names.
+      const named = profileFor(cli)?.modelOf(launchLine);
+      const display = declared?.display ?? likeSeat?.display;
+      if (named) model = `${display ?? `${named.model}${named.version ? ` ${named.version}` : ''}`} (from launch)`;
     }
     rows.push({
       name: row.name,

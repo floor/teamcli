@@ -151,7 +151,7 @@ describe('team seats', () => {
     expect(code).toBe(0);
     expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                LAST ACTIVE  PANE');
     expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               now          pane-1');
-    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT Sol 6 (from launch)       xhigh   idle (screen not recognised), parked  4m ago       pane-2');
+    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (from launch)       xhigh   idle (screen not recognised), parked  4m ago       pane-2');
     expect(io.out).toContain('deepseek-acme            seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       done (screen not recognised)          1h ago       pane-3');
     expect(io.out).toContain('deepseek-acme-2          seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle (screen not recognised)          -            pane-4');
     expect(io.out).not.toContain('grok-acme');
