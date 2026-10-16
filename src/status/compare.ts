@@ -9,7 +9,7 @@ import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } fro
 import { usesLauncher } from '../launch/line.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { readScreen } from '../watch/screen.ts';
-import { modelDiffers, seatModel } from './statusline.ts';
+import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
 // `processes` each seat pane's process identity, where it was read, and null where herdr can't
@@ -569,6 +569,12 @@ function modelOf(
 ): string {
   const running = seatModel(seat, live.screens[agent.pane]);
   if (!running) {
+    // A profile may say the launch line's model stands when the screen names none: its column
+    // shows it labelled, and the note says where the name comes from.
+    if (launchModelWhenUnread(seat.cli)) {
+      notes.push(`${seat.name}: its screen shows no model; the launch line's ${seat.display} stands`);
+      return `${seat.display} (from launch)`;
+    }
     notes.push(`${seat.name}: version unread (its screen doesn't show the model)`);
     return `${seat.display} (unread)`;
   }

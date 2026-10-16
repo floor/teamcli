@@ -89,6 +89,9 @@ status_model:
     version: '{1}'
     yields: [Grok]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
+# A question widget replaces the box, and no rule reads a model off it. The model column then
+# falls back to the launch line's model, labelled, never `(unread)`.
+unread_model: launch
 screen:
   unknown:
     - any: ['Resume this session with:']

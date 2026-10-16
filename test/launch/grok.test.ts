@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { profileFor } from '../../src/profiles/index.ts';
 import { launchCommand, versionVerdict } from '../../src/profiles/profile.ts';
-import { canShowModel, runningModel } from '../../src/status/statusline.ts';
+import { canShowModel, launchModelWhenUnread, runningModel } from '../../src/status/statusline.ts';
 import { classifyComposer, readScreen, screenData } from '../../src/watch/screen.ts';
 import { boxHoldsText } from '../../src/launch/deliver.ts';
 import { type ExitIo, typeExit } from '../../src/commands/down.ts';
@@ -136,6 +136,13 @@ describe('Grok launch and captured screens', () => {
     expect(canShowModel({ cli: 'grok', model: 'Grok 4.7 Fast', version: '4.7' })).toBe(false);
     expect(canShowModel({ cli: 'grok', model: 'Grok', version: 'dev' })).toBe(false);
     expect(canShowModel({ cli: 'grok', model: 'Grok Mini', version: '4.7' })).toBe(false);
+  });
+
+  test("the unread fallback is grok's alone", () => {
+    expect(launchModelWhenUnread('grok')).toBe(true);
+    for (const cli of ['claude-code', 'codex', 'cursor', 'antigravity']) {
+      expect(launchModelWhenUnread(cli)).toBe(false);
+    }
   });
 });
 
