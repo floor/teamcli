@@ -24,6 +24,7 @@ import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { emptySession, readState, updateState, withLock } from '../state.ts';
+import { registerEnd } from './registry-sync.ts';
 import { paneStillRunning, realSources as downSources, stateOf, stateOfPane, typeExit, type DownSources } from './down.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { removeRulesFile } from '../launch/rules-file.ts';
@@ -568,6 +569,17 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       }
       const free = leftName(name, taken);
       left = { pane: agent.pane, free, renamed: sources.renameAgent?.(session, agent.pane, free) ?? false };
+    }
+    // The registry: `--keep` stops the seat's agent, which the file still names and a later
+    // `team add` or `team up` runs again as itself. A removal, a swap or a temporary seat ends the
+    // agent for good (retired, out of the roster), so a seat added in its name is a new agent.
+    if (sources.home) {
+      const ended = registerEnd(
+        { home: sources.home, team, root, by: describeCaller(caller) },
+        name,
+        args.flags.has('keep') ? 'stopped' : 'retired',
+      );
+      if (ended) logLine(dir, 'remove', describeCaller(caller), ended.note, sources.now());
     }
     const who = describeCaller(caller);
     const what = temporary ? `removed temporary ${name}` : swap ? `stopped ${name} for a swap` : args.flags.has('keep') ? `stopped ${name}` : `removed ${name}`;
