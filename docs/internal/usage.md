@@ -82,7 +82,10 @@ them are not: the restricted view renders the labs the caller's own team carries
 other teams put in use is counted and renders for the owner alone. Every block is a lab and its
 accounts, in lab name order; an account belongs to the lab its own team's rule gives it — the
 vendor of the first seat that spends it, else the account's own name — and one account keeps one
-lab whoever else maps it.
+lab whoever else maps it. A status line counts only for the account that seat spends
+(`seat.account ?? seat.vendor`); a seat of another lab running on the same CLI contributes no
+reading to the host lab's account, and its own lab reads `unknown` until a check or a pattern for
+that account exists.
 
 Under a lab, one line per account and window, grouping every team's own row for that window:
 
