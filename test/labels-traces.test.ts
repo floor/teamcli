@@ -19,6 +19,10 @@ const claudeAnsi = readFileSync(new URL('./fixtures/claude-code/2.1.289/permissi
 const claudeWide = readFileSync(new URL('./fixtures/claude-code/2.1.289/permission-read-wide-plain.txt', import.meta.url), 'utf8');
 const claudeProse = readFileSync(new URL('./fixtures/claude-code/2.1.299/working.txt', import.meta.url), 'utf8');
 const codexIdle = readFileSync(new URL('./fixtures/codex/0.157.0/idle.txt', import.meta.url), 'utf8');
+const agyPermission = readFileSync(new URL('./fixtures/antigravity/1.2.16/permission.txt', import.meta.url), 'utf8');
+const agyCommand54 = readFileSync(new URL('./fixtures/antigravity/1.2.16/permission-command-54.txt', import.meta.url), 'utf8');
+const agyEdit54 = readFileSync(new URL('./fixtures/antigravity/1.2.16/permission-edit-54.txt', import.meta.url), 'utf8');
+const agyQuestion135 = readFileSync(new URL('./fixtures/antigravity/1.3.5/question.txt', import.meta.url), 'utf8');
 
 const AT = new Date('2026-10-17T10:00:00Z');
 
@@ -183,6 +187,25 @@ describe('the seat traces', () => {
     expect(toolTrace('codex', codexIdle, AT)).toBeNull();
     expect(toolTrace('claude-code', undefined, AT)).toBeNull();
     expect(toolTrace('claude-code', '', AT)).toBeNull();
+  });
+
+  test("antigravity's rows are read too, the expand hint trimmed, the last row standing", () => {
+    // 1.2.16 prints `● Read(…)` then `● Bash(…) (ctrl+o to expand)`: the last row is the tool
+    // call, and the hint is not part of its own words.
+    expect(toolTrace('antigravity', agyPermission, AT)).toEqual({
+      kind: 'tool',
+      at: '2026-10-17T10:00:00.000Z',
+      what: 'Bash(ls -la ~/project/worktrees/team/)',
+    });
+    expect(toolTrace('antigravity', agyCommand54, AT)?.what).toBe('Bash(ls)');
+    expect(toolTrace('antigravity', agyEdit54, AT)?.what).toBe('Edit(<project-dir>/README.md)');
+    // 1.3.5 prints `● Ran (ls) (ctrl+o to expand)`.
+    expect(toolTrace('antigravity', agyQuestion135, AT)?.what).toBe('Ran(ls)');
+  });
+
+  test('a bullet that is neither shape is not a tool row', () => {
+    expect(toolTrace('antigravity', '● Here (I think) it went well\n', AT)).toBeNull();
+    expect(toolTrace('antigravity', '● Ran it by hand\n', AT)).toBeNull();
   });
 
   test('the three sources together, and nothing when none of them can speak', () => {
