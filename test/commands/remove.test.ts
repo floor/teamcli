@@ -373,10 +373,9 @@ describe('team remove', () => {
     expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
   });
 
-  test('a CLI with no clearing key keeps its leftover exit text, named for the owner', async () => {
-    // Antigravity has no key that empties the box, so the seat is not asked again: the refusal
-    // names the exit text the box holds instead of the generic unsent line, and nothing is
-    // typed, keyed or closed.
+  test('a leftover exit text on Antigravity is cleared inside the stop, and the removal proceeds', async () => {
+    // The box already holds `/exit`. The profile's one key empties it, the exit is typed
+    // fresh, and the seat is removed as on an empty box.
     writeFileSync(file, FILE.replace(
       `    cli: claude-code
     vendor: anthropic
@@ -392,17 +391,33 @@ describe('team remove', () => {
   # stays above lead`,
     ));
     approveCurrent();
-    const raw = readFileSync(new URL('../fixtures/antigravity/1.2.16/exit-typed.txt', import.meta.url), 'utf8');
-    const made = world(readScreen('antigravity', raw));
+    const exitTyped = readFileSync(new URL('../fixtures/antigravity/1.2.16/exit-typed.txt', import.meta.url), 'utf8');
+    const idle = readFileSync(new URL('../fixtures/antigravity/1.2.16/idle.txt', import.meta.url), 'utf8');
+    let raw = exitTyped;
+    let sent = false;
+    const made = world(readScreen('antigravity', exitTyped));
     made.sources.screenText = () => raw;
+    made.sources.foreground = () => (sent ? [] : ['agy']);
+    const launch = made.sources.launch;
+    if (!launch) throw new Error('fixture');
+    launch.typeText = (_session, _pane, text) => {
+      made.typed.push(text);
+      raw = exitTyped;
+      return true;
+    };
+    launch.sendKey = (_session, _pane, key) => {
+      made.keys.push(key);
+      raw = idle;
+      return true;
+    };
+    launch.pressEnter = () => { sent = true; return true; };
     made.agents.push({ name: 'worker', agent: 'agy', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
     const io = testIo(dir, owner);
-    expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(1);
-    expect(made.typed).toEqual([]);
-    expect(made.keys).toEqual([]);
-    expect(made.closed).toEqual([]);
-    expect(io.err).toBe('team remove: worker holds this CLI\'s exit text (/exit) unsent in its input box; left as it is (the owner sends it or clears it in its pane)\n');
-    expect(readFileSync(file, 'utf8')).toContain('name: worker');
+    expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(0);
+    expect(made.keys).toEqual(['ctrl+u']);
+    expect(made.typed).toEqual(['/exit']);
+    expect(made.closed).toEqual(['w1']);
+    expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
   });
 
   test('a prompt-glyph continuation row after the exit text gets no Enter', async () => {
