@@ -11,7 +11,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.agents` | `add` | 1 | the agents can't be read | `team add worker` |
 | `add.already-running` | `add` | 1 | the seat is already running | `team add worker` |
 | `add.another-pane` | `add` | 1 | the state records another pane for the caller's seat | `team add worker` |
-| `add.approved-copy` | `add` | 1 | the approved copy can't be read | `team add worker` |
 | `add.branch-missing` | `add` | 1 | the merged branch doesn't exist | `team add --temporary --like lead --until merged:missing` |
 | `add.budget` | `add` | 1 | the budget refuses the seat | `team add worker` |
 | `add.caller` | `add` | 1 | the caller may not change the team | `team add worker` |
@@ -29,7 +28,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.delegate-flag` | `add` | 1 | the delegate may not use this flag | `team add worker --temporary` |
 | `add.delegate-placement` | `add` | 1 | the approved delegate must be an external non-seat pane | `team add worker` |
 | `add.detached` | `add` | 1 | a run with no terminal | `team add worker` |
-| `add.differs` | `add` | 1 | the file differs from its approval | `team add worker` |
 | `add.doctor` | `add` | 1 | doctor refuses the launch | `team add worker` |
 | `add.file-owner` | `add` | 1 | --file is the owner's | `team add worker --file .agents/team.yaml` |
 | `add.herdr` | `add` | 1 | herdr doesn't answer | `team add worker` |
@@ -143,7 +141,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.stopped` | `down` | 0 | the seats that could be stopped were stopped | `team down` |
 | `down.abandon` | `down` | 1 | only the owner abandons a team | `team down --abandon` |
 | `down.another-pane` | `down` | 1 | the state records another pane for the caller's seat | `team down` |
-| `down.approved-copy` | `down` | 1 | the approved copy of the team file cannot be read | `team down` |
 | `down.caller` | `down` | 1 | the caller may not change the team | `team down` |
 | `down.delegate` | `down` | 1 | the caller is not the approved delegate of any entry | `team down, from a pane no delegate entry names` |
 | `down.delegate-approval` | `down` | 1 | delegation needs a verified approval | `team down, with no approval in force` |
@@ -156,8 +153,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.detached` | `down` | 1 | a run with no terminal | `team down` |
 | `down.file-owner` | `down` | 1 | --file is the owner's | `team down --file .agents/team.yaml` |
 | `down.grant-approval` | `down` | 1 | a grant needs a verified approval | `team down` |
-| `down.grant-approved-copy` | `down` | 1 | a grant needs a readable approved copy | `team down` |
-| `down.grant-drift` | `down` | 1 | a grant needs the approved file | `team down` |
 | `down.grant-scope` | `down` | 1 | the grant does not list down | `team down` |
 | `down.held` | `down` | 1 | a step was held | `team down` |
 | `down.legacy` | `down` | 1 | a legacy approval record stops nobody | `team down` |
@@ -286,12 +281,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `reload.invocation` | `reload` | 2 | the invocation can't be read | `team reload` |
 | `remove.kept` | `remove` | 0 | a stopped seat was kept | `team remove worker --keep` |
 | `remove.removed` | `remove` | 0 | the seat was removed | `team remove worker` |
+| `remove.swapped` | `remove` | 0 | a lead seat was stopped for a swap; the file still names it | `team remove lead --keep` |
 | `remove.temporary` | `remove` | 0 | a temporary seat was removed | `team remove worker` |
 | `remove.abandon` | `remove` | 1 | only the owner abandons a seat | `team remove worker --abandon` |
 | `remove.agents` | `remove` | 1 | the agents can't be read | `team remove worker` |
 | `remove.ambiguous` | `remove` | 1 | herdr lists more than one agent of this name | `team remove lead` |
 | `remove.another-pane` | `remove` | 1 | the state records another pane for the caller's seat | `team remove worker` |
-| `remove.approved-copy` | `remove` | 1 | the approved copy of the team file cannot be read | `team remove lead` |
 | `remove.busy` | `remove` | 1 | the seat is not free | `team remove worker` |
 | `remove.caller` | `remove` | 1 | the caller may not change the team | `team remove worker` |
 | `remove.coordinator` | `remove` | 1 | only the owner removes the orchestrator's or the operator's seat | `team remove lead` |
@@ -316,6 +311,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.run-lock` | `remove` | 1 | another session-mutating run is holding the session | `team remove worker` |
 | `remove.session-owner` | `remove` | 1 | --session is the owner's | `team remove worker --session other` |
 | `remove.stop-failed` | `remove` | 1 | the seat could not be stopped | `team remove worker` |
+| `remove.swap-grant` | `remove` | 1 | no grant or delegate admits this caller's swap of a lead seat | `team remove lead --keep, from a seat the grant does not admit` |
+| `remove.swap-self` | `remove` | 1 | a seat can't swap its own lead seat | `team remove lead --keep, from the lead's own pane` |
 | `remove.unverified` | `remove` | 1 | a name the approved copy does not carry is left as it is | `team remove extra` |
 | `remove.edit` | `remove` | 2 | the edit would not validate | `team remove lead` |
 | `remove.file` | `remove` | 2 | the team file can't be read | `team remove worker --file missing.yaml` |
@@ -323,6 +320,24 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.invocation` | `remove` | 2 | the invocation can't be read | `team remove` |
 | `remove.locked` | `remove` | 2 | the locked edit does not validate | `team remove worker` |
 | `remove.not-a-repo` | `remove` | 2 | not inside a git repository | `team remove worker` |
+| `restart.dry-run` | `restart` | 0 | the stop and launch plan was printed and nothing was touched | `team restart worker --dry-run` |
+| `restart.ready` | `restart` | 0 | the seat was restarted in a new pane | `team restart worker` |
+| `restart.abandon-working` | `restart` | 1 | a seat caller passed --abandon on a working seat | `team restart worker --abandon` |
+| `restart.busy` | `restart` | 1 | the seat is busy and --abandon was not given, or graceful stop did not close the pane | `team restart worker` |
+| `restart.caller` | `restart` | 1 | the caller may not restart a seat, or passed an owner-only flag | `team restart worker` |
+| `restart.detached` | `restart` | 1 | a run with no terminal | `team restart worker` |
+| `restart.herdr` | `restart` | 1 | herdr doesn't answer | `team restart worker` |
+| `restart.lead` | `restart` | 1 | a seat caller passed --abandon for the orchestrator's or the operator's seat | `team restart lead --abandon` |
+| `restart.no-session` | `restart` | 1 | the herdr session is not running | `team restart worker` |
+| `restart.not-ready` | `restart` | 1 | preflight or launch did not produce a ready seat | `team restart worker` |
+| `restart.replaced` | `restart` | 1 | the old pane holds a process that is not the seat's CLI | `team restart worker` |
+| `restart.run-lock` | `restart` | 1 | another session-mutating run is holding the session | `team restart worker` |
+| `restart.self` | `restart` | 1 | a seat caller tried to restart its own recorded pane | `team restart lead` |
+| `restart.signed-off` | `restart` | 1 | the seat is parked or stopped | `team restart worker` |
+| `restart.temporary` | `restart` | 1 | the seat is a temporary copy | `team restart worker-tmp-1` |
+| `restart.unknown` | `restart` | 1 | the seat is not a declared seat | `team restart missing` |
+| `restart.configuration` | `restart` | 2 | the team file can't be read or parsed, or not inside a git repository | `team restart worker --file missing.yaml` |
+| `restart.usage` | `restart` | 2 | the invocation can't be read | `team restart` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
 | `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
 | `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |
@@ -388,7 +403,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.delegate-placement` | `up` | 1 | the approved delegate must be an external non-seat pane | `team up` |
 | `up.deny` | `up` | 1 | deny | `team up` |
 | `up.detached` | `up` | 1 | a run with no terminal | `team up --session elsewhere` |
-| `up.differs` | `up` | 1 | the file differs from its approval | `team up` |
 | `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
 | `up.grant-another-pane` | `up` | 1 | the granted seat is not on its recorded pane | `team up` |
 | `up.grant-approval` | `up` | 1 | a grant needs a verified approval | `team up` |

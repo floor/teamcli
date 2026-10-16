@@ -1,8 +1,8 @@
 import { approvalDifferencesOf, approvedFingerprints, notInForce } from './approve/approval.ts';
 import { compare, describe, fingerprints } from './approve/fingerprint.ts';
 import { callerOf, describeCaller, readAncestors, type Caller, type CallerSources } from './caller.ts';
-import type { Delegate, DelegateCommand } from './delegate-types.ts';
-import { DELEGATE_COMMANDS } from './delegate-types.ts';
+import type { ActingCommand, Delegate, DelegateCommand } from './delegate-types.ts';
+import { ACTING_COMMANDS } from './delegate-types.ts';
 import type { TeamFile } from './file/types.ts';
 import { validateTeamFile } from './file/validate.ts';
 import { agentList, paneRootPid, sessionRunning, type HerdrAgent } from './herdr.ts';
@@ -68,14 +68,14 @@ export const ORDINARY_SECTIONS: readonly string[] = ['rules'];
  * ordinary-change guard for `approve`, which admits the roster and `rules` where the others
  * refuse any difference at all.
  */
-function preflightOf(command: DelegateCommand): readonly string[] {
+function preflightOf(command: ActingCommand): readonly string[] {
   const difference = command === 'approve' ? 'delegate-not-ordinary' : 'delegate-drift';
   return [PREFLIGHT[0], PREFLIGHT[1], difference, PREFLIGHT[2], PREFLIGHT[3]];
 }
 
 /** Every exit id the gate and `ADD_DELEGATE_EDIT` define. The command files record them. */
 export const DELEGATE_EXIT_IDS: readonly string[] = [
-  ...DELEGATE_COMMANDS.flatMap((command) => [
+  ...ACTING_COMMANDS.flatMap((command) => [
     ...preflightOf(command).map((suffix) => `${command}.${suffix}`),
     `${command}.delegate`,
     `${command}.delegate-command`,
@@ -84,12 +84,13 @@ export const DELEGATE_EXIT_IDS: readonly string[] = [
   ADD_DELEGATE_EDIT.id,
 ];
 
-// The flag order is the order a refusal names when several are present. `restore` and
+// The flag order is the order a refusal names when several are present. A swap run (a lead seat's
+// `remove --keep`) drops `keep` from `remove`'s list: the stop-for-replacement is what `swap` grants. `restore` and
 // clearing `stopped` are not flags: `add` reports those with `ADD_DELEGATE_EDIT`. `approve`'s
 // own flag is `--file` alone: a delegate approves the default placed file, never one of its
 // choosing, while `--show` (a read) and `--confirm` (inert on the delegated path) are not the
 // owner's to withhold.
-const PROHIBITED: Record<DelegateCommand, readonly string[]> = {
+const PROHIBITED: Record<ActingCommand, readonly string[]> = {
   up: ['session', 'file'],
   down: ['abandon', 'session', 'file'],
   add: ['temporary', 'like', 'until', 'worktree', 'session', 'file'],
@@ -118,13 +119,19 @@ export function logDelegated(dir: string, pane: string, command: DelegateCommand
  * file and nothing remembered: no earlier valid copy and no unverified approval is consulted.
  * It decides and stops. It does not print, write, or launch.
  *
- * An earlier refusal wins. Any approval difference refuses — a reorder of the delegates list
- * or of a command list included, both part of the canonical value — except under `approve`,
- * whose own step is the ordinary-change guard below: it admits an ordinary difference — the
- * roster and `rules` — and refuses every other owner section.
+ * An earlier refusal wins. The live file is the record for every act but `approve`: a
+ * stored copy and a fingerprint difference are not a gate. `approve` keeps the ordinary-change
+ * guard: it admits an ordinary difference — the roster and `rules` — and refuses every other
+ * owner section.
  */
 export function delegateGate(input: {
-  command: DelegateCommand;
+  command: ActingCommand;
+  /**
+   * The target is the orchestrator's or the operator's seat and the run replaces its agent.
+   * `remove <lead> --keep` is admitted by `swap` alone — `remove` never admits a lead —
+   * and `add <lead>` by `add` or `swap`. `--keep` is then not the owner's to withhold.
+   */
+  swap?: boolean;
   team: TeamFile;
   root: string;
   dir: string;
@@ -143,35 +150,19 @@ export function delegateGate(input: {
     return refuse('delegate-approval', `delegation needs a verified approval: ${notInForce(standing)}`);
   }
 
-  const copy = sources.approvedCopy ? sources.approvedCopy(root) : approvedCopy(root, home);
-  if (copy === null || validated(copy) === null) {
-    return refuse('delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`');
-  }
-
-  // The difference step. A delegated approval admits an ordinary difference — the day's
-  // roster and rules edits are exactly what it is for — and refuses, fail-closed, every other
-  // owner section: authority, money, the ceilings, identity, trust, the workspace's setup
-  // commands, and any section the parser grows later, since the test is membership in the
-  // ordinary list and never exclusion from a list of the known-bad. Seat differences are
-  // admitted here; the ceiling is what bounds the roster, on both sides of this step: `limits`
-  // itself is refused above by name, the ceiling a launch runs under is fixed by the record
-  // (`up` reads it there, never from the file, and refuses a seat past it before it runs), and
-  // a file that declares no ceiling derives one from its seats — so that add moves the section
-  // and is refused here.
+  // `approve` still refuses an owner section outside the ordinary list, and still needs a
+  // readable stored copy. Every other act reads the live file. A fingerprint difference is
+  // not a refusal, and a stored copy that cannot be read does not block the act.
   if (command === 'approve') {
+    const copy = sources.approvedCopy ? sources.approvedCopy(root) : approvedCopy(root, home);
+    if (copy === null || validated(copy) === null) {
+      return refuse('delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`');
+    }
     const kept = compare(approvedFingerprints(standing.record), fingerprints(team)).filter(
       (difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name),
     );
     if (kept.length > 0) {
       return refuse('delegate-not-ordinary', `this change needs the owner: ${kept.map(describe).join('; ')}`);
-    }
-  } else {
-    const differences = approvalDifferencesOf(standing, team);
-    if (differences.length > 0) {
-      return refuse(
-        'delegate-drift',
-        `delegation needs the approved file: the file is not the approved one (${differences.join('; ')}): run \`team approve\``,
-      );
     }
   }
 
@@ -186,11 +177,14 @@ export function delegateGate(input: {
   const found = findEntry(entries, io);
   if (found.kind === 'evidence') return refuse('delegate-evidence', `delegation cannot verify its placement or seats: ${found.reason}`);
   if (found.kind === 'none') return refuse('delegate', nonDelegate(command, describeCaller(found.caller)));
-  if (!found.entry.commands.includes(command)) {
+  const words: readonly DelegateCommand[] = !input.swap ? [command] : command === 'remove' ? ['swap'] : [command, 'swap'];
+  if (!words.some((word) => found.entry.commands.includes(word))) {
     const list = found.entry.commands.join(', ');
-    return refuse('delegate-command', `the approved delegate ${found.entry.pane} may not run \`${command}\`; its approved commands are ${list}`);
+    const what = input.swap && command === 'remove' ? 'swap a lead seat (`swap`)' : `run \`${command}\``;
+    return refuse('delegate-command', `the approved delegate ${found.entry.pane} may not ${what}; its approved commands are ${list}`);
   }
-  const flag = PROHIBITED[command].find((name) => flags.includes(name));
+  const prohibited = input.swap ? PROHIBITED[command].filter((name) => name !== 'keep') : PROHIBITED[command];
+  const flag = prohibited.find((name) => flags.includes(name));
   if (flag !== undefined) return refuse('delegate-flag', `--${flag} is the owner's; the approved delegate cannot use it`);
   return { kind: 'passed', pane: found.entry.pane };
 }
@@ -228,7 +222,7 @@ export function delegateReadGate(input: {
   return findEntry(entries, io).kind === 'match';
 }
 
-const NON_DELEGATE: Record<DelegateCommand, (caller: string) => string> = {
+const NON_DELEGATE: Record<ActingCommand, (caller: string) => string> = {
   up: (caller) => `only the owner or the approved delegate runs \`up\`; this call is ${caller}`,
   down: (caller) => `only the owner, the orchestrator, the operator or the approved delegate stops the team; this call is ${caller}`,
   add: (caller) => `only the owner, the orchestrator, the operator or the approved delegate runs it; this call is ${caller}`,
@@ -236,7 +230,7 @@ const NON_DELEGATE: Record<DelegateCommand, (caller: string) => string> = {
   approve: (caller) => `only the owner or the approved delegate approves a team file; this call is ${caller}`,
 };
 
-function nonDelegate(command: DelegateCommand, caller: string): string {
+function nonDelegate(command: ActingCommand, caller: string): string {
   return NON_DELEGATE[command](caller);
 }
 

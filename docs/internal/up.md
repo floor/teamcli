@@ -465,7 +465,7 @@ record it belongs to, as its meaning says.
 | `<seat>: its recorded pane <pane> was gone and was replaced` / `<seat>: its recorded pane <pane> was gone and was replaced; its workspace <workspace> was left` | a later `up` found the seat recorded waiting and the host no longer lists that pane: a fresh workspace was made and the seat launched. The second line is that same line when the host still lists the recorded workspace: the workspace is named and not closed. A pane the host still lists is never this line |
 | `<seat>: left out: its waiting pane is gone` / `<seat>: left out: its waiting pane holds another process` | a later `up` found the seat recorded waiting and the host still lists that pane but no agent of the seat's name, or the pane no longer holds the recorded process: nothing was created, nothing closed, the record kept; the repair under the record on stderr is the team file's own for this seat — `team down` then `team up` (to restart the whole team) for an orchestrator or operator, `team remove <seat> --keep` then `team add <seat>` (or the whole team) for any other — and the owner answers or closes by hand first when the seat sits at a dialog, or its pane holds an agent `team` cannot name (above) |
 | `<seat>: left out: <reading>; its workspace did not close; left as it is` | the close of that workspace failed, with `<reading>` one of `trust`, `permission`, `question` or `vendor notice` — a run without a terminal closing it, or the pause's own close at the prompt: nothing claims it was closed, and the seat is left exactly as it was, its state kept — a later `up` resumes it |
-| `<seat>: left out: runs <model> <version>; the file says <model> <version>; left at launched, not named. Add <flag> <id> to its launch, or correct the file's model and version and run team approve` | the idle screen shows a different model than the file. The seat is not renamed and gets no rules; its pane stays open. The flag is that CLI's model flag, and the id is the one the profile maps to the file's model. When the profile knows no id, the line says `<id>` |
+| `<seat>: left out: runs <model> <version>; the file says <model> <version>; left at launched, not named. Add <flag> <id> to its launch, or correct the file's model and version` | the idle screen shows a different model than the file. The seat is not renamed and gets no rules; its pane stays open. The flag is that CLI's model flag, and the id is the one the profile maps to the file's model. When the profile knows no id, the line says `<id>` |
 | `<seat>: left out: its pane has been back at its shell for <n> s and shows no CLI prompt; left at launched` | herdr's process info says the pane's foreground program is back at its shell through three full polls on end, four readings, the screen matches no CLI shape, and the launch line's own echo is visible on the screen. A pane read before the line arrived, one whose echo scrolled away, one whose program is slow to draw, or a herdr that can't say (no shell process info), is waited out to the deadline — the end is never inferred from the screen's text, and a single reading can never reach the three polls. The workspace is kept, and the pane's last lines follow on stderr, under the record |
 | `<seat>: left out: timeout` | the prompt never came within the profile's own time limit; the detail under the record, on stderr, says after how long it waited, the screen it last read, the pane's last lines, and that `team up` again resumes it |
 | `<seat>: left out: timeout (no terminal for owner)` | a delegated run's idle wait ran out: for it the timeout is a dialog like any other stop, so the workspace is closed without input — the same proof as every close above — and the seat left out. The owner at a terminal is asked instead (the pause, above), and the owner without one keeps the plain `timeout` record above |
@@ -494,6 +494,7 @@ record it belongs to, as its meaning says.
 | `<seat>: left out: refused: <account> spend <amount> <CUR>, at or below its <floor> <CUR> floor, read <age> ago; accounts with room: <accounts>` | the money its check counted is at or below the account's floor, and this run would launch the seat; this seat is not started, and the others still are |
 | `<seat>: left out: refused: its launch line starts `<word>`, which is not on the PATH` / `…, which does not exist` / `…, which is not executable` / `…, not found from `~`` / `…, not found from its start folder` | the program the line starts is missing where the seat starts — the lobby for a seat that works in worktrees. When the check looked in a folder it resolved, the record's reason stops at `…, not found from its start folder` and the sentence naming the folder is written under the record, on stderr. A first word that is one fully quoted literal (`"claude"`, `'zcash'`) is checked with the quotes removed, the way a shell would run it, and `<word>` is the word as written, quotes and all — a quoted `"~/x"` is a pathname with a literal `~` folder, resolved from the start folder, never the home. A path written as the program is read as main's launcher check read it: it must be there and executable, not merely there. This seat is not started, and the others still are |
 | `<seat>: left out: refused: its launch line runs `<path>`, not found from its start folder` | the line runs a shell — `sh`, `bash` or `zsh`, by name or by path — whose first argument is a relative script path, not an option, and that script resolves from the project root but not from the folder the line will run in: the shell exits 127 without starting anything. The record's reason stops at `…, not found from its start folder`; the sentence naming the folder it looked in and the absolute path to write is written under the record, on stderr. This seat is not started, and the others still are |
+| `<seat>: left out: refused: the lobby is not trusted for <cli>: run <cli> in <lobby> and accept the folder` | a seat about to start in the lobby whose CLI's own trust record for that folder cannot be written: the record is written under the seat's home before its workspace is made, and a config that is a link — that file, or a folder above it — one that cannot be read, or one that CLI's own file cannot be merged into leaves the seat out instead. A `grok` or `cursor` seat is told its own flag instead (`run grok --trust in <lobby>`, `run cursor-agent --trust in <lobby>`); a CLI this build has no writer for starts with nothing written. A `--dry-run` writes nothing: it reports this refusal, as a `would refuse:` line, only for a Claude seat whose config it cannot merge into. This seat is not started, and the others still are |
 | `<seat>: <account> <window> left <n>%, inside its <reserve>% reserve, changed <age> ago; accounts with room: <accounts>` | the same reading, and the seat is already running; setup continues and the line is only a notice — on a real run it is written to stderr, under the seat's record |
 | `<seat>: <account> spend <amount> <CUR>, at or below its <floor> <CUR> floor, read <age> ago; accounts with room: <accounts>` | the same money reading, and the seat is already running; setup continues and the line is only a notice — on a real run it is written to stderr, under the seat's record |
 | `<seat>: <account> is unknown` | the account is in the file and its figure is unknown — a subscription with no counted reading, or a spend account whose money reading is missing, older than `budgets.stale_after`, or in another currency than the floor's. A subscription figure with no known reset is unknown while it could still matter — inside its reserve, or within the reserve again outside it; further out — more than the reserve again — it counts, the room the figure last held, and the launch decision is clear: no unknown line. The seat still starts, and the line is a notice written to stderr, under the seat's record, on a real run |
@@ -544,11 +545,10 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | ``only the owner runs this, from a terminal outside herdr`` — a run with no terminal. ``only the owner runs `up`, from a terminal outside herdr; this call is <caller>`` — any other caller the ordinary rule refuses. With a `delegates` section in the file, that other refusal is the delegate gate's to say, in its own words below |
 | ``only the owner or the approved delegate runs `up`; this call is <caller>`` — the delegate gate: the file's `delegates` section names panes, and this caller is none of them |
 | ``--<flag> is the owner's; the approved delegate cannot use it`` — the delegate gate, for `--session` and `--file` on a delegated run, refused before the file or the session the flag names is read |
-| the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the approved copy unreadable, the live file drifted from the approved copy, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |
-| ``the file was never approved on this machine: run `team approve` `` |
-| ``approved before records were signed: run `team approve` once`` — the record was written by an earlier `team` |
-| ``the record <case>: run `team approve` once`` — a signed record that does not verify |
-| ``the file is not the approved one (<differences>): run `team approve` `` |
+| the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |
+| ``the file was never approved on this machine `` — dev mode only, as a warning; a missing record is not a refusal |
+| ``approved before records were signed`` — the record was written by an earlier `team` |
+| the case a refused record names — a signed record that does not verify |
 | a `MISS` finding from [team doctor](../commands/doctor.md) — herdr or a CLI not installed, or a CLI not logged in. A launch that names another model than the file, or that names none, is a warning, so `up` still starts the seat; a seat's own launch line is not this — it leaves that seat out alone, in the lines above. After the idle wait, a screen that shows a different model leaves that seat at launched, not named |
 | `the load is 1.2 per core, above 1` / `free memory is 8%, below 25%` / `free disk is 3.0 GB, below 10.0 GB` / `free swap is 1.0 GB, below 2.0 GB` |
 | `herdr doesn't answer` |
@@ -684,7 +684,7 @@ claude-beacon: ready
 exit 0
 ```
 
-An owner section changed in the file needs a new approval, and the plan says so before the run:
+An owner section changed in the file is what the commands read. The plan is the live file's:
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -734,8 +734,6 @@ seats:
 
 ```console
 $ team up --dry-run ; echo "exit $?"
-! up would refuse: the file is not the approved one (`limits` changed): run `team approve`
-! up would refuse: run `team approve`: `limits` changed
 + herdr --session beacon workspace rename w1 coordinator
 + herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
@@ -744,14 +742,7 @@ $ team up --dry-run ; echo "exit $?"
   skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 dry run: nothing was run
-exit 1
+exit 0
 ```
 
-The real run goes no further than the refusal — it never touches a team the file doesn't match:
-
-```console
-$ team up ; echo "exit $?"
-team up: the file is not the approved one (`limits` changed): run `team approve`
-team up: run `team approve`: `limits` changed
-exit 1
-```
+The real run follows that plan. A live edit of an owner section is not a refusal.

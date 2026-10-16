@@ -323,10 +323,10 @@ describe('the grant\'s scope', () => {
 
   test('a token outside the closed set never validates, alone or beside a real one', () => {
     expect(messages(`${ONE}grant:\n  session: arena\n  seat: lead\n  scope: [ship]\n`)).toContain(
-      'grant.scope must name up, down, approve, init, reload: "ship" is not one',
+      'grant.scope must name up, down, approve, init, reload, swap: "ship" is not one',
     );
     expect(messages(`${ONE}grant:\n  session: arena\n  seat: lead\n  scope:\n    - up\n    - ship\n`)).toContain(
-      'grant.scope must name up, down, approve, init, reload: "ship" is not one',
+      'grant.scope must name up, down, approve, init, reload, swap: "ship" is not one',
     );
   });
 
@@ -334,7 +334,7 @@ describe('the grant\'s scope', () => {
     const empty = `${ONE}grant:\n  session: arena\n  seat: lead\n  scope: []\n`;
     const blank = `${ONE}grant:\n  session: arena\n  seat: lead\n  scope:\n`;
     for (const text of [empty, blank]) {
-      expect(messages(text)).toContain('grant.scope must name at least one of: up, down, approve, init, reload');
+      expect(messages(text)).toContain('grant.scope must name at least one of: up, down, approve, init, reload, swap');
     }
   });
 
@@ -351,11 +351,10 @@ describe('the grant\'s scope', () => {
 });
 
 describe('the signature the gate trusts', () => {
-  test('a grant added to the live file and not yet approved is invisible to every act', () => {
+  test('a grant added to the live file admits up, and approve still names the owner', () => {
     expect(gate({ act: 'up', live: GRANTED, approved: ONE, sessions: SEATED, io: ORCHESTRATOR })).toEqual({
-      kind: 'refused',
-      id: 'grant.drift',
-      text: 'a grant needs the approved file: the file is not the approved one (`grant` changed): run `team approve`',
+      kind: 'passed',
+      grant: { session: 'arena', seat: 'lead', scope: ['up', 'down', 'approve', 'init'] },
     });
     expect(gate({ act: 'approve', live: GRANTED, approved: ONE, sessions: SEATED, io: ORCHESTRATOR })).toEqual({
       kind: 'refused',
@@ -372,7 +371,7 @@ describe('the signature the gate trusts', () => {
       expect(gate({ act, live: ONE, approved: ONE, dropGrant: true, sessions: SEATED, io: ORCHESTRATOR })).toEqual({
         kind: 'refused',
         id: 'grant.omitted',
-        text: 'the approved file grants nothing',
+        text: 'the file grants nothing',
       });
     }
   });

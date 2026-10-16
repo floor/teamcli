@@ -7,12 +7,10 @@ For a team that is running under 0.2.1:
    one.
 2. One edit of the team file: paste that block under `trust:`; correct `model:` and `version:` if step 1 named
    them.
-3. `team approve`, **run alone**: it prints the file back and records it, and with `--confirm` it asks you
-   to type the number of seats and reads the answer from your terminal. Pasted together with the next
-   command, the leftover input refuses the approval and nothing is written.
-4. `team up`.
+3. `team up`.
 
-That is one edit, one approval, one `up`, and the team is in force again. Read-only commands (`status`,
+That is one edit, then `up`, and the team is in force again. The live file is what the commands read.
+Read-only commands (`status`,
 `doctor`) work throughout. Two exceptions:
 
 - **Running seats stay where 0.2.1 started them until they are relaunched.** `up` skips each one and says what
@@ -29,7 +27,7 @@ That is one edit, one approval, one `up`, and the team is in force again. Read-o
   then `team up`.
 - **A stopped team has no screen for `doctor` to read**, so a file that names a model family its CLI doesn't
   run is only met at the first launch: that seat is left at launch with a line naming the fix; a second edit
-  and a second `team approve` follow. The seat left at launch still sits in its pane, unnamed: close that pane
+  follows. The seat left at launch still sits in its pane, unnamed: close that pane
   by hand (in herdr; no `team` command does it), then run `team up`: it launches the seat again in a new pane
   and leaves the running seats as they are. Without that, `team up` refuses the session (``team up: session
   <name> has 1 agent this file's state doesn't record: `up` never touches a running team``). Don't reach
@@ -44,7 +42,7 @@ What else changes for you:
   (`` `coordinator:` is now `leads: true` on the lead's seat, and is still read ``), and
   `dialogs.trust: coordinator` is read beside `orchestrator` and `owner`. The notice is the only
   line either spelling gains: a keyed file and a marked file approve to the same record, so
-  rewriting the key to the mark needs no new `team approve`.
+  rewriting the key to the mark needs no further record.
 - **`team init` writes the new spelling**: the seat is `role: orchestrator`, `name: orchestrator`,
   carries `leads: true`, and `operator:` names it. Its `cli:` line is the first of `claude-code`,
   `codex`, `cursor`, `antigravity` this machine is signed in to (a login check that cannot tell is
@@ -72,4 +70,4 @@ What else changes for you:
 How to tell it is done: `team doctor` ends `nothing missing` (notes about a placeholder version `"0"` may
 remain), and `team status --json` shows each seat's `start_cwd` under `~/.config/team/lobby`. `team status`
 shows each seat's screen (`idle`), and still counts a difference and exits 1 for a seat whose file says
-version `"0"`: write the version `doctor` names (for example `"5.5"`) and run `team approve` to clear it.
+version `"0"`: write the version `doctor` names (for example `"5.5"`) to clear it.
