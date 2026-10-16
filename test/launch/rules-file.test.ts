@@ -324,7 +324,7 @@ describe('checking the file', () => {
     try {
       write(text, rulesFileHash(text));
       expect(checkRulesFile(path, text)).toEqual({ ok: true });
-      expect(checkRulesFile(path, 'other rules')).toEqual({ ok: false, what: 'its rules file differs from the approved rules' });
+      expect(checkRulesFile(path, 'other rules')).toEqual({ ok: false, what: "its rules file differs from the team file's rules" });
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
