@@ -4,7 +4,10 @@ Lists the projects this machine's registry holds, from `~/.config/team/projects.
 `0600`, under `~/.config/team/` beside the team records). A project is the layer above a team: its
 immutable id, the display name people and team files use for it, the entity it belongs to, its
 lead, and the IDs of the teams that sit in it. The lead is an agent ID — never a seat or a role
-name.
+name. It comes from the lead team: a team says it leads the project it sits in with
+`project_lead: true` beside `in_project:`, one team per project, and the record's lead is the agent
+of that team's own lead seat — the seat its file marks with `leads: true` — re-resolved on every
+launch, so a mark that moves in the file moves the record with it.
 
 The hierarchy is entity, then project, then team, then seat, and the project level is where
 settings start: they inherit entity, then project, then team, then seat — a lower level may
@@ -12,7 +15,10 @@ tighten, and loosen only where the level above allows it.
 
 A team names its project in its team file, `in_project`, holding the project's display name;
 today's `project:` field keeps meaning the team, so every file written before this build loads
-unchanged, and a team that names no project is its own project.
+unchanged, and a team that names no project is its own project. A team belongs to one project at
+most: when the registry names a team in two, [`team check`](check.md) refuses it, naming both
+projects, and the repair is the registry file; and a file that sets `project_lead: true` without
+naming a project is refused as the file loads.
 
 ## Synopsis
 
