@@ -379,9 +379,11 @@ describe('a seat stopped on a provider error or a rate limit', () => {
 
   test('a rate limit carries the reset time, and leaving the screen clears the report', () => {
     const memory = newMemory();
-    expect(run(memory, 0, limit)).toContain('deepseek-acme is at a rate limit: usage limit, resets at 11:00');
+    // The pool is the account the seat spends: its own `account:` when the file names one, its
+    // vendor otherwise — deepseek-acme has none, so its vendor.
+    expect(run(memory, 0, limit)).toContain('deepseek-acme is at a rate limit on deepseek: usage limit, resets at 11:00');
     expect(run(memory, 11 * 60_000, idle).some((line) => line.includes('rate limit'))).toBe(false);
-    expect(run(memory, 12 * 60_000, limit)).toContain('deepseek-acme is at a rate limit: usage limit, resets at 11:00');
+    expect(run(memory, 12 * 60_000, limit)).toContain('deepseek-acme is at a rate limit on deepseek: usage limit, resets at 11:00');
   });
 });
 

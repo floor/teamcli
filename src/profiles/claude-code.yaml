@@ -198,11 +198,12 @@ screen:
   provider_error:
     - any:
         - 'API Error: Connection lost mid-response\. The response above may be incomplete\.'
-  # The 429 line, matched on the fragments that were quoted. Whatever follows
-  # "Your limit will reset at" is the reset time the watch reports.
+  # The rejected line, matched on the fragments that were quoted: the field report names
+  # 429 and 403 as this CLI's usage-limit rejections. Whatever follows "Your limit will
+  # reset at" is the reset time the watch reports.
   rate_limit:
     - all:
-        - 'API Error: Request rejected \(429\)'
+        - 'API Error: Request rejected \((?:429|403)\)'
         - 'Usage limit reached'
         - 'Your limit will reset at'
   working:
