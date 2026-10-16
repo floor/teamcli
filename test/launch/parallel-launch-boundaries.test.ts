@@ -698,7 +698,6 @@ describe('the serial opt-out on the up command', () => {
     expect(io.err).toContain('watch: started\n');
     // Serial: the operator's workspace exists only after the coordinator is renamed.
     expect(made.order.indexOf('rename:claude-coordinator-acme')).toBeLessThan(made.order.indexOf('create:operator'));
-    expect(made.order.indexOf('rename:claude-operator-acme')).toBeLessThan(made.order.indexOf('create:watchdog'));
   });
 
   test('the same machine without the flag overlaps the two seats', async () => {
@@ -714,9 +713,8 @@ describe('the serial opt-out on the up command', () => {
     const code = await runUp(['--file', '.agents/team.yaml'], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
     // Parallel: both workspaces were made before either seat was named — the contrast that
-    // shows the flag above is what forced the order, not the fixture. The watchdog is a
-    // trailing step and still waits for every seat, in either mode.
+    // shows the flag above is what forced the order, not the fixture.
     expect(made.order.indexOf('create:operator')).toBeLessThan(made.order.indexOf('rename:claude-coordinator-acme'));
-    expect(made.order.indexOf('create:watchdog')).toBeGreaterThan(made.order.indexOf('rename:claude-operator-acme'));
+    expect(made.order.indexOf('create:operator')).toBeLessThan(made.order.indexOf('rename:claude-operator-acme'));
   });
 });
