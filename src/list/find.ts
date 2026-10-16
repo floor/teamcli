@@ -165,10 +165,6 @@ function fromStores(session: string, home: string): FoundTeamWithFile | null {
       const found = interpret(live, root, session, home);
       if (found) return found;
     }
-    const approved = join(store, 'approved.yaml');
-    if (!isRealFile(approved)) continue;
-    const found = interpret(approved, root, session, home);
-    if (found) return found;
   }
   return null;
 }

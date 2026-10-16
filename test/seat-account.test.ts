@@ -425,8 +425,10 @@ describe('a seat the approval lists as changed', () => {
 
     // The approval check reports the drifted like-seat, naming the file's seat
     expect(result.reports.find((r) => r.key === 'approval')?.text)
-      .toBe('the file differs from the approved one: seat codex-work changed');
-    // And no figure is folded for the temporary seat
-    expect(result.readings).toEqual([]);
+      .toBe('the file has changed since the last approval: seat codex-work changed');
+    // The live like-seat still supplies the temporary seat's account and profile.
+    expect(result.readings).toEqual([expect.objectContaining({
+      account: 'openai-work', seat: 'codex-temp', left: 12, used: 88, window: 'weekly',
+    })]);
   });
 });

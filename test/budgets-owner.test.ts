@@ -74,15 +74,15 @@ beforeEach(() => {
 afterEach(() => rmSync(base, { recursive: true, force: true }));
 
 describe('the budgets section, owner-only', () => {
-  test('an edit to its values is drift, and the approved values stay in force', () => {
+  test('an edit is recorded as drift and its live budget values take effect', () => {
     approve(source(`${OPENAI}  check_every: 10m\n`));
     const edited = teamFile(source(`${OPENAI.replace('10%', '1%')}  check_every: 1000h\n  marks: [99]\n`));
     expect(approvalDifferences(edited, root, home)).toEqual(['`budgets` changed']);
     const inForce = budgetsInForce(edited, root, home);
-    // What the file says now is not what runs: the approved reserve, marks and cadence stay.
-    expect(inForce.accounts['openai']?.reserve).toBe(10);
-    expect(inForce.marks).toEqual([50, 75, 90]);
-    expect(inForce.checkEvery).toBe(600);
+    // The live reserve, marks and cadence take effect together.
+    expect(inForce.accounts['openai']?.reserve).toBe(1);
+    expect(inForce.marks).toEqual([99]);
+    expect(inForce.checkEvery).toBe(1000 * 3600);
     expect(edited.budgets.accounts['openai']?.reserve).toBe(1);
     expect(edited.budgets.marks).toEqual([99]);
     expect(edited.budgets.checkEvery).toBe(1000 * 3600);
@@ -105,7 +105,7 @@ describe('the budgets section, owner-only', () => {
 });
 
 describe('the check commands run from the budgets in force', () => {
-  test('an unapproved edit that drops an account is not run; the approved copy is', () => {
+  test('a live edit that drops an account stops its check', () => {
     const command = join(root, 'balance');
     writeFileSync(command, '#!/bin/sh\necho "6.20 USD"\n', { mode: 0o755 });
     const account = `  accounts:\n    deepseek: { kind: spend, floor: 5 USD, sources: [check], check: ${command} }\n`;
@@ -122,13 +122,12 @@ describe('the check commands run from the budgets in force', () => {
       home,
     );
 
-    // The file's unapproved edit names no account at all; the approved copy's does, and its
-    // command — unchanged since the approval — runs.
+// The live file names no account, so its former check must not run.
     const edited = teamFile(source('  marks: [50, 75, 90]\n'));
     expect(approvalDifferences(edited, root, home)).toEqual(['`budgets` changed']);
     const reading = { kind: 'spend', amount: 6.2, currency: 'USD', at: NOW_MS } as const;
     const outcomes: CheckOutcome[] = runChecks(edited, root, NOW_MS, home, () => reading);
-    expect(outcomes).toEqual([{ account: 'deepseek', state: 'read', reading }]);
+    expect(outcomes).toEqual([]);
   });
 });
 
@@ -189,7 +188,7 @@ describe('the watch reads them', () => {
     outcomes = [];
   });
 
-  test('an unapproved marks edit silences nothing: the approved marks still report', async () => {
+  test('a live marks edit sets the thresholds reported by the watch', async () => {
     approve(source(OPENAI_CHECK));
     write(source(`  marks: [99]\n${OPENAI_CHECK}`));
     outcomes = [{
@@ -203,25 +202,25 @@ describe('the watch reads them', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runWatch(['--file', '.agents/team.yaml'], io, watchSources(1));
     expect(code).toBe(0);
-    expect(io.out).toContain('openai weekly is 92% used, past the 50% mark');
-    expect(io.out).toContain('openai weekly is 92% used, past the 90% mark');
+    expect(io.out).not.toContain('past the 50% mark');
+    expect(io.out).not.toContain('past the 90% mark');
+    expect(io.out).toContain('openai weekly left 8%, inside its 10% reserve');
     expect(io.out).not.toContain('the file differs from the approved one');
   });
 
-  test('an unapproved cadence edit does not stretch the loop\'s check runs', async () => {
+  test('a live cadence edit changes the loop\'s check runs', async () => {
     approve(source('  check_every: 30s\n'));
     write(source('  check_every: 1000h\n'));
     const io = testIo(root, { kind: 'owner' });
     const code = await runWatch(['--file', '.agents/team.yaml'], io, watchSources(2));
     expect(code).toBe(0);
-    // Two passes 120s apart are the approved 30s cadence's: both run the checks. A file that
-    // could stretch it to a thousand hours would leave the second pass with the first's readings.
-    expect(reads).toEqual([NOW_MS, NOW_MS + 120_000]);
+    // Two passes 120s apart use the live cadence: the second keeps the first reading.
+    expect(reads).toEqual([NOW_MS]);
   });
 });
 
 describe('status reads them', () => {
-  test('an unapproved reserve edit moves no row and no reserve mark', async () => {
+  test('a live reserve edit changes the reserve mark immediately', async () => {
     approve(source(OPENAI));
     const stored: Seen = {
       account: 'openai',
@@ -250,9 +249,9 @@ describe('status reads them', () => {
 
     expect(await status()).toContain('openai  weekly  left 5%  used 95%');
     expect(await status()).toContain('fresh, inside reserve 10%');
-    // The unapproved 1% is not read: the row still carries the approved 10%.
+    // The live 1% reserve puts this reading outside its reserve immediately.
     write(source(OPENAI.replace('10%', '1%')));
-    expect(await status()).toContain('fresh, inside reserve 10%');
+    expect(await status()).not.toContain('inside reserve');
     // Approved, it is the row's own reserve.
     approve(source(OPENAI.replace('10%', '1%')));
     const after = await status();

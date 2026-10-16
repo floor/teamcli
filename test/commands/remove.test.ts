@@ -927,7 +927,7 @@ describe('team remove', () => {
     made.agents.push({ name: 'worker-tmp-1', agent: 'claude', pane: 'w2:p1', workspace: 'w2', status: 'idle', cwd: null });
     const left = testIo(dir, owner);
     expect(await runRemove(['worker-tmp-1', '--file', file], left, made.sources)).toBe(1);
-    expect(left.err).toContain('worker-tmp-1: its record is not an approved seat; left as it is (the owner cleans it: team remove worker-tmp-1 --abandon)');
+    expect(left.err).toContain('worker-tmp-1: its record is not a declared seat; left as it is (the owner cleans it: team remove worker-tmp-1 --abandon)');
     expect(made.typed).toEqual([]);
     expect(existsSync(rulesFile)).toBe(true);
     expect(readFileSync(file, 'utf8')).not.toContain('tmp');
@@ -1060,7 +1060,7 @@ describe('team remove', () => {
     const made = world();
     const io = testIo(dir, lead);
     expect(await runRemove(['stray'], io, made.sources)).toBe(1);
-    expect(io.err).toBe('team remove: stray: its record is not an approved seat; left as it is (the owner cleans it: team remove stray --abandon)\n');
+    expect(io.err).toBe('team remove: stray: its record is not a declared seat; left as it is (the owner cleans it: team remove stray --abandon)\n');
     expect(readState(join(dir, '.agents')).sessions.acme?.seats.stray).toBeDefined();
   });
 
@@ -1070,7 +1070,7 @@ describe('team remove', () => {
     made.agents.push({ name: 'stray', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null });
     const io = testIo(dir, owner);
     expect(await runRemove(['stray', '--file', file], io, made.sources)).toBe(1);
-    expect(io.err).toBe('team remove: stray: its record is not an approved seat; left as it is (the owner cleans it: team remove stray --abandon)\n');
+    expect(io.err).toBe('team remove: stray: its record is not a declared seat; left as it is (the owner cleans it: team remove stray --abandon)\n');
     expect(made.typed).toEqual([]);
     expect(made.closed).toEqual([]);
     expect(readState(join(dir, '.agents')).sessions.acme?.seats.stray).toBeDefined();
