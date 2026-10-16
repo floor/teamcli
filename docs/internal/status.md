@@ -160,6 +160,7 @@ here.
 | `<seat>: its rules were not delivered` | `team remove <seat> --keep`, then `team add <seat>` |
 | `<seat>: its rules file is missing` / `… is a symbolic link` / `… is not a regular file` / `… has mode 0644, not 0600` / `… is not owned by this user` / `… cannot be read` / `… differs from the approved rules` | `the owner runs team up` — the seat's rules travel in a file in the project state folder, and it no longer holds the approved rules text; `status` never rewrites it |
 | `<seat> holds text in its input box that was never sent` | `the owner clears or sends it in the pane; team does not type into a box it can't verify` |
+| `<seat> waits at a permission prompt: its owner's to answer` | `the owner answers it in the pane` |
 | `<seat>: its launch stopped at "named", and it holds text in its input box that was never sent` | `the owner clears or sends it in the pane, then runs team up (it resumes the launch)` |
 | `<name>: a temporary seat is recorded and is not running` | `team remove <name>` |
 | `no watch has run for this session` | `team watch --session <s>` |

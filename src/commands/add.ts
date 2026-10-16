@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { approvalDifferencesOf, budgetsInForceOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
+import { approvalDifferencesOf, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
@@ -270,27 +270,37 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.default-session
     return 1;
   }
-  // One verified snapshot for the whole command: a legacy or refused record is not
-  // an approval in force, and the approved copy the seat is built from is the record's own.
+  // A missing record is the live file. A legacy or refused record is still not in force.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
-  if (standing.kind !== 'verified') {
+  if (standing.kind !== 'verified' && standing.kind !== 'none') {
     out.stderr(`team add: ${plainText(notInForce(standing))}\n`);
     // exit: add.never-approved
     // exit: add.ceilings
     return 1;
   }
-  const differences = approvalDifferencesOf(standing, team);
-  if (differences.length) {
-    out.stderr(`team add: the file is not the approved one (${plainText(differences.join('; '))}): run \`team approve\`\n`);
-    // exit: add.differs
-    return 1;
-  }
-  const approvedText = standing.record.file;
-  const approved = validateTeamFile(approvedText, { home: sources.home, fs: sources.fs, root });
-  if (!approved.ok) {
-    out.stderr('team add: the approved copy can\'t be read: run `team approve`\n');
-    // exit: add.approved-copy
-    return 1;
+  let approvedText: string;
+  let approvedTeam: TeamFile;
+  let ceilings: Ceilings;
+  if (standing.kind === 'none') {
+    approvedText = readFileSync(path, 'utf8');
+    approvedTeam = team;
+    ceilings = ceilingsOf(team);
+  } else {
+    const differences = approvalDifferencesOf(standing, team);
+    if (differences.length) {
+      out.stderr(`team add: the file is not the approved one (${plainText(differences.join('; '))}): run \`team approve\`\n`);
+      // exit: add.differs
+      return 1;
+    }
+    approvedText = standing.record.file;
+    const approved = validateTeamFile(approvedText, { home: sources.home, fs: sources.fs, root });
+    if (!approved.ok) {
+      out.stderr('team add: the approved copy can\'t be read: run `team approve`\n');
+      // exit: add.approved-copy
+      return 1;
+    }
+    approvedTeam = approved.team;
+    ceilings = standing.record.approval.ceilings;
   }
 
   const live = sources.sessionState(session);
@@ -314,12 +324,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const recorded = readState(dir).sessions[session] ?? emptySession();
-  const ceilings: Ceilings = standing.record.approval.ceilings;
 
   const original = readFileSync(path, 'utf8');
   const built = temporary
-    ? temporarySeat(args.values, original, approved.team, recorded, agents, root, team.workspace.base)
-    : declaredSeat(args.rest[0] ?? '', original, approvedText, approved.team, sources.home, sources.fs);
+    ? temporarySeat(args.values, original, approvedTeam, recorded, agents, root, team.workspace.base)
+    : declaredSeat(args.rest[0] ?? '', original, approvedText, approvedTeam, sources.home, sources.fs);
   if ('error' in built) {
     out.stderr(`team add: ${plainText(built.error)}\n`);
     // exit: add.no-seat
@@ -475,7 +484,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // says it. A `miss` joins the doctor findings below, for a seat this `add` would launch.
   // A seat whose pane holds a process team did not launch is never adopted into that pane:
   // it is closed and launched fresh, so no stray is looked for.
-  const stray = repair ? undefined : unnamedIn(recorded.seats[built.name]?.workspace, agents);
+  const stray =
+    repair || (held?.launched !== undefined && verdict !== 'same')
+      ? undefined
+      : unnamedIn(built.name, recorded.seats, agents);
   const resumeCwd = recorded.seats[built.name]?.start_cwd;
   const line = !stray
     ? launchLineFinding(prepared.team, built.seat, root, {
@@ -531,6 +543,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       : []),
   ]) {
     if (blocksLaunch(finding)) {
+      // A missing approval record is the live file, the same way `up` reads it. The doctor's
+      // never-approved miss is that record's absence, and it does not stop this add.
+      if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
       // A file a CLI reads at start is said here and refused later, only when this seat is
       // about to start in the lobby. Other misses still stop the run here.
       if (finding.text.includes(' is read at start by ')) {
@@ -708,7 +723,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       }
       const parsed = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
       // The amendment re-signs from the command's own one snapshot, read at its gate.
-      if (parsed.ok) recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);
+      if (parsed.ok && standing.kind === 'verified') recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);
       // The reach projection, from the file just written: a seat added with a `reach` grant
       // reaches the bridge and the shuttle at this approval, without waiting for an `up`.
       if (parsed.ok) {
@@ -846,9 +861,23 @@ function seatPlan(
   };
 }
 
-function unnamedIn(workspace: string | undefined, agents: readonly HerdrAgent[]): HerdrAgent | undefined {
+function unnamedIn(
+  seatName: string,
+  seats: Readonly<Record<string, SeatState>>,
+  agents: readonly HerdrAgent[],
+): HerdrAgent | undefined {
+  const held = seats[seatName];
+  const workspace = held?.workspace;
   if (!workspace) return undefined;
-  return agents.find((agent) => !agent.name && agent.workspace === workspace);
+  const shared = Object.entries(seats).some(
+    ([name, other]) =>
+      name !== seatName
+      && (other.workspace === workspace || (held.pane !== undefined && other.pane === held.pane)),
+  );
+  if (shared) return undefined;
+  return agents.find(
+    (agent) => !agent.name && agent.workspace === workspace && (held.pane === undefined || agent.pane === held.pane),
+  );
 }
 
 function runningOf(agents: readonly HerdrAgent[], team: TeamFile, state: SessionState): Running[] {
@@ -858,9 +887,12 @@ function runningOf(agents: readonly HerdrAgent[], team: TeamFile, state: Session
     if (!agent.name) continue;
     const seat = seats.get(agent.name);
     const known = state.seats[agent.name];
-    if (!seat && !known?.temporary) continue;
     const like = known?.temporary ? seats.get(known.temporary.like) : undefined;
-    running.push({ name: agent.name, vendor: seat?.vendor ?? like?.vendor ?? 'unknown', temporary: Boolean(known?.temporary) });
+    running.push({
+      name: agent.name,
+      vendor: seat?.vendor ?? like?.vendor ?? 'unknown',
+      temporary: !seat || Boolean(known?.temporary),
+    });
   }
   return running;
 }
@@ -873,7 +905,7 @@ function ceilingProblem(ceilings: Ceilings, running: readonly Running[], seat: S
   }
   const cap = ceilings.vendors[seat.vendor];
   if (cap !== undefined) {
-    const vendors = running.filter((item) => item.vendor === seat.vendor).length + 1;
+    const vendors = running.filter((item) => item.vendor === seat.vendor || item.vendor === 'unknown').length + 1;
     if (vendors > cap) return `the approval allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
   }
   return null;

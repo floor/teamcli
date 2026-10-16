@@ -89,40 +89,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.version` | `answer` | 1 | this version has no trust answer | `team answer lead trust` |
 | `answer.configuration` | `answer` | 2 | the team file cannot be read | `team answer lead trust --file missing.yaml` |
 | `answer.usage` | `answer` | 2 | the invocation is not a seat and trust | `team answer` |
-| `approve.approved` | `approve` | 0 | the owner approved the file | `team approve` |
-| `approve.show` | `approve` | 0 | the comparison was printed | `team approve --show` |
-| `approve.answer` | `approve` | 1 | the answer was not the number of seats | `team approve --confirm` |
-| `approve.check` | `approve` | 1 | an approved check cannot be resolved | `team approve` |
-| `approve.delegate` | `approve` | 1 | the caller is neither the owner nor the approved delegate | `team approve` |
-| `approve.delegate-approval` | `approve` | 1 | delegation needs a verified approval | `team approve` |
-| `approve.delegate-approved-copy` | `approve` | 1 | delegation needs a readable approved copy | `team approve` |
-| `approve.delegate-command` | `approve` | 1 | the approved delegate may not run `approve` | `team approve` |
-| `approve.delegate-evidence` | `approve` | 1 | delegation cannot verify its placement or seats | `team approve` |
-| `approve.delegate-flag` | `approve` | 1 | a flag of the owner's was passed to the approved delegate | `team approve --file <path>` |
-| `approve.delegate-not-ordinary` | `approve` | 1 | the change moves an owner section a delegate may not: it needs the owner | `team approve` |
-| `approve.delegate-placement` | `approve` | 1 | the approved delegate must be an external non-seat pane | `team approve` |
-| `approve.detached` | `approve` | 1 | a run with no terminal | `team approve` |
-| `approve.grant-another-pane` | `approve` | 1 | the granted seat is not on its recorded pane | `team approve` |
-| `approve.grant-approval` | `approve` | 1 | a grant needs a verified approval | `team approve` |
-| `approve.grant-approved-copy` | `approve` | 1 | a grant needs a readable approved copy | `team approve` |
-| `approve.grant-caller` | `approve` | 1 | only the seat the grant names runs this | `team approve` |
-| `approve.grant-flag` | `approve` | 1 | a granted seat cannot aim --file | `team approve --file other` |
-| `approve.grant-no-pane` | `approve` | 1 | no pane is recorded for the granted seat | `team approve` |
-| `approve.grant-not-ordinary` | `approve` | 1 | this change needs the owner | `team approve` |
-| `approve.grant-scope` | `approve` | 1 | the grant does not list approve | `team approve` |
-| `approve.input-unreadable` | `approve` | 1 | the terminal could not be read to check for input waiting | `team approve` |
-| `approve.input-waiting` | `approve` | 1 | input was waiting on the terminal | `team approve` |
-| `approve.key` | `approve` | 1 | the signing key can't be read | `team approve` |
-| `approve.key-changed` | `approve` | 1 | the signing key changed while the file was being approved | `team approve` |
-| `approve.not-owner` | `approve` | 1 | a seat ran it | `team approve` |
-| `approve.store` | `approve` | 1 | the approval store sits where seats work | `team approve` |
-| `approve.file` | `approve` | 2 | the team file can't be read | `team approve --file missing.yaml` |
-| `approve.file-invalid` | `approve` | 2 | the team file can't be parsed | `team approve --file team.yaml` |
-| `approve.invocation` | `approve` | 2 | the invocation can't be read | `team approve extra` |
-| `approve.not-a-repo` | `approve` | 2 | not inside a git repository | `team approve` |
-| `approve.overrides` | `approve` | 2 | the overrides file can't be parsed | `team approve` |
-| `approve.placed` | `approve` | 2 | a path would trust the project's parent | `team approve` |
-| `approve.revalidate` | `approve` | 2 | the file does not validate | `team approve` |
 | `ask-show.shown` | `ask-show` | 0 | the question is printed | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.expired` | `ask-show` | 1 | the marker matches and the ask is past expires_at plus 5 seconds | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.refused` | `ask-show` | 1 | the marker does not verify, or a file cannot be read | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
@@ -420,6 +386,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.delegate-evidence` | `up` | 1 | the delegate gate can't verify its placement or seats | `team up` |
 | `up.delegate-flag` | `up` | 1 | --session or --file is the owner's on a delegated run | `team up --session other` |
 | `up.delegate-placement` | `up` | 1 | the approved delegate must be an external non-seat pane | `team up` |
+| `up.deny` | `up` | 1 | deny | `team up` |
 | `up.detached` | `up` | 1 | a run with no terminal | `team up --session elsewhere` |
 | `up.differs` | `up` | 1 | the file differs from its approval | `team up` |
 | `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
@@ -436,7 +403,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.machine` | `up` | 1 | the machine is over a launch limit | `team up` |
 | `up.never-approved` | `up` | 1 | the file was never approved | `team up` |
 | `up.no-launch` | `up` | 1 | this call has no way to reach herdr | `team up` |
-| `up.not-owner` | `up` | 1 | only the owner runs up | `team up` |
+| `up.not-owner` | `up` | 1 | deny | `team up` |
 | `up.pending` | `up` | 1 | a seat was left short of ready | `team up` |
 | `up.placement` | `up` | 1 | a seat has nowhere to start | `team up` |
 | `up.run-lock` | `up` | 1 | another session-mutating run is holding the session | `team up` |

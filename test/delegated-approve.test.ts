@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { approvalDifferencesOf, approvalOf } from '../src/approve/approval.ts';
 import { fingerprints, OWNER_SECTIONS } from '../src/approve/fingerprint.ts';
 import type { Caller, CallerSources, Process } from '../src/caller.ts';
-import { runApprove, type ApproveSources } from '../src/commands/approve.ts';
+import { runApprove, type ApproveSources } from '../src/approve/command.ts';
 import { ORDINARY_SECTIONS, delegateGate, type DelegateSources, type DelegateVerdict } from '../src/delegate.ts';
 import type { DelegateCommand } from '../src/delegate-types.ts';
 import type { TeamFile } from '../src/file/types.ts';
