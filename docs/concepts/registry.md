@@ -50,13 +50,17 @@ of the SHA-256 of the root's real path, so two stores of one root are one team:
 lowercased, every run of characters outside letters, digits, `.`, `_` and `-` written as one `-`,
 nothing left at either end: `TeamCLI` is `teamcli`, `Team CLI` is `team-cli`. A team file's
 `in_project` writes the display name, and the id is the key it reaches. The id is minted when the
-project is first written and never moves: a rename writes `name`.
+project is first written and never moves: a rename writes `name`. The team file's `in_project`
+writes this record — the name, the entity and the team IDs — and a team that sets
+`project_lead: true` beside it supplies `lead` on every launch: the agent of that team's own lead
+seat, so a mark that moves in the file moves the record with it. A team the registry names in two
+projects is refused by [`team check`](../commands/check.md), which names both.
 
 | Field | Meaning |
 | --- | --- |
 | `name` | the display name — what people and team files call the project (`TeamCLI`) |
 | `entity` | the entity the project belongs to |
-| `lead` | the project lead, by agent ID — never a seat or a role name |
+| `lead` | the project lead, by agent ID — never a seat or a role name: the agent of the lead seat (`leads: true`) of the one team whose file sets `project_lead: true` beside `in_project`, re-resolved on that team's every launch; a lead seat with no agent yet leaves it `null` |
 | `teams` | the team IDs the project groups |
 | `provenance` | who registered the record, and when it was registered and last updated |
 
