@@ -630,6 +630,31 @@ Usage:
 | --- | --- | --- |
 | `name` | no | no |
 
+## `restart`
+
+Hidden: no
+
+Usage:
+
+    team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--abandon` | no | no | no |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `seats`
 
 Hidden: no

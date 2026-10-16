@@ -18,9 +18,9 @@ the state file is in the project, and a process of the same user that writes its
 under the orchestrator's name, and renames its pane, passes. The check guards a mistaken agent, not
 a hostile process running as the same user. `--file` and `--session` are the owner's alone, from a
 terminal outside herdr: a non-owner aiming either is refused before the flagged file or session is
-read at all. Everything `up` refuses on — a file that is not the approved one, a `MISS` finding
-from `team doctor`, the machine past its limits, the approval's ceilings — refuses here too, for
-the one seat being started.
+read at all. Everything `up` refuses on — a `MISS` finding from `team doctor`, the machine past
+its limits, the ceilings — refuses here too, for the one seat being started. A file that differs
+from a stored copy is not a refusal: the live file is the record.
 
 A file with a `delegates` section also admits one more caller: the approved delegate, a pane the
 owner named in that section as `<session>/<pane id>`, outside the team. When the ordinary rule
@@ -113,14 +113,14 @@ returns before these real-run failures, and never takes their status:
 | Message | Exit |
 | --- | --- |
 | `team add: --like, --until and --worktree are for --temporary` | 2 |
-| ``team add: delegation needs a verified approval: <reason>`` / ``team add: delegation needs a readable approved copy: run `team approve` `` / ``team add: delegation needs the approved file: the file is not the approved one (<differences>): run `team approve` `` — the delegate gate, reading the same approval every other check reads | 1 |
+| ``team add: delegation needs a verified approval: <reason>`` — the delegate gate. A fingerprint difference is not a refusal; the live file names the delegate | 1 |
 | ``team add: delegation cannot verify its placement or seats: <reason>`` | 1 |
 | `team add: the approved delegate must be an external non-seat pane` | 1 |
 | ``team add: the approved delegate <session>/<pane id> may not run `add`; its approved commands are <list>`` | 1 |
 | `team add: --<flag> is the owner's; the approved delegate cannot use it` — `--temporary`, `--like`, `--until`, `--worktree`, `--session` or `--file` | 1 |
 | `team add: the approved delegate cannot change the file or the approval; the owner adds a missing or stopped seat` — an add that would restore a missing seat or clear `stopped`, also on `--dry-run` | 1 |
 | `team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat` — any caller but the owner; a temporary seat takes them from any caller | 1 |
-| ``team add: approved before records were signed: run `team approve` once`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
+| ``team add: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify. A missing record is not a refusal, and neither is a file that differs from a stored copy | 1 |
 | `team add: no launch profile for \`<cli>\` in this version` | 1 |
 | `team add: session can't be "default", herdr's own session` / `team add: herdr doesn't answer` | 1 |
 | ``team add: session <session> is stopped; clear it with `herdr session delete <session>` `` / `team add: session <session> runs, and its agents can't be read` | 1 |
