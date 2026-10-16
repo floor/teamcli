@@ -698,6 +698,10 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         paneText: (_session, pane) => action.paneText('', pane),
         // The address a register records: the fixture runs no sockets, so the stub answers null.
         refreshAddress: () => ({ address: null }),
+        // The two sidebar writes an adoption re-applies: noops that report "done", so an example
+        // spawns no herdr.
+        renameWorkspace: () => true,
+        reportDisplayAgent: () => true,
         now,
       };
     },
