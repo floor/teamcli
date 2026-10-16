@@ -11,6 +11,7 @@
 import { join } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { blindDifferences } from '../commands/seats.ts';
 import { approvalCaseRow, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
@@ -26,7 +27,7 @@ import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
 import { byName, ofTeam, ProjectsError } from '../registry/projects.ts';
 import { getTeam, teamIdOf, TeamsError } from '../registry/teams.ts';
-import { emptySession, readState, type SessionState, type State } from '../state.ts';
+import { emptySession, liveHold, readState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
 import { seatModel } from '../status/statusline.ts';
@@ -170,6 +171,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...approvalCaseRow(standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null),
     ...overrideDrift(overrides),
     ...rulesFileDifferences(standing, team, root, sources.home),
+    // A blind seat — unknown past the blind threshold — counts as not working, and is
+    // a must-fix here exactly as it is in `team status`.
+    ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null),
   ]);
   const differences = comparison.differences;
   for (const difference of differences) {

@@ -26,7 +26,7 @@ import { realSources as realProjectSources, type ProjectSources } from './projec
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
-import { renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
+import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
 
 // What `status` reads from outside the file and the state, so tests can stand in for it.
 export type StatusSources = {
@@ -233,10 +233,14 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     return 2;
   }
   const now = sources.now();
+  // The team's hold first of all, the way it is the first thing a reader should know: a hold
+  // past its `until` reads as none (`liveHold`), so neither the note nor the document carries
+  // one that has lapsed. Read before the comparison below, whose held seats it marks.
+  const hold = liveHold(whole, now);
   const budgets = budgetTable(budgetsInForceOf(standing, team), recall(whole.budgets), now.getTime());
   const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
   const all = args.flags.has('all');
-  const registryRows = all ? seatRegistryRows(team, state, live, comparison, now, true) : undefined;
+  const registryRows = all ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null) : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
   // The one machine check this reading cannot pass — the same fact `doctor` reports as a finding,
   // as one note, in the reading's own words. `up`'s refusal on it is its own line, and nothing
@@ -247,10 +251,6 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     if (problem !== null) comparison.notes.unshift(problem);
   }
   if (!live.running) comparison.notes.unshift(`the herdr session "${session}" is not running`);
-  // The team's hold first of all, the way it is the first thing a reader should know: a hold
-  // past its `until` reads as none (`liveHold`), so neither the note nor the document carries
-  // one that has lapsed.
-  const hold = liveHold(whole, now);
   if (hold) comparison.notes.unshift(holdText(hold));
   // What the seats recorded with `team proc add`: one note per live process, read the same way
   // `team proc list` reads it — a record whose pid is gone is skipped here and left for the next
@@ -277,6 +277,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ...overrideDrift(overrides),
     // The file's own rules files, only once a record exists for a launch to have written them.
     ...rulesFileDifferences(standing, team, root, sources.home),
+    // A seat whose reading is blind — unknown past the blind threshold — counts as
+    // not working, and is a must-fix here exactly as it is in `team check`.
+    ...blindDifferences(team, state, live, comparison, now, hold !== null),
   ]);
 
   if (args.flags.has('json')) {

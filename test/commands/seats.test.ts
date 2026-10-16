@@ -145,15 +145,15 @@ describe('team seats', () => {
     expect(io.out).toBe(USAGE);
   });
 
-  test('lists active seats in the 9-column registry table and omits stopped seats by default', async () => {
+  test('lists active seats in the 11-column registry table and omits stopped seats by default', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runSeats(['--file', file], io, statusSources);
     expect(code).toBe(0);
-    expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                LAST ACTIVE  PANE');
-    expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               now          pane-1');
-    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  4m ago       pane-2');
-    expect(io.out).toContain('deepseek-acme            seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       done (screen not recognised)          1h ago       pane-3');
-    expect(io.out).toContain('deepseek-acme-2          seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle (screen not recognised)          -            pane-4');
+    expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE  SOURCE  LAST ACTIVE  PANE');
+    expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               idle   cli     now          pane-1');
+    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  idle   herdr   4m ago       pane-2');
+    expect(io.out).toContain('deepseek-acme            seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       done (screen not recognised)          done   herdr   1h ago       pane-3');
+    expect(io.out).toContain('deepseek-acme-2          seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle (screen not recognised)          idle   herdr   -            pane-4');
     expect(io.out).not.toContain('grok-acme');
   });
 
@@ -161,7 +161,8 @@ describe('team seats', () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runSeats(['--file', file, '--all'], io, statusSources);
     expect(code).toBe(0);
-    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               1d ago       -');
+    // A retained seat is done (its process is gone), not judged blind on its day-old trace.
+    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done   process  1d ago       -');
   });
 
   test('--json and --all --json emit the SeatsJson payload', async () => {
@@ -246,14 +247,14 @@ describe('team seats', () => {
 });
 
 describe('team status --all', () => {
-  test('renders the 9-column registry table while preserving difference footer and notes', async () => {
+  test('renders the 11-column registry table while preserving difference footer and notes', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runStatus(['--file', file, '--all'], io, statusSources);
     expect(code).toBe(0);
     expect(io.out).toContain('team acme-web, session "acme-web"');
-    expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                LAST ACTIVE  PANE');
-    expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               now          pane-1');
-    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               1d ago       -');
+    expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE  SOURCE   LAST ACTIVE  PANE');
+    expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               idle   cli      now          pane-1');
+    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done   process  1d ago       -');
     expect(io.out).toContain('0 difference(s)');
     expect(io.out).toContain('note: codex-acme: version unread');
   });
