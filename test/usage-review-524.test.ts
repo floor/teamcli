@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { machineUsage, reportOf, viewFor } from '../src/information/usage.ts';
+import { machineUsage, reportOf, reportText, viewFor } from '../src/information/usage.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
@@ -137,6 +137,41 @@ test("a shared machine account's restricted row keeps a foreign team's own metad
   expect(entry?.kind).toBe('spend');
   if (entry === undefined || entry.kind !== 'spend') throw new Error('no spend line for the shared account');
   expect(entry.machine.amount).toBe(25);
+});
+
+test("inside an unrelated project, a machine fallback is not a door to a foreign lab's name", () => {
+  const { home, base } = syntheticHome();
+  writeFileSync(join(home, '.config', 'team', 'accounts.yaml'), 'accounts:\n  - shared\n');
+  const foreignRoot = join(base, 'foreign-checkout');
+  approved(home, foreignRoot, teamText({
+    project: 'foreign-lab', session: 'foreign-session', root: foreignRoot,
+    budgets: 'budgets:\n  accounts:\n    shared: { kind: spend, floor: 5 USD, sources: [check], check: foreign-balance }\n',
+    cli: 'grok', vendor: '/synthetic/private-project', account: 'shared',
+  }));
+  recordSpend(foreignRoot, 'foreign-session', 'shared', 25);
+  // A project that declares nothing: the machine account still reaches it as a fallback
+  // declaration, and that fallback must not hand it the lab name the foreign seat's vendor made.
+  const publicRoot = join(base, 'public-checkout');
+  approved(home, publicRoot, teamText({ project: 'public-project', session: 'public-session', root: publicRoot, budgets: '', cli: 'grok', vendor: 'grok' }));
+  // The restricted view of a caller standing in that project: `full: false`, as a seat's call
+  // reads it, with the checkout as its own.
+  const view = { full: false, mine: publicRoot };
+  const report = reportOf(machineUsage(home, NOW, view), view, NOW, []);
+  expect(report.view).toBe('restricted');
+  expect(report.mine).toBe('public-project');
+  const face = JSON.stringify(report);
+  expect(face).not.toContain('/synthetic/private-project');
+  expect(face).not.toContain('private-project');
+  expect(reportText(report)).not.toContain('private-project');
+  // The account itself is the machine's own subscription name, and prints under it.
+  expect(report.labs.map((lab) => lab.lab)).toContain('shared');
+  const entry = report.labs.flatMap((lab) => lab.accounts).find((one) => one.account === 'shared');
+  expect(entry?.kind).toBe('spend');
+  // The lab's own team still reads the name its own declaration carries: the rule is who the
+  // name belongs to, not a ban on vendor strings.
+  const own = { full: false, mine: foreignRoot };
+  expect(reportOf(machineUsage(home, NOW, own), own, NOW, []).labs.map((lab) => lab.lab))
+    .toContain('/synthetic/private-project');
 });
 
 test("the default report keeps the caller's own rows when two checkouts share a project name", () => {

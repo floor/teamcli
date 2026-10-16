@@ -654,7 +654,11 @@ export function machineUsage(home: string, now: number, view: UsageView): Machin
     for (const declared of team.usage.accounts) {
       const preferred = declarationOf.get(declared.account) ?? declared;
       const slot = labSlot(preferred.lab);
-      if (!slot.carried.includes(team)) slot.carried.push(team);
+      // The lab name is the winning declaration's, which may be another team's: a team belongs
+      // here only when the name is its own — its own explicit declaration under this lab, or its
+      // own vendor below. A fallback declaration (the machine's account list reaching a team that
+      // never named the account) is no team's metadata, so it carries the account, never the lab.
+      if (declared.fallback !== true && declared.lab === preferred.lab && !slot.carried.includes(team)) slot.carried.push(team);
       const account = slot.accounts.get(declared.account) ?? { account: declared.account, kind: preferred.kind, declaring: [] };
       account.declaring.push(team);
       slot.accounts.set(declared.account, account);
