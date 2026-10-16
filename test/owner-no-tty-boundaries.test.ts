@@ -344,6 +344,10 @@ describe('every owner-gated command refuses the run with no terminal, through th
   });
 
   const throwingRemove: RemoveSources = {
+    // The create-grant read is the one store lookup the refusal below is allowed, and a record it
+    // finds is what asks the clock: the empty home names no store, so the scene never reaches the
+    // machine's real grants and the order it pins is the order it always sees.
+    home: '',
     sessionRunning: boom('the session'),
     agents: boom('the agent list'),
     alive: boom('a pid'),
