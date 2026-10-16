@@ -32,6 +32,11 @@ export const watch: Section = {
       team_idle: measureSchema(DURATION),
       nudge_wait: measureSchema(DURATION),
       unsent_after: measureSchema(DURATION),
+      nudge: {
+        type: 'string',
+        minLength: 1,
+        description: 'text sent to each idle worker after idle_first; the report line when omitted',
+      },
       quota_marks: {
         type: 'array',
         items: { type: 'number', exclusiveMinimum: 0, maximum: 100 },
@@ -66,7 +71,7 @@ export function defaultWatch(): TeamFile['watch'] {
 
 function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
   const fields = check.fields(entry?.value, 'watch', [
-    'interval', 'idle_first', 'idle_repeat', 'team_idle', 'nudge_wait', 'unsent_after', 'quota_marks', 'checks',
+    'interval', 'idle_first', 'idle_repeat', 'team_idle', 'nudge_wait', 'unsent_after', 'nudge', 'quota_marks', 'checks',
   ]);
   const time = (name: string, fallback: number) =>
     check.measure(fields.get(name), `watch.${name}`, DURATION, '120s or 10m') ?? fallback;
@@ -74,6 +79,7 @@ function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
   const idleRepeat = repeatField
     ? check.measure(repeatField, 'watch.idle_repeat', DURATION, '120s or 10m')
     : undefined;
+  const nudge = check.text(fields.get('nudge'), 'watch.nudge');
   const base = defaultWatch();
   let quotaMarks = base.quotaMarks;
   const marks = fields.get('quota_marks');
@@ -95,6 +101,7 @@ function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
       unsentAfter: time('unsent_after', base.unsentAfter),
       quotaMarks,
       checks: readChecks(fields.get('checks'), check),
+      ...(nudge !== undefined ? { nudge } : {}),
     },
   };
 }

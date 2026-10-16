@@ -3,11 +3,17 @@
 Watches a running team. Every `watch.interval` seconds it reads the session — the seats, their
 screens, the file, the approval, the machine — prints what is wrong, and removes a merged worktree
 whose end holds. A temporary seat is left as it is: the owner removes it. When a report is
-waiting, and an approval is in force, it types one fixed line into an idle seat — the nudge —
-so that seat reads the log. The operator is not that seat. A file that was never
-approved, a legacy record, and a refused record type nothing. It types nothing into a
+waiting, it types one fixed line into an idle seat — the nudge —
+so that seat reads the log. The operator is not that seat. A missing approval does not
+stop that line. It types nothing into a
 screen it can't read as an empty idle prompt, so a permission dialog and a half-typed sentence are
-left alone. A box that already holds the nudge's own line is sent, not typed into twice — and only
+left alone. `watch.nudge`, when the file sets it, is sent to each idle worker once
+`idle_first` has passed and again every `idle_repeat` when that is set. The body goes to the
+same drop file `team send` uses, and the pane receives one short line naming that file.
+When `watch.nudge` is omitted, that body is the report line. The text is taken from the
+live file, so it does not wait for an approval. The operator, the orchestrator, and the
+pane the watch itself is running in are never the target, and neither is a pane that is in
+a dialog or already holds unsent text. A box that already holds the nudge's own line is sent, not typed into twice — and only
 by the watch process that typed it: the same text from anyone else, or found after a restart, is
 its owner's, and is never sent or cleared. A screen hatch is an escape hatch for a CLI whose
 screens the data primitives cannot express. The guarantees cover what a hatch returns and what load
@@ -95,7 +101,7 @@ it and run `team up`.
 | --- | --- |
 | `--session <name>` | the herdr session to watch, instead of `team.session` |
 | `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
-| `--no-nudge` | the owner's. Type nothing into any pane: no report nudge and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
+| `--no-nudge` | the owner's. Type nothing into any pane: no report nudge, no work prompt and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
 | `--no-notify` | the owner's. No desktop notification for a report addressed to the operator. A report addressed to the owner is still notified, still written to the log, and still visible in `team status` |
 | `--help`, `-h` | the usage, and exit 0 |
 
@@ -404,6 +410,8 @@ The watch's own timings are the owner's too: `interval`, `idle_first`, `idle_rep
 `nudge_wait` and `unsent_after` are approved with the file, and an edit to one of them changes
 nothing until the owner approves it — the passes keep running with the values of the approved copy,
 or with the defaults when nothing was approved, and the difference is reported.
+`watch.nudge` is read from the live file on each pass, including while those timings are still
+the approved copy or the defaults.
 By default an idle seat is reported once per idle period (`idle_repeat` is off). A team that wants
 repeated idle reports turns them on by setting `watch.idle_repeat` to the repeat interval (such as
 `idle_repeat: 20m`), repeating every 20 minutes while the seat stays quiet.

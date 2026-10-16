@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
 import { approvalCase, budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
 import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } from '../caller.ts';
@@ -5,7 +6,7 @@ import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendR
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
 import type { TeamFile } from '../file/types.ts';
-import { validateTeamFile } from '../file/validate.ts';
+import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, pressEnter, reportDisplayAgent, typeText, workspaceRename, type PaneProcesses } from '../herdr.ts';
@@ -18,6 +19,7 @@ import { readMachine, readingsText } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
 import { beatWatch, ownWatchPane, placedWatch } from '../watch/pane.ts';
 import { notify } from '../watch/notify.ts';
+import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
 import { newMemory, ownUnsent, pass, type MailboxWaiting } from '../watch/pass.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -325,6 +327,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // The budget values in force, from the same snapshot: an unapproved edit to the marks, the
       // accounts or the cadence silences nothing here until the owner approves it.
       const budget = budgetsInForceOf(standing, team);
+      // One read of this process's pane per pass. The heartbeat and the work drop share it:
+      // a second read would count as a second pass to a caller that records the calls.
+      const own = sources.ownPane?.(session, sources.pid);
+      const ownPane = own && own !== 'gone' ? own.pane : null;
       const live = sources.live(session, team);
       if (!live) {
         if (!silent) tell('herdr doesn\'t answer; the watch keeps trying', true);
@@ -383,7 +389,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           quotaFor: (cli) => quotaWith(cli, overrides.profiles),
           readScreen: (cli, pane) => classifyWith(cli, pane, overrides.profiles),
           readings: stored, foreground, processes,
-          nudgeOperator: approvedOperator(standing),
           // A record is bound to the file's session. A watch of another session neither rings
           // nor raises the owner line; the file's own watch still does both.
           mailbox: !foreign && sources.home ? mailboxWaiting(root, team, live, sources.home) : [],
@@ -409,10 +414,38 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             else say(`${label.name}: its display was not reported`, false);
           }
         }
-        if (result.nudge) {
+        const delivered = new Set<string>();
+        if (!foreign) {
+          for (const item of result.work) {
+            if (item.pane === ownPane) continue;
+            if (args.flags.has('no-nudge')) {
+              say(`nudge not typed (--no-nudge): ${item.body}`, false);
+              continue;
+            }
+            const written = writeWorkDrop(dir, session, item.seat, item.body);
+            if ('error' in written) {
+              tell(written.error, true);
+              continue;
+            }
+            await deliver({
+              pane: item.pane,
+              text: written.trigger,
+              pending: [],
+              cli: item.cli,
+              seat: item.seat,
+              said: item.body,
+            }, team, session, sources, memory, say, tell, told);
+            delivered.add(item.pane);
+          }
+        }
+        if (result.nudge && result.nudge.pane === ownPane) {
+          // The watch's own pane is the owner's. The reports go back: this pass did not type them.
+          memory.pending.push(...result.nudge.pending);
+          if (result.nudge.pending.length > 0) memory.pendingSince ??= sources.now().getTime();
+        } else if (result.nudge && !delivered.has(result.nudge.pane)) {
           if (args.flags.has('no-nudge')) say(`nudge not typed (--no-nudge): ${result.nudge.text}`, false);
           else await deliver(result.nudge, team, session, sources, memory, say, tell, told);
-        } else if (result.ring) {
+        } else if (!result.nudge && result.ring && delivered.size === 0) {
           if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${result.ring.text}`, false);
           else await deliver({
             pane: result.ring.pane,
@@ -426,7 +459,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (result.mailboxNote) tell(result.mailboxNote, true);
         await closeEnded({ team, root, dir, session, live, sources, say, io, told });
       }
-      const place = placedWatch(dir, session, sources.pid, sources.ownPane);
+      const place = placedWatch(dir, session, sources.pid, sources.ownPane ? () => own ?? null : undefined);
       if (place === 'end' && paneGoneOnce) {
         tell(`the watch's pane is gone; the watch ends with it`, true);
         break;
@@ -446,13 +479,33 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   return 0;
 }
 
-/** The verified file's gate for the nudge. Null types nothing. The seat it names is not the pane. */
-function approvedOperator(standing: Standing): { name: string; cli: string } | null {
-  if (standing.kind !== 'verified') return null;
-  const approved = validateTeamFile(standing.record.file);
-  if (!approved.ok) return null;
-  const seat = approved.team.seats.find((item) => item.name === approved.team.operator);
-  return seat ? { name: seat.name, cli: seat.cli } : null;
+/** Writes the work prompt where `team send` writes a plain body: `.agents/send-drops/<session>/<seat>/<id>`,
+ *  mode 0600, and returns the one line the pane is asked to read. A path that will not fit in
+ *  that line is not written. */
+function writeWorkDrop(
+  dir: string, session: string, seat: string, body: string,
+): { trigger: string } | { error: string } {
+  const id = randomUUID();
+  const dropDir = join(dir, 'send-drops', session, seat);
+  // Checked before the write, as `team send` does: a path that will not fit is not written.
+  if (triggerLine(join(dropDir, id)) === null) {
+    return { error: `${seat}: the trigger would exceed the limit; nothing was sent` };
+  }
+  let path: string;
+  try {
+    const root = join(dir, 'send-drops');
+    const sessionDir = join(root, session);
+    mkdirSync(dropDir, { recursive: true });
+    chmodSync(root, 0o700);
+    chmodSync(sessionDir, 0o700);
+    chmodSync(dropDir, 0o700);
+    path = dropMessage(dropDir, id, body);
+  } catch {
+    return { error: `${seat}: the drop file could not be written; nothing was typed` };
+  }
+  const trigger = triggerLine(path);
+  if (trigger === null) return { error: `${seat}: the trigger would exceed the limit; nothing was sent` };
+  return { trigger };
 }
 
 /** The spend readings among a pass's check outcomes, for the state. */
@@ -492,7 +545,7 @@ function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string):
 }
 
 async function deliver(
-  nudge: { pane: string; text: string; pending: string[]; cli?: string; seat?: string; ring?: { to: string } }, team: TeamFile, session: string, sources: WatchSources,
+  nudge: { pane: string; text: string; pending: string[]; cli?: string; seat?: string; ring?: { to: string }; said?: string }, team: TeamFile, session: string, sources: WatchSources,
   memory: ReturnType<typeof newMemory>, say: (text: string, desktop: boolean) => void,
   tell: (text: string, notify: boolean) => void, told: Set<string>,
 ): Promise<void> {
@@ -598,11 +651,12 @@ async function deliver(
   if (sources.pressEnter(nudge.pane, session)) {
     // Sent: the line has left the box, so nothing here can claim it any more.
     memory.ownNudge = null;
+    const spoken = nudge.said ?? nudge.text;
     say(nudge.ring
       ? `rang ${nudge.ring.to}: ${nudge.text}`
       : mine
-        ? `nudged ${who} (its own unsent line was already in its box): ${nudge.text}`
-        : `nudged ${who}: ${nudge.text}`, false);
+        ? `nudged ${who} (its own unsent line was already in its box): ${spoken}`
+        : `nudged ${who}: ${spoken}`, false);
   } else keep();
 }
 

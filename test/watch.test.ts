@@ -264,7 +264,7 @@ describe('a pass of the watch', () => {
     const { labels, ...rest } = pass({
       team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(),
     });
-    expect(rest).toEqual({ reports: [], nudge: null, fallback: null, ring: null, mailboxNote: null, readings: [] });
+    expect(rest).toEqual({ reports: [], nudge: null, work: [], fallback: null, ring: null, mailboxNote: null, readings: [] });
     expect(labels.length).toBe(5);
   });
 
@@ -980,11 +980,11 @@ describe('team watch', () => {
       kind: 'refused' as const,
       why: 'the record does not carry a valid signature: it was changed after approval, or written without the key: run `team approve` once',
     })],
-  ] satisfies Array<[string, WatchSources['standing']]>)('types nothing while the record is %s', async (_name, standing) => {
+  ] satisfies Array<[string, WatchSources['standing']]>)('still nudges an idle seat while the record is %s', async (_name, standing) => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources(1, { standing }));
     expect(code).toBe(0);
-    expect(typed).toEqual([]);
+    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
   });
 
   test('types nothing when herdr lists two agents of the idle seat', async () => {
