@@ -542,6 +542,10 @@
             "type": "boolean",
             "$comment": "the seat that leads: exactly one seat carries it"
           },
+          "assistant": {
+            "type": "boolean",
+            "$comment": "the entity's assistant: at most one seat carries it"
+          },
           "count": {
             "type": "integer",
             "minimum": 1

@@ -90,6 +90,14 @@ export type Seat = {
   mode: Mode;
   parked: boolean;
   stopped: boolean;
+  /**
+   * The entity's assistant: the seat the file marks with `assistant: true`. At most one seat
+   * carries it, and admission reads it as a place in the chain — the entity's first assistant,
+   * the one seat admitted to its coordinator — never a role's name. Absent means the seat is not
+   * the assistant, so a file that marks none keeps every digest it had; marking one is a change
+   * the owner approves, because the capability admits a send.
+   */
+  assistant?: true;
   /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
   reach?: SeatReach;
   // The entry's `name` and `count` as written, and this seat's place in it (1 for the first).
