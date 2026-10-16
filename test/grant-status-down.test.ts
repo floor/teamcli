@@ -48,12 +48,12 @@ const SEAT = (role: string, name: string, leads = false) => `  - role: ${role}
     launch: claude --model claude-opus-5-5${leads ? '\n    leads: true' : ''}
 `;
 
-function teamText(project: string, root: string, home: string): string {
+function teamText(project: string, root: string, home: string, session?: string): string {
   const lobby = join(home, '.config', 'team', 'lobbies', 'beacon');
   return `format: 1
 project: ${project}
 entity: beacon
-operator: orchestrator
+${session === undefined ? '' : `session: ${session}\n`}operator: orchestrator
 trust:
   - ${lobby}
   - ${root}
@@ -94,9 +94,12 @@ const recordWith = (expires: string, extra = ''): string =>
   `entity: beacon\nsession: dispatch\nagent: beacon-runner\npaths:\n  - ~/Code/beacon\nexpires: "${expires}"\n${extra}`;
 const WITH_RUNNER = recordWith(FUTURE, `runner: ${RUNNER}\n`);
 
-function teamAt(root: string, home: string): void {
+/** The team file a directory carries. `session` is the herdr session the file names, and the
+ *  one a walk of it places a caller in; left out, the file names no session and the project
+ *  name stands in for it. */
+function teamAt(root: string, home: string, session?: string): void {
   mkdirSync(join(root, '.agents'), { recursive: true });
-  writeFileSync(join(root, '.agents', 'team.yaml'), teamText('beacon-v1', root, home));
+  writeFileSync(join(root, '.agents', 'team.yaml'), teamText('beacon-v1', root, home, session));
 }
 
 /** The commands driven through the walker: the fake parents are the whole caller source. */
@@ -320,6 +323,178 @@ describe('every other caller and path still refuses', () => {
       // list to read, the placement says so, and the record is never consulted for it.
       expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n');
       expect(io.out.endsWith('dry run: nothing was run\n')).toBe(true);
+      expect(code).toBe(1);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+});
+
+// The same record, held by a seat: `agent` names the seat, `session` the herdr session it
+// stands in. A seat the record names is the holder it was written for. The team file these
+// scenes read names the seat's own session, so the walk places the caller — the reading and
+// the stop are the record's to admit or refuse, not the placement's.
+const SEAT_GRANT = `entity: beacon\nsession: floor\nagent: iris\npaths:\n  - ~/Code/beacon\nexpires: "${FUTURE}"\n`;
+/** The same record, naming a session the seat doesn't stand in. */
+const ELSEWHERE_GRANT = `entity: beacon\nsession: elsewhere\nagent: iris\npaths:\n  - ~/Code/beacon\nexpires: "${FUTURE}"\n`;
+const PAST_GRANT = `entity: beacon\nsession: floor\nagent: iris\npaths:\n  - ~/Code/beacon\nexpires: "${PAST}"\n`;
+
+/** The walk of a herdr seat: herdr above it, the pane root among the ancestors, and the one
+ *  session the seat stands in — and only it — listing the pane under the seat's name. A walk
+ *  asked about any other session finds no agent there, as a session that doesn't hold the pane
+ *  answers. */
+function seatIo(cwd: string, name = 'iris', session = 'floor', pane = 'w1:p1') {
+  const root = 4242;
+  const io = testIo(cwd);
+  io.callerSources = (asked?: string) => ({
+    ancestors: () => [{ pid: root, name: 'zsh' }, { pid: 1, name: 'herdr' }],
+    agents: () => (asked === session ? [{ pane, name, agent: null, workspace: '', status: '', cwd }] : []),
+    paneRootPid: (askedPane: string) => (askedPane === pane ? root : null),
+    env: io.env,
+    stdinIsTTY: io.stdinIsTTY,
+  });
+  return io;
+}
+
+describe('a create-grant names a seat of another team', () => {
+  test('status reads as the seat the record names, in the session it names', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', SEAT_GRANT);
+      teamAt(sb.covered, sb.home, 'floor');
+      const io = seatIo(sb.covered);
+      const code = await runStatus([], io, statusSources(sb.home));
+      expect(io.err).not.toContain('this team is not yours to read');
+      expect(io.out).toContain('team beacon-v1, session "floor"');
+      expect(code).not.toBe(2);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('down stops as that seat: a dry run plans the stop instead of refusing it', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', SEAT_GRANT);
+      teamAt(sb.covered, sb.home, 'floor');
+      const io = seatIo(sb.covered);
+      const code = await runDown(['--dry-run'], io, downSources(sb.home));
+      expect(io.err).toBe('');
+      expect(io.out).not.toContain('would refuse');
+      expect(io.out.endsWith('dry run: nothing was run\n')).toBe(true);
+      expect(code).toBe(0);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  // Every other seat, session and path still refuses: the record names one seat, in one
+  // session, under one path, until one expiry. The caller is placed as the seat it is, so the
+  // refusal's own sentence names it — the walk's words, from the run the test makes.
+  test('status refuses another seat of the same session', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', SEAT_GRANT);
+      teamAt(sb.covered, sb.home, 'floor');
+      const io = seatIo(sb.covered, 'co-worker');
+      expect(await runStatus([], io, statusSources(sb.home))).toBe(2);
+      expect(io.err).toBe(NOT_YOURS);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('status refuses the named seat in a session the record does not name', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', ELSEWHERE_GRANT);
+      teamAt(sb.covered, sb.home, 'floor');
+      const io = seatIo(sb.covered);
+      expect(await runStatus([], io, statusSources(sb.home))).toBe(2);
+      expect(io.err).toBe(NOT_YOURS);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('status refuses a root outside the granted paths', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', SEAT_GRANT);
+      teamAt(sb.outside, sb.home, 'floor');
+      const io = seatIo(sb.outside);
+      expect(await runStatus([], io, statusSources(sb.home))).toBe(2);
+      expect(io.err).toBe(NOT_YOURS);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('status refuses the named seat on a record past its expiry', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', PAST_GRANT);
+      teamAt(sb.covered, sb.home, 'floor');
+      const io = seatIo(sb.covered);
+      expect(await runStatus([], io, statusSources(sb.home))).toBe(2);
+      expect(io.err).toBe(NOT_YOURS);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('down refuses another seat of the same session, in the dry run\'s own words', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', SEAT_GRANT);
+      teamAt(sb.covered, sb.home, 'floor');
+      const io = seatIo(sb.covered, 'co-worker');
+      const code = await runDown(['--dry-run'], io, downSources(sb.home));
+      expect(io.err).toBe('');
+      expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is co-worker\n');
+      expect(code).toBe(1);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('down refuses the named seat in a session the record does not name', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', ELSEWHERE_GRANT);
+      teamAt(sb.covered, sb.home, 'floor');
+      const io = seatIo(sb.covered);
+      const code = await runDown(['--dry-run'], io, downSources(sb.home));
+      expect(io.err).toBe('');
+      expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is iris\n');
+      expect(code).toBe(1);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('down refuses a root outside the granted paths', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', SEAT_GRANT);
+      teamAt(sb.outside, sb.home, 'floor');
+      const io = seatIo(sb.outside);
+      const code = await runDown(['--dry-run'], io, downSources(sb.home));
+      expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is iris\n');
+      expect(code).toBe(1);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('down refuses the named seat on a record past its expiry', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, 'beacon.yaml', PAST_GRANT);
+      teamAt(sb.covered, sb.home, 'floor');
+      const io = seatIo(sb.covered);
+      const code = await runDown(['--dry-run'], io, downSources(sb.home));
+      expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is iris\n');
       expect(code).toBe(1);
     } finally {
       rmSync(sb.base, { recursive: true, force: true });

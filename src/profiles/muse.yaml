@@ -25,11 +25,9 @@ unattended:
 # No flag appends to the system prompt, so the rules are the first message.
 rules: first-message
 login:
-  check:
-    - auth
-    - status
-  # From a run: `muse auth status` printed `Account:` and `Provider:  meta (default)`, exit 0,
-  # while logged in.
+  # Muse Code 1.4.9 has no non-interactive login check: `muse auth` only stores an API key
+  # (`muse auth set --api-key-stdin`), and `muse auth status` prints "expected `auth set`".
+  # The account shows in the interactive /status only.
   hint: muse login
 exit: /exit
 # An operator probe of this CLI names ctrl+u as the key that empties the composer.

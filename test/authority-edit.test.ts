@@ -581,7 +581,8 @@ describe('revocation reaches the real admission gates', () => {
       const verdict = grantGate({ act, io, home: place.home, sources });
       expect(verdict.kind).toBe('refused');
       if (verdict.kind === 'refused') {
-        expect(verdict.id).toBe(act === 'approve' ? 'grant.not-ordinary' : act === 'reload' ? 'grant.drift' : 'grant.omitted');
+        // reload reads the live file since #523: a revoked grant is simply absent there, as for up and down.
+        expect(verdict.id).toBe(act === 'approve' ? 'grant.not-ordinary' : 'grant.omitted');
       }
     }
     expect(fs.readFileSync(stateFile, 'utf8')).toBe(state);
