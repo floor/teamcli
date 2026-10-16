@@ -1,8 +1,8 @@
 # team seats
 
-Shows the seat registry for the team: one row per seat whose STATUS is not `stopped`, or every seat
-when `--all` is given, with its stable seat handle (`seat_<12 hex>`), role, CLI, model, effort, status, last active time,
-and pane.
+Shows the seat registry: one row per seat — every seat with `--all`, otherwise the running ones — with its stable
+handle (`seat_<12 hex>`), role, CLI, model, effort, status, last active and pane. A flag the caller may not aim exits 1;
+an unreadable invocation or team file, herdr not answering, or a caller that may not read this team exits 2.
 
 ## Synopsis
 
@@ -12,8 +12,7 @@ and pane.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
+| `--session`, `--file` | `<name>`, `<path>` | the herdr session or team file to read, instead of `team.session` and `.agents/team.yaml`; the owner's |
 | `--all` | — | include the seats whose STATUS reads `stopped`; without it those rows are dropped, and every other state is listed either way |
 | `--watch` | — | refresh the table every 2 seconds until interrupted |
 | `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`) |
@@ -33,11 +32,9 @@ and pane.
 | LAST ACTIVE | `now` when working, relative age (`2m ago`), or `-` |
 | PANE | the herdr pane, or `-` when not running |
 
-The handle belongs to the seat, not to one run of it. It is minted on the seat's first launch or
-`team add`, and parked in the state's `retained_seats` when the record goes away: `team down` and
-`team remove <seat> --keep` park it, and the next `team up` or `team add <seat>` records the same
-handle again — so a seat that is stopped and started again comes back as itself. A plain
-`team remove <seat>` drops the handle with the record, and the name starts over at its next launch.
+The handle belongs to the seat, not to one run of it: it is minted at the seat's first launch or `team add`, and parked
+in the state's `retained_seats` when the record goes away — `team down` and `team remove <seat> --keep` park it, and the
+next `team up` or `team add <seat>` records the same handle again. A plain `team remove <seat>` drops it with the record.
 
 ## Who may run it
 
@@ -46,21 +43,7 @@ handle again — so a seat that is stopped and started again comes back as itsel
 | the owner, from a terminal outside herdr | read the team, and aim the read with `--file` and `--session` |
 | a seat of the team, placed in the file's session, on the pane the state records for it | read the team; a seat the state records no pane for, or records on another pane, fails closed |
 | a pane outside the team that the approved file names in its `delegates` entries | read the team |
-| anyone else | nothing: `team seats: this team is not yours to read`, exit 2 |
-
-`--file` and `--session` aimed by anyone else are refused before any file or session is read, and
-exit 1:
-
-    team seats: --file is the owner's, from a terminal outside herdr; this call is claude-keeper
-    team seats: --session is the owner's, from a terminal outside herdr; this call is claude-keeper
-
-## Exit codes
-
-| Exit | When |
-| --- | --- |
-| 0 | the seats table or JSON document was printed |
-| 1 | a flag the caller may not aim |
-| 2 | the arguments or team file cannot be read, herdr does not answer, or the caller may not read this team |
+| anyone else | nothing: `team seats: this team is not yours to read`, exit 2. `--file` and `--session` aimed by anyone else are refused before any file or session is read, and exit 1 — `team seats: --file is the owner's, from a terminal outside herdr; this call is claude-keeper`, `team seats: --session is the owner's, from a terminal outside herdr; this call is claude-keeper` |
 
 ## Example
 
@@ -112,18 +95,13 @@ state:
       last_active: "2026-10-04T08:00:00.000Z"
 ```
 
-Without `--all`, stopped seats are omitted:
+Without `--all`, stopped seats are omitted; with `--all`, they are included:
 
 ```console
 $ team seats ; echo "exit $?"
 SEAT           ID                 ROLE         CLI          MODEL            EFFORT  STATUS   LAST ACTIVE  PANE
 claude-keeper  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  2m ago       -
 exit 0
-```
-
-With `--all`, stopped seats are included:
-
-```console
 $ team seats --all ; echo "exit $?"
 SEAT           ID                 ROLE         CLI          MODEL            EFFORT  STATUS   LAST ACTIVE  PANE
 claude-keeper  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  2m ago       -
