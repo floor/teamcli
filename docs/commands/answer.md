@@ -9,7 +9,7 @@ Anything else sends nothing.
 
     team answer <seat> trust [--session <name>] [--file <path>] [--json]
 
-`<seat>` names one seat of the approved copy. `trust` is the only dialog word. No option takes a key, a text, or another dialog. The pane is herdr's one agent of that name; a pane recorded in the state selects nothing. A name the copy does not carry is left as it is. Two agents of the name send nothing.
+`<seat>` names one seat of the team file. `trust` is the only dialog word. No option takes a key, a text, or another dialog. The pane is herdr's one agent of that name; a pane recorded in the state selects nothing. A name the file does not carry is left as it is. Two agents of the name send nothing.
 
 ## Flags
 

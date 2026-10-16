@@ -28,7 +28,7 @@ alone runs it, from a terminal outside herdr, and a file that already exists is 
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| a skeleton was written, or the approved copy was restored | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.` | 0 |
+| a skeleton was written, or the copy this machine last approved was restored | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.` | 0 |
 | refused: not the owner, the file is tracked or already there, or there is nothing to restore | `team init: <reason>` | 1 |
 | it can't run: not inside a git repository, or a bad option | `team init: <problem>`, with the usage for a bad option | 2 |
 
