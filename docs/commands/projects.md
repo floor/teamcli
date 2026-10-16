@@ -3,8 +3,16 @@
 Lists the projects this machine's registry holds, from `~/.config/team/projects.yaml` (mode
 `0600`, under `~/.config/team/` beside the team records). A project is the layer above a team: its
 immutable id, the display name people and team files use for it, the entity it belongs to, its
-lead, and the IDs of the teams that sit in it. The lead is the seat whose role holds the `leads`
-capability — an agent ID, never a role-name string.
+lead, and the IDs of the teams that sit in it. The lead is an agent ID — never a seat or a role
+name.
+
+The hierarchy is entity, then project, then team, then seat, and the project level is where
+settings start: they inherit entity, then project, then team, then seat — a lower level may
+tighten, and loosen only where the level above allows it.
+
+A team names its project in its team file, `in_project`, holding the project's display name;
+today's `project:` field keeps meaning the team, so every file written before this build loads
+unchanged, and a team that names no project is its own project.
 
 ## Synopsis
 
@@ -20,6 +28,12 @@ Reads `~/.config/team/projects.yaml`, a map of project IDs to records:
         entity: floor
         lead: agt_2b9f
         teams: ["1a2b3c4d5e6f", "6f5e4d3c2b1a"]
+
+The ID is the display name lowercased, every run of characters outside letters, digits, `.`, `_`
+and `-` written as one `-` and nothing left at either end: `TeamCLI` is `teamcli`, `Team CLI` is
+`team-cli`. It is minted when the project is first written and never moves: a rename writes
+`name`. The registry sits beside the agent and team records, all three described in
+[the registries](../concepts/registry.md).
 
 A missing file is no projects — every team is its own project — and prints `(no projects)`. A
 file that does not read as a project registry (not a map with a `projects` key, a project without
