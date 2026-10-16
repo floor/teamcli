@@ -82,6 +82,32 @@ Literal: `trust`
 | --- | --- | --- |
 | `seat` | no | no |
 
+## `archive`
+
+Hidden: no
+
+Usage:
+
+    team archive [--out <folder>] [--keep-running] [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--abandon` | no | no | no |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--keep-running` | no | no | no |
+| `--out` | yes | no | no |
+| `--session` | yes | no | no |
+| `--wait` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `ask-show`
 
 Hidden: no
@@ -371,12 +397,13 @@ Hidden: no
 
 Usage:
 
-    team init [--restore]
+    team init [--restore] [--from-archive <folder>]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--from-archive` | yes | no | no |
 | `--help` | no | no | no |
 | `--restore` | no | no | no |
 | `-h` | no | no | yes |

@@ -14,6 +14,7 @@ import { noteTeam } from '../registry/teams.ts';
 import { LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { version } from '../version.ts';
+import { readArchive, type ArchiveManifest } from './archive.ts';
 import { realSources as doctorSources, type DoctorSources } from './doctor.ts';
 
 // What git must never pick up: the file and the runtime files beside it — the broker's start
@@ -136,7 +137,7 @@ export function exclude(root: string): string[] {
 export const init: Command = (argv, io) => runInit(argv, io, undefined, undefined, { ...doctorSources, registryHome: homedir() });
 export default init;
 
-export const USAGE = 'Usage: team init [--restore]\n';
+export const USAGE = 'Usage: team init [--restore] [--from-archive <folder>]\n';
 
 // `home` is where the user-level store is looked for; tests hand in a temporary one.
 // `readStanding` stands in for the store's one read, so a test can count it or swap the
@@ -149,18 +150,27 @@ export async function runInit(
   readStanding?: (root: string) => Standing,
   sources: Pick<DoctorSources, 'loggedIn'> & { now?: () => Date; registryHome?: string } = doctorSources,
 ): Promise<number> {
-  const args = readArgs(argv, [], ['restore']);
+  const args = readArgs(argv, ['from-archive'], ['restore']);
   if (args.error || args.rest.length) {
     io.stderr(`team init: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
     // exit: init.invocation
     return 2;
   }
+  const fromArchive = args.values['from-archive'];
+  if (args.flags.has('restore') && fromArchive !== undefined) {
+    io.stderr('team init: --restore and --from-archive are two sources for the one file: pass one of them.\n');
+    // exit: init.sources
+    return 2;
+  }
   const caller = callerOf(io);
   let foundRoot: string | null | undefined;
   const rootOf = () => (foundRoot === undefined ? (foundRoot = findRoot(io.cwd)) : foundRoot);
+  // A restore reads a copy of a file rather than composing one, so neither it nor a restore from
+  // an archive is the create a grant may stand behind.
   const createGranted =
     !isOwner(caller) &&
     !args.flags.has('restore') &&
+    fromArchive === undefined &&
     readEntityCreateGrants(home).length > 0 &&
     (() => {
       const candidateRoot = rootOf();
@@ -199,6 +209,8 @@ export async function runInit(
   }
 
   let text: string;
+  let what: string;
+  let first: string;
   if (args.flags.has('restore')) {
     // Only a verified record carries a copy worth restoring: a legacy or refused
     // one is said in its own words, never restored from.
@@ -224,16 +236,39 @@ export async function runInit(
       return 1;
     }
     text = copy;
+    what = 'restored the approved copy';
+    first = `Restored ${TEAM_FILE} from the copy you last approved on this machine.\n`;
+  } else if (fromArchive !== undefined) {
+    // The archive's own team file, checked against the archive's manifest before anything else
+    // is done: the sha256 it records is the file's, and the file validates. It is written
+    // verbatim — a restore never edits the file it restores — and it is this root's file
+    // afterwards, so the placement it was archived with may still need the owner's attention.
+    const archived = readArchive(fromArchive, io.cwd);
+    if (!archived.ok) {
+      io.stderr(`team init: nothing was restored: ${archived.reason}.\n`);
+      // exit: init.from-archive
+      return 1;
+    }
+    const check = validateTeamFile(archived.text, { home, root });
+    if (!check.ok) {
+      io.stderr(`team init: nothing was written: the archived team file doesn't validate: ${check.errors[0]?.message}\n`);
+      // exit: init.from-archive-invalid
+      return 1;
+    }
+    text = archived.text;
+    what = `restored the team file from the archive ${fromArchive}, written with teamcli ${archived.manifest.teamcli}`;
+    first = `Restored ${TEAM_FILE} from an archive. ${archiveProvenance(archived.manifest)}\n`;
   } else {
     text = skeleton(basename(root), git(root, 'rev-parse', 'HEAD'), version(), root, firstLoggedInCli(sources));
     const check = validateTeamFile(text);
     // exit: init.skeleton
     if (!check.ok) throw new Error(`the skeleton doesn't validate: ${check.errors[0]?.message}`);
+    what = 'wrote a skeleton';
+    first = `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run the seats.\n`;
   }
   mkdirSync(dirname(path), { recursive: true });
   const added = exclude(root);
   writeFileSync(path, text, { flag: 'wx' });
-  const what = args.flags.has('restore') ? 'restored the approved copy' : 'wrote a skeleton';
   logLine(dirname(path), 'init', describeCaller(caller), `${what} as ${TEAM_FILE}; excluded ${added.length} path(s)`);
   // The registry is where the user-level state lives: the home the shipped command names, or the
   // one a test hands in. A caller that names neither leaves the machine's registry alone.
@@ -245,10 +280,22 @@ export async function runInit(
       if (unrecorded) io.stderr(`team init: ${unrecorded}\n`);
     }
   }
-  io.stdout(args.flags.has('restore')
-    ? `Restored ${TEAM_FILE} from the copy you last approved on this machine.\n\n${PRIVACY}\n`
-    : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run the seats.\n\n${PRIVACY}\n`);
+  io.stdout(`${first}\n${PRIVACY}\n`);
   // exit: init.wrote
   // exit: init.restored
+  // exit: init.restored-archive
   return 0;
+}
+
+/** What an archive says about itself, printed with the restore: which project it was taken from,
+ *  where and when, by whom — and what else it holds, since a restore writes the team file alone.
+ *  Every field is the manifest's, whatever the archive's writer put there; the file itself is the
+ *  one the manifest's hash names. The teamcli version the archive was written with stays in the
+ *  manifest and the log line: the printed line is the same on every release. */
+function archiveProvenance(manifest: ArchiveManifest): string {
+  const also: string[] = [];
+  if (manifest.state) also.push(STATE_FILE);
+  if (manifest.drops) also.push(`send-drops (${manifest.drops.files} file${manifest.drops.files === 1 ? '' : 's'})`);
+  const holds = also.length ? ` It also holds ${also.join(' and ')}; a restore writes the team file alone.` : '';
+  return `The archive is ${manifest.project}'s, taken at ${manifest.root} on ${manifest.stampedAt} by ${manifest.by}.${holds}`;
 }

@@ -255,13 +255,14 @@ check, and this build acts on what the commands below read.
 
 | Command | What it does | Who may run it |
 | --- | --- | --- |
-| `team init` | writes the skeleton `.agents/team.yaml` and adds it and its runtime files to `.git/info/exclude` | the owner |
+| `team init` | writes the skeleton `.agents/team.yaml` and adds it and its runtime files to `.git/info/exclude`; `--restore` writes the copy this machine last approved, and `--from-archive <folder>` the team file an archive holds | the owner |
 | `team commits check <ref>` | checks one commit or a `a..b` range against the signature rule, `--since <ref>` skipping history already checked; exit 1 when one is refused | anyone; read only |
 | `team pr check <file>` | checks a pull request's body against the signature rule (`-` reads stdin), needing no repository; exit 1 when it is refused | anyone; read only |
 | `team doctor` | checks this machine for what the file needs: herdr, each CLI, login, launch line, model, watch heartbeat; `--login` checks only CLI sign-ins | anyone; read only |
 | `team status` | prints the file's seats against the running session, each difference with its repair; `--json` outputs a stable JSON document (`format: 1`) for scripts; exit 1 when they differ | the owner, a seat of that team on its recorded pane, or a pane the approved file names; `--file` and `--session` are the owner's; read only |
 | `team list` | lists the herdr sessions on this machine, running ones by default; `--all` includes stopped sessions; `--json` prints a stable array, empty when there is nothing; an orphan session and an unreadable seat do not fail it | anyone, from any folder; read only |
 | `team up` / `team down` | starts / stops the session and its seats | `up`: the owner; `down`: the owner, the coordinator or the operator seat |
+| `team archive` | snapshots the team as it is — the team file, the state and the send queues — into one `~/.config/team/archive/<project>-<hash>-<stamp>/` folder, which is never overwritten, then stops the team: the stop is `team down` itself, with its refusals and its exit codes. `--keep-running` takes the snapshot alone, `--out` puts the folder elsewhere, and `--dry-run` prints both halves' plans and writes nothing | the owner, from a terminal outside herdr; a seat may take the snapshot, and `down` then decides the stop; `--out` and `--file` are the owner's |
 | `team hold <reason> [--until <time>]` / `team hold --release` | records a hold on the team's work in the team state, shown as the first `note:` in `team status` and a `--  ` line in `team doctor`; `--until` is a local `<HH:MM>` or an ISO 8601 instant, and a record past it reads as no hold at all; `--release` clears it; nothing else consults a hold in this build | the owner, the coordinator or the operator seat |
 | `team watch` | watches the session, reports idle seats and nudges the operator; `--no-nudge` and `--no-notify` are the owner's and do not silence a report addressed to the owner | anyone, one per session; it types only a fixed line into an empty idle prompt: the report nudge, or `Team: run team messages` when a message is already waiting |
 | `team tempo <word>` | sets the team's tempo to relaxed, normal or urgent, which scales the watch's idle and nudge waits; normal is the file with the key omitted | the owner |
@@ -313,8 +314,8 @@ can never approve a widening of its own grant.
 existing login check command (`cursor-agent status`, `agy models`, `codex login status`, `claude auth status`, `grok models`).
 It never answers prompts and performs no sign-in action.
 
-`team up`, `team down`, `team add`, `team remove`, `team worktree new` and `team worktree remove`
-run live. `team worktree list` prints the recorded worktrees and writes nothing. `up`, `down` and `add` take `--dry-run` to print every command they would run, and every
+`team up`, `team down`, `team archive`, `team add`, `team remove`, `team worktree new` and `team worktree remove`
+run live. `team worktree list` prints the recorded worktrees and writes nothing. `up`, `down`, `add` and `archive` take `--dry-run` to print every command they would run, and every
 refusal, and change nothing.
 
 ## The live file is the record
