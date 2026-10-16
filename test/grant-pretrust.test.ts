@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Process } from '../src/caller.ts';
+import { runAdd, type AddSources } from '../src/commands/add.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { grantsDir } from '../src/grant.ts';
@@ -289,6 +290,71 @@ describe('create-grant folder pretrust after init', () => {
       expect(keys.reads).toBe(0);
       const seats = readState(join(root, '.agents')).sessions['v5']?.seats ?? {};
       expect(seats.orchestrator?.stage).toBe('ready');
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+});
+
+function addSourcesOf(home: string, host: ReturnType<typeof dialogHost>): AddSources {
+  return {
+    home,
+    sessionState: () => 'running',
+    agents: () => [],
+    workspaces: () => [],
+    doctor: {
+      version: () => '2.1.288',
+      onPath: () => true,
+      loggedIn: () => true,
+      herdrVersion: () => '0.7.1',
+      sessionRunning: () => true,
+      now: host.now,
+      home,
+    },
+    machine: () => AMPLE,
+    now: host.now,
+    launch: { ...host, workspacePanes: (_session: string, workspace: string) => [`${workspace}:p1`] } as unknown as Launch,
+  };
+}
+
+describe('create-grant folder pretrust on add', () => {
+  test("a runner's add of the lead trusts the project folder in the CLI record", async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, ['~/Code/beacon']);
+      const root = project(sb, 'a1', (r) => [sb.lobby, r]);
+      initGitRepo(root);
+      const host = dialogHost(sb.home);
+      const io = walkIo(root, OUTSIDE_HERDR);
+      const code = await runAdd(['orchestrator'], io, addSourcesOf(sb.home, host));
+      expect(code, `${io.err}${io.out}`).toBe(0);
+      expect(claudeTrusts(sb.home, root)).toBe(true);
+      expect(io.out + io.err).not.toContain('trust (no terminal for owner)');
+      expect(host.closed).toBe(0);
+      expect(readState(join(root, '.agents')).sessions['beacon-a1']?.seats.orchestrator?.stage).toBe('ready');
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('a runner the grant does not name, a dry run, and an unlisted folder write no project record', async () => {
+    const sb = makeSandbox();
+    try {
+      writeGrant(sb.home, ['~/Code/beacon']);
+      const root = project(sb, 'a2', (r) => [sb.lobby, r]);
+      initGitRepo(root);
+      const other = await runAdd(['orchestrator'], walkIo(root, WITHOUT_RUNNER), addSourcesOf(sb.home, dialogHost(sb.home)));
+      expect(other).toBe(1);
+      expect(claudeTrusts(sb.home, root)).toBe(false);
+
+      const dry = walkIo(root, OUTSIDE_HERDR);
+      expect(await runAdd(['orchestrator', '--dry-run'], dry, addSourcesOf(sb.home, dialogHost(sb.home))), `${dry.err}${dry.out}`).toBe(0);
+      expect(claudeTrusts(sb.home, root)).toBe(false);
+
+      const unlisted = project(sb, 'a3', () => [sb.lobby]);
+      initGitRepo(unlisted);
+      await runAdd(['orchestrator'], walkIo(unlisted, OUTSIDE_HERDR), addSourcesOf(sb.home, dialogHost(sb.home)));
+      expect(claudeTrusts(sb.home, unlisted)).toBe(false);
     } finally {
       rmSync(sb.base, { recursive: true, force: true });
     }
