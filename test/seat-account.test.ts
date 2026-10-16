@@ -423,9 +423,9 @@ describe('a seat the approval lists as changed', () => {
       foreground: { 'w0:p1': ['codex'] },
     });
 
-    // A difference in the record is handed in and says nothing: the live file is the record,
-    // and the temporary seat's own fold is not a report either.
-    expect(result.reports.find((r) => r.key === 'approval')?.text).toBeUndefined();
+    // The approval check reports the drifted like-seat, naming the file's seat
+    expect(result.reports.find((r) => r.key === 'approval')?.text)
+      .toBe('the file has changed since the last approval: seat codex-work changed');
     // The live like-seat still supplies the temporary seat's account and profile.
     expect(result.readings).toEqual([expect.objectContaining({
       account: 'openai-work', seat: 'codex-temp', left: 12, used: 88, window: 'weekly',
