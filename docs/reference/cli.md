@@ -106,6 +106,36 @@ Usage:
 | --- | --- | --- |
 | `request_id` | no | no |
 
+## `brief`
+
+Hidden: no
+
+Usage:
+
+    team brief <seat> <file> [--dry-run] [--json]
+    team brief --done [--seat <name>] [--summary <text>] [--json]
+    team brief --list [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--done` | no | no | no |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--list` | no | no | no |
+| `--seat` | yes | no | no |
+| `--summary` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | yes | no |
+| `file` | yes | no |
+
 ## `broker`
 
 Hidden: no

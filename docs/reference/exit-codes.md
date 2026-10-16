@@ -89,6 +89,17 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `ask-show.expired` | `ask-show` | 1 | the marker matches and the ask is past expires_at plus 5 seconds | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.refused` | `ask-show` | 1 | the marker does not verify, or a file cannot be read | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.invocation` | `ask-show` | 2 | the invocation cannot be read | `team ask-show` |
+| `brief.delivered` | `brief` | 0 | the brief was recorded and the seat's channel took it | `team brief worker brief.md` |
+| `brief.done` | `brief` | 0 | the seat's brief was marked done | `team brief --done --summary shipped` |
+| `brief.dry-run` | `brief` | 0 | the brief file and the seat were checked and nothing was written | `team brief worker brief.md --dry-run` |
+| `brief.list` | `brief` | 0 | one row per seat was printed, nothing was written | `team brief --list` |
+| `brief.detached` | `brief` | 1 | a run with no terminal | `team brief worker brief.md` |
+| `brief.held` | `brief` | 1 | the brief is recorded and the pane was left untouched | `team brief worker brief.md` |
+| `brief.refused` | `brief` | 1 | nothing was handed, on purpose: a caller that may not, a seat the file does not declare, a brief file that cannot be taken, or a brief that is not active | `team brief missing brief.md` |
+| `brief.send-refused` | `brief` | 1 | the brief is recorded, and team send refused to deliver it | `team brief worker brief.md` |
+| `brief.unreachable` | `brief` | 1 | the brief is recorded, and the seat was not reached | `team brief worker brief.md` |
+| `brief.configuration` | `brief` | 2 | the team file can't be read, or the brief folder can't be written | `team brief worker brief.md` |
+| `brief.usage` | `brief` | 2 | the invocation can't be read | `team brief` |
 | `broker.stopped` | `broker` | 0 | the broker served until it was stopped | `team broker` |
 | `broker.bind` | `broker` | 1 | the socket could not be bound | `team broker` |
 | `broker.busy` | `broker` | 1 | a broker is already answering on this clone's socket | `team broker` |

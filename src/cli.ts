@@ -30,6 +30,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   remove: () => import('./commands/remove.ts'),
   restart: () => import('./commands/restart.ts'),
   send: () => import('./commands/send.ts'),
+  brief: () => import('./commands/brief.ts'),
   feed: () => import('./commands/feed.ts'),
   release: () => import('./commands/release.ts'),
   usage: () => import('./commands/usage.ts'),

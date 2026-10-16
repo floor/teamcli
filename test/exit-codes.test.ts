@@ -30,6 +30,7 @@ import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
 import { runUnlock } from '../src/commands/unlock.ts';
+import { runBrief } from '../src/commands/brief.ts';
 import { runTempo } from '../src/commands/tempo.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
@@ -3013,6 +3014,61 @@ scene('send.listed', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['--list'], owner, sendHost(place)), 'lead  claude-code');
 });
+
+async function briefed(place: Place, argv: string[], caller: Caller, host: SendHost): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const code = await runBrief(argv, io, host);
+  return { code, out: io.out, err: io.err };
+}
+
+function briefFile(place: Place): string {
+  const path = join(place.root, 'b.md');
+  writeFileSync(path, '# Brief\n\nDo the thing.\n');
+  return path;
+}
+
+scene('brief.usage', async (place) => show(await briefed(place, [], owner, sendHost(place)), 'a seat and a file are required'));
+scene('brief.configuration', async (place) =>
+  show(await briefed(place, ['lead', briefFile(place)], owner, sendHost(place)), 'no team file'));
+scene('brief.refused', async (place) => {
+  write(place, TWO);
+  return show(await briefed(place, ['missing', briefFile(place)], owner, sendHost(place)), 'it is not a declared seat');
+});
+scene('brief.held', async (place) => {
+  write(place, TEAM);
+  const host = sendHost(place);
+  host.native.paneText = () => `${'─'.repeat(30)}\n❯ draft in box\n${'─'.repeat(30)}`;
+  return show(await briefed(place, ['lead', briefFile(place)], owner, host), 'held');
+});
+scene('brief.unreachable', async (place) => {
+  write(place, TEAM);
+  return show(await briefed(place, ['lead', briefFile(place)], owner, sendHost(place, { agents: false })), 'unreachable');
+});
+scene('brief.send-refused', async (place) => {
+  write(place, TEAM);
+  writeFileSync(join(dirname(place.file), 'send-drops'), 'a file where send keeps its drop folder\n');
+  return show(await briefed(place, ['lead', briefFile(place)], owner, sendHost(place)), 'the drop file could not be written');
+});
+scene('brief.delivered', async (place) => {
+  write(place, TEAM);
+  return show(await briefed(place, ['lead', briefFile(place)], owner, sendHost(place)), 'lead: briefed');
+});
+scene('brief.dry-run', async (place) => {
+  write(place, TEAM);
+  return show(await briefed(place, ['lead', briefFile(place), '--dry-run'], owner, sendHost(place)), 'lead: would hand b.md');
+});
+scene('brief.done', async (place) => {
+  write(place, TEAM);
+  const host = sendHost(place);
+  expect((await briefed(place, ['lead', briefFile(place)], owner, host)).code).toBe(0);
+  return show(await briefed(place, ['--done', '--seat', 'lead', '--summary', 'shipped'], owner, host), 'lead: marked done');
+});
+scene('brief.list', async (place) => {
+  write(place, TEAM);
+  return show(await briefed(place, ['--list'], owner, sendHost(place)), 'none');
+});
+scene('brief.detached', async (place) =>
+  show(await briefed(place, ['lead', briefFile(place)], detachedCaller, sendHost(place)), SENTENCE));
 
 async function fed(place: Place, argv: string[]): Promise<Ran> {
   const io = testIo(place.root);
