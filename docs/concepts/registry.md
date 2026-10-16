@@ -40,7 +40,7 @@ of the SHA-256 of the root's real path, so two stores of one root are one team:
 | `project_id` | the project the team sits in, by project ID, or `null`: a team no project names is its own project; written from the team file's `in_project` |
 | `session` | the herdr session |
 | `root`, `lobby` | the checkout, and the lobby folder |
-| `roster` | one `{agent, seat, role, leads}` per seat: `leads` is the file's lead capability — the one seat `leads: true` marks — readable without a role name, and a line written before the field existed reads as not leading |
+| `roster` | one `{agent, seat, role}` per seat, and `leads: true` on the one seat the team file marks as its lead — the capability, readable without a role name; an absent field means the seat is not known to lead, so a record written before the field reads unchanged |
 | `lifecycle` | `defined`, `running`, `stopped` or `archived` |
 | `provenance` | including when the record was last updated |
 
