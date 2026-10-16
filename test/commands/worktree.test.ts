@@ -828,6 +828,24 @@ seats:
     expect(existsSync(join(base, 'worktrees', 'renamed', 'select-width', 'README.md'))).toBe(true);
   });
 
+  test('with the session omitted, a rename moves it too: the note prints and the state lands under the approved session', async () => {
+    // The file names an entity and no session, so the session is `<entity>-<project>`: renaming the
+    // project changes the session, and that change is the drift. `{repo}` is the live name.
+    const wide = teamText()
+      .replace('  - ../worktrees/acme/*\n', '  - ../worktrees/*\n')
+      .replace('project: acme\n', 'project: acme\nentity: floor\n');
+    approve(wide);
+    edit(wide.replace('project: acme\n', 'project: renamed\n'));
+    const io = await run(['new', 'select-width', '--kind', 'fix']);
+    expect(io.code).toBe(0);
+    expect(io.err).toBe(note);
+    expect(io.out).toBe('../worktrees/renamed/select-width\n');
+    const state = readState(join(project, '.agents'));
+    expect(Object.keys(state.sessions)).toEqual(['floor-acme']);
+    expect(state.sessions['floor-acme']?.worktrees['select-width']?.branch).toBe('fix/select-width');
+    expect(existsSync(join(base, 'worktrees', 'renamed', 'select-width', 'README.md'))).toBe(true);
+  });
+
   test('renaming project against a trust that names the old project makes the file invalid', async () => {
     edit(teamText().replace('project: acme\n', 'project: renamed\n'));
     const io = await run(['new', 'select-width', '--kind', 'fix']);

@@ -565,8 +565,9 @@ grant:
     - reload
 ```
 
-- `session` is the team's own session: the `session` key, or the project name when that key is
-  omitted. Any other value is `grant.session must be the file's session "<session>": "<written>"`.
+- `session` is the team's own session: the `session` key, or `<entity>-<project>` when that key is
+  omitted and the file names an entity (the project name alone when it names none). Any other value
+  is `grant.session must be the file's session "<session>": "<written>"`.
 - `seat` is the orchestrator's name, the one `coordinator:` or `leads: true` resolves. The
   operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":
   "<written>"`.
