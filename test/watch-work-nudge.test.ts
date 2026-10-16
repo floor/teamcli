@@ -6,6 +6,7 @@ import { execSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { verifiedOf } from '../src/approve/approval.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -35,21 +36,21 @@ const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTot
 const MIN = 60_000;
 
 function agent(name: string, workspace: string, status: string): HerdrAgent {
-  return { name, agent: 'claude', pane: `${workspace}:p1`, workspace, status, cwd: null };
+  return { name, agent: 'claude', pane: `${workspace}:pane`, workspace, status, cwd: null };
 }
 
 function scene(over: Partial<Record<string, { status?: string; screen?: string }>> = {}): Live {
   const seats: [string, string, string, string][] = [
-    ['claude-coordinator-acme', 'w1', 'idle', idle],
-    ['deepseek-acme', 'w3', 'working', busy],
-    ['deepseek-acme-2', 'w4', 'working', busy],
+    ['claude-coordinator-acme', 'lead', 'idle', idle],
+    ['deepseek-acme', 'first', 'working', busy],
+    ['deepseek-acme-2', 'second', 'working', busy],
   ];
   const agents: HerdrAgent[] = [];
   const screens: Record<string, string> = {};
   for (const [name, workspace, status, screen] of seats) {
     const change = over[name] ?? {};
     agents.push(agent(name, workspace, change.status ?? status));
-    screens[`${workspace}:p1`] = change.screen ?? screen;
+    screens[`${workspace}:pane`] = change.screen ?? screen;
   }
   return { running: true, agents, workspaces: agents.map((one) => ({ id: one.workspace, label: one.name ?? '' })), screens };
 }
@@ -89,7 +90,7 @@ describe('watch.nudge', () => {
     const live = scene({ 'deepseek-acme': { status: 'idle', screen: idle } });
     at(text, memory, 0, live);
     expect(at(text, memory, 10 * MIN, live).work).toEqual([
-      { pane: 'w3:p1', seat: 'deepseek-acme', cli: 'claude-code', body: NUDGE_TEXT },
+      { pane: 'first:pane', seat: 'deepseek-acme', cli: 'claude-code', body: NUDGE_TEXT },
     ]);
     expect(at(text, memory, 40 * MIN, live).work).toEqual([]);
   });
@@ -103,7 +104,7 @@ describe('watch.nudge', () => {
     pass({ team, watch, state: emptySession(), live, machine: fine, now: 0, memory });
     const due = pass({ team, watch, state: emptySession(), live, machine: fine, now: 10 * MIN, memory });
     expect(due.work).toEqual([
-      { pane: 'w3:p1', seat: 'deepseek-acme', cli: 'claude-code', body: PROMPT },
+      { pane: 'first:pane', seat: 'deepseek-acme', cli: 'claude-code', body: PROMPT },
     ]);
   });
 
@@ -179,15 +180,15 @@ describe('team watch writes the drop', () => {
     clock = Date.parse('2026-10-03T14:00:00Z');
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources({
-      ownPane: () => ({ pane: 'w3:p1', workspace: 'w3' }),
+      ownPane: () => ({ pane: 'first:pane', workspace: 'first' }),
     }));
     expect(code).toBe(0);
     const triggers = typed.filter((line) => line.includes(' and do that.'));
     expect(triggers).toHaveLength(1);
-    expect(triggers[0]).toMatch(/^w4:p1 Read .+ and do that\.$/);
-    expect(typed.some((line) => line.startsWith('w3:p1 '))).toBe(false);
-    expect(typed.some((line) => line.startsWith('w1:p1 '))).toBe(false);
-    const path = triggers[0]?.match(/^w4:p1 Read (.+) and do that\.$/)?.[1];
+    expect(triggers[0]).toMatch(/^second:pane Read .+ and do that\.$/);
+    expect(typed.some((line) => line.startsWith('first:pane '))).toBe(false);
+    expect(typed.some((line) => line.startsWith('lead:pane '))).toBe(false);
+    const path = triggers[0]?.match(/^second:pane Read (.+) and do that\.$/)?.[1];
     expect(path).toBeTruthy();
     expect(path).toContain(join('send-drops', 'acme-web', 'deepseek-acme-2'));
     expect(readFileSync(path!, 'utf8')).toBe(PROMPT);
@@ -195,5 +196,28 @@ describe('team watch writes the drop', () => {
     expect(statSync(join(dir, '.agents', 'send-drops')).mode & 0o777).toBe(0o700);
     expect(io.out).toContain(`nudged deepseek-acme-2: ${PROMPT}`);
     expect(io.out).not.toContain('nudged claude-coordinator-acme');
+  });
+
+  test('an edited grant and delegates produces no approved-copy difference line', async () => {
+    file = join(dir, '.agents', 'team.yaml');
+    writeFileSync(
+      file,
+      `${raw}\ngrant:\n  session: acme-web\n  seat: claude-coordinator-acme\n  scope: [up, down]\ndelegates:\n  - pane: other/pane-1\n    commands: [up, down]\n`,
+    );
+    typed = [];
+    screenNow = idle;
+    clock = Date.parse('2026-10-03T14:00:00Z');
+    const io = testIo(dir, { kind: 'owner' });
+    let left = 1;
+    const code = await runWatch(['--file', file], io, sources({
+      standing: (root) => verifiedOf(teamOf(raw), raw, root),
+      wait: async () => --left > 0,
+    }));
+    expect(code).toBe(0);
+    expect(io.out).not.toContain('the file differs from the approved one');
+    expect(io.out).not.toContain('grant');
+    expect(io.out).not.toContain('delegates');
+    const log = readFileSync(join(dir, '.agents', 'team.log'), 'utf8');
+    expect(log).not.toContain('the file differs from the approved one');
   });
 });

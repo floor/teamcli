@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
-import { approvalCase, budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
+import { budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
 import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } from '../caller.ts';
 import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
@@ -32,7 +32,7 @@ import { stateOf } from './down.ts';
 import type { DownSeat } from '../launch/plan.ts';
 import { profileFor } from '../profiles/index.ts';
 import { classifyWith, overridesInForceOf, quotaWith, type OverrideForce } from '../profiles/overrides.ts';
-import type { Standing } from '../store/store.ts';
+import { LEGACY_LINE, type Standing } from '../store/store.ts';
 import { realSources, standingSource } from './status.ts';
 
 // What the watch reads and does outside its own process, so tests can stand in for it.
@@ -289,21 +289,19 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         announced = true;
         say(`watching the session "${session}" every ${watchInForceOf(standing, team).interval}s${args.flags.has('no-nudge') ? ', without nudges' : ''}`, false);
       }
-      for (const line of [
-        ...overrides.problems,
-        ...overrides.differences.map((difference) => `the overrides differ from the approved copy: ${difference}`),
-      ]) {
+      for (const line of overrides.problems) {
         if (told.has(line)) continue;
         told.add(line);
         say(line, false);
       }
-      // A record that is not an approval in force — legacy, or one the verification refused —
-      // is said once, in its own words. The watch keeps watching either way: it never stops a
-      // seat over this, and the owner-only checks simply read unapproved.
-      const approval = approvalCase(standing, team);
-      if (approval.reason !== null && !told.has(`approval:${approval.reason}`)) {
-        told.add(`approval:${approval.reason}`);
-        say(approval.reason, false);
+      // The live file is the record: a verified copy that differs is not reported. A record
+      // that is not an approval in force — legacy, or one the verification refused — is said
+      // once, in its own words. The watch keeps watching either way: it never stops a seat over
+      // this, and the owner-only checks simply read unapproved.
+      const approvalReason = standing.kind === 'legacy' ? LEGACY_LINE : standing.kind === 'refused' ? standing.why : null;
+      if (approvalReason !== null && !told.has(`approval:${approvalReason}`)) {
+        told.add(`approval:${approvalReason}`);
+        say(approvalReason, false);
       }
       const problem = current.ok ? current.notice : `team.yaml can't be read (${current.errors[0]?.message ?? 'unknown'}); watching with the team as it was`;
       if (problem !== notice) {
@@ -385,7 +383,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         }
         const run = (stored: readonly Seen[]) => pass({
           team, state, live, machine, now, memory,
-          approval: approval.differences, approvalReason: approval.reason, watch: inForce, outcomes, budgets: budget,
+          approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce, outcomes, budgets: budget,
           quotaFor: (cli) => quotaWith(cli, overrides.profiles),
           readScreen: (cli, pane) => classifyWith(cli, pane, overrides.profiles),
           readings: stored, foreground, processes,

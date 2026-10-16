@@ -150,7 +150,6 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `the file was never approved on this machine` | there is no approval record for this project |
 | `approved before records were signed: run \`team approve\` once` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
 | `<why the record was refused>` | a signed record that does not verify (changed after approval, another root, a replayed or rolled-back generation): said once, and the watch keeps watching |
-| `the file differs from the approved one: <differences>` | the file is not the approved one; the differences read as `team status` prints them |
 | `the load is <n> per core, above <n>` | over `machine.load_max` |
 | `free memory is <n>%, below <n>%` | under `machine.memory_min` |
 | `free disk is <n> GB, below <n> GB` | under `machine.disk_min` |
@@ -361,8 +360,8 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-The file is part of the same pass. A `trust` line changed since the owner approved it is reported at
-the next one, and the team keeps running until the owner approves it again:
+The file is part of the same pass. The live file is the record, so a `trust` line changed since the
+owner approved it logs no difference, and the team keeps running:
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -401,7 +400,6 @@ seats:
 ```console
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the file differs from the approved one: `trust` changed
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
 ```
@@ -409,7 +407,7 @@ exit 0
 The watch's own timings are the owner's too: `interval`, `idle_first`, `idle_repeat`, `team_idle`,
 `nudge_wait` and `unsent_after` are approved with the file, and an edit to one of them changes
 nothing until the owner approves it — the passes keep running with the values of the approved copy,
-or with the defaults when nothing was approved, and the difference is reported.
+or with the defaults when nothing was approved.
 `watch.nudge` is read from the live file on each pass, including while those timings are still
 the approved copy or the defaults.
 By default an idle seat is reported once per idle period (`idle_repeat` is off). A team that wants
@@ -420,7 +418,7 @@ A check the team doesn't want is turned off in `watch.checks` — a section only
 so it is approved like the rest of them. While that edit is unapproved, the approved list stays
 in force: nothing new is turned off, and a check the approved file turned off stays off. The
 machine below sits at 8% free memory, and this file turns that report off. The approved list left
-it on, so the report still comes, with the difference beside it.
+it on, so the report still comes.
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -463,7 +461,6 @@ seats:
 ```console machine=tight
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the file differs from the approved one: `watch.checks` changed
 2026-10-04T09:00:00.000Z free memory is 8%, below 15%
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0

@@ -1069,7 +1069,28 @@ describe('team watch', () => {
     // The file says 120s; the values in force say 5s, and the wait between passes is theirs.
     expect(io.out).toContain('watching the session "acme-web" every 5s');
     expect(waits).toEqual([5]);
-    expect(io.out).toContain('the file differs from the approved one: `watch` changed');
+    expect(io.out).not.toContain('the file differs from the approved one');
+  });
+
+  test('an edited grant and delegates logs no approved-copy difference', async () => {
+    writeFileSync(
+      file,
+      `${example}\ngrant:\n  session: acme-web\n  seat: claude-coordinator-acme\n  scope: [up, down]\ndelegates:\n  - pane: other/pane-1\n    commands: [up, down]\n`,
+    );
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runWatch(['--file', file], io, sources(1, {
+      standing: (root) => {
+        const parsed = validateTeamFile(example);
+        if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+        return verifiedOf(parsed.team, example, root);
+      },
+    }));
+    expect(code).toBe(0);
+    expect(io.out).not.toContain('the file differs from the approved one');
+    expect(io.out).not.toContain('grant');
+    expect(io.out).not.toContain('delegates');
+    const log = readFileSync(join(dir, '.agents', 'team.log'), 'utf8');
+    expect(log).not.toContain('the file differs from the approved one');
   });
 
   test('when it stops, its record is cleared and that is notified', async () => {
