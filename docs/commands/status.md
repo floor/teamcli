@@ -56,6 +56,15 @@ answer once the caller has passed the gate: without it, `status` can't say anyth
 
 ## Output and exit codes
 
+When `watch.queue_dir` names the team's queue directory, a `queues:` section lists the depth
+for each seat. Each queue is `<seat>.md`: top-level numbered entries and unchecked Markdown
+tasks count as work; checked tasks, nested details and fenced examples do not. Missing,
+unreadable, non-file or larger-than-1-MiB queues read `unknown`, not zero. JSON rows carry the
+same reading as `queue_depth` (a number or `null`); the field is absent when queues are not configured.
+
+A recognized quota or rate-limit screen reads `rate limit` instead of `idle` or `done`.
+Its note includes the reset time when the screen supplies one.
+
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | no difference | the seats table, the `budgets:` table when the file names an account or a reading is stored, one `note:` line per note, then `0 difference(s)` | 0 |
