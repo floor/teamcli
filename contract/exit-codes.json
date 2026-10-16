@@ -605,6 +605,76 @@
     },
     {
       "code": 0,
+      "command": "archive",
+      "id": "archive.keep-running",
+      "meaning": "the snapshot was written and the team was left running",
+      "trigger": "team archive --keep-running"
+    },
+    {
+      "code": 1,
+      "command": "archive",
+      "id": "archive.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team archive"
+    },
+    {
+      "code": 1,
+      "command": "archive",
+      "id": "archive.exists",
+      "meaning": "the archive folder already exists",
+      "trigger": "team archive, when this run’s folder is already there"
+    },
+    {
+      "code": 1,
+      "command": "archive",
+      "id": "archive.file-owner",
+      "meaning": "--file is the owner’s",
+      "trigger": "team archive --file .agents/team.yaml"
+    },
+    {
+      "code": 1,
+      "command": "archive",
+      "id": "archive.out-owner",
+      "meaning": "--out is the owner’s",
+      "trigger": "team archive --out ~/archives"
+    },
+    {
+      "code": 2,
+      "command": "archive",
+      "id": "archive.file",
+      "meaning": "the team file can’t be read",
+      "trigger": "team archive --file missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "archive",
+      "id": "archive.file-invalid",
+      "meaning": "the team file can’t be parsed",
+      "trigger": "team archive --file team.yaml"
+    },
+    {
+      "code": 2,
+      "command": "archive",
+      "id": "archive.invocation",
+      "meaning": "the invocation can’t be read",
+      "trigger": "team archive extra"
+    },
+    {
+      "code": 2,
+      "command": "archive",
+      "id": "archive.not-a-repo",
+      "meaning": "not inside a git repository",
+      "trigger": "team archive"
+    },
+    {
+      "code": 2,
+      "command": "archive",
+      "id": "archive.stop-flags",
+      "meaning": "--keep-running with a flag that only describes the stop",
+      "trigger": "team archive --keep-running --abandon"
+    },
+    {
+      "code": 0,
       "command": "ask-show",
       "id": "ask-show.shown",
       "meaning": "the question is printed",
@@ -1824,6 +1894,13 @@
     {
       "code": 0,
       "command": "init",
+      "id": "init.restored-archive",
+      "meaning": "the team file was restored from an archive",
+      "trigger": "team init --from-archive ~/.config/team/archive/beacon-<hash>-20261014T100000Z"
+    },
+    {
+      "code": 0,
+      "command": "init",
       "id": "init.wrote",
       "meaning": "a skeleton was written",
       "trigger": "team init"
@@ -1848,6 +1925,20 @@
       "id": "init.exists",
       "meaning": "the team file already exists",
       "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.from-archive",
+      "meaning": "the archive can’t be read or verified",
+      "trigger": "team init --from-archive <folder>"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.from-archive-invalid",
+      "meaning": "the archived team file doesn’t validate",
+      "trigger": "team init --from-archive <folder>"
     },
     {
       "code": 1,
@@ -1918,6 +2009,13 @@
       "id": "init.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team init"
+    },
+    {
+      "code": 2,
+      "command": "init",
+      "id": "init.sources",
+      "meaning": "--restore and --from-archive together",
+      "trigger": "team init --restore --from-archive <folder>"
     },
     {
       "code": 0,
