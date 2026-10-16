@@ -23,6 +23,11 @@ export type Rule = {
   belowLastRule?: RegExp;
   /** The window has no composer rule: the dialog is the pane. */
   withoutRule?: boolean;
+  /** `any` and `all` are read on the live region only — the composer's own rows, rules and
+   *  footers, and the newest turn of transcript above them — so a sentence the window has
+   *  scrolled past is not the dialog. A window whose composer cannot be read keeps the whole
+   *  window, as a rule without this field does. */
+  live?: true;
   noneAfter?: { anchor: LinePattern; patterns: LinePattern[] };
   /** Every non-blank row after the block's last anchor must match one of these: the block's
    *  own tail, with nothing of another dialog's after it. */

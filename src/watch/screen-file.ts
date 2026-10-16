@@ -326,7 +326,7 @@ function testedOf(entry: YamlEntry): VersionRange {
 
 function ruleOf(node: YamlNode, ignoreCase: boolean, allowCase = true): Rule {
   const entries = mapping(node, 'a rule');
-  only(entries, ['any', 'all', 'footer', 'on_footer', 'below_last_rule', 'without_rule', 'none_after', 'only_after', 'block']);
+  only(entries, ['any', 'all', 'footer', 'on_footer', 'below_last_rule', 'without_rule', 'none_after', 'only_after', 'block', 'live']);
   if (entries.length === 0) fail(node.line, 'a rule has no primitive');
   const block = optional(entries, 'block');
   // A block spells the rows it draws, the footer among them, so it stands alone: a rule that
@@ -352,6 +352,17 @@ function ruleOf(node: YamlNode, ignoreCase: boolean, allowCase = true): Rule {
   if (withoutRule) rule.withoutRule = boolOf(withoutRule.value, 'without_rule');
   if (noneAfter) rule.noneAfter = afterOf(noneAfter.value, 'none_after', ignoreCase, allowCase);
   if (onlyAfter) rule.onlyAfter = afterOf(onlyAfter.value, 'only_after', ignoreCase, allowCase);
+  // `live` narrows the lines `any` and `all` are read on, and nothing else: the other primitives
+  // place their own rows, and a rule that pairs it with one of them would be read as neither.
+  const live = optional(entries, 'live');
+  if (live) {
+    const narrowed = boolOf(live.value, 'live');
+    if (narrowed && !any && !all) fail(live.line, '"live" narrows "any" or "all": it needs one of them');
+    if (narrowed && (footer || onFooter || below || withoutRule || noneAfter || onlyAfter)) {
+      fail(live.line, '"live" reads with "any" or "all" alone, never beside another primitive');
+    }
+    if (narrowed) rule.live = true;
+  }
   return rule;
 }
 

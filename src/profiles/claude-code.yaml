@@ -207,10 +207,13 @@ screen:
         patterns:
           - '^\s*[❯›>]\s*$'
   # The prompt is back and the error is still on the pane. Herdr calls the seat done. The
-  # sentence is the one a seat printed; no capture shows a retry key, so none is named.
+  # sentence is the one a seat printed; no capture shows a retry key, so none is named. `live`
+  # reads it on the live region alone: the newest turn above the box, never a turn the pane has
+  # scrolled past, so an old error over an idle prompt stays an idle prompt.
   provider_error:
     - any:
         - 'API Error: Connection lost mid-response\. The response above may be incomplete\.'
+      live: true
   # The rejected line, matched on the fragments that were quoted: the field report names
   # 429 and 403 as this CLI's usage-limit rejections. Whatever follows "Your limit will
   # reset at" is the reset time the watch reports.
