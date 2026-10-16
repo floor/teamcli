@@ -14,3 +14,10 @@ The account line is `<account>` and the plan is `<plan>`. Directory paths are `<
 - `permission.txt`: `Requesting permission for:` `ls`, `> 1. Yes, run command`. Escape dismissed it.
 - `exit.txt`: after `/exit`. `Resume with -c` and the shell prompt. The conversation id is
   `<session-id>`.
+- `rules-line.txt`: the rules line, captured with herdr 0.7.1, `pane read --source visible`,
+  in a scratch session created for the purpose and stopped afterwards. The pane's `stty size`
+  was `23 53`. The line is the same neutral store path the 1.2.16 capture uses, typed with
+  `pane send-text` and never sent. The box wraps it: the break after `Read` and the break
+  after `your` each hide one space, and the break in the path hides nothing. Read `unsent`.
+  One `pane send-keys` `ctrl+u` with that line in the box restored the idle prompt and
+  `? for shortcuts`, and the CLI stayed up.

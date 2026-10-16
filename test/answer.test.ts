@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fingerprints } from '../src/approve/fingerprint.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { listFolder } from '../src/file/landing.ts';
@@ -468,8 +468,9 @@ describe('team answer', () => {
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
-    // The paste renders with one character changed: the box never reads back as the line, no
-    // Enter presses it, and the delivery's stop is past the key.
+    // The paste renders with one character changed: the box never reads back as the line, so
+    // Enter is not pressed. The line this run typed is cleared with the profile's key, and
+    // the seat stays in the recovery the trust key recorded.
     host.type = (_session, _pane, value) => {
       host.typed.push(value);
       host.screen = cursorBox(value.replace('standing rules', 'stunding rules'));
@@ -477,7 +478,7 @@ describe('team answer', () => {
     };
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
-    expect(host.keys).toEqual(['a']);
+    expect(host.keys).toEqual(['a', 'ctrl+u']);
     expect(host.typed.length).toBe(1);
     expect(host.entered).toBe(0);
     expect(io.err).toBe('lead: trust sent; recovery required\n');

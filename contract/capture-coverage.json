@@ -33,7 +33,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 3,
+        "real": 4,
         "constructed": 0,
         "undocumented": 0
       },
@@ -439,6 +439,12 @@
       "file": "antigravity/1.3.5/question.txt",
       "cli": "antigravity",
       "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/rules-line.txt",
+      "cli": "antigravity",
+      "kind": "unsent",
       "provenance": "capture"
     },
     {

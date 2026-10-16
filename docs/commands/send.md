@@ -60,8 +60,9 @@ nothing; it appends one line to `.agents/team.log`.
 
 Reads the team file, the caller's placement, and the herdr session's agents. A plain send
 writes `.agents/send-drops/<session>/<seat>/<id>` (the file mode 0600), types one trigger line
-into that seat's pane, and reads the pane once afterwards. `send-drops`, the session directory,
-and the seat directory are each mode 0700. This command never deletes a delivered drop file;
+into that seat's pane, reads the pane back before Enter to check the composer holds that line,
+and reads it again after Enter. `send-drops`, the session directory, and the seat directory are
+each mode 0700. This command never deletes a delivered drop file;
 the owner removes `.agents/send-drops` when those messages are no longer needed. `--wait` to a
 Claude Code seat reads the processes of the seat's pane and the socket file's presence in
 `cc-socks` instead of writing a drop file. The socket is the first of the pane's processes —
@@ -98,12 +99,18 @@ before the seat is looked up. A run with no terminal is refused before `--list` 
 | usage | 2 | `team send: <message>` and the usage on stderr |
 | configuration | 2 | `team send: <message>` on stderr |
 
-`held` is nothing typed: the message is safely on disk, the pane was left as it was, and the
-run exits 1 — the reason it prints says what held it.
+`held` is nothing sent: the message is safely on disk, the run exits 1, and the reason it prints
+says what held it. A pane whose composer already holds unsent text is left alone before the run
+types anything (`the composer already holds unsent text`). The trigger line is what the composer
+is read back for: before Enter the run checks the composer holds it, and a composer that does not
+takes no Enter (`the composer read-back did not match the trigger`); a trigger the composer still
+holds when herdr's status did not show the submission ends the run the same way (`the trigger
+stayed unsent in the composer`), the line left in the composer.
 
 `unreachable` is the seat not reached: no live agent of that name, a screen that is one of the
 dialogs listed above, no socket file for a waited Claude Code seat, a connection that would not
-take that frame, or a seat whose herdr status did not show the trigger was submitted. `timeout`
+take that frame, or a seat whose herdr status did not show the trigger was submitted and whose
+composer no longer holds the trigger line. `timeout`
 is a waited frame written on the socket and no reply inside the window. `refused` is nothing
 being sent on purpose: an unknown seat (the file's seats are named), `--wait` to a seat that is
 not Claude Code, a frame over the socket limit, a trigger longer than the measured line, a
