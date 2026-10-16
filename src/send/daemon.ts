@@ -760,6 +760,8 @@ async function executeQueuedSend(
   const who = from === 'owner' ? 'owner' : from === team.orchestrator ? 'orchestrator' : 'seat';
   const body = request.body;
   const msgId = request.id ?? randomUUID();
+  // Send to outcome is measured from here: the daemon's own handling, not the requester's wait.
+  const startedAt = Date.now();
   const configured = team.seats.find((s) => s.name === seatName);
   if (!configured) {
     const names = team.seats.map((s) => s.name);
@@ -802,6 +804,7 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason };
   }
@@ -817,6 +820,7 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
   }
@@ -871,6 +875,7 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'held',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail, drop_path: dropPath };
   };
@@ -883,6 +888,7 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail, drop_path: dropPath };
   };
@@ -964,6 +970,8 @@ async function executeQueuedSend(
         body,
         id: msgId,
         outcome: 'not-submitted',
+        ms: Date.now() - startedAt,
+        via: 'typed',
       });
       return {
         v: 1,
@@ -993,6 +1001,8 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'delivered',
+      ms: Date.now() - startedAt,
+      via: 'typed',
     });
     return {
       v: 1,
@@ -1025,6 +1035,8 @@ async function executeSocketSend(
   host: DaemonHost,
   alive: (pid: number) => boolean,
 ): Promise<DaemonSendResponse> {
+  // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.
+  const startedAt = Date.now();
   const frame = `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;
   if (frame.length > FRAME_LIMIT) {
     return {
@@ -1049,6 +1061,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason };
   }
@@ -1062,6 +1075,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: "the pane's processes could not be read" };
   }
@@ -1075,6 +1089,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
   }
@@ -1097,6 +1112,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'held',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail };
   }
@@ -1117,6 +1133,8 @@ async function executeSocketSend(
           body,
           id: msgId,
           outcome: 'unreachable',
+          ms: Date.now() - startedAt,
+          via: 'socket',
         });
         return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: taken.reason };
       }
@@ -1132,6 +1150,8 @@ async function executeSocketSend(
           body,
           id: msgId,
           outcome: 'answered',
+          ms: Date.now() - startedAt,
+          via: 'socket',
         });
         return { v: 1, ok: true, id: msgId, seat: seatName, outcome: 'answered', reply: read.reply, reply_id: read.msg_id };
       }
@@ -1143,6 +1163,8 @@ async function executeSocketSend(
         body,
         id: msgId,
         outcome: 'timeout',
+        ms: Date.now() - startedAt,
+        via: 'socket',
       });
       return {
         v: 1,

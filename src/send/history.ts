@@ -36,6 +36,10 @@ export type HistoryEntry = {
   body: string;
   id: string;
   outcome: string;
+  /** Send to outcome in whole milliseconds, written when the sender measured it. */
+  ms?: number;
+  /** The path the send took: `socket` or `typed`; absent for outcomes with no delivery. */
+  via?: string;
 };
 
 export type HistoryWrite =
@@ -174,6 +178,9 @@ export function appendHistory(project: string, root: string, home: string, entry
     id: entry.id,
     outcome: entry.outcome,
   };
+  // Written only when the sender measured them, so older lines keep their exact shape.
+  if (entry.ms !== undefined) record.ms = entry.ms;
+  if (entry.via !== undefined) record.via = entry.via;
   const line = `${JSON.stringify(record)}\n`;
   const bytes = Buffer.from(line, 'utf8');
 
@@ -257,7 +264,7 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
   ) {
     return null;
   }
-  return {
+  const entry: HistoryEntry = {
     ts: obj.ts,
     from: obj.from,
     to: obj.to,
@@ -265,6 +272,14 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     id: obj.id,
     outcome: obj.outcome,
   };
+  // `ms` and `via` are optional: a line with a wrong-typed one keeps its other fields.
+  if (typeof obj.ms === 'number' && Number.isFinite(obj.ms) && obj.ms >= 0) {
+    entry.ms = obj.ms;
+  }
+  if (typeof obj.via === 'string' && obj.via !== '') {
+    entry.via = obj.via;
+  }
+  return entry;
 }
 
 /**

@@ -28,7 +28,7 @@ Options:
   --audit <path>   include Desk or bridge audit JSONL lines from <path>
   --briefs <dir>   include <from>-to-<to>.md brief files from <dir>
   --follow         keep reading as new lines arrive, across log rotations
-  --json           one JSON object per line ({ts, from, to, body, id, outcome})
+  --json           one JSON object per line ({ts, from, to, body, id, outcome, ms?, via?})
 `;
 
 export const DEFAULT_FEED_LIMIT = 50;
@@ -527,18 +527,29 @@ function timeOf(ts: string): string {
 
 function formatEntry(entry: HistoryEntry, json: boolean): string {
   if (json) {
-    return `${JSON.stringify({
+    const obj: Record<string, unknown> = {
       ts: entry.ts,
       from: entry.from,
       to: entry.to,
       body: entry.body,
       id: entry.id,
       outcome: entry.outcome,
-    })}\n`;
+    };
+    // Present only when the send recorded them, so older readers see the same object.
+    if (entry.ms !== undefined) obj.ms = entry.ms;
+    if (entry.via !== undefined) obj.via = entry.via;
+    return `${JSON.stringify(obj)}\n`;
   }
   const lines = entry.body.split('\n');
   const first = lines[0] ?? '';
-  const header = `${timeOf(entry.ts)}  ${entry.from} -> ${entry.to}  [${entry.outcome}]  ${first}\n`;
+  const meta = [
+    entry.via !== undefined ? `via ${entry.via}` : null,
+    entry.ms !== undefined ? `in ${String(Math.round(entry.ms))} ms` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(' ');
+  const timing = meta === '' ? '' : ` ${meta}`;
+  const header = `${timeOf(entry.ts)}  ${entry.from} -> ${entry.to}  [${entry.outcome}]${timing}  ${first}\n`;
   if (lines.length === 1) return header;
   const rest = lines
     .slice(1)
