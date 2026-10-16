@@ -309,7 +309,7 @@ function answerHost(): AnswerHost {
   };
 }
 
-const NEVER_APPROVED = 'the file was never approved on this machine: run `team approve`';
+const NEVER_APPROVED = 'the file was never approved on this machine';
 
 // The two refusal tails the commands share, each with the command's own name in front.
 const NO_PANE = (name: string) =>
@@ -1159,7 +1159,7 @@ describe('remove and a record that is not in force', () => {
     {
       name: 'a legacy record',
       sources: () => removeSources({ standing: () => ({ kind: 'legacy' }) }),
-      why: 'team remove: approved before records were signed: run `team approve` once\n',
+      why: 'team remove: approved before records were signed\n',
     },
     {
       name: 'a record the verification refused',

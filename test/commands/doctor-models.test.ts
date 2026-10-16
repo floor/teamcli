@@ -89,7 +89,6 @@ describe('team doctor on a file of every model shape', () => {
         // The fixture still spells the lead `coordinator:`, on line 4: doctor prints the file's
         // notice before the seats' own warnings, and counts it.
         'warn  the file, line 4: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
-        'ok    the file is the one the owner approved (approval #1, 2026-10-03, key fe21ef6293de)',
         // the message seats' rules files: written by `up`, absent in this fixture
         'warn  plain-codex: its rules file is missing; run `team remove plain-codex --keep` then `team add plain-codex` (or `team down` then `team up` for the whole team)',
         'warn  plain-voyager: its rules file is missing; run `team remove plain-voyager --keep` then `team add plain-voyager` (or `team down` then `team up` for the whole team)',
@@ -131,13 +130,12 @@ describe('team doctor on a file of every model shape', () => {
     expect(run.out).toEndWith('team doctor: nothing missing, 5 warnings\n');
   });
 
-  test('model_from is part of the seat the owner approves', async () => {
+  test('model_from edited after the record is not a doctor miss', async () => {
     await approve();
     edit((text) => text.replace('launch: zsh launcher.sh', 'launch: zsh launcher.sh\n    model_from: launcher'));
     const run = await doctor();
-    // The owner approved the seat without the key, so the file is no longer the approved one, and
-    // the difference names the seat: model_from sits in the seat's digest, not beside it.
-    expect(run.out).toContain('MISS  run `team approve`: seat script-seat changed');
+    expect(run.out).not.toContain('team approve');
+    expect(run.out).not.toContain('seat script-seat changed');
   });
 
   test('an all-correct running team warns only where a version is untested or the owner must act', async () => {

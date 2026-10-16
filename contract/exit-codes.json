@@ -39,13 +39,6 @@
     {
       "code": 1,
       "command": "add",
-      "id": "add.approved-copy",
-      "meaning": "the approved copy can't be read",
-      "trigger": "team add worker"
-    },
-    {
-      "code": 1,
-      "command": "add",
       "id": "add.branch-missing",
       "meaning": "the merged branch doesn't exist",
       "trigger": "team add --temporary --like lead --until merged:missing"
@@ -160,13 +153,6 @@
       "command": "add",
       "id": "add.detached",
       "meaning": "a run with no terminal",
-      "trigger": "team add worker"
-    },
-    {
-      "code": 1,
-      "command": "add",
-      "id": "add.differs",
-      "meaning": "the file differs from its approval",
       "trigger": "team add worker"
     },
     {
@@ -963,13 +949,6 @@
     {
       "code": 1,
       "command": "down",
-      "id": "down.approved-copy",
-      "meaning": "the approved copy of the team file cannot be read",
-      "trigger": "team down"
-    },
-    {
-      "code": 1,
-      "command": "down",
       "id": "down.caller",
       "meaning": "the caller may not change the team",
       "trigger": "team down"
@@ -1049,20 +1028,6 @@
       "command": "down",
       "id": "down.grant-approval",
       "meaning": "a grant needs a verified approval",
-      "trigger": "team down"
-    },
-    {
-      "code": 1,
-      "command": "down",
-      "id": "down.grant-approved-copy",
-      "meaning": "a grant needs a readable approved copy",
-      "trigger": "team down"
-    },
-    {
-      "code": 1,
-      "command": "down",
-      "id": "down.grant-drift",
-      "meaning": "a grant needs the approved file",
       "trigger": "team down"
     },
     {
@@ -1999,13 +1964,6 @@
     {
       "code": 1,
       "command": "remove",
-      "id": "remove.approved-copy",
-      "meaning": "the approved copy of the team file cannot be read",
-      "trigger": "team remove lead"
-    },
-    {
-      "code": 1,
-      "command": "remove",
       "id": "remove.busy",
       "meaning": "the seat is not free",
       "trigger": "team remove worker"
@@ -2219,6 +2177,132 @@
       "id": "remove.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team remove worker"
+    },
+    {
+      "code": 0,
+      "command": "restart",
+      "id": "restart.dry-run",
+      "meaning": "the stop and launch plan was printed and nothing was touched",
+      "trigger": "team restart worker --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "restart",
+      "id": "restart.ready",
+      "meaning": "the seat was restarted in a new pane",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.abandon-working",
+      "meaning": "a seat caller passed --abandon on a working seat",
+      "trigger": "team restart worker --abandon"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.busy",
+      "meaning": "the seat is busy and --abandon was not given, or graceful stop did not close the pane",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.caller",
+      "meaning": "the caller may not restart a seat, or passed an owner-only flag",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.herdr",
+      "meaning": "herdr doesn't answer",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.lead",
+      "meaning": "a seat caller passed --abandon for the orchestrator's or the operator's seat",
+      "trigger": "team restart lead --abandon"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.no-session",
+      "meaning": "the herdr session is not running",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.not-ready",
+      "meaning": "preflight or launch did not produce a ready seat",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.replaced",
+      "meaning": "the old pane holds a process that is not the seat's CLI",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.run-lock",
+      "meaning": "another session-mutating run is holding the session",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.self",
+      "meaning": "a seat caller tried to restart its own recorded pane",
+      "trigger": "team restart lead"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.signed-off",
+      "meaning": "the seat is parked or stopped",
+      "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.temporary",
+      "meaning": "the seat is a temporary copy",
+      "trigger": "team restart worker-tmp-1"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.unknown",
+      "meaning": "the seat is not a declared seat",
+      "trigger": "team restart missing"
+    },
+    {
+      "code": 2,
+      "command": "restart",
+      "id": "restart.configuration",
+      "meaning": "the team file can't be read or parsed, or not inside a git repository",
+      "trigger": "team restart worker --file missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "restart",
+      "id": "restart.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team restart"
     },
     {
       "code": 0,
@@ -2674,13 +2758,6 @@
       "id": "up.detached",
       "meaning": "a run with no terminal",
       "trigger": "team up --session elsewhere"
-    },
-    {
-      "code": 1,
-      "command": "up",
-      "id": "up.differs",
-      "meaning": "the file differs from its approval",
-      "trigger": "team up"
     },
     {
       "code": 1,

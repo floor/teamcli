@@ -162,10 +162,10 @@ stop at all.
 | ``team down: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
 | ``team down: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team down: <the delegate gate's text>` — the file has a `delegates` section and a delegate's call was refused: one of `down.delegate`, `down.delegate-approval`, `down.delegate-approved-copy`, `down.delegate-drift`, `down.delegate-evidence`, `down.delegate-placement`, `down.delegate-command`, `down.delegate-flag` | 1 |
-| `team down: <the grant gate's text>` — the file has a `grant` and the orchestrator's own seat ran `down`: one of `down.grant-approval`, `down.grant-approved-copy`, `down.grant-drift`, `down.grant-scope` | 1 |
+| `team down: <the grant gate's text>` — the file has a `grant` and the orchestrator's own seat ran `down`: one of `down.grant-approval`, `down.grant-scope` | 1 |
 | ``team down: another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share; the line names no command, because the lock is shared. The lock is taken before this run's first effect and released at its end; `--dry-run` and a session with nothing left to stop take no lock and never show it | 1 |
 | ``team down: another session-mutating run may be holding session <session>, and its lock cannot be read; if no run is using it, delete <state dir>/seat-locks/<session>/.run`` — the lock file does not read as a token, so its holder is unknown and only the owner clears it; the line names the file | 1 |
-| ``team down: the file was never approved on this machine: run `team approve` `` | 1 |
+| ``team down: the file was never approved on this machine `` | 1 |
 | `team down: <the legacy record's one-line repair>` | 1 |
 | `team down: <why the record was refused>` | 1 |
 | `team down: the approved copy of the team file cannot be read` | 1 |
@@ -256,8 +256,7 @@ dry run: nothing was run
 exit 0
 ```
 
-The live file renamed claude-beacon after the copy was approved. The stop list is that copy, so
-the plan is the same as before the rename — the edit is not in force until `team approve`:
+The live file renamed claude-beacon after the copy was stored. The stop list is the live file:
 
 ```yaml file=.agents/team.yaml
 format: 1

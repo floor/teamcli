@@ -200,7 +200,7 @@ describe('the machine\'s figures', () => {
     };
     const small: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 1e9, swapFree: 0.5e9, swapUsed: 0.5e9 };
     expect(swapTotalProblem(small, limits)).toBe(
-      'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep, then run `team approve`',
+      'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep',
     );
     // The check can pass in principle — its floor sits under the machine's total — and the free
     // figure is low right now: `up`'s refusal and the watch's finding, and nothing here.
@@ -978,7 +978,7 @@ describe('team watch', () => {
     ['legacy', () => ({ kind: 'legacy' as const })],
     ['refused', () => ({
       kind: 'refused' as const,
-      why: 'the record does not carry a valid signature: it was changed after approval, or written without the key: run `team approve` once',
+      why: 'the record does not carry a valid signature: it was changed after approval, or written without the key',
     })],
   ] satisfies Array<[string, WatchSources['standing']]>)('types nothing while the record is %s', async (_name, standing) => {
     const io = testIo(dir, { kind: 'owner' });
