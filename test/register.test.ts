@@ -13,8 +13,8 @@
 //     no agent of the name in the session, two agents of the name, a pane holding a shell, a
 //     pane whose foreground process is not the one the file's `cli` names, and a screen the
 //     file-cli's reader does not know;
-// (d) the run is repeatable: the second run says `already registered` without reading the pane
-//     again, and `--dry-run` verifies the same way and writes nothing.
+// (d) the run is repeatable: the second run says `already registered` and writes the registry
+//     record again from the file, without reading the pane again, and `--dry-run` writes nothing.
 // Fake herdr throughout, a temporary home and a pinned caller: no live session is read.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -242,7 +242,7 @@ describe('a running seat', () => {
     }
   });
 
-  test('registered twice: the second run says so without reading the pane again', async () => {
+  test('registered twice: the second run refreshes the record without reading the pane again', async () => {
     const w = world();
     expect((await register(w, ['lead'])).code).toBe(0);
     const before = readState(w.dir).sessions.acme?.seats.lead;
@@ -254,7 +254,7 @@ describe('a running seat', () => {
     });
 
     expect(second.code).toBe(0);
-    expect(second.out).toContain('lead: already registered — pane w1:p1; nothing was written');
+    expect(second.out).toContain('lead: already registered — pane w1:p1; the record was refreshed from the file, nothing relaunched');
     expect(second.led).toEqual(['session acme', 'agents acme']);
     expect(readState(w.dir).sessions.acme?.seats.lead).toEqual(before);
     expect(readAgents(w.home)).toHaveLength(1);
