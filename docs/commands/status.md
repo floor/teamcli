@@ -47,12 +47,7 @@ such line. `--json` carries the same reading as a `procs` array, absent when the
 | the owner, from a terminal outside herdr | read the team, and aim the read with `--file` and `--session` |
 | a seat of the team, placed in the file's session, on the pane the state records for it | read the team; a seat the state records no pane for, or records on another pane, fails closed |
 | a pane outside the team that the live file names in its `delegates` entries | read the team; a pane newly named by the live file also passes |
-| a caller outside herdr whose ancestry names a create-grant's `runner` | read the team, for a file whose root and this call's folder both sit under the paths that record covers, before it expires |
-| anyone else, an owner's run without a terminal included | nothing, unless a create-grant's `runner` names the caller: the fixed sentence `team status: this team is not yours to read` on stderr, stdout empty, exit 2 |
-
-A create-grant's `runner` — the record [`team init`](init.md) describes — is the one caller outside
-herdr admitted without the owner's terminal. It buys the read alone: `--file` and `--session` stay
-the owner's, and a granted read keeps no `last_valid` copy the way the owner's run does.
+| anyone else, an owner's run without a terminal included | nothing: the fixed sentence `team status: this team is not yours to read` on stderr, stdout empty, exit 2 |
 
 `--file` and `--session` aimed by anyone else are refused before any file or session is read —
 `--file is the owner's, from a terminal outside herdr; this call is …`, or `only the owner runs

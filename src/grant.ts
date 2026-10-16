@@ -5,7 +5,7 @@ import { approvedFingerprints, notInForce } from './approve/approval.ts';
 import { compare, describe, fingerprints } from './approve/fingerprint.ts';
 import { anotherPaneRefusal, callerAncestors, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf } from './caller.ts';
 import { ORDINARY_SECTIONS } from './delegate.ts';
-import { findRoot, loadTeamFile } from './file/load.ts';
+import { loadTeamFile } from './file/load.ts';
 import type { GrantScope, LoadResult } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
@@ -263,36 +263,17 @@ export function entityGrantAdmits(
   options: { home?: string; now?: Date; cwd?: string } = {},
 ): boolean {
   const home = options.home ?? homedir();
+  const nowMs = (options.now ?? new Date()).getTime();
   const cwd = options.cwd ?? io.cwd;
   const grants = readEntityCreateGrants(home);
   if (grants.length === 0) return false;
-  // The clock is read only once a grant answers to this caller and this folder: identity and
-  // containment are checked first, so a detached caller no grant names never evaluates `now` —
-  // the order `test/owner-no-tty-boundaries.test.ts` throws its clock at. Expiry still decides
-  // before any grant admits.
-  let nowMs: number | undefined;
-  const nowOf = () => (nowMs ??= (options.now ?? new Date()).getTime());
   for (const grant of grants) {
-    if (!grantMatchesCaller(grant, io)) continue;
-    if (!grant.paths.some((entry) => pathUnderGranted(entry, root, cwd, home))) continue;
     const expMs = Date.parse(grant.expires);
-    if (!Number.isFinite(expMs) || nowOf() >= expMs) continue;
-    return true;
+    if (!Number.isFinite(expMs) || nowMs >= expMs) continue;
+    if (!grantMatchesCaller(grant, io)) continue;
+    if (grant.paths.some((entry) => pathUnderGranted(entry, root, cwd, home))) return true;
   }
   return false;
-}
-
-/**
- * `entityGrantAdmits` for the cwd's own repository, found the way `init` finds it. The early ask
- * of the commands that decide the detached sentence before any team file is read; the loaded
- * file's own root still decides their caller rule.
- */
-export function entityGrantAdmitsCwd(
-  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources' | 'cwd'>,
-  options: { home?: string; now?: Date; cwd?: string } = {},
-): boolean {
-  const root = findRoot(io.cwd);
-  return root !== null && entityGrantAdmits(root, io, options);
 }
 
 /**
