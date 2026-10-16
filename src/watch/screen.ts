@@ -41,6 +41,7 @@ const DATA: Record<string, ScreenData> = {
   antigravity: load('antigravity'),
   grok: load('grok'),
   gemini: load('gemini'),
+  muse: load('muse'),
 };
 
 /** The shipped screen for a CLI, or null when this version has none. */

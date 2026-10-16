@@ -6,7 +6,7 @@ import { agentList, paneRootPid } from './herdr.ts';
 import type { HerdrAgent } from './herdr.ts';
 import type { Io } from './io.ts';
 import { readState } from './state.ts';
-import { CLI_PROCESSES } from './clis.ts';
+import { CLI_PROCESSES, processNameMatches } from './clis.ts';
 
 // Who runs this command, placed by its parent processes, never by its environment. This guards
 // against a mistaken agent, not a hostile one: every seat runs as the owner's user.
@@ -105,7 +105,7 @@ export function walkCaller(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'calle
 }
 
 function walkOutside(ancestors: Process[], sources: Pick<CallerSources, 'env' | 'stdinIsTTY'>): Caller {
-  const cli = ancestors.find((process) => CLI_PROCESSES.includes(process.name));
+  const cli = ancestors.find((process) => processNameMatches(process.name, CLI_PROCESSES));
   if (cli) return { kind: 'unplaced', reason: `it is run by an agent (${cli.name}) outside herdr` };
   if (sources.env.AGENT_UNATTENDED) return { kind: 'unplaced', reason: 'AGENT_UNATTENDED is set' };
   if (!sources.stdinIsTTY) return { kind: 'owner-no-tty' };

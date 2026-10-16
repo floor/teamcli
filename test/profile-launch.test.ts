@@ -254,6 +254,7 @@ describe('the lobby_files a profile may name', () => {
     expect(profileFor('antigravity')?.lobbyFiles).toEqual([]);
     expect(profileFor('grok')?.lobbyFiles).toEqual([]);
     expect(profileFor('gemini')?.lobbyFiles).toEqual([]);
+    expect(profileFor('muse')?.lobbyFiles).toEqual([]);
   });
 
   test('the union of every shipped profile and the tool\'s own files is what a lobby may hold, whatever the team runs', () => {
@@ -261,7 +262,7 @@ describe('the lobby_files a profile may name', () => {
     // declaration together — plus the files the tool itself keeps there, today the reach
     // projection and its write's temporary — sorted and deduped, so a CLI another team runs
     // and the tool's own files are covered too.
-    const perCli = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini']
+    const perCli = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse']
       .flatMap((cli) => profileFor(cli)?.lobbyFiles ?? []);
     expect(shippedLobbyFiles()).toEqual([...new Set([...perCli, ...TOOL_LOBBY_FILES])].sort());
     expect(shippedLobbyFiles()).toContain('.claude/scheduled_tasks.lock');

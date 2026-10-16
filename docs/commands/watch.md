@@ -149,7 +149,6 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `every agent is idle` | every seat that is not the orchestrator, the operator or parked, quiet for `watch.team_idle` |
 | `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model — <repair>` (`<declared>` is the seat's `display` spelling) | the running model or version is not the file's. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
 | `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, a workspace labelled watchdog aside |
-| `the file was never approved on this machine` | there is no approval record for this project |
 | `approved before records were signed` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
 | `<why the record was refused>` | a signed record that does not verify (changed after approval, another root, a replayed or rolled-back generation): said once, and the watch keeps watching |
 | `the load is <n> per core, above <n>` | over `machine.load_max` |
@@ -500,9 +499,9 @@ exit 1
 ```
 
 The four that can't be turned off — `attention`, `missing`, `model-drift` and `approval` — are
-refused by the schema itself, with the line, and so is a name that is no check. `team approve`
-refuses such a file the same way, and the watch keeps the last copy that validated, with the
-checks as the owner approved them.
+refused by the schema itself, with the line, and so is a name that is no check. A command that
+reads such a file refuses it the same way, and the watch keeps the last copy that validated, with
+the checks as the owner approved them.
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -540,8 +539,8 @@ seats:
 ```
 
 ```console
-$ team approve ; echo "exit $?"
-team approve: line 9: watch.checks can't turn off attention: attention, missing, model-drift, approval always run
-team approve: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, attention, provider-error, unsent, idle, extra, team-idle, approval, load, memory, disk, swap-free, swap-growth, budget
+$ team up ; echo "exit $?"
+team up: line 9: watch.checks can't turn off attention: attention, missing, model-drift, approval always run
+team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, attention, provider-error, unsent, idle, extra, team-idle, approval, load, memory, disk, swap-free, swap-growth, budget
 exit 2
 ```

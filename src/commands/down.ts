@@ -2,12 +2,13 @@ import { homedir } from 'node:os';
 import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
+import { processNameMatches } from '../clis.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
-import { grantGate, logGranted } from '../grant.ts';
+import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { findRoot, loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import {
   agentList,
@@ -170,7 +171,7 @@ export default down;
 // The seat has left when no foreground process is its CLI. An unreadable list keeps the wait.
 export function paneStillRunning(foreground: readonly string[] | null, processNames: readonly string[]): boolean {
   if (!foreground) return true;
-  return foreground.some((name) => processNames.includes(name));
+  return foreground.some((name) => processNameMatches(name, processNames));
 }
 
 /**
@@ -408,8 +409,20 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.invocation
     return 2;
   }
+  // A create-grant's own runner is the one detached caller the record may name: this sentence is
+  // not for it, exactly as `init` asks it. Only the cwd's own repository is known this early,
+  // before any file is read, so this decision answers this refusal alone — the loaded root decides
+  // the caller rule below, and a team outside the granted paths still refuses there.
   const detached = detachedRefusal(walkCaller(io));
-  if (detached !== undefined) {
+  // Asked only for the placement that would be refused, and only when a record exists, so a
+  // caller with none is refused without reading a repository or a clock.
+  let runnerGranted = false;
+  if (detached !== undefined && readEntityCreateGrants(sources.home ?? homedir()).length > 0) {
+    const hereRoot = findRoot(io.cwd);
+    runnerGranted = hereRoot !== null
+      && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
+  }
+  if (detached !== undefined && !runnerGranted) {
     io.stderr(`team down: ${detached}\n`);
     // exit: down.detached
     return 1;
@@ -566,6 +579,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       session = team.session;
     }
   }
+  // A create-grant the record holds for this loaded root is the run's admission, the same one
+  // `init` and `up` consult: the team this run would stop is under the granted paths. Asked only
+  // where the ordinary rule has just refused — the record is a second door, never a second gate —
+  // and only when one exists, so an owner's run reads no clock for it. A granted run stops the
+  // whole team, exactly as the owner's own `down` does: no seat of it is the caller.
+  const createGranted = !branching() && rule.kind !== 'ok'
+    && readEntityCreateGrants(sources.home ?? homedir()).length > 0
+    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
 
   // The load above wrote nothing. A refused caller, a dry run, and a run that finds the
   // session lock held leave the state file as it was. An allowed run that is not a dry run
@@ -584,7 +605,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     else grantRefusal = said.text;
   }
 
-  const callerRefused = (rule.kind !== 'ok' && !branching()) || grantRefusal !== undefined;
+  // A caller the create-grant admits is not a refused caller: the run remembers its file exactly
+  // as `up`'s admitted runs do.
+  const callerRefused = (rule.kind !== 'ok' && !branching() && !createGranted) || grantRefusal !== undefined;
   const abandonRefused = args.flags.has('abandon') && granted === undefined && !callerOwns(caller) && verdict === undefined;
   const mayRemember = !callerRefused && !abandonRefused && !dry && current.path !== undefined;
   const remember = (): void => {
@@ -613,7 +636,11 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
 
   if (grantRefusal !== undefined) refusals.push(grantRefusal);
-  if (rule.kind !== 'ok' && !branching()) {
+  // A create-grant held for this root is the run's admission: the ordinary rule's sentence is
+  // then not a refusal, and the delegate gate — which the ordinary refusal alone summons — has
+  // nothing to replace. Every check below (the approval, the budgets, the machine gate) still
+  // reads exactly as it does for the owner.
+  if (rule.kind !== 'ok' && !branching() && !createGranted) {
     // The ordinary rule has refused, and only now is the gate asked. With no delegate in the live
     // file nothing changes. A refusal takes the ordinary refusal's place, in the same place and at
     // the same exit statuses: a real run stops on it, a dry run says what it would refuse and
