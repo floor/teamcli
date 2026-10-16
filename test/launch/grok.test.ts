@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { profileFor } from '../../src/profiles/index.ts';
 import { launchCommand, versionVerdict } from '../../src/profiles/profile.ts';
+import { canShowModel, runningModel } from '../../src/status/statusline.ts';
 import { classifyComposer, readScreen, screenData } from '../../src/watch/screen.ts';
 import { boxHoldsText } from '../../src/launch/deliver.ts';
 import { type ExitIo, typeExit } from '../../src/commands/down.ts';
@@ -109,6 +110,32 @@ describe('Grok launch and captured screens', () => {
     for (const file of ['exit', 'compact-mode'] as const) {
       expect(boxHoldsText('grok', 'anything', fixture(file))).toBe(false);
     }
+  });
+
+  test('the closing rule names the model, and a screen that hides it does not', () => {
+    const current = (name: string) => readFileSync(new URL(`../fixtures/grok/1.0.52/${name}.txt`, import.meta.url), 'utf8');
+    expect(runningModel('grok', fixture('idle'))).toEqual({ model: 'Grok', version: '4.7' });
+    expect(runningModel('grok', fixture('idle-ansi'))).toEqual({ model: 'Grok', version: '4.7' });
+    expect(runningModel('grok', fixture('compact-mode'))).toEqual({ model: 'Grok', version: '4.7' });
+    expect(runningModel('grok', fixture('working-start'))).toEqual({ model: 'Grok', version: '4.7' });
+    expect(runningModel('grok', fixture('working-tool'))).toEqual({ model: 'Grok Fast', version: '4.7' });
+    expect(runningModel('grok', fixture('unsent-wrap'))).toEqual({ model: 'Grok Fast', version: '4.7' });
+    expect(runningModel('grok', fixture('exit'))).toBeNull();
+    expect(runningModel('grok', current('idle'))).toEqual({ model: 'Grok', version: '4.7' });
+    expect(runningModel('grok', current('working'))).toEqual({ model: 'Grok', version: '4.7' });
+    expect(runningModel('grok', current('exit-typed'))).toEqual({ model: 'Grok', version: '4.7' });
+    expect(runningModel('grok', current('question'))).toBeNull();
+    expect(runningModel('grok', current('permission'))).toBeNull();
+    expect(runningModel('grok', current('exit'))).toBeNull();
+    // The welcome line and the build banner sit on the same screens and name no model.
+    expect(runningModel('grok', '  Grok 4.7 is here!\n')).toBeNull();
+    expect(runningModel('grok', '                        Grok Build  1.0.52 [stable]\n')).toBeNull();
+    expect(runningModel('grok', 'Grok 4.7 Fast (high)\nGrok 4.7 (high)\n')).toEqual({ model: 'Grok', version: '4.7' });
+    expect(canShowModel({ cli: 'grok', model: 'Grok', version: '4.7' })).toBe(true);
+    expect(canShowModel({ cli: 'grok', model: 'Grok Fast', version: '4.7' })).toBe(true);
+    expect(canShowModel({ cli: 'grok', model: 'Grok 4.7 Fast', version: '4.7' })).toBe(false);
+    expect(canShowModel({ cli: 'grok', model: 'Grok', version: 'dev' })).toBe(false);
+    expect(canShowModel({ cli: 'grok', model: 'Grok Mini', version: '4.7' })).toBe(false);
   });
 });
 
