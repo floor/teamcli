@@ -1,0 +1,93 @@
+# Gemini CLI's screen, captured from gemini 0.64.0 (herdr 0.7.1, stty size 23 53).
+# The composer is a two-rule box whose opening border is an unbroken run of `▄` from
+# column 1 and whose closing border is an equal-width run of `▀`, with the workspace
+# and model footer below (`  workspace (/directory)                    gemini-3-pro`).
+# `To resume this session: gemini --resume` is the shell screen after `/exit`.
+format: 1
+cli: gemini
+binary: gemini
+# `/opt/homebrew/bin/gemini` is a `#!/usr/bin/env node` entry point that spawns a child
+# node process; `herdr pane process-info` reports `argv0: "node"` for its foreground
+# processes, while `gemini` covers a direct or wrapped binary.
+process_names:
+  - gemini
+  - node
+tested:
+  from: '0.64.0'
+  to: '0.64.0'
+unattended:
+  - --approval-mode
+  - yolo
+rules: first-message
+# `gemini --help` (0.64.0) offers no non-interactive auth check command.
+login:
+  hint: gemini
+exit: /exit
+# With text standing in the composer on 0.64.0, one ctrl+c emptied the box and returned
+# the pane to the idle composer (with the `Press Ctrl+C again to exit.` footer notice).
+exit_clear: ctrl+c
+timeouts:
+  idle: 90s
+  exit: 30s
+# From `--help` and 0.64.0 source: Gemini CLI loads `GEMINI.md` context files and
+# `.gemini/settings.json` from the working directory at start.
+startup_reads:
+  - GEMINI.md
+  - .gemini/settings.json
+models:
+  option:
+    - -m
+    - --model
+  ids:
+    - match: '^gemini-([0-9]+(?:\.[0-9]+)*)-(flash|pro)(?:-(?:preview|lite|customtools))*$'
+      ignore_case: true
+      model: 'Gemini {2:title}'
+      version: '{1}'
+status_model:
+  - match: '(?:^|\s)gemini-([0-9]+(?:\.[0-9]+)*)-(flash|pro)(?:-(?:preview|lite|customtools))*\b'
+    ignore_case: true
+    model: 'Gemini {2:title}'
+    version: '{1}'
+    yields: [Gemini Flash, Gemini Pro]
+    version_like: '^[0-9]+(?:\.[0-9]+)*$'
+screen:
+  unknown:
+    - any:
+        - 'To resume this session: gemini --resume'
+  trust:
+    - all:
+        - 'Do you trust the files in this folder\?'
+        - '1\.\s+Trust folder'
+        - '3\.\s+Don''t trust'
+  permission:
+    - all:
+        - 'Apply this change\?|Do you want to proceed\?'
+        - '1\.\s+Allow once'
+        - 'No, suggest changes \(esc\)'
+  question:
+    - all:
+        - 'Enter to select'
+        - '↑/↓ to navigate'
+        - 'Esc to cancel'
+  rate_limit:
+    - all:
+        - 'Usage limit reached for all .* models\.'
+        - '1\.\s+Keep trying'
+        - '2\.\s+Stop'
+  working:
+    - any:
+        - '^\s*[⠀-⣿]\s+.*\(esc to cancel'
+  composer:
+    mode: two-rules-footer-below
+    # In `--approval-mode yolo`, the prompt glyph is `*` (` * `); in default mode, `>` (` > `).
+    prompt: '^ [>*]'
+    # The opening rule is a full-width run of `▄` and the closing rule is an equal-width
+    # run of `▀` (`sameRulePair` in screen-core.ts).
+    rule: '^[▄▀]{8,}$'
+    footers:
+      - '^\s+workspace(?:\s+\(/directory\))?\b'
+      - '^\s+quit\s+Exit the cli$'
+      - '^\s+Press Ctrl\+C again to exit\.'
+    placeholders:
+      - equals: 'Type your message or @path/to/file'
+      - equals: ''

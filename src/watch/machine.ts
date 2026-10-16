@@ -190,5 +190,31 @@ export function launchLimit(
 export function swapTotalProblem(machine: Machine, limits: TeamFile['machine']): string | null {
   if (machine.swapTotal === null || machine.swapFree === null) return null;
   if (limits.swapFreeMin <= machine.swapTotal) return null;
-  return `the machine check asks for ${gb(limits.swapFreeMin)} free swap; at this reading the machine has ${gb(machine.swapTotal)} in total, so \`team up\` would refuse now; set \`machine.swap_free_min\` to a figure this machine can keep, then run \`team approve\``;
+  return `the machine check asks for ${gb(limits.swapFreeMin)} free swap; at this reading the machine has ${gb(machine.swapTotal)} in total, so \`team up\` would refuse now; set \`machine.swap_free_min\` to a figure this machine can keep`;
 }
+
+/**
+ * How many seats `team up` may launch and wait on concurrently.
+ *
+ * `--serial` (or an unreadable load or memory figure, which never counts as fine) runs one seat
+ * at a time (`1`). When `launchLimit` passes but the machine is already under load — load per
+ * core above 70% of `load_start`, free memory within 10 percentage points of `memory_start`, or
+ * free swap below 1.5x `swap_free_min` — it falls back to `1` so `allow` re-reads after each
+ * seat settles. When headroom is present, concurrency scales between `2` and `8` from both
+ * remaining load and remaining free memory.
+ */
+export function launchConcurrency(
+  machine: Machine | undefined,
+  limits: TeamFile['machine'],
+  serial = false,
+): number {
+  if (serial || !machine) return 1;
+  if (machine.loadPerCore === null || machine.memoryFree === null) return 1;
+  if (machine.loadPerCore > limits.loadStart * 0.7) return 1;
+  if (machine.memoryFree < limits.memoryStart + 10) return 1;
+  if (machine.swapFree !== null && machine.swapFree < limits.swapFreeMin * 1.5) return 1;
+  const loadSlots = Math.floor((limits.loadStart - machine.loadPerCore) * 4);
+  const memorySlots = Math.floor((machine.memoryFree - limits.memoryStart) / 3);
+  return Math.max(2, Math.min(8, loadSlots, memorySlots));
+}
+
