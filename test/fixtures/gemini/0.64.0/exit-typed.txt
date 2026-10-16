@@ -1,0 +1,13 @@
+4. Be specific for the best results
+
+
+
+─────────────────────────────────────────────────────
+ YOLO Ctrl+Y
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ * /exit
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ quit   Exit the cli
+ workspace (/directory)    sandbox            /model
+ <workspace>               no sandbox   gemini-3-pro

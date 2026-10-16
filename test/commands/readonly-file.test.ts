@@ -685,8 +685,8 @@ describe('doctor: --file reads for any caller, and writes nothing', () => {
   test("a non-owner's --file prints the report and writes nothing — a git project's file", async () => {
     const run = await doctored(true);
     expect(run.seat).toEqual(run.owner);
-    expect(run.seat.code).toBe(1);
-    expect(run.seat.out).toContain('this file was never approved');
+    expect(run.seat.code).toBe(0);
+    expect(run.seat.out).toContain('team doctor: nothing missing');
     expect(run.listing).toEqual(['team.yaml']);
     expect(run.stateBytes).toBe(null);
   });
@@ -694,7 +694,7 @@ describe('doctor: --file reads for any caller, and writes nothing', () => {
   test("a non-owner's --file prints the report and writes nothing — a plain folder's file", async () => {
     const run = await doctored(false);
     expect(run.seat).toEqual(run.owner);
-    expect(run.seat.out).toContain('this file was never approved');
+    expect(run.seat.out).toContain('team doctor: nothing missing');
     expect(run.listing).toEqual(['team.yaml']);
     expect(run.stateBytes).toBe(null);
   });

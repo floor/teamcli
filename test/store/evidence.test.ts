@@ -252,7 +252,6 @@ describe('a signed record', () => {
     expect(state.kind).toBe('refused');
     if (state.kind !== 'refused') return;
     expect(state.why).toContain('interrupted');
-    expect(state.why).toContain('run `team approve` once');
   });
 
   test('a rolled-back generation fails closed', () => {
@@ -347,7 +346,7 @@ describe('a legacy record, written before records were signed', () => {
     legacy();
     const state = standing();
     expect(state).toEqual({ kind: 'legacy' });
-    expect(LEGACY_LINE).toBe('approved before records were signed: run `team approve` once');
+    expect(LEGACY_LINE).toBe('approved before records were signed');
     const loaded = team();
     // Reads behave as with no approval at all.
     expect(approvedCopy(realpathSync(root), home)).toBe(null);
@@ -405,7 +404,7 @@ describe('round 2: the record\'s shape, the key file, and the root\'s identity',
     for (const one of broken) {
       restore(one as Record<string, unknown>);
       // Never a throw, never verified, never legacy: the malformed record is a refusal.
-      expect(standing()).toEqual({ kind: 'refused', why: expect.stringContaining('run `team approve` once') });
+      expect(standing()).toEqual({ kind: 'refused', why: expect.stringContaining('the approval record cannot be read') });
     }
     // A huge string is read and refused, not crashed on.
     restore({ ...flat, file: 'x'.repeat(1_000_000) });
@@ -607,7 +606,7 @@ console.log(JSON.stringify({ kind: standing.kind, fingerprint: keyFingerprint(ke
 describe('round 2: what a standing that is not verified yields', () => {
   const refused: Standing = {
     kind: 'refused',
-    why: 'the record does not carry a valid signature: it was changed after approval, or written without the key: run `team approve` once',
+    why: 'the record does not carry a valid signature: it was changed after approval, or written without the key',
   };
   const notVerified: Standing[] = [
     { kind: 'none' },

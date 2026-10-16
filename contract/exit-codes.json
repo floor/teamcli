@@ -39,13 +39,6 @@
     {
       "code": 1,
       "command": "add",
-      "id": "add.approved-copy",
-      "meaning": "the approved copy can't be read",
-      "trigger": "team add worker"
-    },
-    {
-      "code": 1,
-      "command": "add",
       "id": "add.branch-missing",
       "meaning": "the merged branch doesn't exist",
       "trigger": "team add --temporary --like lead --until merged:missing"
@@ -160,13 +153,6 @@
       "command": "add",
       "id": "add.detached",
       "meaning": "a run with no terminal",
-      "trigger": "team add worker"
-    },
-    {
-      "code": 1,
-      "command": "add",
-      "id": "add.differs",
-      "meaning": "the file differs from its approval",
       "trigger": "team add worker"
     },
     {
@@ -963,13 +949,6 @@
     {
       "code": 1,
       "command": "down",
-      "id": "down.approved-copy",
-      "meaning": "the approved copy of the team file cannot be read",
-      "trigger": "team down"
-    },
-    {
-      "code": 1,
-      "command": "down",
       "id": "down.caller",
       "meaning": "the caller may not change the team",
       "trigger": "team down"
@@ -1049,20 +1028,6 @@
       "command": "down",
       "id": "down.grant-approval",
       "meaning": "a grant needs a verified approval",
-      "trigger": "team down"
-    },
-    {
-      "code": 1,
-      "command": "down",
-      "id": "down.grant-approved-copy",
-      "meaning": "a grant needs a readable approved copy",
-      "trigger": "team down"
-    },
-    {
-      "code": 1,
-      "command": "down",
-      "id": "down.grant-drift",
-      "meaning": "a grant needs the approved file",
       "trigger": "team down"
     },
     {
@@ -1964,6 +1929,13 @@
     {
       "code": 0,
       "command": "remove",
+      "id": "remove.swapped",
+      "meaning": "a lead seat was stopped for a swap; the file still names it",
+      "trigger": "team remove lead --keep"
+    },
+    {
+      "code": 0,
+      "command": "remove",
       "id": "remove.temporary",
       "meaning": "a temporary seat was removed",
       "trigger": "team remove worker"
@@ -1995,13 +1967,6 @@
       "id": "remove.another-pane",
       "meaning": "the state records another pane for the caller's seat",
       "trigger": "team remove worker"
-    },
-    {
-      "code": 1,
-      "command": "remove",
-      "id": "remove.approved-copy",
-      "meaning": "the approved copy of the team file cannot be read",
-      "trigger": "team remove lead"
     },
     {
       "code": 1,
@@ -2170,6 +2135,20 @@
       "id": "remove.stop-failed",
       "meaning": "the seat could not be stopped",
       "trigger": "team remove worker"
+    },
+    {
+      "code": 1,
+      "command": "remove",
+      "id": "remove.swap-grant",
+      "meaning": "no grant or delegate admits this caller's swap of a lead seat",
+      "trigger": "team remove lead --keep, from a seat the grant does not admit"
+    },
+    {
+      "code": 1,
+      "command": "remove",
+      "id": "remove.swap-self",
+      "meaning": "a seat can't swap its own lead seat",
+      "trigger": "team remove lead --keep, from the lead's own pane"
     },
     {
       "code": 1,
@@ -2800,13 +2779,6 @@
       "id": "up.detached",
       "meaning": "a run with no terminal",
       "trigger": "team up --session elsewhere"
-    },
-    {
-      "code": 1,
-      "command": "up",
-      "id": "up.differs",
-      "meaning": "the file differs from its approval",
-      "trigger": "team up"
     },
     {
       "code": 1,
