@@ -60,6 +60,12 @@ answer once the caller has passed the gate: without it, `status` can't say anyth
 `--json` prints the same reading as one document and nothing else, with the same exit code; a caller
 who may not read the team gets the fixed sentence and no document.
 
+Every line the table prints is cleaned first: escape sequences, control characters and invisible
+format characters carried by the team file, the state, a pane or herdr are removed, and the columns
+are padded on the cleaned text, so a value can never move the cursor, paint the terminal or open a
+second line. `--json` is the one text not cleaned: the document carries each string as it was read,
+escaped where JSON requires it, for a parser rather than a terminal.
+
 ## Example
 
 ```yaml file=.agents/team.yaml
