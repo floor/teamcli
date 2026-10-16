@@ -8,6 +8,8 @@ import { plainLine } from '../launch/plain.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { observedSeatState, sayThreshold, type SeatStateWord, type StateSource } from '../labels/state.ts';
 import { newestTraceAt, seatTraces } from '../labels/traces.ts';
+import { findAgent } from '../registry/agents.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { DEFAULT_STATE_THRESHOLDS } from '../settings/inherit.ts';
 import { emptySession, isSeatId, liveHold, readState, type SessionState } from '../state.ts';
 import { compare, type Comparison, type Difference, type Live } from '../status/compare.ts';
@@ -53,6 +55,9 @@ export type SeatRegistryRow = {
   state: SeatStateWord;
   state_source: StateSource;
   blind: boolean;
+  /** The seat's registry record carries the dev mark: a registration dev mode admitted wrote it
+   *  (`src/registry/agents.ts`), shown beside the id. Absent when the record says nothing. */
+  dev_mode?: boolean;
   stored?: string;
   last_active: string | null;
   last_active_display: string;
@@ -83,6 +88,8 @@ export interface SeatsJson {
     last_active: string | null;
     pane: string | null;
     launch_line: string | null;
+    /** Present, and true, only for a record a dev-mode registration wrote. */
+    dev_mode?: boolean;
     start_cwd?: string;
   }>;
 }
@@ -172,6 +179,12 @@ export function seatRegistryRows(
     const lastActiveDisplay = workingNow ? 'now' : formatRelativeTime(lastActive, now);
     const pane = row.pane === '-' ? null : row.pane;
     const launchLine = recorded?.launch_line ?? declared?.launch ?? likeSeat?.launch ?? null;
+    // The registry record's own provenance, when a home is there to read it: a record a dev-mode
+    // registration wrote is marked beside the seat's id. An unreadable registry is no mark, as it
+    // is no record for every other reader.
+    const record = traceSources?.home === undefined
+      ? null
+      : findAgent(traceSources.home, { team: teamIdOf(traceSources.root), seat: row.name });
     rows.push({
       name: row.name,
       id,
@@ -183,6 +196,7 @@ export function seatRegistryRows(
       state: reading.state,
       state_source: reading.source,
       blind: reading.blind,
+      ...(record?.provenance.dev_mode === true ? { dev_mode: true } : {}),
       ...(row.stored ? { stored: row.stored } : {}),
       last_active: lastActive,
       last_active_display: lastActiveDisplay,
@@ -221,7 +235,9 @@ export function renderSeatsTable(rows: SeatRegistryRow[], indent = ''): string {
   const head = ['SEAT', 'ID', 'ROLE', 'CLI', 'MODEL', 'EFFORT', 'STATUS', 'STATE', 'SOURCE', 'LAST ACTIVE', 'PANE'];
   const body = rows.map((row) => [
     plainLine(row.name),
-    plainLine(row.id ?? '-'),
+    // The id cell carries the record's one mark: `(dev)` says a registration dev mode admitted
+    // wrote the seat's registry record.
+    plainLine(row.dev_mode === true ? `${row.id ?? '-'} (dev)` : row.id ?? '-'),
     plainLine(row.role),
     plainLine(row.cli),
     plainLine(row.model),
@@ -331,6 +347,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
           last_active: row.last_active,
           pane: row.pane,
           launch_line: row.launch_line,
+          ...(row.dev_mode === true ? { dev_mode: true } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
         })),
       };

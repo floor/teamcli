@@ -91,7 +91,16 @@ and open nothing: the target is the file the caller's own place finds.
   accepted) or the relaunch beside it. The record is the launch's own declaration: a read cannot
   change it and the check writes nothing here; the drift is re-recorded by `team register`, a
   reload or the next launch. A team the registry holds no record for reads as before, and a
-  screen the reader cannot name a model from is never wrong;
+  screen the reader cannot name a model from is never wrong. A record whose provenance carries
+  the dev mark — its registration was written by a run with dev mode on, the caller gate folded
+  into a warning (`src/commands/register.ts`) — is one more difference: `<seat>: registered under
+  dev mode (by <caller>)`, the caller the record itself kept, repaired with `team register <seat>`
+  — the same write with the caller gate in force — and a clean launch of the seat does it too:
+  `register` and `up`, the two launch-command writes that know a mode, say which one they ran in,
+  every other launch-command write is one in force, and so the mark stands exactly while the last
+  write of the seat's record carries it. The table [`team seats`](../commands/seats.md) prints
+  shows the same mark as `(dev)` beside the seat's id, read the same way — and only when the run
+  was given a home to read the registry from;
 - the team registry's record of this team (`~/.config/team/teams.yaml`), for its roster
   ([the registries](../concepts/registry.md)): a seat the state records ready, running on the pane
   it recorded, that the roster does not list is a difference — `<seat>: ready and running, and the

@@ -138,6 +138,9 @@ export interface StatusJson {
     /** Present, true, only where it applies: `unknown` past the blind threshold, which counts
      *  as not working (the table's `(blind)`). */
     blind?: true;
+    /** `--all` only, like the registry's other fields: present when the seat's registry record
+     *  carries the dev mark — a registration dev mode admitted wrote it. */
+    dev_mode?: boolean;
     start_cwd?: string;
   }>;
   notes: string[];
@@ -318,6 +321,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
           ...(extra ? { launch_line: extra.launch_line } : {}),
           ...(found ? { seat_state: found.state, seat_state_source: found.state_source } : {}),
           ...(found?.blind ? { blind: true as const } : {}),
+          ...(extra?.dev_mode === true ? { dev_mode: true } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
         };
       }),

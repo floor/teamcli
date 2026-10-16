@@ -222,7 +222,10 @@ line):
 published — `seat_state` and `seat_state_source` (the seat's own reading, the table's STATE and
 SOURCE columns, on every row whether `--all` is given or not, with `blind: true` only where it
 applies), `model`, `pane`, and, when recorded at workspace creation by a migrated launch,
-`start_cwd`. `notice` is the line a normal run prints above the table, or null when there is none. `budgets` is present only
+`start_cwd`. With `--all` a row also carries the registry's own fields — the seat's `id`, `role`,
+`cli`, `effort`, `last_active` and `launch_line` — and `dev_mode: true` when its registry record
+carries the dev mark, the same mark `team seats` prints beside the id (the agent registry, in
+[the check page](./check.md)). `notice` is the line a normal run prints above the table, or null when there is none. `budgets` is present only
 when the budgets table would be printed, one object per row (`account`, `window`, `left`, `used`,
 `resetsIn`, `seat`, `age`, `source`, `fallback`, `state`, `inside`, `reserve`). `inside` is true
 when a subscription's left figure is at or inside its reserve, `fallback` when the figure did not

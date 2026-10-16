@@ -19,6 +19,9 @@ export type RegistryTeam = {
   /** The herdr session the command launched in or stopped. Absent: the file's. `up --session x`
    *  launches under `x`, and the registry must address the panes where they are. */
   session?: string;
+  /** The run had dev mode on: the caller gate was folded into a warning. The record keeps the
+   *  mark in its provenance while the write stands, and a run without it takes the mark off. */
+  devMode?: boolean;
 };
 
 /** How a seat's agent ends: `stopped` comes back to the same agent, `retired` never does. */
@@ -74,6 +77,10 @@ function recordProjectLead(input: RegistryTeam, teamId: string): void {
  * A seat launched in `pane`: its agent is registered when the (team, seat) has none, else it is
  * re-pointed (same id, new pane, running). The signing triple, the lab, the cli and the launch
  * line are the launch's own, so a reload that changes the model rewrites them on the same agent.
+ * The run's provenance is stated too: `register` and `up` say with the write whether they ran
+ * under dev mode, and the writers that have none to state (`add`, `restart`, `reload` have no dev
+ * mode) carry no `devMode`, which takes a mark an earlier run left off the record: the record
+ * speaks for the last write of it.
  * Returns the agent's id, or the note to log.
  */
 export function registerLaunch(
@@ -93,13 +100,15 @@ export function registerLaunch(
     const seatHandle = SEAT_HANDLE.test(handle ?? '') && !known?.seat_handle ? { seat_handle: handle as string } : {};
     const reach = { team: teamId, seat: seat.name, session: input.session ?? team.session, pane, address: known?.reach.address ?? null };
     const signing = { model: seat.model, version: seat.version, role: seat.role };
+    const devMode = input.devMode === true;
     const agent = known
       ? updateAgent(home, known.id, {
-        signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach, ...seatHandle,
+        signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
+        provenance: { dev_mode: devMode }, ...seatHandle,
       })
       : registerAgent(home, {
         name: seat.name, signing, lab: seat.vendor, cli: seat.cli, launcher: null, launch: seat.launch,
-        reach, mcp: [], skills: [], lifecycle: 'running', by, ...seatHandle,
+        reach, mcp: [], skills: [], lifecycle: 'running', by, devMode, ...seatHandle,
       });
     writeRoster(input, teamId, seat.name, { agent: agent.id, role: seat.role });
     recordProjectLead(input, teamId);
