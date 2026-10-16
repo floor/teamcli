@@ -82,6 +82,10 @@ exit code is the same as without `--json`.
 | `team init: .agents/team.yaml exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.` | 1 |
 | `team init: nothing to restore: no copy of a team file was stored for this folder on this machine. Run team init for a skeleton.` | 1 |
 | `team init: nothing was restored: the record for this folder was approved before records were signed.` — the record was written by an earlier `team`; the same shape, with the case, for a record that does not verify | 1 |
+| `team init: nothing was restored: no archive at <folder>: it holds no manifest.json` — and the same shape for a manifest that doesn't parse, is not a `teamcli-archive` of `format: 1`, names no team file, or is a folder without its `team.yaml` | 1 |
+| `team init: nothing was restored: team.yaml in <folder> is not the file the manifest recorded: its sha256 is <got>, the manifest's is <recorded>` | 1 |
+| `team init: nothing was written: the archived team file doesn't validate: <the validator's first message>` | 1 |
+| `team init: --restore and --from-archive are two sources for the one file: pass one of them.` | 2 |
 | `team init: unknown option --<name>` (with the usage) | 2 |
 
 The tracked-file message names the repair:
@@ -89,6 +93,27 @@ The tracked-file message names the repair:
     team init: .agents/team.yaml is tracked by git, and a team file is private. Untrack it, keeping the file:
       git rm --cached .agents/team.yaml
     then run team init again. History is not rewritten.
+
+## Restoring from an archive
+
+`--from-archive <folder>` reads a folder [team archive](../commands/archive.md) wrote — or one a
+person kept elsewhere; the folder's name decides nothing. `<folder>` may be relative to the
+caller's own folder. The run reads `<folder>/manifest.json` first: it must parse, be
+`kind: teamcli-archive` and `format: 1`, and name a team file's sha256. Then it reads
+`<folder>/team.yaml`, hashes the bytes it read — not the text it decoded, so the copy cannot be
+re-encoded on the way — and refuses anything that does not match the manifest. The file is
+validated as a team file, and written verbatim: a restore never edits the file it restores, and
+the placement it was archived with is the owner's to repair.
+
+Only the team file is restored. The archive's state and queues are named on stdout and left
+alone: state records panes, worktrees and readings of the machine the archive was taken from.
+The line printed names the archive's project, the root and moment it was taken, and the caller
+that took it — all of them the manifest's fields, whatever the archive's writer put there. The
+`teamcli` version the archive was written with stays in the manifest and the log line, never on
+stdout: the printed sentence is the same on every release, which is why a page may pin it.
+
+Neither `--restore` nor `--from-archive` is a create a create-grant's `runner` stands behind: a
+granted caller gets the skeleton alone, as it did before this flag existed.
 
 ## Examples, moved here whole
 
