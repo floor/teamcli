@@ -128,6 +128,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
 | `conformance-adapter.finished` | `conformance-adapter` | 0 | the protocol finished | `team conformance-adapter` |
+| `delegate.done` | `delegate` | 0 | the authority record was updated, already matched, or passed a write-free preview | `team delegate <session/pane> --commands up,down` |
+| `delegate.refused` | `delegate` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team delegate <session/pane> --commands up,down` |
+| `delegate.invalid` | `delegate` | 2 | the team file or proposed authority record is invalid or cannot be read | `team delegate <session/pane> --commands up,down` |
+| `delegate.invocation` | `delegate` | 2 | the command arguments are invalid | `team delegate <session/pane> --commands up,down` |
 | `doctor.clear` | `doctor` | 0 | nothing is missing | `team doctor` |
 | `doctor.missing` | `doctor` | 1 | something is missing | `team doctor` |
 | `doctor.file` | `doctor` | 2 | the team file can't be read | `team doctor --file missing.yaml` |
@@ -168,6 +172,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
 | `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
 | `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |
+| `grant.done` | `grant` | 0 | the authority record was updated, already matched, or passed a write-free preview | `team grant lead --scope up,down` |
+| `grant.refused` | `grant` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team grant lead --scope up,down` |
+| `grant.invalid` | `grant` | 2 | the team file or proposed authority record is invalid or cannot be read | `team grant lead --scope up,down` |
+| `grant.invocation` | `grant` | 2 | the command arguments are invalid | `team grant lead --scope up,down` |
 | `init.restored` | `init` | 0 | the approved copy was restored | `team init --restore` |
 | `init.wrote` | `init` | 0 | a skeleton was written | `team init` |
 | `init.detached` | `init` | 1 | a run with no terminal | `team init` |
@@ -343,6 +351,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.unknown` | `restart` | 1 | the seat is not a declared seat | `team restart missing` |
 | `restart.configuration` | `restart` | 2 | the team file can't be read or parsed, or not inside a git repository | `team restart worker --file missing.yaml` |
 | `restart.usage` | `restart` | 2 | the invocation can't be read | `team restart` |
+| `revoke.done` | `revoke` | 0 | the authority record was updated, already matched, or passed a write-free preview | `team revoke grant` |
+| `revoke.refused` | `revoke` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team revoke grant` |
+| `revoke.invalid` | `revoke` | 2 | the team file or proposed authority record is invalid or cannot be read | `team revoke grant` |
+| `revoke.invocation` | `revoke` | 2 | the command arguments are invalid | `team revoke grant` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
 | `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
 | `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |

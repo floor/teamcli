@@ -207,6 +207,29 @@ None.
 
 None.
 
+## `delegate`
+
+Hidden: no
+
+Usage:
+
+    team delegate <session/pane> --commands <act,...> [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--commands` | yes | no | no |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `session/pane` | no | no |
+
 ## `doctor`
 
 Hidden: no
@@ -278,6 +301,29 @@ Usage:
 ### Positionals
 
 None.
+
+## `grant`
+
+Hidden: no
+
+Usage:
+
+    team grant <seat> --scope <act,...> [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--scope` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
 
 ## `help`
 
@@ -739,6 +785,68 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `seat` | no | no |
+
+## `revoke`
+
+Hidden: no
+
+Usage:
+
+    team revoke grant [--dry-run]
+    team revoke delegate <session/pane> [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `delegate`
+
+Hidden: no
+
+Usage:
+
+    team revoke delegate <session/pane> [--dry-run]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `session/pane` | no | no |
+
+### `grant`
+
+Hidden: no
+
+Usage:
+
+    team revoke grant [--dry-run]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
 
 ## `seats`
 
