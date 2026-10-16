@@ -58,6 +58,19 @@ models:
     - match: '^claude-(opus|sonnet|haiku|fable)-([0-9]+)(?:-[0-9]{8})?$'
       model: 'Claude {1:title}'
       version: '{2}'
+# Opt-in status-line format, exercised by a constructed screen fixture in quota.test.ts.
+# L and W are subscription percentages USED; they are never context-window percentages.
+quota:
+  - account: anthropic
+    match: '\bL: ([0-9]+)% \(([0-9hm]+)\)'
+    used: '{1}%'
+    resets: '{2}'
+    window: session
+  - account: anthropic
+    match: '\bW: ([0-9]+)% \(([0-9hm]+)\)'
+    used: '{1}%'
+    resets: '{2}'
+    window: weekly
 status_model:
   - match: '(?:^|[\s·|])(Opus|Sonnet|Haiku|Fable)\s+([0-9]+(?:\.[0-9]+)*)(?:$|[\s·|])'
     model: 'Claude {1}'
@@ -221,6 +234,9 @@ screen:
     # pane's first column, the closing rule the window's last rule row. A rule-looking row the
     # box holds is drawn at the content column and is content, never the frame.
     rule: '^[─━]{8,}$'
+    # Explicit subscription labels from the configurable quota status line; context percentages
+    # and transcript text are not quota. The constructed fixture documents this format.
+    status: '\b[LW]: [0-9]+% \([0-9hm]+\)'
     footers:
       - '^\s{2,}.*·.*(?:Opus|Sonnet|Haiku|Fable)\s+[0-9]+.*$'
       - '^\s{2,}(?:(?:⏵⏵\s+)?bypass permissions|⏸\s+manual mode)\b.*$'

@@ -21,10 +21,21 @@ describe('quota patterns', () => {
   });
 
   test('the other shipped CLIs have no quota pattern', () => {
-    expect(quotaFor('claude-code')).toEqual([]);
     expect(quotaFor('cursor')).toEqual([]);
     expect(quotaFor('antigravity')).toEqual([]);
     expect(quotaFor('gemini')).toEqual([]);
+  });
+
+  test('Claude subscription status labels carry used percentages and resets', () => {
+    // Constructed configurable status line; this is not a capture of a default CLI setting.
+    const line = '  L: 13% (44m) · W: 20% (114h4m)';
+    const pane = '────────────\n❯ \n────────────\n' + line + '\n';
+    expect(figuresOf(quotaFor('claude-code'), statusRow('claude-code', pane))).toEqual([
+      { account: 'anthropic', window: 'session', left: 87, used: 13, resets: '44m' },
+      { account: 'anthropic', window: 'weekly', left: 80, used: 20, resets: '114h4m' },
+    ]);
+    expect(figuresOf(quotaFor('claude-code'), statusRow('claude-code', pane.replace(line, '  Context 80% left')))).toEqual([]);
+    expect(figuresOf(quotaFor('claude-code'), statusRow('claude-code', line + '\n────────────\n❯ \n────────────\n'))).toEqual([]);
   });
 
   test('grok reads the weekly figure off its footer row', () => {

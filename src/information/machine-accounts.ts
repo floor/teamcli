@@ -31,7 +31,9 @@ export function machineAccountsOf(home: string): string[] {
   }
   if (root.kind !== 'map') return [];
   const accounts = root.entries.find((entry) => entry.key === 'accounts');
-  if (accounts === undefined || accounts.value.kind !== 'seq') return [];
+  if (accounts === undefined) return [];
+  if (accounts.value.kind === 'map') return [...new Set(accounts.value.entries.map((entry) => entry.key))].sort();
+  if (accounts.value.kind !== 'seq') return [];
   const names: string[] = [];
   for (const item of accounts.value.items) {
     if (item.kind !== 'scalar' || typeof item.value !== 'string' || item.value.length === 0) continue;
@@ -41,7 +43,14 @@ export function machineAccountsOf(home: string): string[] {
 }
 
 /** The seat-shaped input the mapping reads: the four fields it needs off a `Seat`. */
-export type SeatLike = { cli: string; launch: string; account?: string; vendor: string };
+export type SeatLike = { cli: string; launch: string; account?: string; vendor: string; model?: string };
+
+export function payingPoolOf(seat: SeatLike): 'gemini' | 'claude-gpt' | undefined {
+  if (seat.cli !== 'antigravity' && seat.cli !== 'agy') return undefined;
+  if (/gemini/i.test(seat.model ?? '')) return 'gemini';
+  if (/claude|gpt|opus|sonnet|haiku/i.test(seat.model ?? '')) return 'claude-gpt';
+  return undefined;
+}
 
 /** The account that pays for a seat, by the CLI it runs and the launcher that runs it — not the
  *  vendor string. A seat that names its own `account:` spends that one, as the counting rule
@@ -54,8 +63,7 @@ export function payingAccountOf(seat: SeatLike): string {
     case 'grok':
       return 'xai';
     case 'antigravity':
-      // One subscription; its pools (Gemini on the one hand, Claude/GPT on the other) are the
-      // vendor's own split of the same account, and no CLI screen reports a figure for either.
+    case 'agy':
       return 'google-antigravity';
     case 'gemini':
       return 'google-gemini';

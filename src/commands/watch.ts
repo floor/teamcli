@@ -1,3 +1,4 @@
+import { machineAccountsOf } from '../information/machine-accounts.ts';
 import { randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
 import { budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
@@ -5,6 +6,7 @@ import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } 
 import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
+import { saveMachineReadings } from '../information/machine-readings.ts';
 import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -381,7 +383,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           readingsAt = now;
           logLine(dir, 'watch', 'watch', `readings: ${readingsText(machine)}`, sources.now());
         }
+        const machineAccounts = sources.home === undefined ? [] : machineAccountsOf(sources.home);
         const run = (stored: readonly Seen[]) => pass({
+          machineAccounts,
           team, state, live, machine, now, memory,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce, outcomes, budgets: budget,
           quotaFor: (cli) => quotaWith(cli, overrides.profiles),
@@ -400,6 +404,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             const folded = run(stored);
             return { readings: folded.readings, value: folded };
           });
+        if (!foreign && sources.home) saveMachineReadings(sources.home, result.machineReadings, now);
         for (const report of result.reports) tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
         for (const label of result.labels) {
           const slot = (memory.seatLabels[label.name] ??= {});
@@ -766,4 +771,3 @@ async function closeEnded(input: {
     if (code !== 0) say(`worktree ${task} was not removed`, true);
   }
 }
-

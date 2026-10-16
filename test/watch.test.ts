@@ -264,7 +264,7 @@ describe('a pass of the watch', () => {
     const { labels, ...rest } = pass({
       team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(),
     });
-    expect(rest).toEqual({ reports: [], nudge: null, work: [], fallback: null, ring: null, mailboxNote: null, readings: [] });
+    expect(rest).toEqual({ reports: [], nudge: null, work: [], fallback: null, ring: null, mailboxNote: null, readings: [], machineReadings: [] });
     expect(labels.length).toBe(5);
   });
 
