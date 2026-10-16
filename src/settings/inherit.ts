@@ -92,3 +92,104 @@ export const SEATS_CROSS_TEAMS: SettingSpec = {
 export function seatsCrossTeams(declared: Partial<Record<SettingLevel, boolean | undefined>>): boolean {
   return resolveSetting(SEATS_CROSS_TEAMS, declarationsOf(declared)).value;
 }
+
+/**
+ * A number setting, in the boolean one's shape: the value when no level declares one, which side
+ * of the inherited value is the permissive one, and the levels allowed to loosen — to declare a
+ * permissive value where the inherited one is stricter. Tightening is allowed at every level and
+ * needs no listing. A word equal to the value in force is no word at all.
+ */
+export type NumberSettingSpec = {
+  /** The name the setting is written under, for reports. */
+  name: string;
+  /** The value when nothing declares it. */
+  fallback: number;
+  /** The permissive side: the side of the inherited value a level may move to only where it
+   *  may loosen. */
+  permissive: 'higher' | 'lower';
+  /** The levels allowed to loosen this setting. */
+  looseningLevels: readonly SettingLevel[];
+};
+
+/** One level's word on a number setting: the level that holds it, and the value it declares. */
+export type NumberDeclaration = { level: SettingLevel; value: number };
+
+export type NumberResolution = { value: number; source: SettingLevel | null; refused: NumberDeclaration[] };
+
+/** The inheritance itself, number-valued: the same order, the same loosen-only-where-listed
+ *  rule, and a word equal to the value in force counting as none. */
+export function resolveNumberSetting(spec: NumberSettingSpec, declared: readonly NumberDeclaration[]): NumberResolution {
+  let value = spec.fallback;
+  let source: SettingLevel | null = null;
+  const refused: NumberDeclaration[] = [];
+  for (const level of SETTING_LEVELS) {
+    for (const declaration of declared) {
+      if (declaration.level !== level || declaration.value === value) continue;
+      const looser = spec.permissive === 'higher' ? declaration.value > value : declaration.value < value;
+      if (looser && !spec.looseningLevels.includes(level)) {
+        refused.push(declaration);
+        continue;
+      }
+      value = declaration.value;
+      source = level;
+    }
+  }
+  return { value, source, refused };
+}
+
+/** The declarations a chain of per-level numbers holds, in inheritance order; a level the chain
+ *  says nothing about is left out, like one given `undefined`. */
+export function numberDeclarationsOf(declared: Partial<Record<SettingLevel, number | undefined>>): NumberDeclaration[] {
+  const out: NumberDeclaration[] = [];
+  for (const level of SETTING_LEVELS) {
+    const value = declared[level];
+    if (value !== undefined) out.push({ level, value });
+  }
+  return out;
+}
+
+/**
+ * The two thresholds the seat-state reading runs by (FLO-995): how fresh a TeamCLI trace must
+ * be for the seat to read as working, and how long a seat may read unknown before it counts as
+ * not working — the reading `status` and `check` flag `blind`. A longer window tolerates more,
+ * so the permissive side is 'higher'; the project may open either, and every level inside may
+ * tighten again. Declared per seat as a partial pair, each field inherited on its own.
+ */
+export type StateThresholds = { trace_window_seconds: number; blind_after_seconds: number };
+
+export const STATE_THRESHOLDS: { [K in keyof StateThresholds]: NumberSettingSpec } = {
+  trace_window_seconds: {
+    name: 'state_trace_window_seconds',
+    fallback: 120,
+    permissive: 'higher',
+    looseningLevels: ['project'],
+  },
+  blind_after_seconds: {
+    name: 'state_blind_after_seconds',
+    fallback: 1800,
+    permissive: 'higher',
+    looseningLevels: ['project'],
+  },
+};
+
+/** The values when nothing declares any — the same fallbacks the specs carry. */
+export const DEFAULT_STATE_THRESHOLDS: StateThresholds = {
+  trace_window_seconds: STATE_THRESHOLDS.trace_window_seconds.fallback,
+  blind_after_seconds: STATE_THRESHOLDS.blind_after_seconds.fallback,
+};
+
+/** The one call the state reading makes: the chain in, both thresholds out. */
+export function stateThresholds(declared: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>): StateThresholds {
+  const said = (name: keyof StateThresholds): NumberDeclaration[] => {
+    const out: NumberDeclaration[] = [];
+    for (const level of SETTING_LEVELS) {
+      const value = declared[level]?.[name];
+      if (value !== undefined) out.push({ level, value });
+    }
+    return out;
+  };
+  return {
+    trace_window_seconds: resolveNumberSetting(STATE_THRESHOLDS.trace_window_seconds, said('trace_window_seconds')).value,
+    blind_after_seconds: resolveNumberSetting(STATE_THRESHOLDS.blind_after_seconds, said('blind_after_seconds')).value,
+  };
+}
