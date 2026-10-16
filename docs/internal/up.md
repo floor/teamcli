@@ -88,8 +88,8 @@ A dry run that reaches a refusal the real run would give before doing anything r
 
 A pane of another session the approved file's `delegates` section names may run `up` when that
 entry's `commands` list names it. The ordinary rule above refuses such a caller first, and only
-then — the section is in the file — does the delegate gate decide, against the live file and the
-approved copy, never a cached team: refused, the gate's own words replace the ordinary refusal
+then — the section is in the file — does the delegate gate decide, against the default live file,
+never a cached team: refused, the gate's own words replace the ordinary refusal
 (same list, same dry-run line, same exit); passed, the run is the delegate's. The section is read
 from the folder's own default file, never one the caller names: a delegated run never has
 `--session` or `--file` — both are the owner's, the gate refuses them before the file or the
