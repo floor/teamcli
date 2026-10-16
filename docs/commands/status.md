@@ -5,6 +5,12 @@ Shows the team as it stands: one line per seat with what the session's herdr sho
 that repairs it. It changes nothing but the owner's `last_valid` copy of the file it read; a run that
 is not the owner's writes nothing at all.
 
+A row's state is herdr's word, with up to one reading the screen adds: a quiet seat holding text
+in its input box reads `(unsent text)`, a quiet seat on a screen its profile cannot read reads
+`(screen not recognised)`, and a quiet seat stopped on its provider's usage limit reads `(rate
+limit on <account>, resets at <time>)` — the pool the seat spends, its own `account:` or its
+vendor when it names none, and the reset the screen gives when it gives one.
+
 A pane that no longer holds the process `team` launched is not by itself a difference: when a
 program `team` did not launch is in front and the agent session stored at its launch is the
 session the pane reports now — a herdr restart brings the pane back under a new shell pid — the
