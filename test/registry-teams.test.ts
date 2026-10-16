@@ -92,6 +92,7 @@ describe('the registry file', () => {
         'teams:',
         '  abcdef012345:',
         '    project: acme',
+        '    project_id: null',
         '    entity: acme',
         '    session: acme',
         '    root: /work/acme',
@@ -114,6 +115,7 @@ describe('the registry file', () => {
       abcdef012345: {
         id: 'abcdef012345',
         project: 'acme',
+        projectId: null,
         entity: null,
         session: 'acme',
         root: '/work/acme',
@@ -221,6 +223,56 @@ describe('upsertTeam', () => {
     const before = readFileSync(teamsFile(home), 'utf8');
     expect(() => upsertTeam(home, 'abcdef012345', { lifecycle: 'retired' as never })).toThrow('"retired" is not a team lifecycle');
     expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
+  });
+});
+
+describe('a team record points to its project by id', () => {
+  test('a team registered into a project keeps the id, and a team with none reads null — its own project', () => {
+    upsertTeam(home, 'abcdef012345', { ...seed, projectId: 'teamcli', at: AT });
+    upsertTeam(home, 'fedcba987654', { ...seed, at: AT });
+    expect(getTeam(home, 'abcdef012345')?.projectId).toBe('teamcli');
+    expect(getTeam(home, 'fedcba987654')?.projectId).toBeNull();
+  });
+
+  test('the pointer is written, moves on an update, and can be cleared', () => {
+    upsertTeam(home, 'abcdef012345', { ...seed, projectId: 'teamcli', at: AT });
+    expect(readFileSync(teamsFile(home), 'utf8')).toContain('    project_id: teamcli');
+    expect(upsertTeam(home, 'abcdef012345', { projectId: 'site', at: AT }).projectId).toBe('site');
+    expect(upsertTeam(home, 'abcdef012345', { projectId: null, at: AT }).projectId).toBeNull();
+  });
+
+  test('a pointer of the wrong kind is refused and the file stays as it was', () => {
+    upsertTeam(home, 'abcdef012345', { ...seed, at: AT });
+    const before = readFileSync(teamsFile(home), 'utf8');
+    expect(() => upsertTeam(home, 'abcdef012345', { projectId: 7 } as never)).toThrow('"project_id" must be a project ID or null');
+    expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
+  });
+
+  test('a registry written before the project level reads, every team its own project', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(
+      teamsFile(home),
+      [
+        'teams:',
+        '  abcdef012345:',
+        '    project: acme',
+        '    entity: null',
+        '    session: acme',
+        '    root: /work/acme',
+        '    lobby: /home/lobby',
+        '    roster: []',
+        '    lifecycle: running',
+        `    provenance: { registered_by: owner, registered_at: "${AT}", updated_at: "${AT}" }`,
+        '',
+      ].join('\n'),
+    );
+    expect(getTeam(home, 'abcdef012345')).toMatchObject({ project: 'acme', projectId: null });
+  });
+
+  test('a project_id that is neither text nor null names the file and the team', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(teamsFile(home), 'teams:\n  abcdef012345:\n    project: acme\n    lifecycle: running\n    project_id: 7\n');
+    expect(() => readTeams(home)).toThrow(/"project_id" must be a project ID or null/);
   });
 });
 

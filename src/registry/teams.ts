@@ -25,7 +25,11 @@ export type TeamProvenance = { registered_by: string; registered_at: string; upd
 export type TeamRecord = {
   /** The team ID this record is stored under. Filled in when a record is read; never written. */
   id?: string;
+  /** The team's own name — today's `project:` key in the team file. Not the project it sits in. */
   project: string;
+  /** The project this team sits in, by project ID (src/registry/projects.ts), or null: a team no
+   *  project names is its own project. Written from the team file's `in_project` through sync. */
+  projectId: string | null;
   entity: string | null;
   session: string;
   root: string;
@@ -107,6 +111,7 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
       }
       record = {
         project: fields.project as string,
+        projectId: fields.projectId ?? null,
         entity: fields.entity ?? null,
         session: fields.session as string,
         root: fields.root as string,
@@ -117,6 +122,7 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
       };
     }
     if (!TEAM_LIFECYCLES.includes(record.lifecycle)) throw new TeamsError(`"${record.lifecycle}" is not a team lifecycle`);
+    if (record.projectId !== null && typeof record.projectId !== 'string') throw new TeamsError('"project_id" must be a project ID or null');
     delete record.id;
     teams[id] = record;
     write(home, teams);
@@ -250,6 +256,8 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
   }
   const entity = raw.entity ?? null;
   if (entity !== null && typeof entity !== 'string') bad('"entity" must be text or null');
+  const projectId = raw.project_id ?? null;
+  if (projectId !== null && typeof projectId !== 'string') bad('"project_id" must be a project ID or null');
   const roster = raw.roster ?? [];
   if (!Array.isArray(roster)) bad('"roster" must be a list');
   const entries = (roster as YamlValue[]).map((entry, i): RosterEntry => {
@@ -267,6 +275,7 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
   return {
     id,
     project: text('project'),
+    projectId: projectId as string | null,
     entity: entity as string | null,
     session: text('session'),
     root: text('root'),
@@ -302,6 +311,7 @@ function emit(teams: Record<string, TeamRecord>): string {
     const team = teams[id] as TeamRecord;
     lines.push(`  ${scalar(id)}:`);
     lines.push(`    project: ${scalar(team.project)}`);
+    lines.push(`    project_id: ${nullable(team.projectId)}`);
     lines.push(`    entity: ${nullable(team.entity)}`);
     lines.push(`    session: ${scalar(team.session)}`);
     lines.push(`    root: ${scalar(team.root)}`);
