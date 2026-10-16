@@ -44,8 +44,9 @@ it. Nothing either report says starts a seat.
 | a pane outside the team that the approved file names in its `delegates` entries | read the team; a pane only the live file names does not pass |
 | anyone else, an owner's run without a terminal included | nothing: the fixed sentence `team status: this team is not yours to read` on stderr, stdout empty, exit 2 |
 
-`--file` and `--session` aimed by anyone else are refused before any file or session is read
-(`--file is the owner's, from a terminal outside herdr; this call is …`), exit 1. And herdr has to
+`--file` and `--session` aimed by anyone else are refused before any file or session is read —
+`--file is the owner's, from a terminal outside herdr; this call is …`, or `only the owner runs
+this, from a terminal outside herdr` for a run with no terminal — and exit 1. And herdr has to
 answer once the caller has passed the gate: without it, `status` can't say anything and exits 2.
 
 ## Output and exit codes
