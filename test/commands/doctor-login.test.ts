@@ -258,7 +258,7 @@ describe('team doctor --login', () => {
     const code = await runDoctor(['--file', file, '--invalid-flag'], io, fakeSources());
     expect(code).toBe(2);
     expect(io.err).toContain('unknown option --invalid-flag\n');
-    expect(io.err).toContain('Usage: team doctor [--session <name>] [--file <path>] [--login] [--json]\n');
+    expect(io.err).toContain('Usage: team doctor [--session <name>] [--file <path>] [--login] [--jules] [--json]\n');
   });
 
   test('--json validates against DOCTOR_OUTPUT_SCHEMA and emits structured error on bad invocation', async () => {
