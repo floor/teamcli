@@ -11,7 +11,7 @@ import type { Command, Io } from '../io.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
-import { readProjects } from '../registry/projects.ts';
+import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { liveSocketOf } from '../send/address.ts';
@@ -593,8 +593,11 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
   }
   // Phase 0b: every row carries the project its team sits in — the registry project whose teams
   // name this team, else the team's own project name (a team the registry places in none is its
-  // own project).
-  const project = host.projects?.ofTeam(teamIdOf(loaded.root))?.name ?? loaded.team.project;
+  // own project). An injected registry answers for itself; with none, the registry the host's home
+  // holds is the reading, bound to that home rather than to wherever the process runs.
+  const teamId = teamIdOf(loaded.root);
+  const found = host.projects ? host.projects.ofTeam(teamId) : projectRegistry.ofTeam(host.home, teamId);
+  const project = found?.name ?? loaded.team.project;
   const seats = loaded.team.seats.map((seat) => ({
     name: seat.name,
     cli: seat.cli,
@@ -818,7 +821,7 @@ function admissionOf(
   // team → seat, which `admitSend` resolves itself (`seatsCrossTeams`). No level's record
   // carries a declaration of that setting yet, so the chain is empty here and the setting
   // stands at its own default, off.
-  const context: AdmitContext = { projects: readProjects(home), crossTeams: {} };
+  const context: AdmitContext = { projects: projectRegistry.readProjects(home), crossTeams: {} };
   const verdict = admitSend(sender, judged, records, undefined, context);
   if (verdict.ok) return { ok: true, rule: verdict.rule, sender };
   // The grant folder is asked for a recorded sender alone: a grant names an identity, and the

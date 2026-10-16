@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProjects, type ProjectSources, type ProjectView } from '../src/commands/projects.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
+import { upsertProject } from '../src/registry/projects.ts';
 import { upsertTeam } from '../src/registry/teams.ts';
 import { testIo } from './helpers.ts';
 
@@ -39,15 +40,16 @@ function sourcesOf(records: ProjectView[]): ProjectSources {
 }
 
 /** A status sources whose every reading is a stand-in: the project path reads the projects
- *  source and the home, and nothing else. */
-function statusWith(home: string, projects: ProjectSources): StatusSources {
+ *  source and the home, and nothing else. With no projects source handed in, the field is left
+ *  off — the shape a caller reads when only the home is known. */
+function statusWith(home: string, projects?: ProjectSources): StatusSources {
   return {
     live: () => null,
     branch: () => null,
     standing: () => ({ kind: 'none' }),
     now: () => new Date('2026-10-05T04:00:00.000Z'),
     home,
-    projects,
+    ...(projects ? { projects } : {}),
   };
 }
 
@@ -114,6 +116,32 @@ test('team status --project covers every team of the project, registered or not'
       + `  ${TEAM_A}  session "teamcli"  defined  1 seat(s)\n`
       + `  ${TEAM_B}  not registered\n`,
     );
+  } finally {
+    place.done();
+  }
+});
+
+test("team status --project reads the registry the home holds when no projects source is injected", async () => {
+  const place = home();
+  try {
+    // Written through the registry's own writer into the injected home: the reading that finds it
+    // is the one bound to this home — a read through another directory would find nothing.
+    upsertProject(place.dir, '4f2a1b7c9d0e', { name: 'TeamCLI', entity: 'floor', lead: 'agt_2b9f', teams: [TEAM_A] });
+    const io = testIo('/anywhere');
+    const code = await runStatus(['--project', 'TeamCLI'], io, statusWith(place.dir));
+
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toBe(
+      'project TeamCLI  4f2a1b7c9d0e  entity floor  lead agt_2b9f\n'
+      + `  ${TEAM_A}  not registered\n`,
+    );
+
+    // The same fallback still refuses a name the registry does not hold.
+    const nopeIo = testIo('/anywhere');
+    const nope = await runStatus(['--project', 'nope'], nopeIo, statusWith(place.dir));
+    expect(nope).toBe(1);
+    expect(nopeIo.err).toBe('team status: no project named "nope"; nothing to show\n');
   } finally {
     place.done();
   }
