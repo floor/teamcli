@@ -130,6 +130,16 @@ describe("the profiles' schema", () => {
     }
   });
 
+  test('unread_model takes launch alone, the loader’s one value', () => {
+    const doc = (unreadModel: unknown): unknown => ({
+      format: 1, cli: 'sample', unread_model: unreadModel,
+      screen: { composer: COMPOSER },
+    });
+    expect(errors(doc('launch'))).toEqual([]);
+    expect(errors(doc('screen')).length).toBeGreaterThan(0);
+    expect(errors(doc(true)).length).toBeGreaterThan(0);
+  });
+
   test('a rule may carry on_footer and without_rule, the loader’s flags', () => {
     const trust = (rule: unknown): unknown => ({ format: 1, cli: 'sample', screen: { trust: [rule], composer: COMPOSER } });
     expect(errors(trust({ any: ['^x$'], on_footer: true }))).toEqual([]);

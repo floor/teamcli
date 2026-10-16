@@ -408,6 +408,11 @@
           "type": "string",
           "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$"
         },
+        "nudge": {
+          "type": "string",
+          "minLength": 1,
+          "description": "text sent to each idle worker after idle_first; the report line when omitted"
+        },
         "quota_marks": {
           "type": "array",
           "items": {

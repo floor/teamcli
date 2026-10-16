@@ -49,6 +49,9 @@ export interface Profile {
   exitTimeout: number;
   /** Whether the CLI starts on its last-used model when a launch names none. */
   lastUsedModel: boolean;
+  /** What the model column shows when this CLI's screen names no model: `launch` falls back
+   *  to the launch line's model, labelled; null keeps `(unread)`. */
+  unreadModel: 'launch' | null;
   /** The model and version a launch line's model id means, or null when unknown. */
   modelOf(launch: string): { model: string; version: string } | null;
   /** A launch that names no model starts on whatever model this CLI used last. */
@@ -269,7 +272,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // without the first belongs to a CLI whose screen doesn't show its model; the second says the
 // CLI starts on its last-used model when a launch names none, and no shipped profile sets it.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'exit', 'timeouts', 'models'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['status_model', 'last_used_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -298,6 +301,14 @@ function confirmKeyOf(entry: YamlEntry): string {
     fail(entry.line, `"exit_confirm" must be one of: ${CONFIRM_KEYS.join(', ')}`);
   }
   return value;
+}
+
+/** The value of `unread_model`: the one fallback a profile may name for a screen that names
+ *  no model. `launch` shows the launch line's model, labelled; no other word is one. */
+function unreadModelOf(entry: YamlEntry): 'launch' {
+  const value = text(entry, 'unread_model');
+  if (value !== 'launch') fail(entry.line, '"unread_model" must be launch');
+  return 'launch';
 }
 
 /**
@@ -502,6 +513,7 @@ function launchOf(root: YamlNode): Shipped {
   const quotaEntry = optional(entries, 'quota');
   const statusEntry = optional(entries, 'status_model');
   const lastUsedEntry = optional(entries, 'last_used_model');
+  const unreadModelEntry = optional(entries, 'unread_model');
   const exitClearEntry = optional(entries, 'exit_clear');
   const exitConfirmEntry = optional(entries, 'exit_confirm');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
@@ -528,6 +540,7 @@ function launchOf(root: YamlNode): Shipped {
       idleTimeout: seconds(timeouts, 'idle'),
       exitTimeout: seconds(timeouts, 'exit'),
       lastUsedModel: lastUsedEntry ? boolOf(lastUsedEntry.value, 'last_used_model') : false,
+      unreadModel: unreadModelEntry ? unreadModelOf(unreadModelEntry) : null,
       modelOf: (launch) => modelOf(models, launch),
       startsOnLastModel: models.absent === 'last-used',
       modelFlag: (model, version) => ({

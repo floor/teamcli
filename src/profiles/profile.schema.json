@@ -73,6 +73,7 @@
     "models": { "$ref": "#/$defs/models" },
     "status_model": { "type": "array", "items": { "$ref": "#/$defs/statusModelRule" }, "minItems": 1, "description": "optional: absent, the CLI's screen doesn't show its model" },
     "last_used_model": { "type": "boolean", "description": "optional: the CLI starts on its last-used model when a launch names none" },
+    "unread_model": { "type": "string", "enum": ["launch"], "description": "optional: launch names no model read from the screen but the launch line's own, labelled (from launch)" },
     "quota": { "type": "array", "items": { "$ref": "#/$defs/quota" }, "minItems": 1 },
     "trust_answer": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/trustAnswer" } },
     "screen": { "$ref": "#/$defs/screen" },

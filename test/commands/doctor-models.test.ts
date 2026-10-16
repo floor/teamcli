@@ -343,6 +343,7 @@ describe('modelFlagFinding', () => {
       ['cursor', 'cursor/2026.10.01'],
       ['antigravity', 'antigravity/1.2.16'],
       ['gemini', 'gemini/0.64.0'],
+      ['grok', 'grok/1.0.50'],
     ];
     for (const [cli, dir] of dirs) {
       const shown = readdirSync(join(import.meta.dir, '../fixtures', dir))
@@ -369,6 +370,7 @@ describe('the declared models and versions, on the captured screens', () => {
     ['cursor', 'cursor/2026.10.01'],
     ['antigravity', 'antigravity/1.2.16'],
     ['gemini', 'gemini/0.64.0'],
+    ['grok', 'grok/1.0.50'],
   ];
   const VERSIONS = ['9.8.7', '9.8', '9'];
 
@@ -551,6 +553,7 @@ describe('the declared models and versions, on the captured screens', () => {
       ['cursor', 'Grok', ['grok', 'GROK', 'Grok ', ' Grok', 'GPT  Sol']],
       ['antigravity', 'Gemini Flash', ['gemini flash', 'GEMINI FLASH', 'Gemini Flash ', ' Gemini Flash', 'Gemini  Flash']],
       ['gemini', 'Gemini Pro', ['gemini pro', 'GEMINI PRO', 'Gemini Pro ', ' Gemini Pro', 'Gemini  Pro']],
+      ['grok', 'Grok', ['grok', 'GROK', 'Grok ', ' Grok', 'Grok  Fast']],
     ];
     for (const [cli, declared, variants] of CASES) {
       expect(canShowModel({ cli, model: declared })).toBe(true);
