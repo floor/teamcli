@@ -37,15 +37,17 @@ down — it reaches this terminal and no file. The daily log keeps the seat and 
 The outcome is always confirmed — one of `delivered`, `answered`, `held`, `timeout`, `unreachable`
 or `refused` — printed and matched by the exit code, or written as one machine-readable document
 with `--json`. `--list` sends nothing: it prints the file's addressable seats. Broadcast is not
-in this build.
+in this build. Any seat's shell can run it — agy, grok, codex or claude — and it is the only path
+by which one agent types into another seat's pane: agents do not send keys through herdr.
 
 ## Synopsis
 
-    team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
-    team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <target> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <target> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send --list [--json]
 
-`<seat>` names one seat of the team file — the same resolution `team status` uses. The message
+`<target>` names whom to reach: a seat of the team file — the same resolution `team status` uses —
+or one of the registry forms under `Addressing` below. The message
 is every remaining word, joined with single spaces; `--file` reads the whole body from a file
 instead (and then takes no message words). A seat that has both a message and `--file` is a
 usage error. `--timeout` is a whole number of seconds, 1 to 86,400, and is only meaningful with
@@ -55,6 +57,19 @@ message this command composed and `ids.reply` the reply frame's own, when there 
 `--dry-run` resolves the seat and names the channel. A plain dry run names the drop file. A
 dry run of `--wait` to a Claude Code seat names the socket. It writes no drop file and types
 nothing; it appends one line to `.agents/team.log`.
+
+## Addressing
+
+| Target | Names |
+| --- | --- |
+| `agt_<12 hex>` | one agent by its id, from the agent registry |
+| `<seat>@<team>` | a seat in a named team; `<team>` is a team id, a project or a session |
+| `<seat>` | a seat of the caller's own team, as the team file declares it |
+
+Resolution reads the registries — `~/.config/team/agents/<id>.yaml` and
+`~/.config/team/teams.yaml` — and falls back to the live herdr read for a name the registry does
+not carry. An agent's id is assigned once and never reused; its name is display only
+([the registries](../concepts/registry.md)).
 
 ## What it reads and writes
 
@@ -77,13 +92,26 @@ and appends the message's body to the project's message history
 ([team feed](feed.md)). The daily log keeps the seat and the size; the history keeps the
 message.
 
-## Who may run it
+## Who may send to whom
 
-The owner, or the orchestrator from its own seat, on the pane the project's state records for
-it — the same check `team answer` makes, judged the same way. Every other caller is refused
-before the seat is looked up. A run with no terminal is refused before `--list` as well:
+Send is denied by default: a caller reaches exactly the targets below, and anything else is
+refused before the seat is looked up. A run with no terminal is refused before `--list` as well:
 `team send: only the owner runs this, from a terminal outside herdr`. For every other caller,
 `--list` prints the file's roster and sends nothing, so it needs no caller check.
+
+| Caller | May send to |
+| --- | --- |
+| the owner | any agent |
+| an orchestrator | an orchestrator, in any team |
+| an assistant seat | its entity's main coordinator |
+| any seat | its own team's orchestrator |
+| a caller an owner-signed grant names for `send` | what the grant names |
+
+## The sender header
+
+Every drop file opens with a header, written before the body: the sender's agent id, and the reach
+above or the grant that admitted the send. The receiver reads who sent a message and why that sender
+was let through; the drop record carries the sender's id from day one.
 
 ## Outcomes
 
