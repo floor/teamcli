@@ -1,10 +1,13 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
+import { validateTeamFile } from '../file/validate.ts';
 import { agentList, sessionList, type HerdrSession } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { findTeamFile, type FoundTeam } from '../list/find.ts';
+import { readTeams, teamsFile } from '../registry/teams.ts';
 import { isSeatId, readState } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
 
@@ -38,6 +41,29 @@ export type ActiveSeatsSummary = {
   stopped: number;
 };
 
+/** One seat a registry record lists: the seat name in its team file, and what the record adds. */
+export type RegistryRosterSeat = {
+  seat: string;
+  role?: string | null;
+  agent?: string | null;
+};
+
+/** One team as the team registry holds it (`~/.config/team/teams.yaml`). `list` reads only what it
+ *  shows; a record from the registry module carries these fields and more. */
+export type RegistryTeam = {
+  /** The record's key: sha256 of the root's real path, first 12 hex. */
+  id: string;
+  entity: string | null;
+  project: string | null;
+  session: string | null;
+  root: string | null;
+  lobby: string | null;
+  roster: RegistryRosterSeat[];
+};
+
+/** What a registry record's root holds: the team file, and whether it loads and validates. */
+export type RegistryFile = { valid: boolean; seats: number | null };
+
 /** What `list` reads from outside itself, so a test stands in with fixtures and never a socket. */
 export type ListSources = {
   /** Null when herdr cannot be asked. */
@@ -46,6 +72,12 @@ export type ListSources = {
   roster(session: string): RosterSeat[] | null;
   /** Null when no team file names this session. */
   team(session: string): FoundTeam | null;
+  /** Every team in the registry. Null when there is no registry to read — no file, or one that
+   *  cannot be read — which is also the signal that this machine lists discovery alone. Absent
+   *  counts as null, so a caller that never reads it is never asked for one. */
+  registry?(): RegistryTeam[] | null;
+  /** The team file at a registry record's root. Null when the root is null or holds no file. */
+  file?(root: string): RegistryFile | null;
   /** Waits between `--watch` passes; false ends the loop. */
   wait?(seconds: number): Promise<boolean>;
   /** Clock for `--watch` headers. */
@@ -75,6 +107,23 @@ export type ListRow = {
 export type ListSeatsRow = ListRow & {
   active: ActiveSeatsSummary | null;
   roster: RosterSeat[];
+};
+
+/** One row of the registry view (spec section 5): a registered team, or a session the registry
+ *  does not name. `defined` is whether the registry holds the record; `approved` is whether the
+ *  team file at its root loads and validates; `running` is whether herdr lists its session now,
+ *  null when herdr cannot be asked. `roster` is the record's seats, shown by `--seats`. */
+export type RegistryRow = {
+  entity: string | null;
+  team: string;
+  project: string | null;
+  lobby: string | null;
+  seats: number | null;
+  defined: boolean;
+  approved: boolean;
+  running: boolean | null;
+  source: 'registry' | 'discovered';
+  roster: RegistryRosterSeat[];
 };
 
 type Draft = {
@@ -245,6 +294,147 @@ export function seatRowsOf(sessions: ListedSession[], sources: ListSources, all:
       note: noteOf(row, drafts),
     };
   });
+}
+
+/** The session name a record is listed under: its session, its project, or the record's key. */
+function recordName(record: RegistryTeam): string {
+  return record.session ?? record.project ?? record.id;
+}
+
+/** The team file at a record's root. The registry read is the only source that knows a root
+ *  without a live session, so the file is asked for by that root. */
+function fileAt(sources: ListSources, root: string | null): RegistryFile | null {
+  if (root === null) return null;
+  return ask(() => sources.file?.(root) ?? null, null);
+}
+
+/**
+ * The registry view (spec section 5): one row per registered team, plus one per herdr session the
+ * registry does not name. A registered team's session is matched by its session name, and by the
+ * root its team file resolves to when the name does not match. Rows carry where they come from:
+ * `registry` is authoritative, `discovered` is a session nothing registered. `entity` filters
+ * rows; rows are grouped by entity, then by team. `all` keeps stopped discovered sessions.
+ */
+export function registryRowsOf(
+  registry: RegistryTeam[],
+  sessions: ListedSession[] | null,
+  sources: ListSources,
+  all: boolean,
+  entity: string | null = null,
+): RegistryRow[] {
+  const live = sessions ?? [];
+  const liveByName = new Map(live.map((session) => [session.name, session]));
+  const found = new Map<string, FoundTeam | null>();
+  for (const session of live) found.set(session.name, ask(() => sources.team(session.name), null));
+  const taken = new Set<string>();
+  const rows: RegistryRow[] = [];
+  for (const record of [...registry].sort((a, b) => byName(recordName(a), recordName(b)))) {
+    const name = recordName(record);
+    const session = liveByName.get(name)
+      ?? live.find((other) => !taken.has(other.name) && record.root !== null && found.get(other.name)?.root === record.root)
+      ?? null;
+    if (session) taken.add(session.name);
+    const file = fileAt(sources, record.root);
+    const roster = record.roster.map((seat) => ({
+      seat: plainLine(seat.seat),
+      ...(seat.agent !== undefined ? { agent: seat.agent ? plainLine(seat.agent) : null } : {}),
+      ...(seat.role !== undefined ? { role: seat.role ? plainLine(seat.role) : null } : {}),
+    }));
+    rows.push({
+      entity: record.entity ? plainLine(record.entity) : null,
+      team: plainLine(name),
+      project: record.project ? plainLine(record.project) : null,
+      lobby: record.lobby ? plainLine(record.lobby) : null,
+      seats: roster.length > 0 ? roster.length : (file?.seats ?? null),
+      defined: true,
+      approved: file?.valid ?? false,
+      running: sessions === null ? null : (session?.running ?? false),
+      source: 'registry',
+      roster,
+    });
+  }
+  for (const session of live) {
+    if (taken.has(session.name)) continue;
+    if (!all && !session.running) continue;
+    const team = found.get(session.name) ?? null;
+    const project = team?.project ? plainLine(team.project) : null;
+    rows.push({
+      entity: project,
+      team: plainLine(session.name),
+      project,
+      lobby: null,
+      seats: team && !team.unreadable ? team.seats : null,
+      defined: false,
+      approved: team !== undefined && team !== null && !team.unreadable && team.seats !== null,
+      running: session.running,
+      source: 'discovered',
+      roster: [],
+    });
+  }
+  const shown = entity === null ? rows : rows.filter((row) => row.entity === entity);
+  return shown.sort((a, b) => byName(a.entity ?? '', b.entity ?? '') || byName(a.team, b.team));
+}
+
+const REGISTRY_HEAD = ['ENTITY', 'TEAM/SESSION', 'PROJECT', 'LOBBY', 'SEATS', 'DEFINED', 'APPROVED', 'RUNNING', 'SOURCE'];
+
+/** `yes` / `no`, and `?` for a state that cannot be read. */
+function yesNo(value: boolean | null): string {
+  return value === null ? '?' : value ? 'yes' : 'no';
+}
+
+function registryCells(row: RegistryRow): string[] {
+  return [
+    row.entity ?? '-',
+    row.team,
+    row.project ?? '-',
+    row.lobby ?? '-',
+    row.seats === null ? '?' : String(row.seats),
+    yesNo(row.defined),
+    yesNo(row.approved),
+    yesNo(row.running),
+    row.source,
+  ];
+}
+
+/** The registry view's table. `--seats` prints each registered team's roster under its row,
+ *  indented two spaces: seat, agent, role. A discovered row has no roster to print. */
+export function registryTable(rows: RegistryRow[], showSeats = false): string {
+  const head = REGISTRY_HEAD;
+  const body = rows.map(registryCells);
+  const width = head.map((label, index) => Math.max(label.length, ...body.map((cells) => cells[index]?.length ?? 0)));
+  const line = (cells: string[]): string => cells
+    .map((cell, index) => (index === cells.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
+    .join('  ')
+    .trimEnd();
+  const out: string[] = [line(head)];
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index]!;
+    out.push(line(body[index]!));
+    if (!showSeats || row.roster.length === 0) continue;
+    const seatCells = row.roster.map((seat) => [seat.seat, seat.agent ?? '-', seat.role ?? '-']);
+    const seatWidths = [0, 1, 2].map((col) => Math.max(1, ...seatCells.map((cells) => cells[col]?.length ?? 0)));
+    for (const cells of seatCells) {
+      out.push(`  ${cells.map((cell, col) => (col === cells.length - 1 ? cell : cell.padEnd(seatWidths[col] ?? 0))).join('  ').trimEnd()}`);
+    }
+  }
+  return `${out.join('\n')}\n`;
+}
+
+/** The registry rows as JSON: the same fields as the table, plus `roster` with `--seats`. */
+export function registryJsonOf(rows: RegistryRow[], showSeats = false): string {
+  const documents = rows.map((row) => ({
+    entity: row.entity,
+    team: row.team,
+    project: row.project,
+    lobby: row.lobby,
+    seats: row.seats,
+    defined: row.defined,
+    approved: row.approved,
+    running: row.running,
+    source: row.source,
+    ...(showSeats ? { roster: row.roster } : {}),
+  }));
+  return `${JSON.stringify(documents, null, 2)}\n`;
 }
 
 function table(rows: ListRow[]): string {
@@ -421,6 +611,27 @@ export function realListSources(home: string = homedir()): ListSources {
       const dir = listed()?.find((row) => row.name === session)?.sessionDir ?? null;
       return findTeamFile(session, dir, home)?.found ?? null;
     },
+    registry() {
+      // No registry file is no registry: this machine lists discovery alone, as it did before
+      // the registry existed. A file that cannot be read as one is not fatal to a read-only
+      // list, so it too is no registry rather than an error.
+      const path = teamsFile(home);
+      try {
+        if (!existsSync(path)) return null;
+        return Object.entries(readTeams(home)).map(([id, record]) => ({ ...record, id }));
+      } catch {
+        return null;
+      }
+    },
+    file(root) {
+      try {
+        const text = readFileSync(join(root, '.agents', 'team.yaml'), 'utf8');
+        const checked = validateTeamFile(text, { home, root });
+        return checked.ok ? { valid: true, seats: checked.team.seats.length } : { valid: false, seats: null };
+      } catch {
+        return null;
+      }
+    },
     wait: waitOrStop,
     now: () => new Date(),
   };
@@ -431,9 +642,18 @@ export default list;
 
 export async function runList(argv: string[], io: Io, sources: ListSources = realListSources()): Promise<number> {
   const args = readArgs(argv, [], ['all', 'seats', 'watch', 'json']);
-  if (args.error || args.rest.length || (args.flags.has('watch') && args.flags.has('json'))) {
-    const why = args.error
-      ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : "--watch and --json can't be used together");
+  const contradictory = args.flags.has('watch') && args.flags.has('json');
+  // An argument this command cannot use stops it before anything outside it is read.
+  const early = args.error !== undefined || contradictory;
+  const registry = early || sources.registry === undefined ? null : ask(() => sources.registry!(), null);
+  // The one word a registry lists is the entity to filter rows by. With no registry to read, this
+  // command has no word, and a word is not its own.
+  const words = registry === null ? 0 : 1;
+  const why = args.error
+    ?? (args.rest.length > words
+      ? `unexpected "${args.rest[words]}"`
+      : contradictory ? "--watch and --json can't be used together" : null);
+  if (why !== null) {
     io.stderr(`team list: ${why}\n${USAGE}`);
     // exit: list.invocation
     return 2;
@@ -442,20 +662,30 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
   const showSeats = args.flags.has('seats');
   const json = args.flags.has('json');
   const watching = args.flags.has('watch');
+  const entity = registry === null ? null : (args.rest[0] ?? null);
+  const registryText = (teams: RegistryTeam[]): { text: string; empty: boolean } => {
+    const rows = registryRowsOf(teams, ask(() => sources.sessions(), null), sources, all, entity);
+    if (rows.length === 0) return { text: json ? '[]\n' : 'no teams\n', empty: true };
+    return { text: json ? registryJsonOf(rows, showSeats) : registryTable(rows, showSeats), empty: false };
+  };
   if (watching) {
     const wait = sources.wait ?? waitOrStop;
     const now = sources.now ?? (() => new Date());
     for (;;) {
-      const listed = ask(() => sources.sessions(), null);
       let body: string;
-      if (listed === null) {
-        body = 'herdr is not running\n';
-      } else if (showSeats) {
-        const rows = seatRowsOf(listed, sources, all);
-        body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : tableWithSeats(rows);
+      if (registry !== null) {
+        body = registryText(registry).text;
       } else {
-        const rows = rowsOf(listed, sources, all);
-        body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : table(rows);
+        const listed = ask(() => sources.sessions(), null);
+        if (listed === null) {
+          body = 'herdr is not running\n';
+        } else if (showSeats) {
+          const rows = seatRowsOf(listed, sources, all);
+          body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : tableWithSeats(rows);
+        } else {
+          const rows = rowsOf(listed, sources, all);
+          body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : table(rows);
+        }
       }
       if (io.stdoutIsTTY) {
         io.stdout(`\x1b[2J\x1b[H`);
@@ -466,22 +696,29 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
       if (!(await wait(2))) break;
     }
   } else {
-    const listed = ask(() => sources.sessions(), null);
-    if (listed === null) {
-      io.stdout(json ? '[]\n' : 'herdr is not running\n');
-      // exit: list.herdr-down
-      return 0;
+    let text: string;
+    let empty = false;
+    if (registry !== null) {
+      const view = registryText(registry);
+      text = view.text;
+      empty = view.empty;
+    } else {
+      const listed = ask(() => sources.sessions(), null);
+      if (listed === null) {
+        io.stdout(json ? '[]\n' : 'herdr is not running\n');
+        // exit: list.herdr-down
+        return 0;
+      }
+      const rows = showSeats ? seatRowsOf(listed, sources, all) : rowsOf(listed, sources, all);
+      empty = rows.length === 0;
+      if (empty) text = json ? '[]\n' : all ? 'no sessions\n' : 'no running sessions\n';
+      else if (showSeats) text = json ? jsonWithSeatsOf(rows as ListSeatsRow[]) : tableWithSeats(rows as ListSeatsRow[]);
+      else text = json ? jsonOf(rows) : table(rows);
     }
-    const rows = showSeats ? seatRowsOf(listed, sources, all) : rowsOf(listed, sources, all);
-    if (rows.length === 0) {
-      io.stdout(json ? '[]\n' : all ? 'no sessions\n' : 'no running sessions\n');
+    io.stdout(text);
+    if (empty) {
       // exit: list.empty
       return 0;
-    }
-    if (showSeats) {
-      io.stdout(json ? jsonWithSeatsOf(rows as ListSeatsRow[]) : tableWithSeats(rows as ListSeatsRow[]));
-    } else {
-      io.stdout(json ? jsonOf(rows) : table(rows));
     }
   }
   // exit: list.shown
