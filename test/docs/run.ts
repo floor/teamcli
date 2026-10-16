@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { runAck } from '../../src/commands/ack.ts';
 import { runAdd } from '../../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
+import { runArchive } from '../../src/commands/archive.ts';
 import { runAskShow } from '../../src/commands/ask-show.ts';
 import { runApprove, type Waiting } from '../../src/approve/command.ts';
 import { runBrief } from '../../src/commands/brief.ts';
@@ -116,6 +117,8 @@ function normalize(text: string, page: { fixture: Fixture }): string {
     .replaceAll(page.fixture.root, '.')
     .replaceAll(page.fixture.home, '~')
     .replace(/(team\/[A-Za-z0-9._-]+)-[0-9a-f]{12}\b/g, '$1-<hash>')
+    // An archive folder carries the store's name, the same hash, and the moment it was taken.
+    .replace(/([A-Za-z0-9._-]+)-[0-9a-f]{12}-(?=\d{8}T\d{6}Z)/g, '$1-<hash>-')
     .replace(/\b[0-9a-f]{40}\b/g, '<sha>')
     .replace(/\b[0-9a-f]{10}\b/g, '<sha>')
     .replace(/^(\s+)[0-9a-f]{7,40} /gm, '$1<sha> ');
@@ -307,6 +310,9 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runAdd(rest, io, world.addSources());
     case 'answer':
       return runAnswer(rest, io, answerHost(fixture.home));
+    case 'archive':
+      // The stop half is the same `down` run the down page's examples use: one world, one home.
+      return runArchive(rest, io, world.downSources());
     case 'ask-show':
       return runAskShow(rest, io, new Date(spec.now));
     // The broker page's one runnable line is the file-source refusal, which precedes the
