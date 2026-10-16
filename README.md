@@ -19,7 +19,7 @@ The project's name is TeamCLI; the package and the command are `team`. The site 
 [RFC 000](https://github.com/floor/teamcli/discussions/147).
 
 **Status: early, herdr only.** This build parses and
-validates the file, checks who is calling, and holds `add`, `answer`, `approve`, `check`, `doctor`,
+validates the file, checks who is calling, and holds `add`, `answer`, `check`, `doctor`,
 `down`, `init`, `list`, `release`, `remove`, `status`, `up`, `watch` and `worktree`.
 
 ## Install
@@ -36,8 +36,9 @@ team --version            # 0.4.8
 `team init` keeps `.agents/team.yaml` out of git through `.git/info/exclude`, never by editing
 `.gitignore`: a public repository shouldn't carry its roster. A fresh clone therefore has no team
 file. Run `team init` to write one, or `team init --restore` to bring back the copy you last
-approved on this machine. A file you receive from someone else runs nothing until you approve it
-yourself.
+approved on this machine. A file you receive from someone else is read as it is — no step records
+it first — and `up` starts its seats only from the owner's terminal, or from a seat the file's
+`grant` names.
 
 ## The file's format
 
@@ -244,8 +245,7 @@ twice. A secondary figure that cannot be written is left off. When the primary
 figure cannot be written, nothing is printed. Five hours (`300` minutes) is
 `session`, a day (`1440`) is `daily`, and a week (`10080`) is `weekly`. Any other
 length, a figure over 100%, or no such rollout prints nothing, so the account
-reads unknown. `team approve` records the command you named. Bun has to be on
-`PATH` when the check runs.
+reads unknown. Bun has to be on `PATH` when the check runs.
 
 More fields exist — `dialogs`, `tools`, `trust`, `machine`, `limits`, `watch`, `visibility` and
 `releases` — and the comments `team init` writes name them; validation refuses what it cannot
@@ -256,13 +256,12 @@ check, and this build acts on what the commands below read.
 | Command | What it does | Who may run it |
 | --- | --- | --- |
 | `team init` | writes the skeleton `.agents/team.yaml` and adds it and its runtime files to `.git/info/exclude` | the owner |
-| `team approve` | reads the whole file back for a last look, then records it, its ceilings and its seats on this machine; `--show` prints it; `--confirm` asks for the seat count before writing | the owner (`--show`: anyone) |
 | `team commits check <ref>` | checks one commit or a `a..b` range against the signature rule, `--since <ref>` skipping history already checked; exit 1 when one is refused | anyone; read only |
 | `team pr check <file>` | checks a pull request's body against the signature rule (`-` reads stdin), needing no repository; exit 1 when it is refused | anyone; read only |
 | `team doctor` | checks this machine for what the file needs: herdr, each CLI, login, launch line, model, watch heartbeat; `--login` checks only CLI sign-ins | anyone; read only |
 | `team status` | prints the file's seats against the running session, each difference with its repair; `--json` outputs a stable JSON document (`format: 1`) for scripts; exit 1 when they differ | the owner, a seat of that team on its recorded pane, or a pane the approved file names; `--file` and `--session` are the owner's; read only |
 | `team list` | lists the herdr sessions on this machine, running ones by default; `--all` includes stopped sessions; `--json` prints a stable array, empty when there is nothing; an orphan session and an unreadable seat do not fail it | anyone, from any folder; read only |
-| `team up` / `team down` | starts / stops the session and its seats | `up`: the owner; `down`: the owner, the coordinator or the operator seat |
+| `team up` / `team down` | starts / stops the session and its seats | `up`: the owner at a terminal outside herdr, or the seat the file's `grant` names for `up` (anyone else is told `deny`); `down`: the owner, the coordinator or the operator seat |
 | `team watch` | watches the session, reports idle seats and nudges the operator; `--no-nudge` and `--no-notify` are the owner's and do not silence a report addressed to the owner | anyone, one per session; it types only a fixed line into an empty idle prompt: the report nudge, or `Team: run team messages` when a message is already waiting |
 | `team tempo <word>` | sets the team's tempo to relaxed, normal or urgent, which scales the watch's idle and nudge waits; normal is the file with the key omitted | the owner |
 | `team messages` | verifies a message that is already waiting, prints its body and writes the receipt; no command writes a message record — `team send` writes to a seat's cross-session socket, not to this mailbox — and a report still leaves as the watch's nudge | anyone |
@@ -283,8 +282,9 @@ that `bun run ci` runs against a fixture team. [herdr as a team uses
 it](https://github.com/floor/teamcli/blob/main/docs/reference/herdr.md) — the session, the
 workspaces and panes a team lives in, and the two names a seat shows — is the reference beside them.
 
-The owner is a terminal outside herdr with no agent process above it. `approve` and `up` read the
-processes above the call and refuse a seat — or a script a seat runs — that makes it: a guard
+The owner is a terminal outside herdr with no agent process above it. `up` reads the processes above
+the call: the owner's placement starts the team, and a seat — or a script a seat runs — that makes
+it is told the one word `deny`, unless the file's `grant` names that seat for `up`. That is a guard
 against a mistaken agent, not a hostile one, so a seat that forges the owner's placement is a
 known limitation, being hardened. With no `--file`, the file is `.agents/team.yaml` of
 the repository's main checkout, found through git's common directory. A folder that is not a git
@@ -293,19 +293,14 @@ repository is read from `.agents/team.yaml` in that folder only, not from a pare
 that reads the file also takes `--file <path>` for a file other than `.agents/team.yaml`.
 
 A pane outside the team's session can be an approved **delegate**: the file's `delegates` section
-names panes — `<herdr session>/<pane id>` — and, per pane, which of `up`, `down`, `add`, `remove`
-and `approve` it may run. The caller is matched on the session and pane id, never on a seat, a
+names panes — `<herdr session>/<pane id>` — and, per pane, which of `up`, `down`, `add` and
+`remove` it may run. The caller is matched on the session and pane id, never on a seat, a
 role or an agent name. `up`, `down`, `add` and `remove` run only while the live file is exactly
 the approved one — drift is refused — and a command the entry does not list, or a prohibited
 flag, is refused with the gate's own words and exit id; `--file` and `--session` are refused
 outright. Every delegated run writes one line to the file's log naming the pane and the command.
-A delegated `approve` is for ordinary changes — the roster, a launch line, a rule — and never
-for any other owner section: the guard is an allowlist, and `rules` is all it admits, so
-`delegates` first, and `budgets`, `limits`, identity, `trust`, the workspace, the operator and
-orchestrator sections, and any section a later version adds are refused with `this change
-needs the owner`, judged against the approved copy before anything else is read, so a delegate
-can never approve a widening of its own grant. `team approve` prints the section's entries as
-`Delegate:` lines before anything is written.
+`approve` is still a word a `delegates` entry or a `grant` scope may carry — a file that names it
+is read like any other — and no command in this build consults it.
 
 `team status --json` prints the facts `status` prints as one JSON document (`format: 1`) on stdout:
 `project`, `session`, `rows` (`name`, `state`, `model`, `pane`), `notes`, `differences` (`what`, `repair`), and `notice`.
@@ -318,16 +313,16 @@ It never answers prompts and performs no sign-in action.
 run live. `team worktree list` prints the recorded worktrees and writes nothing. `up`, `down` and `add` take `--dry-run` to print every command they would run, and every
 refusal, and change nothing.
 
-## Approvals are signed
+## The approval record
 
-`team approve` writes the record signed: the approval, the stored copy of the file, the project
+`team approve` is not part of this build: nothing records an approval, and `up`, `add`, `remove`
+and `down` run with no record at all, reading `.agents/team.yaml` as it is on disk. A record an
+earlier build wrote is still verified where a command reads one: `up` refuses to start from a file
+that has drifted from a record in force, and the delegate gate is consulted only when one is in
+force. The record's shape is unchanged — the approval, the stored copy of the file, the project
 root and a per-project number, covered by one signature whose key lives outside the store, in
-`~/.config/team-key`. Every command that needs an approval in force verifies the whole record
-through one snapshot; a record changed after approval, signed for another root, or replayed from an
-older number is not an approval, and the command says which case it was. Each approval moves the
-number and prints it with the signing key's short fingerprint — `approval #4 for this project;
-the last one was on 2026-10-04; key fe21ef6293de.` — and `team doctor` and `team status` show
-the same three: the number, its date, the key.
+`~/.config/team-key`. A record changed after it was signed, signed for another root, or replayed
+from an older number is not an approval, and the command says which case it found.
 
 Approvals guard against mistakes, not against a hostile process running as the owner. The
 signature refuses a record changed by something that does not use the key; a process that can
@@ -336,10 +331,8 @@ differ. What a replaced key does change is the fingerprint: an owner who noted i
 That is evidence, not prevention — `team` computes the fingerprint, and a seat can replace `team`
 itself.
 
-A record written by an earlier `team`, before records were signed, is refused by `up` and `add`
-with `approved before records were signed: run \`team approve\` once`; the watch keeps watching,
-`status` keeps reporting, `down` and `remove` keep working, and approving once replaces the record
-with a signed one.
+A record written by an earlier `team`, before records were signed, is not an approval in force:
+`up`, `add`, `remove` and `down` refuse it.
 
 ## Your first team in five minutes
 
@@ -347,18 +340,16 @@ with a signed one.
 mkdir hello && cd hello && git init
 team init                  # the owner: writes .agents/team.yaml, private to this clone
 $EDITOR .agents/team.yaml  # name your seats — the example above is a working file; any CLI fits any role
-team approve               # the owner: read the file it prints, then record it (--confirm asks first)
 team doctor                # what this machine still needs
 team up --dry-run          # every command it would run, and every refusal
 team up                    # the owner: starts the session and its seats
 ```
 
 `team init` writes a skeleton, one seat and lots of comments; it prints how the file stays private,
-and leaves your first commit as a commented `#   since:` line. `team approve` prints the whole file
-back before it records anything — a terminal with input already waiting is refused, so no file
-approves itself unnoticed, and `--confirm` asks you to type how many seats it holds first. Then
-`doctor` says what is missing on this machine, `up --dry-run` shows every command the launch would
-run — and `up` starts the team, from the owner's terminal outside herdr.
+and leaves your first commit as a commented `#   since:` line. Nothing is recorded between the edit
+and the run: `up` reads the file as it is. `doctor` says what is missing on this machine,
+`up --dry-run` shows every command the launch would run — and `up` starts the team, from the
+owner's terminal outside herdr.
 
 ## Development
 
