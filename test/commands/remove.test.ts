@@ -1309,6 +1309,58 @@ describe('team remove delegated', () => {
     expect(await runRemove(['lead', '--abandon'], lead, { ...made.sources, delegateGate: () => passed })).toBe(1);
   });
 
+  test('with both set, dev mode keeps its own words: the bypass is not read', async () => {
+    approveFile(FILE + DELEGATES);
+    const made = world();
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
+    const io = testIo(dir, pilot);
+    io.env = { ...io.env, TEAMCLI_DEV_MODE: '1', TEAMCLI_BYPASS: 'seat:worker' };
+    const code = await runRemove(['worker', '--abandon'], io, { ...made.sources, delegateGate: () => passed });
+    expect(io.err).toContain('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
+    expect(io.err).not.toContain('the scoped bypass');
+    expect(made.closed).toContain('w3');
+    expect(code).toBe(0);
+  });
+
+  test('with TEAMCLI_BYPASS=seat:worker, --abandon from a granted caller warns and closes the worker', async () => {
+    approveFile(FILE + DELEGATES);
+    const made = world();
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
+    const io = testIo(dir, pilot);
+    io.env = { ...io.env, TEAMCLI_BYPASS: 'seat:worker' };
+    const code = await runRemove(['worker', '--abandon'], io, { ...made.sources, delegateGate: () => passed });
+    expect(io.err).toContain('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; the scoped bypass continues (TEAMCLI_BYPASS seat "worker")\n');
+    expect(made.closed).toContain('w3');
+    expect(code).toBe(0);
+  });
+
+  test('the project scope covers the abandon of its own seats', async () => {
+    approveFile(FILE + DELEGATES);
+    const made = world();
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
+    const io = testIo(dir, pilot);
+    io.env = { ...io.env, TEAMCLI_BYPASS: 'project:acme' };
+    const code = await runRemove(['worker', '--abandon'], io, { ...made.sources, delegateGate: () => passed });
+    expect(io.err).toContain('the scoped bypass continues (TEAMCLI_BYPASS project "acme")');
+    expect(made.closed).toContain('w3');
+    expect(code).toBe(0);
+  });
+
+  test('a bypass for another seat or project, or a malformed value, leaves the abandon refusal where it is', async () => {
+    for (const value of ['seat:lead', 'project:other', '1']) {
+      approveFile(FILE + DELEGATES);
+      const made = world();
+      made.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
+      const io = testIo(dir, pilot);
+      io.env = { ...io.env, TEAMCLI_BYPASS: value };
+      const code = await runRemove(['worker', '--abandon'], io, { ...made.sources, delegateGate: () => passed });
+      expect(`${value}: ${code}`).toBe(`${value}: 1`);
+      expect(io.err).toBe('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
+      expect(made.closed).toEqual([]);
+      expect(readFileSync(file, 'utf8')).toContain('name: worker');
+    }
+  });
+
   test('even a gate that passed --keep finds no signing: the record is not the delegate\'s to write', async () => {
     // The real gate refuses `--keep` for a delegate; this run pins the invariant at the command
     // layer — the one signing site a `remove` has is closed to a delegated run, so nothing a
