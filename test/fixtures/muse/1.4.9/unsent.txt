@@ -1,0 +1,23 @@
+│  USAGE          0 tokens · 0 turns · 0 subagents  │
+│  CONTEXT        not projected · 1008K limit       │
+│                 Usage: cumulative session tokens… │
+│                                                   │
+│  SESSION        <session-id>                      │
+│  ACTIVITY       no tasks                          │
+│                 0 terminals · inbox clear         │
+│                                                   │
+│  BILLING        Subscription · Muse Code Power U… │
+└───────────────────────────────────────────────────┘
+
+  You are currently subscribed to the Muse Code Power
+  Usage usage plan.
+  Usage currently unavailable
+
+  Manage your plan in Account Center
+  (https://accountscenter.meta.com/muse_code)
+
+── Voice input (⌥ + v to start) ─────────────────────
+❯ Team watch: reports are waiting in .agents/
+  team.log
+─────────────────────────────────────────────────────
+  muse-wonder-1.0 · high · …/muse-ws · Auto-review

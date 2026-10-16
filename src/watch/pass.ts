@@ -5,6 +5,8 @@
 import { observe, observeCheck, type Seen } from '../budgets/readings.ts';
 import type { CheckOutcome } from '../budgets/run.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
+import { payingAccountOf, payingPoolOf } from '../information/machine-accounts.ts';
+import type { MachineFigure } from '../information/machine-readings.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
@@ -130,6 +132,7 @@ export type PassResult = {
   mailboxNote: string | null;
   // The readings that count, to be saved: the project's, with this pass's figures folded in (§ 4.4).
   readings: Seen[];
+  machineReadings: MachineFigure[];
   // Sidebar lines to push for running file seats. The pass does not call herdr: the command
   // does, and records `title` and `line` only after the call returns true. A seat with neither
   // half changed is absent.
@@ -201,6 +204,8 @@ export type PassInput = {
   outcomes?: readonly CheckOutcome[];
   budgets?: TeamFile['budgets'];
   readings?: readonly Seen[];
+  /** Machine subscriptions observed without adding a launch budget. */
+  machineAccounts?: readonly string[];
   foreground?: Readonly<Record<string, readonly string[] | null>>;
   // Each pane's process identity, by pane id, as the caller read it — null where herdr can't
   // tell, and absent for a pane it wasn't read for. A seat's recorded identity is compared with
@@ -232,6 +237,7 @@ export function pass({
   outcomes = [],
   budgets = team.budgets,
   readings: stored = [],
+  machineAccounts = [],
   foreground,
   processes,
   readScreen: read = readScreen,
@@ -382,13 +388,24 @@ export function pass({
   // runs on) stays that account's, whichever seat's screen showed it.
   //
   // The live file is the record: a seat's figures fold under the account the file names now,
-  // and a change since the last approval holds no seat's figures back.
+  // and a change since the last approval holds no seat's figures back. A running seat's figure
+  // is also folded into the machine's own observations, under the account that pays for it.
+  const machineReadings: MachineFigure[] = [];
   let readings = stored.slice();
   for (const seat of observations) {
     if (!seat.running) continue;
+    const declared = team.seats.find((one) => one.name === seat.name)
+      ?? team.seats.find((one) => one.name === state.seats[seat.name]?.temporary?.like);
     for (const figure of seat.quota) {
-      const account = figure.account === seat.vendor ? seat.account : figure.account;
-      if (budgets.accounts[account]?.sources.includes('status_line')) {
+      if (declared && seat.identity !== 'gone' && seat.identity !== 'replaced') {
+        const pool = payingPoolOf(declared);
+        machineReadings.push({ ...figure, account: payingAccountOf(declared), ...(pool ? { pool } : {}) });
+      }
+      const payer = declared === undefined ? seat.account : payingAccountOf(declared);
+      const backing = declared === undefined ? seat.vendor : payingAccountOf({ ...declared, account: undefined });
+      const account = figure.account === backing ? payer : figure.account === seat.vendor ? seat.account : figure.account;
+      const entry = budgets.accounts[account];
+      if (entry !== undefined ? entry.sources.includes('status_line') : machineAccounts.includes(account) && (figure.account === backing || figure.account === payer)) {
         readings = observe(readings, { ...figure, account }, seat.name, now);
       }
     }
@@ -520,7 +537,7 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  return { reports, nudge, work: workDrops(team, live, observations, watch, now, memory, read), fallback, ring, mailboxNote, readings, labels };
+  return { reports, nudge, work: workDrops(team, live, observations, watch, now, memory, read), fallback, ring, mailboxNote, readings, machineReadings, labels };
 }
 
 /** Idle workers due a work drop this pass. Leads, parked and stopped seats, a dialog and a

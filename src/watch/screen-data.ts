@@ -69,6 +69,11 @@ type Box = {
    * every pattern, in order, and the counts must be equal.
    */
   footers: RegExp[];
+  /** The grammar of the status row a box composer draws under its closing rule — a CLI whose
+   *  footer carries a quota figure (grok's `Weekly limit left: 0%`). The quota read takes its
+   *  row, and only a row under the closing rule: a line the box holds is typed text, never the
+   *  row. Empty where no capture shows the box a status row. */
+  status: StatusLine;
   placeholders: Placeholder[];
   placeholderStyle?: PlaceholderStyle;
   wrap?: Wrap;

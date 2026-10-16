@@ -21,6 +21,11 @@ or `team down, then team up` for a lead — when its screen names a model the fi
 or its launch line starts a launcher; a pane it can say nothing about is repaired by looking at
 it. Nothing either report says starts a seat.
 
+A process a seat recorded with `team proc add` shows too: one `note:` line per live record —
+`proc <name>: <by> since <at>`, with `, pid <n>` when one is recorded — printed after the other
+notes. A record whose process has ended is not printed, and a team that recorded none shows no
+such line. `--json` carries the same reading as a `procs` array, absent when there is none.
+
 ## Synopsis
 
     team status [--session <name>] [--file <path>] [--all] [--json]

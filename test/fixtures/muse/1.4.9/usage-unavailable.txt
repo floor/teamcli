@@ -1,0 +1,23 @@
+
+  Including your 30 Claude Code personal skills —
+  manage with /settings.
+
+┌───────────────────────────────────────┐
+│  Session usage                        │
+│                                       │
+│    Input      0                       │
+│    Cached     0                       │
+│    Output     0                       │
+│    Total      0                       │
+│                                       │
+│    Turns         0                    │
+│    Subagents  none                    │
+│                                       │
+│  Subscription · Muse Code Power Usage │
+│    Currently unavailable              │
+└───────────────────────────────────────┘
+
+── Voice input (⌥ + v to start) ─────────────────────
+❯
+─────────────────────────────────────────────────────
+  muse-wonder-1.0 · high · …/muse-ws · Auto-review

@@ -6,7 +6,8 @@
     "codex",
     "cursor",
     "gemini",
-    "grok"
+    "grok",
+    "muse"
   ],
   "kinds": [
     "idle",
@@ -363,6 +364,63 @@
         "constructed": 0,
         "undocumented": 0
       }
+    },
+    "muse": {
+      "idle": {
+        "real": 4,
+        "constructed": 2,
+        "undocumented": 0
+      },
+      "working": {
+        "real": 1,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "unsent": {
+        "real": 1,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "permission": {
+        "real": 1,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "question": {
+        "real": 1,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "exit question": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "trust": {
+        "real": 1,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "vendor notice": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "provider error": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "rate limit": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "unknown": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      }
     }
   },
   "notProduced": {
@@ -371,7 +429,11 @@
     "codex": {},
     "cursor": {},
     "gemini": {},
-    "grok": {}
+    "grok": {},
+    "muse": {
+      "rate limit": "the Power plan stood at `0% used` on both windows throughout",
+      "unknown": "the screen after `/exit` was not captured"
+    }
   },
   "fixtures": [
     {
@@ -1703,6 +1765,72 @@
     {
       "file": "grok/1.0.52/working.txt",
       "cli": "grok",
+      "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/idle-footer.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/idle.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/model-picker.txt",
+      "cli": "muse",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/permission.txt",
+      "cli": "muse",
+      "kind": "permission",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/spark-constructed.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.9/trust.txt",
+      "cli": "muse",
+      "kind": "trust",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/unsent.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/usage-unavailable.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/usage.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/wonder-full-constructed.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.9/working.txt",
+      "cli": "muse",
       "kind": "working",
       "provenance": "capture"
     },
