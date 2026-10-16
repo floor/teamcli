@@ -262,7 +262,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // Set to exactly `1`. Anything else, including unset, leaves every refusal where it is. Dev
   // mode folds the caller gate — and only it — into a warning and the run continues, the shape
   // `up` keeps for its own caller lines; the seat's placement in herdr, the pane's own CLI, the
-  // screen and every write stay enforced.
+  // screen and every write stay enforced. The record the run writes says so: its provenance
+  // carries `dev_mode: true` — `team check` shows it as a difference — until a run in force
+  // writes the seat's record again.
   const dev = io.env.TEAMCLI_DEV_MODE === '1';
   const warning: string[] = [];
   // The caller gate is the one refusal with a command of its own behind it: nothing in the file
@@ -472,7 +474,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     current.launched_file = path;
   });
 
-  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session }, seat, found.pane, id);
+  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev }, seat, found.pane, id);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);
   else {
     // The address: the live session socket this seat answers at, recorded on the agent the way a

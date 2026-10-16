@@ -36,7 +36,17 @@ export type AgentReach = {
   address: string | null;
 };
 
-export type AgentProvenance = { registered_by: string; registered_at: string; updated_at: string };
+/** Who wrote the record and when. `registered_by` and `registered_at` are the first
+ *  registration's and never change; `dev_mode` says whether the run that last wrote the record's
+ *  registration had dev mode on — the caller gate folded into a warning — and is set and cleared
+ *  by the writers that know, so a record a dev-mode run made says so until a run in force
+ *  rewrites it. */
+export type AgentProvenance = {
+  registered_by: string;
+  registered_at: string;
+  updated_at: string;
+  dev_mode?: boolean;
+};
 
 export type Agent = {
   /** `agt_` plus 12 lowercase hex. Immutable. */
@@ -59,10 +69,12 @@ export type Agent = {
   seat_handle?: string | null;
 };
 
-export type AgentInit = Omit<Agent, 'id' | 'provenance'> & { by: string };
+export type AgentInit = Omit<Agent, 'id' | 'provenance'> & { by: string; devMode?: boolean };
 
 /** What `updateAgent` accepts. The nested records merge field by field, so a relaunch can re-point
- *  `reach.pane` alone; `id` and the registration provenance are never changed. */
+ *  `reach.pane` alone; `id`, `provenance.registered_by` and `provenance.registered_at` are never
+ *  changed. `provenance.dev_mode` is the one provenance field a writer may state: true marks the
+ *  record as one a dev-mode run wrote, false takes the mark off. */
 export type AgentPatch = Partial<Omit<Agent, 'id' | 'signing' | 'reach' | 'provenance'>> & {
   signing?: Partial<AgentSigning>;
   reach?: Partial<AgentReach>;
@@ -105,20 +117,21 @@ export function getAgent(home: string, id: string): Agent | null {
   return readAgentFile(agentFile(home, id), id);
 }
 
-/** Assigns the id, records who registered and when, and writes the file atomically. */
+/** Assigns the id, records who registered and when, and writes the file atomically. A run under
+ *  dev mode hands in `devMode` and the record keeps the mark. */
 export function registerAgent(home: string, init: AgentInit): Agent {
   const dir = agentsDir(home);
   return withLock(dir, () => {
     let id = mintAgentId();
     while (existsSync(agentFile(home, id))) id = mintAgentId();
     const now = new Date().toISOString();
-    const { by, ...fields } = init;
+    const { by, devMode, ...fields } = init;
     const agent: Agent = {
       ...fields,
       id,
       mcp: [...fields.mcp],
       skills: [...fields.skills],
-      provenance: { registered_by: by, registered_at: now, updated_at: now },
+      provenance: { registered_by: by, registered_at: now, updated_at: now, ...(devMode === true ? { dev_mode: true } : {}) },
     };
     const problem = invalid(agent);
     if (problem) throw new Error(`cannot register the agent: ${problem}`);
@@ -127,22 +140,26 @@ export function registerAgent(home: string, init: AgentInit): Agent {
   });
 }
 
-/** Applies the patch and rewrites the file atomically. `id` and the registration provenance never
- *  change; `updated_at` is set to now. Throws when there is no such agent. */
+/** Applies the patch and rewrites the file atomically. `id`, `registered_by` and `registered_at`
+ *  never change; `updated_at` is set to now, and `dev_mode` follows the patch when it states one.
+ *  Throws when there is no such agent. */
 export function updateAgent(home: string, id: string, patch: AgentPatch): Agent {
   if (!isAgentId(id)) throw new Error(`"${id}" is not an agent id`);
   return withLock(agentsDir(home), () => {
     const file = agentFile(home, id);
     const current = readAgentFile(file, id);
     if (!current) throw new Error(`no agent ${id} in ${agentsDir(home)}`);
-    const { signing, reach, provenance: _provenance, ...rest } = patch;
+    const { signing, reach, provenance, ...rest } = patch;
+    const nextProvenance: AgentProvenance = { ...current.provenance, updated_at: new Date().toISOString() };
+    if (provenance?.dev_mode === true) nextProvenance.dev_mode = true;
+    else if (provenance?.dev_mode === false) delete nextProvenance.dev_mode;
     const next: Agent = {
       ...current,
       ...definedOnly(rest),
       id: current.id,
       signing: { ...current.signing, ...definedOnly(signing ?? {}) },
       reach: { ...current.reach, ...definedOnly(reach ?? {}) },
-      provenance: { ...current.provenance, updated_at: new Date().toISOString() },
+      provenance: nextProvenance,
     };
     const problem = invalid(next);
     if (problem) throw new Error(`cannot update ${id}: ${problem}`);
@@ -301,7 +318,13 @@ function fromValue(value: YamlValue): Agent | null {
     mcp,
     skills,
     lifecycle: lifecycle as AgentLifecycle,
-    provenance: { registered_by: registeredBy, registered_at: registeredAt, updated_at: updatedAt },
+    provenance: {
+      registered_by: registeredBy,
+      registered_at: registeredAt,
+      updated_at: updatedAt,
+      // Only the writer's own `true` counts: any other value reads as no mark at all.
+      ...(provenance.dev_mode === true ? { dev_mode: true } : {}),
+    },
   };
   if (handle !== null) agent.seat_handle = handle;
   return agent;
@@ -363,6 +386,9 @@ function emit(agent: Agent): string {
     `  registered_at: ${quote(agent.provenance.registered_at)}`,
     `  updated_at: ${quote(agent.provenance.updated_at)}`,
   ];
+  // Written only when it holds: a record with no mark does not carry a `dev_mode: false` line,
+  // so the files an ordinary launch writes read exactly as they always did.
+  if (agent.provenance.dev_mode === true) lines.push('  dev_mode: true');
   if (agent.seat_handle != null) lines.push(`seat_handle: ${quote(agent.seat_handle)}`);
   return `${lines.join('\n')}\n`;
 }

@@ -16,6 +16,7 @@ import { brokerSocket } from '../src/broker/protocol.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { readAgents } from '../src/registry/agents.ts';
 import { keyFolder } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { readState } from '../src/state.ts';
@@ -177,6 +178,14 @@ test('an unapproved file refuses, and the same file mounts when TEAMCLI_DEV_MODE
   expect(mountedWorld.runs.map((run) => run.command).join('\n')).toContain('claude --model claude-opus-5-5');
   expect(readState(join(mounted.root, '.agents')).sessions.acme?.seats.lead?.stage).toBe('ready');
   expect(approvalArtifacts(mounted.home, mounted.root)).toEqual([]);
+  // The registration this run made says so: the record's provenance carries the dev mark,
+  // written to the file as its own line. The refused run registered nothing at all.
+  expect(readAgents(refused.home)).toEqual([]);
+  const record = readAgents(mounted.home)[0];
+  expect(record?.provenance.dev_mode).toBe(true);
+  expect(record?.provenance.registered_by).toBe('unplaced (it runs under herdr)');
+  const recordFile = readFileSync(join(mounted.home, '.config', 'team', 'agents', `${record?.id}.yaml`), 'utf8');
+  expect(recordFile).toContain('  dev_mode: true\n');
 });
 
 /** Bytes of every approval, key, and grant under home. A rules file is not one of these. */

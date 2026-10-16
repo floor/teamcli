@@ -1569,9 +1569,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     if (projectionNote) logLine(dir, 'up', callerLabel(caller), projectionNote, now());
     const afterwards = readState(dir).sessions[session]?.seats ?? {};
     // The registry follows the state this run left: a ready seat is registered, or re-pointed to
-    // its pane when it was relaunched; a seat the file stops, or one not ready, is stopped.
+    // its pane when it was relaunched; a seat the file stops, or one not ready, is stopped. The
+    // run's own dev mode is stated with the write, so a record an un-gated run registered says so
+    // — and a run in force, stating it false, takes any earlier mark off.
     for (const note of registerRun(
-      { home: sources.home, team, root, by: callerLabel(caller), session },
+      { home: sources.home, team, root, by: callerLabel(caller), session, devMode: dev },
       team.seats.map((seat) => ({
         seat,
         pane: afterwards[seat.name]?.stage === 'ready' ? (afterwards[seat.name]?.pane ?? null) : null,

@@ -164,6 +164,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...signingDifferences(team, live, root, sources.home),
+    ...devModeDifferences(team, root, sources.home),
     ...attentionDifferences(team, state, live),
     ...labelDifferences(team, state, live),
     ...rosterDifferences(team, state, live, root, sources.home),
@@ -206,6 +207,30 @@ function notYours(io: Io): number {
   io.stderr('team check: this team is not yours to check\n');
   // exit: check.not-yours
   return 2;
+}
+
+/**
+ * A seat whose record carries the dev mark: its registration was written by a run whose caller
+ * gate was folded into a warning (`src/registry/agents.ts`, `src/registry/sync.ts`), so the
+ * record that says what the seat is was made without the ordinary gate behind it. The difference
+ * names the caller the record itself kept and the one repair that takes the mark off: the owner's
+ * own `team register`, the same write with nothing folded — a clean launch of the seat does it
+ * too. A seat the file no longer names, and one whose record the registry holds none for, is not
+ * this finding's.
+ */
+function devModeDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
+  if (home === undefined) return [];
+  const out: Difference[] = [];
+  const teamId = teamIdOf(root);
+  for (const seat of team.seats) {
+    const record = findAgent(home, { team: teamId, seat: seat.name });
+    if (record?.provenance.dev_mode !== true) continue;
+    out.push({
+      what: `${seat.name}: registered under dev mode (by ${record.provenance.registered_by})`,
+      repair: `re-record the seat with the caller gate in force (team register ${seat.name})`,
+    });
+  }
+  return out;
 }
 
 /**

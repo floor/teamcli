@@ -1,6 +1,6 @@
 // `team register` under dev mode, and its dry run: the caller gate becomes a warning and the
 // run continues — the shape `up` and `down` keep — while everything else stays enforced; a dry
-// run is never a bare refusal.
+// run is never a bare refusal, and a registration dev mode admitted says so in its record.
 //
 // (a) TEAMCLI_DEV_MODE=1: an unplaced caller registers with the caller gate said once as a
 //     warning on stderr, and the run writes its own audit line;
@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
+import { describeCaller } from '../src/caller.ts';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
@@ -140,6 +141,28 @@ test('TEAMCLI_DEV_MODE=1: an unplaced caller registers with the caller gate as a
   expect(log).toContain('lead: registered seat_');
   expect(log).toContain(PANE);
   expect(readState(w.dir).sessions.acme?.seats.lead?.stage).toBe('ready');
+  // The record says so: the provenance carries the mark, and the caller the run kept beside it.
+  const record = readAgents(w.home)[0];
+  expect(record?.provenance.dev_mode).toBe(true);
+  expect(record?.provenance.registered_by).toBe(describeCaller(UNPLACED));
+  const file = readFileSync(join(w.home, '.config', 'team', 'agents', `${record?.id}.yaml`), 'utf8');
+  expect(file).toContain('  dev_mode: true\n');
+});
+
+test('a run in force writes the record again and the mark comes off', async () => {
+  const w = world();
+  const dev = await register(w, ['lead'], { caller: UNPLACED, dev: true });
+  expect(dev.code).toBe(0);
+  expect(readAgents(w.home)[0]?.provenance.dev_mode).toBe(true);
+
+  // The owner's own run: the seat is already on that pane, so the already path rewrites the
+  // registry record from the file — the repair the mark's own finding names (`team check`).
+  const again = await register(w, ['lead'], { caller: OWNER });
+  expect(again.code).toBe(0);
+  expect(again.out).toContain(`lead: already registered — pane ${PANE}`);
+  const record = readAgents(w.home)[0];
+  expect(record?.provenance.dev_mode).toBeUndefined();
+  expect(readFileSync(join(w.home, '.config', 'team', 'agents', `${record?.id}.yaml`), 'utf8')).not.toContain('dev_mode');
 });
 
 test('unset, and the same call is refused with the bare sentence', async () => {
