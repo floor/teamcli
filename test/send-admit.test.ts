@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { admitSend, senderHeader, type AdmitTeams } from '../src/send/admit.ts';
+import { admitSend, sendGrantFor, senderHeader, type AdmitTeams, type SendGrant, type SendGrantRecord } from '../src/send/admit.ts';
 import type { Agent } from '../src/registry/agents.ts';
 
 // The reach every rule is decided over, and nothing else: a send is admitted only by a rule
@@ -72,6 +72,12 @@ const teams: AdmitTeams = {
   },
 };
 
+// The clock every grant test is judged at, and one record as the owner's folder returns them.
+const NOW = new Date('2026-10-16T12:00:00.000Z');
+function grantRecords(from: string, to: string, expires = '2026-11-16T00:00:00.000Z'): SendGrantRecord[] {
+  return [{ name: 'labs to teamcli', from, to, expires }];
+}
+
 describe('send admission: the rules that admit', () => {
   test('the owner sends to anyone', () => {
     for (const target of [orchCli, builder1, builderLabs, builderRadio]) {
@@ -82,8 +88,8 @@ describe('send admission: the rules that admit', () => {
   test('an orchestrator reaches an orchestrator of another team, and its own', () => {
     expect(admitSend(orchCli, orchRadio, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
     expect(admitSend(orchCli, orchLabs, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
-    // Its own team's lead is admitted as a seat of that team; only another team's is the pair.
-    expect(admitSend(orchCli, orchCli, teams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
+    // A lead to itself is the orchestrator pair; there is no wider own-team reach.
+    expect(admitSend(orchCli, orchCli, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
   });
 
   test('an assistant reaches the coordinator of its entity, in the main team', () => {
@@ -98,11 +104,13 @@ describe('send admission: the rules that admit', () => {
     expect(admitSend(assistantCli, orchCli, teams)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
   });
 
-  test('an orchestrator reaches any seat of its own team, and no other team\'s', () => {
-    expect(admitSend(orchCli, builder1, teams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
-    expect(admitSend(orchCli, tester1, teams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
-    expect(admitSend(orchCli, assistantCli, teams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
-    expect(admitSend(orchRadio, builderRadio, teams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
+  test('an orchestrator reaches no seat of its own team', () => {
+    // The design admits orchestrator to orchestrator only: the work that carries down to a
+    // team's seats is `team brief`, not this command, and no rule below names that pair.
+    expect(admitSend(orchCli, builder1, teams).ok).toBe(false);
+    expect(admitSend(orchCli, tester1, teams).ok).toBe(false);
+    expect(admitSend(orchCli, assistantCli, teams).ok).toBe(false);
+    expect(admitSend(orchRadio, builderRadio, teams).ok).toBe(false);
     // Another team's seats are reached through that team's orchestrator, not directly.
     expect(admitSend(orchCli, builderLabs, teams).ok).toBe(false);
     expect(admitSend(orchCli, builderRadio, teams).ok).toBe(false);
@@ -113,8 +121,8 @@ describe('send admission: the rules that admit', () => {
     expect(admitSend(tester1, orchCli, teams)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
     expect(admitSend(builderLabs, orchLabs, teams)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
     expect(admitSend(builderRadio, orchRadio, teams)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
-    // An orchestrator to its own team's lead is a seat to that lead like any other.
-    expect(admitSend(orchLabs, orchLabs, teams).ok).toBe(true);
+    // A lead to itself is the orchestrator pair of the rule above, and nothing wider.
+    expect(admitSend(orchLabs, orchLabs, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
   });
 
   test('an owner-signed grant naming send admits the pair it was verified for', () => {
@@ -158,8 +166,8 @@ describe('send admission: the lead seat a file names itself', () => {
 
   test('a seat reaches the coordinator its roster names, with no lead field to read', () => {
     expect(admitSend(agy, coordinator, fileTeams)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
-    // The coordinator's own reach is the lead's: any seat of its team, and no other team's.
-    expect(admitSend(coordinator, second, fileTeams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
+    // The coordinator's own reach is the other orchestrators'; a seat of its team is not one.
+    expect(admitSend(coordinator, second, fileTeams).ok).toBe(false);
     expect(admitSend(coordinator, betaLead, fileTeams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
   });
 
@@ -170,7 +178,7 @@ describe('send admission: the lead seat a file names itself', () => {
   test('the file word names only the lead: seat to seat still has no rule', () => {
     expect(admitSend(agy, second, fileTeams)).toEqual({
       ok: false,
-      why: "agy-seat@aaa111aaa111 may not send to second-seat@aaa111aaa111: no rule admits it (the owner; an orchestrator to a seat of its own team; an orchestrator to another orchestrator; an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
+      why: "agy-seat@aaa111aaa111 may not send to second-seat@aaa111aaa111: no rule admits it (the owner; an orchestrator to another orchestrator; an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     });
   });
 
@@ -212,17 +220,12 @@ describe('send admission: default deny', () => {
     'orchestrator@teamcli -> orchestrator@labs',
     'orchestrator@teamcli -> orchestrator@radio',
     'orchestrator@teamcli -> orchestrator@teamcli',
-    'orchestrator@teamcli -> builder-1@teamcli',
-    'orchestrator@teamcli -> tester-1@teamcli',
-    'orchestrator@teamcli -> assistant@teamcli',
     'orchestrator@labs -> orchestrator@teamcli',
     'orchestrator@labs -> orchestrator@radio',
     'orchestrator@labs -> orchestrator@labs',
-    'orchestrator@labs -> builder-1@labs',
     'orchestrator@radio -> orchestrator@teamcli',
     'orchestrator@radio -> orchestrator@labs',
     'orchestrator@radio -> orchestrator@radio',
-    'orchestrator@radio -> builder-1@radio',
     "assistant@teamcli -> orchestrator@teamcli",
     'builder-1@teamcli -> orchestrator@teamcli',
     'tester-1@teamcli -> orchestrator@teamcli',
@@ -243,7 +246,7 @@ describe('send admission: default deny', () => {
             pair,
             ok: false,
             why: `${from.name} may not send to ${to.name}: no rule admits it (` +
-              'the owner; an orchestrator to a seat of its own team; an orchestrator to another orchestrator; ' +
+              'the owner; an orchestrator to another orchestrator; ' +
               'an assistant seat to its entity\'s coordinator; ' +
               "a seat to its own team's orchestrator; an owner-signed grant naming send)",
           });
@@ -278,11 +281,22 @@ describe('send admission: default deny', () => {
     expect(admitSend(assistantCli, cliWithSecondBuilder, teams).ok).toBe(false);
   });
 
+  test('a worker reaches another team\'s worker only through a verified grant', () => {
+    // The pair the whole grant machinery exists for: refused bare, admitted with the record.
+    expect(admitSend(builderRadio, builder1, teams).ok).toBe(false);
+    const grant = sendGrantFor(builderRadio, builder1, grantRecords('builder-1@radio', 'builder-1@teamcli'), teams, NOW);
+    expect(grant).toEqual({ name: 'labs to teamcli' });
+    expect(admitSend(builderRadio, builder1, teams, grant)).toEqual({
+      ok: true,
+      rule: 'an owner-signed grant naming send (labs to teamcli)',
+    });
+  });
+
   test('without a verified grant, a grant-admitted pair is refused', () => {
     // The refusal text carries the five rules, so a reader sees what would have admitted it.
     expect(admitSend(builderRadio, builder1, teams)).toEqual({
       ok: false,
-      why: 'builder-1@radio may not send to builder-1@teamcli: no rule admits it (the owner; an orchestrator to a seat of its own team; ' +
+      why: 'builder-1@radio may not send to builder-1@teamcli: no rule admits it (the owner; ' +
         'an orchestrator to another orchestrator; ' +
         "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     });
@@ -299,6 +313,72 @@ describe('send admission: default deny', () => {
     expect(admitSend(builder1, orchCli, sparse)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
       const byField: AdmitTeams = { teamcli: { project: 'teamcli', entity: 'teamcli', orchestrator: 'orchestrator', roster: [{ agent: ORCH_CLI, seat: 'orchestrator', role: 'lead' }] } };
     expect(admitSend(builder1, orchCli, byField)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
+  });
+});
+
+// The owner's grants folder hands admission records, never a decision: `sendGrantFor` is the
+// check that the record names this caller's own identity and this receiver, and the clock. A
+// record that fails it is not passed to `admitSend` at all, so the pair is refused as if the
+// folder held nothing — a forged or stale record cannot widen the reach by existing.
+describe('send admission: the owner-signed grant, verified pair by pair', () => {
+  const grantOf = (caller: Agent, target: Agent, grants: SendGrantRecord[]): SendGrant | undefined =>
+    sendGrantFor(caller, target, grants, teams, NOW);
+
+  test('a record naming the pair by agent id admits exactly that pair', () => {
+    const grant = grantOf(builderRadio, builder1, grantRecords(BUILDER_RADIO, BUILDER_1));
+    expect(grant).toEqual({ name: 'labs to teamcli' });
+    // The header names the record, so the receiver reads which grant was the reason.
+    expect(senderHeader(builderRadio, `an owner-signed grant naming send (${grant?.name ?? ''})`)).toBe(
+      `from ${BUILDER_RADIO} (builder-1 of radio, builder-1@radio) — admitted by: an owner-signed grant naming send (labs to teamcli)\n`,
+    );
+  });
+
+  test('the pair may be spelled seat@team or session/seat', () => {
+    expect(grantOf(builderRadio, builder1, grantRecords('builder-1@radio', 'builder-1@teamcli'))).toEqual({ name: 'labs to teamcli' });
+    expect(grantOf(builderRadio, builder1, grantRecords('radio/builder-1', 'teamcli/builder-1'))).toEqual({ name: 'labs to teamcli' });
+  });
+
+  test('a bare seat names the receiver only in the caller\'s own team', () => {
+    // The sender is always spelled with its team or session: a bare `from` names no team.
+    expect(grantOf(builder1, tester1, grantRecords('builder-1', 'tester-1'))).toBeUndefined();
+    // A bare `to` is the caller's own team's seat, and unambiguous nowhere else.
+    expect(grantOf(builder1, tester1, grantRecords('builder-1@teamcli', 'tester-1'))).toEqual({ name: 'labs to teamcli' });
+    expect(grantOf(builderRadio, builder1, grantRecords('builder-1@radio', 'builder-1'))).toBeUndefined();
+  });
+
+  test('a forged sender id is refused, however the record spells the identity', () => {
+    // Each record names somebody else: builderLabs' id, builderLabs' seat@team, orchRadio's id.
+    expect(grantOf(builderRadio, builder1, grantRecords(BUILDER_LABS, BUILDER_1))).toBeUndefined();
+    expect(grantOf(builderRadio, builder1, grantRecords('builder-1@labs', 'builder-1@teamcli'))).toBeUndefined();
+    expect(grantOf(builderRadio, builder1, grantRecords(ORCH_RADIO, BUILDER_1))).toBeUndefined();
+    // The caller's own spellings in another session's record are not its own either.
+    expect(grantOf(builderRadio, builder1, grantRecords('teamcli/builder-1', 'builder-1@teamcli'))).toBeUndefined();
+  });
+
+  test('an expired record admits nothing, to the millisecond', () => {
+    expect(grantOf(builderRadio, builder1, grantRecords('builder-1@radio', 'builder-1@teamcli', '2026-10-16T11:59:59.999Z'))).toBeUndefined();
+    expect(grantOf(builderRadio, builder1, grantRecords('builder-1@radio', 'builder-1@teamcli', NOW.toISOString()))).toBeUndefined();
+    expect(grantOf(builderRadio, builder1, grantRecords('builder-1@radio', 'builder-1@teamcli', '2026-10-16T12:00:00.001Z'))).toEqual({ name: 'labs to teamcli' });
+  });
+
+  test('a record naming another receiver admits nothing', () => {
+    expect(grantOf(builderRadio, builder1, grantRecords('builder-1@radio', 'tester-1@teamcli'))).toBeUndefined();
+    expect(grantOf(builderRadio, builder1, grantRecords('builder-1@radio', ORCH_CLI))).toBeUndefined();
+  });
+
+  test('the first record naming the pair is the one admitted, and the pair still needs no rule', () => {
+    const two: SendGrantRecord[] = [
+      { name: 'someone else', from: 'tester-1@teamcli', to: 'builder-1@teamcli', expires: '2026-11-16T00:00:00.000Z' },
+      ...grantRecords('builder-1@radio', 'builder-1@teamcli'),
+    ];
+    expect(grantOf(builderRadio, builder1, two)).toEqual({ name: 'labs to teamcli' });
+    // And with no record the same pair is refused, grant or no grant folder.
+    expect(admitSend(builderRadio, builder1, teams, grantOf(builderRadio, builder1, []))).toEqual({
+      ok: false,
+      why: 'builder-1@radio may not send to builder-1@teamcli: no rule admits it (the owner; ' +
+        'an orchestrator to another orchestrator; ' +
+        "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
+    });
   });
 });
 

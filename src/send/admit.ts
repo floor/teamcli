@@ -15,6 +15,8 @@ export type AdmitTeam = {
   entity: string | null;
   /** The lead seat, when the record carries it; the roster is read when it does not. */
   orchestrator?: string | null;
+  /** The session the team runs in, when the record carries it; a grant may spell a team by it. */
+  session?: string | null;
   roster: { agent: string; seat: string; role: string }[];
 };
 
@@ -25,6 +27,14 @@ export type SendVerdict = { ok: true; rule: string } | { ok: false; why: string 
 
 /** An owner-signed grant naming `send`, already verified by the caller's grant machinery. */
 export type SendGrant = { name: string };
+
+/**
+ * One send-grant record as read from the owner's grants folder (`~/.config/team/grants/`): the
+ * pair it admits, spelled as `from` and `to`, and the moment it stops. Reading the folder is
+ * `readSendGrants`'; deciding whether a record admits this pair is `sendGrantFor`, which reads
+ * no file and no clock of its own.
+ */
+export type SendGrantRecord = { name: string; from: string; to: string; expires: string };
 
 /**
  * A side of a send that admission can judge without the registry: the seat a command has already
@@ -41,7 +51,6 @@ export type SendSide = Agent | SendSeat;
  *  identity to judge by, and the docs all read alike. */
 export const RULE_SUMMARY = [
   'the owner',
-  'an orchestrator to a seat of its own team',
   'an orchestrator to another orchestrator',
   "an assistant seat to its entity's coordinator",
   "a seat to its own team's orchestrator",
@@ -62,12 +71,9 @@ export function admitSend(caller: SendSide | 'owner', target: SendSide, teams: A
   const targetTeam = teams[targetTeamId];
   const targetOrchestrator = orchestratorSeat(targetTeam);
 
-  // An orchestrator writes to any seat of its own team: the briefs that carry the work down.
-  if (callerTeam !== undefined && targetTeam === callerTeam && seatOf(caller) === orchestratorSeat(callerTeam)) {
-    return { ok: true, rule: 'an orchestrator to a seat of its own team' };
-  }
-  // An orchestrator writes to an orchestrator of another team: the pair that carries work
-  // between teams. An orchestrator of a team this caller leads was admitted just above.
+  // An orchestrator writes to an orchestrator, in any team: the pair that carries work between
+  // teams. The design admits no other orchestrator-to-seat reach — a seat of the caller's own
+  // team included — so nothing here names one.
   if (seatOf(caller) === orchestratorSeat(callerTeam) && seatOf(target) === targetOrchestrator) {
     return { ok: true, rule: 'an orchestrator to another orchestrator' };
   }
@@ -85,6 +91,71 @@ export function admitSend(caller: SendSide | 'owner', target: SendSide, teams: A
     ok: false,
     why: `${seatAt(caller)} may not send to ${seatAt(target)}: no rule admits it (${RULE_SUMMARY})`,
   };
+}
+
+/**
+ * The owner-signed grant that admits this pair, or undefined: the first record whose `from` names
+ * the caller — by its agent id, its `seat@team` or its `session/seat` — whose `to` names the
+ * receiver the same way (or, as a bare seat, the caller's own team's seat), and whose `expires` is
+ * still ahead of `now`. A record matching neither side is not a grant for this send: the caller
+ * passes only what this returns into `admitSend`.
+ *
+ * Nothing looser is read: a bare `from` is ambiguous between teams and matches nobody, and a
+ * `from` naming another agent — however spelled — is refused here, so the identity the drop file
+ * carries is always the registry's own record for the caller.
+ */
+export function sendGrantFor(
+  caller: SendSide,
+  target: SendSide,
+  grants: SendGrantRecord[],
+  teams: AdmitTeams,
+  now: Date,
+): SendGrant | undefined {
+  const nowMs = now.getTime();
+  for (const grant of grants) {
+    const expMs = Date.parse(grant.expires);
+    if (!Number.isFinite(expMs) || nowMs >= expMs) continue;
+    if (!grantFromNames(grant.from, caller, teams)) continue;
+    if (!grantToNames(grant.to, target, caller, teams)) continue;
+    return { name: grant.name };
+  }
+  return undefined;
+}
+
+/** Whether a grant's `from` names this caller: an agent id, `seat@team`, or `session/seat`. */
+function grantFromNames(from: string, caller: SendSide, teams: AdmitTeams): boolean {
+  if (from.startsWith('agt_')) return 'reach' in caller && caller.id === from;
+  const at = from.lastIndexOf('@');
+  if (at > 0) {
+    return seatOf(caller) === from.slice(0, at) && teamSpelled(teamOf(caller), from.slice(at + 1), teams);
+  }
+  const slash = from.indexOf('/');
+  if (slash > 0) {
+    return 'reach' in caller && caller.reach.session === from.slice(0, slash) && seatOf(caller) === from.slice(slash + 1);
+  }
+  return false;
+}
+
+/** Whether a grant's `to` names this receiver: an agent id, `seat@team`, `session/seat`, or a
+ *  bare seat, which only the caller's own team makes unambiguous. */
+function grantToNames(to: string, target: SendSide, caller: SendSide, teams: AdmitTeams): boolean {
+  if (to.startsWith('agt_')) return 'reach' in target && target.id === to;
+  const at = to.lastIndexOf('@');
+  if (at > 0) {
+    return seatOf(target) === to.slice(0, at) && teamSpelled(teamOf(target), to.slice(at + 1), teams);
+  }
+  const slash = to.indexOf('/');
+  if (slash > 0) {
+    return 'reach' in target && target.reach.session === to.slice(0, slash) && seatOf(target) === to.slice(slash + 1);
+  }
+  return seatOf(target) === to && teamOf(target) === teamOf(caller);
+}
+
+/** Whether `spelled` names the team `id`: the record's own id, its project or its session. */
+function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
+  if (id === spelled) return true;
+  const team = teams[id];
+  return team !== undefined && (team.project === spelled || team.session === spelled);
 }
 
 /**

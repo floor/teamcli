@@ -222,7 +222,7 @@ describe('team send: delivered', () => {
     expect(io.out).toBe('lead: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
-      `from agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')} (lead, lead@acme) — admitted by: an orchestrator to a seat of its own team\n\na note`,
+      `from agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')} (lead, lead@acme) — admitted by: an orchestrator to another orchestrator\n\na note`,
     );
   });
 

@@ -12,7 +12,8 @@ import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import { readTeams } from '../registry/teams.ts';
-import { admitSend, RULE_SUMMARY, senderHeader, type AdmitTeam, type AdmitTeams, type SendSide } from '../send/admit.ts';
+import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, type AdmitTeam, type AdmitTeams, type SendSide } from '../send/admit.ts';
+import { readSendGrants } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { bindPane, deliverTrigger, type DeliverResult } from '../send/deliver.ts';
@@ -34,9 +35,9 @@ left the seat's input box, and the pane is not a dialog this command already cla
 (question, permission, trust, vendor notice, provider error, rate limit). A screen that
 is one of those is not reached: the kind and the drop path are named, and nothing
 further is pressed. Who may call it is the registry's decision, default deny: the
-owner; an orchestrator to any seat of its own team or to an orchestrator in any
-teams; an assistant seat to its entity's coordinator; any seat to its own team's
-orchestrator; or an owner-signed grant naming send. The drop file's first line
+owner; an orchestrator to an orchestrator, in any teams; an assistant seat to its
+entity's coordinator; any seat to its own team's orchestrator; or an owner-signed
+grant naming send. The drop file's first line
 names the sender and the rule that admitted it. --list sends nothing: it prints
 the file's seats and needs no caller check. --dry-run resolves the seat and the
 channel, writes no drop file, and types nothing. It appends one line to the team
@@ -214,7 +215,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (hit === null) {
     const placement = placementProblemOf(caller, standingOf(dir, judged.session, caller));
     if (placement) return refuse(io, dir, who, placement, host, report);
-    admission = admissionOf(caller, team, null, seatName, host.home);
+    admission = admissionOf(caller, team, null, seatName, host.home, () => host.now());
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
     const configured = team.seats.find((seat) => seat.name === seatName);
     if (!configured) {
@@ -222,7 +223,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     to = { seat: seatName, session: team.session, cli: configured.cli, pane: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(caller, team, hit, seatName, host.home);
+    admission = admissionOf(caller, team, hit, seatName, host.home, () => host.now());
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
     // A resolved spec is addressed by its record: its pane, its session and its CLI, under the
     // receiving team's own folder; across teams this run's daemon is skipped, so the send is
@@ -598,8 +599,14 @@ type Admission = { ok: true; rule: string; sender: Agent | 'owner' } | { ok: fal
  * admit by and is refused; `up` and `add` register a seat the first time they launch it. The
  * team's record comes from the live file this run judged, which is the seed the registry
  * projects; a registered team's own record joins it when addressing crosses teams.
+ *
+ * The last rule is read only once the registry's own rules have refused: the owner's send-grants
+ * folder, and, only when it holds a record, the clock that decides expiry — the same order `up`
+ * and `init` ask the grants in. A record the folder returns still has to name this caller's own
+ * record and this receiver (`sendGrantFor`); a grant for another pair is not a grant here, so
+ * nothing looser than the pair reaches `admitSend`.
  */
-function admissionOf(caller: Caller, team: TeamFile, target: Target | null, seatName: string, home: string): Admission {
+function admissionOf(caller: Caller, team: TeamFile, target: Target | null, seatName: string, home: string, now: () => Date): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
   const sender = recordFor(home, team.session, caller.kind === 'seat' ? caller.name : '');
   if (sender === null) {
@@ -612,9 +619,18 @@ function admissionOf(caller: Caller, team: TeamFile, target: Target | null, seat
   // spec — it names the team a cross-team send lands in — else the seat the caller's team was
   // asked for, as the declared-seat path always had it.
   const judged: SendSide = target === null ? { seat: seatName, team: sender.reach.team } : target.agent;
-  const verdict = admitSend(sender, judged, admitRecordsOf(home, team, sender.reach.team));
-  if (!verdict.ok) return { ok: false, why: verdict.why };
-  return { ok: true, rule: verdict.rule, sender };
+  const records = admitRecordsOf(home, team, sender.reach.team);
+  const verdict = admitSend(sender, judged, records);
+  if (verdict.ok) return { ok: true, rule: verdict.rule, sender };
+  const grants = readSendGrants(home);
+  if (grants.length > 0) {
+    const grant = sendGrantFor(sender, judged, grants, records, now());
+    if (grant !== undefined) {
+      const granted = admitSend(sender, judged, records, grant);
+      if (granted.ok) return { ok: true, rule: granted.rule, sender };
+    }
+  }
+  return { ok: false, why: verdict.why };
 }
 
 /** The registry's record for a seat of this session: the most recently updated one, retired

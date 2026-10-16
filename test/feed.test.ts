@@ -165,13 +165,14 @@ const OWNER_HEADER = 'from the owner — admitted by: the owner\n\n';
 describe('team send history log & team feed', () => {
   test('writes 0600 JSONL under the state folder, never in a lobby or the repo, and an A->B send appears once', async () => {
     const { root, dir, home, sockets } = world();
-    recordSeat(dir, 'lead', 'pane-lead');
-    registerSeat(home, 'lead', 'coordinator');
+    // A seat to its own team's orchestrator: the pair the authority rules admit without a grant.
+    recordSeat(dir, 'helper', 'pane-helper');
+    registerSeat(home, 'helper', 'implementer');
     const host = hostFor(home, sockets);
-    const callerIo = testIo(root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+    const callerIo = testIo(root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
 
     const secret = 'distinctive-secret-payload';
-    const code = await runSend(['helper', secret, '--json'], callerIo, host);
+    const code = await runSend(['lead', secret, '--json'], callerIo, host);
     expect(code).toBe(0);
     const sentDoc = JSON.parse(callerIo.out) as { ids: { sent: string } };
 
@@ -188,11 +189,11 @@ describe('team send history log & team feed', () => {
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
     expect(Object.keys(parsed).sort()).toEqual(['body', 'from', 'id', 'outcome', 'to', 'ts']);
     // The seat's send files the body under its header: the id admission admitted, and the rule.
-    const seatHeader = 'from agt_6c6561640000 (lead, lead@acme) — admitted by: an orchestrator to a seat of its own team\n\n';
+    const seatHeader = 'from agt_68656c706572 (helper, helper@acme) — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
       ts: NOW.toISOString(),
-      from: 'lead',
-      to: 'helper',
+      from: 'helper',
+      to: 'lead',
       body: `${seatHeader}${secret}`,
       id: sentDoc.ids.sent,
       outcome: 'delivered',
@@ -207,7 +208,7 @@ describe('team send history log & team feed', () => {
     const feedIo = testIo(root);
     expect(await runFeed([], feedIo, { home })).toBe(0);
     expect(feedIo.out).toBe(
-      `15:30:00  lead -> helper  [delivered]  ${seatHeader.split('\n')[0]}\n          \n          ${secret}\n`,
+      `15:30:00  helper -> lead  [delivered]  ${seatHeader.split('\n')[0]}\n          \n          ${secret}\n`,
     );
   });
 

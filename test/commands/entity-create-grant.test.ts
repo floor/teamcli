@@ -227,8 +227,9 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
         expect(seats[name]?.stage, name).toBe('ready');
       }
 
-      const leadCaller = { kind: 'seat', name: 'orchestrator', pane: seats.orchestrator?.pane ?? 'seat-pane-1', session: 'radiooooo-v4' } as const;
-      const sendIo = testIo(v4, leadCaller);
+      // The owner sends the brief: an orchestrator's own-team seats are outside the reach the
+      // send rules admit, and this scene is about the create-grant covering init and up.
+      const sendIo = testIo(v4, { kind: 'owner' });
       const sendHost: SendHost = {
         agents: () => [{ name: 'builder-1', pane: seats['builder-1']?.pane ?? 'seat-pane-2' }],
         processInfo: () => ({ shell: 1, foreground: [2] }),

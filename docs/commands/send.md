@@ -108,11 +108,28 @@ needs no caller check.
 | Caller | May send to |
 | --- | --- |
 | the owner | any agent |
-| an orchestrator | any seat of its own team |
 | an orchestrator | an orchestrator, in any team |
 | an assistant seat | its entity's main coordinator |
 | any seat | its own team's orchestrator |
 | a caller an owner-signed grant names for `send` | what the grant names |
+
+An orchestrator has no other reach: a send to a seat of its own team is refused like any other
+pair the table does not list, and needs an owner-signed grant naming it.
+
+An owner-signed grant is a record in the owner's grants folder (`~/.config/team/grants/`, the
+same folder the standing create-grants live in), naming the pair it admits and when it stops:
+
+```text
+send:
+  from: builder-1@labs      # the sender: its agent id, seat@team or session/seat
+  to: lead@teamcli          # the receiver, in the same spellings; a bare seat is the sender's own team's
+expires: "2026-10-17T00:00:00Z"
+```
+
+The record is read only once the rules above have refused, and it admits the send only when its
+`from` names the caller's own agent record — a grant naming another agent never admits this
+caller — its `to` names the receiver, and `expires` is still ahead. A record that fails any of
+those, or a symbolic link, is not a grant: the send is refused as if the folder were empty.
 
 ## The sender header
 
