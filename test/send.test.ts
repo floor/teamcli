@@ -202,9 +202,9 @@ describe('team send: delivered', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    // The fixture's sockets folder holds no socket file, so the default (socket) path is
-    // unavailable and the typed trigger carries it; the outcome names that and the reason.
-    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
+    // The typed trigger is the default: a sockets folder with or without a socket file makes no
+    // difference here, and the outcome is the plain word.
+    expect(io.out).toBe('lead: delivered\n');
     expect(host.frames).toEqual([]);
     expect(pane.typed.length).toBe(1);
     expect(pane.typed[0]).not.toContain('hello world');
@@ -242,7 +242,7 @@ describe('team send: delivered', () => {
     const code = await runSend(['lead', 'a note'], io, fake(sockets, { native: scripted(['idle', 'working']) }));
 
     expect(code).toBe(0);
-    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
+    expect(io.out).toBe('lead: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
       `from agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')} (lead, lead@acme) — admitted by: an orchestrator to another orchestrator\n\na note`,
@@ -259,7 +259,7 @@ describe('team send: delivered', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
+    expect(io.out).toBe('lead: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
       `from agt_${Buffer.from('helper').toString('hex').padEnd(12, '0')} (helper, helper@acme) — admitted by: a seat to its own team's orchestrator\n\na note`,
@@ -277,7 +277,7 @@ describe('team send: delivered', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
+    expect(io.out).toBe('lead: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
       "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\na note",
@@ -1035,7 +1035,7 @@ describe('team send: native drop', () => {
     expect(JSON.parse(json.out)).toEqual({ seat: 'lead', status: 'dry-run', exit: 0, ids: { sent: null, reply: null } });
     const claude = owner(root);
     expect(await runSend(['lead', 'hello', '--dry-run'], claude, fake(sockets))).toBe(0);
-    expect(claude.out).toBe('lead: dry-run: claude-code via its cross-session socket, falling back to a 0600 drop file and one trigger line; nothing was written\n');
+    expect(claude.out).toBe('lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written\n');
     const waited = owner(root);
     expect(await runSend(['lead', 'hello', '--wait', '--dry-run'], waited, fake(sockets))).toBe(0);
     expect(waited.out).toBe('lead: dry-run: claude-code via the cross-session socket; nothing was sent\n');
@@ -1100,7 +1100,7 @@ describe('team send: native drop', () => {
     const io = owner(root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
+    expect(io.out).toBe('lead: delivered\n');
   });
 });
 

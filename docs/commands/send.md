@@ -1,11 +1,11 @@
 # team send
 
-Writes one message to one seat. A plain send to a Claude Code seat writes one frame on that
-session's cross-session socket, and nothing is typed; when no socket takes the frame, the send
-falls back to the drop-file path and the outcome line says so — `delivered (typed, socket
-<reason>)`. Every other seat takes that path from the start: the body is written whole to a drop
-file, mode 0600, by renaming a temporary file into place, and one short trigger line that names
-that file is typed. The body is never typed, and it is never split across several writes. `delivered` means herdr reported the seat `working` — or `done` or `blocked`, and not
+Writes one message to one seat. A plain send writes the body whole to a drop file, mode 0600,
+by renaming a temporary file into place, and types one short trigger line that names that file.
+The body is never typed, and it is never split across several writes. That is the default for
+every seat, Claude Code's included: a socket write to a busy session can land at its held-message
+dialog, where the box is blocked, so the cross-session socket is the waited send's channel and a
+plain send is the typed trigger. `delivered` means herdr reported the seat `working` — or `done` or `blocked`, and not
 the status read before Enter — after that one line and Enter, or the transcript shows the drop
 being read (a CLI's status can lag while it works), the line had left the seat's input box, and
 the pane was not a dialog this command already classifies: question, permission, trust, vendor notice, provider error, or
@@ -16,14 +16,17 @@ spinner in the terminal title for codex, and the `esc to cancel` footer for agy.
 narrow enough to wrap the hint can submit while herdr stays idle; that run is `not-submitted`,
 not a silent success.
 
-`team send` to a Claude Code seat writes one frame on the cross-session socket — the address its
-session answers at — and `--wait` takes the same path to stand the reply listener the answer must
-arrive beside. A successful write says the frame was sent on the socket,
+`team send --wait` to a Claude Code seat writes one frame on the cross-session socket — the
+address its session answers at — and stands the reply listener the answer must arrive beside. A
+successful write says the frame was sent on the socket,
 not that it was delivered. The command opens a listener at its own `cc-socks/<pid>.sock` — the
 address the receiving session derives from the connection, the one it names as the message's
 `from` — before the frame is written, so an answer that comes at once finds it standing, and
 then blocks until a reply line arrives or the window closes. The wait's outcome is `answered`
-when the reply came back. No reply within the window says the frame was sent and that a seat
+when the reply came back; a frame the receiving session holds at its own held-message dialog is
+`held (socket)` at once — the run reads the pane for that dialog for about a second after the
+write, and nothing further is typed into the blocked box. No reply within the window says the
+frame was sent and that a seat
 which does not accept messages from other sessions holds the frame until a person lets it
 through. A reply the replying harness stamped with its attribution wrapper
 (`<cross-session-message …>`) is printed as the body inside it. A listener that cannot be
@@ -58,9 +61,9 @@ usage error. `--timeout` is a whole number of seconds, 1 to 86,400, and is only 
 `--wait`; without it a wait runs 120 seconds. `--json` prints one result document instead of
 the lines — `{seat, status, exit, reply?, error?, ids}` — where `ids.sent` is the id of the
 message this command composed and `ids.reply` the reply frame's own, when there is one.
-`--dry-run` resolves the seat and names the channel the run would take — a Claude Code seat's
-cross-session socket, falling back to a drop file and one trigger line, and the drop file for
-every other seat. It writes no drop file and types nothing; it appends one line to
+`--dry-run` resolves the seat and names the channel the run would take — a drop file and one
+trigger line for a plain send, and the cross-session socket for a waited Claude Code seat. It
+writes no drop file and types nothing; it appends one line to
 `.agents/team.log`.
 
 ## Addressing
@@ -86,10 +89,10 @@ agents. A plain send writes `.agents/send-drops/<session>/<seat>/<id>` (the file
 types one trigger line into that seat's pane, reads the pane back before Enter to check the
 composer holds that line, and reads it again after Enter. `send-drops`, the session directory,
 and the seat directory are each mode 0700. This command never deletes a delivered drop file;
-the owner removes `.agents/send-drops` when those messages are no longer needed. A send to a Claude Code seat reads the registry's recorded address while it is still live — its
-pid among the pane's, its socket present — and the processes of the seat's pane otherwise, with
+the owner removes `.agents/send-drops` when those messages are no longer needed. A waited send to a Claude Code seat reads the registry's recorded address while it is still live —
+its pid among the pane's, its socket present — and the processes of the seat's pane otherwise, with
 the socket file's presence in the sockets folder — this Mac's Claude Code can write its sockets
-to `/tmp/cc-socks` instead, so discovery reads that folder too — before any drop file is written. The socket is the first of the
+to `/tmp/cc-socks` instead, so discovery reads that folder too — before the frame is written. The socket is the first of the
 pane's processes — the foreground processes first, then the shell — with a file at
 `<sockets dir>/<pid>.sock`.
 The command holds the seat's lock (`<state dir>/seat-locks/<session>/<seat>`) around the write,
@@ -158,7 +161,7 @@ was let through; the drop record carries the sender's id from day one.
 | --- | --- | --- |
 | delivered | 0 | `<seat>: delivered` on stdout |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
-| held | 1 | `team send: <seat>: held: <reason>` on stderr |
+| held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
 | listed | 0 | one `<name>  <cli>  <role>` line per seat on stdout |
 | timeout | 1 | `team send: <seat>: timeout: sent, no reply within <s>s; a seat which does not accept messages from other sessions holds the frame until a person lets it through` on stderr |
@@ -167,8 +170,10 @@ was let through; the drop record carries the sender's id from day one.
 | usage | 2 | `team send: <message>` and the usage on stderr |
 | configuration | 2 | `team send: <message>` on stderr |
 
-`held` is nothing sent: the message is safely on disk, the run exits 1, and the reason it prints
-says what held it. A pane whose composer already holds unsent text is left alone before the run
+`held` is nothing sent: the message is safely on disk — or, on the socket's path, in the frame the
+receiving session's held-message dialog keeps for a person to let through — the run exits 1, and
+the reason it prints says what held it. A socket write the dialog keeps is `held (socket)`, and
+nothing is typed into the blocked box while the dialog stands. A pane whose composer already holds unsent text is left alone before the run
 types anything (`the composer already holds unsent text`). The trigger line is what the composer
 is read back for: before Enter the run checks the composer holds it, and a composer that does not
 takes no Enter (`the composer read-back did not match the trigger`); the trigger line is the
@@ -236,11 +241,11 @@ seats:
     launch: codex -m gpt-6-sol
 ```
 
-A plain send to a Claude Code seat goes over its cross-session socket, and nothing is typed. `delivered (socket)` means the socket took the message. When no socket is found or the socket refuses, the send falls back to a drop file and one trigger, and says so: `delivered (typed, socket <reason>)`.
+A plain send is a drop file and one trigger line, and the outcome is the plain word. The cross-session socket is `--wait`'s channel; a frame the receiving session holds at its held-message dialog is `held (socket)`.
 
 ```console
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
-claude-keeper: delivered (socket)
+claude-keeper: delivered
 exit 0
 ```
 
