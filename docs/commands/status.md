@@ -83,6 +83,13 @@ are padded on the cleaned text, so a value can never move the cursor, paint the 
 second line. `--json` is the one text not cleaned: the document carries each string as it was read,
 escaped where JSON requires it, for a parser rather than a terminal.
 
+Every row of the seats table ends with the word a send would use to reach that seat: `socket` while
+the file declares the seat `cli: claude-code` and the pane's own processes carry a live session
+socket, and `typed` otherwise — another CLI, a pane that is gone, one herdr could not read. The word
+is read from the processes the comparison already holds, so no extra herdr call is made; only the
+socket file itself is looked up on disk. `--json` rows keep the shape they published: the document
+carries no such word.
+
 ## Example
 
 ```yaml file=.agents/team.yaml

@@ -186,6 +186,9 @@ note: proc release-watch: owner since 2026-10-04T09:00:00.000Z
 0 difference(s)
 ```
 
+The seats table's last column is the word a send would use to reach each seat — `socket` or `typed`;
+[team status](status.md) explains it.
+
 A second seat may not take a live name. The record stays where it is:
 
 ```console caller=claude-keeper
