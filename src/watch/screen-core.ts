@@ -1069,6 +1069,12 @@ function statusThenOne(
   return { kind: 'unknown' };
 }
 
+function sameRulePair(top: string | null, bottom: string | null): boolean {
+  if (top === null || bottom === null) return false;
+  if (top === bottom) return true;
+  return top.length === bottom.length && /^▄+$/.test(top) && /^▀+$/.test(bottom);
+}
+
 function twoRules(lines: string[], styled: string[], composer: Extract<ScreenData['composer'], { mode: 'two-rules-footer-below' }>, tick: () => boolean): Hit {
   // The frame first: the box's bottom rule is the window's last rule row, and its top rule is
   // the nearest rule row above it — the captures draw exactly two rules around the box, both
@@ -1085,9 +1091,10 @@ function twoRules(lines: string[], styled: string[], composer: Extract<ScreenDat
   }
   if (top < 0 || bottom < 0) return { kind: 'unknown' };
   // The two rules of one box are drawn at one width (53 columns in unsent.txt, 54 in
-  // folded-rules.txt). A window whose rules differ is not that frame — the box the caller
+  // folded-rules.txt), either as the same rule line or as an upper-and-lower half-block pair
+  // (▄… above, ▀… below). A window whose rules differ is not that frame — the box the caller
   // compares against typed text cannot be established — and the read fails closed.
-  if (ruleRun(composer, lines[bottom] ?? '') !== ruleRun(composer, lines[top] ?? '')) return { kind: 'unknown' };
+  if (!sameRulePair(ruleRun(composer, lines[top] ?? ''), ruleRun(composer, lines[bottom] ?? ''))) return { kind: 'unknown' };
   // The input row is the box's first row under its opening frame, and it carries the prompt at
   // the capture's own column. A row there that does not — a folded box's marker row
   // (folded-rules.txt) — is not this box's input, and the read fails closed rather than take

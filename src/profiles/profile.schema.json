@@ -34,7 +34,7 @@
     "login": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["check", "hint"],
+      "required": ["hint"],
       "properties": {
         "check": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
         "hint": { "type": "string", "minLength": 1 }

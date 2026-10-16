@@ -1685,3 +1685,24 @@ describe('team add --model and --effort', () => {
   });
 });
 
+
+// The second half of a swap. The lead is declared and not stopped, so the add launches
+// it without editing the file or the approval, and the swap's record goes once it runs.
+describe('team add after a lead swap', () => {
+  test('starts the lead, leaves the file as approved, and clears the swap record', async () => {
+    const agents = join(project, '.agents');
+    updateState(agents, (state) => {
+      (state.sessions.acme ??= emptySession()).swapping = { lead: { by: 'owner', at: '2026-10-15T07:00:00.000Z' } };
+    });
+    const before = readFileSync(join(agents, 'team.yaml'), 'utf8');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['lead'], io, sources(made))).toBe(0);
+    expect(made.creates).toEqual(['lead']);
+    expect(readFileSync(join(agents, 'team.yaml'), 'utf8')).toBe(before);
+    const session = readState(agents).sessions.acme;
+    expect(session?.seats.lead?.stage).toBe('ready');
+    expect(session?.swapping).toBeUndefined();
+    expect(readFileSync(join(agents, 'team.log'), 'utf8')).toContain('lead runs its new agent (swap started by owner at 2026-10-15T07:00:00.000Z)');
+  });
+});

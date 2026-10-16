@@ -24,6 +24,7 @@ describe('quota patterns', () => {
     expect(quotaFor('claude-code')).toEqual([]);
     expect(quotaFor('cursor')).toEqual([]);
     expect(quotaFor('antigravity')).toEqual([]);
+    expect(quotaFor('gemini')).toEqual([]);
   });
 
   test('grok reads the weekly figure off its footer row', () => {
