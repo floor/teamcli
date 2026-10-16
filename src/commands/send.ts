@@ -12,6 +12,7 @@ import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
+import { liveSocketOf } from '../send/address.ts';
 import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
 import { readSendGrants } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
@@ -301,7 +302,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   }
 
   // Phase 1: a Claude Code seat takes the frame on its cross-session socket by default —
-  // nothing is typed. The registry's recorded address when it has one, else the pane's own
+  // nothing is typed. The registry's recorded address while it is live, else the pane's own
   // processes; a socket that is missing or refuses falls back to the typed trigger below,
   // and the outcome line keeps the reason it fell (delivered (typed, socket <reason>)).
   let socketNote: string | null = null;
@@ -421,7 +422,9 @@ async function deliverSocket(
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
     return unreachable(io, dir, who, to.seat, "the pane's processes could not be read", host, report);
   }
-  const socketPath = to.address ?? socketOf(host, processes);
+  // The registry's recorded address while it is still live, else today's discovery, the pane's
+  // own processes — which also covers the alternative sockets folder.
+  const socketPath = liveSocketOf(to.address, processes, host.socketsDir) ?? socketOf(host, processes);
   if (socketPath === null) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
     return unreachable(io, dir, who, to.seat, `no cross-session socket was found for its pane's processes (looked in ${socketDirs(host)})`, host, report);
@@ -625,7 +628,7 @@ type SocketAttempt = { kind: 'done' } | { kind: 'fallback'; reason: string };
 
 /**
  * The default path's first leg: one frame on the target's cross-session socket, nothing typed.
- * The address is resolved first — the registry's recorded one when it has one, else the pane's
+ * The address is resolved first — the registry's recorded one while it is still live, else the pane's
  * own processes — and a write the socket takes is the send: this channel has no
  * acknowledgement, so a taken frame is all this run can know. Every other ending comes back as
  * a reason for the caller to fall back to the typed trigger: no pane, no socket, a socket gone
@@ -674,12 +677,18 @@ async function deliverSocketFrame(
   return { kind: 'done' };
 }
 
-/** The address a send tries: the registry's recorded one when there is one, else the pane's own
- *  processes (`socketOf`). `recorded` marks the difference — only a recorded address gets the
- *  live re-resolution after its write refuses. */
+/** The address a send tries: the registry's recorded one while it is still live — its pid among
+ *  the pane's, its socket present — else the pane's own processes (`socketOf`). `recorded` marks
+ *  the difference — only the recorded address gets the live re-resolution after its write
+ *  refuses. A pane that cannot be read leaves a recorded address as the only thing this run has;
+ *  a write that refuses still falls back to the typed trigger. */
 function socketPathFor(host: SendHost, to: Aim, pane: string): { path: string; recorded: boolean } | null {
-  if (to.address !== null) return { path: to.address, recorded: true };
   const processes = host.processInfo(to.session, pane);
+  if (to.address !== null) {
+    const live = liveSocketOf(to.address, processes, host.socketsDir);
+    if (live !== null) return { path: live, recorded: live === to.address };
+    if (processes === null) return { path: to.address, recorded: true };
+  }
   if (processes === null) return null;
   const path = socketOf(host, processes);
   return path === null ? null : { path, recorded: false };
