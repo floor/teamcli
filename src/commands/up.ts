@@ -600,9 +600,6 @@ function denyUp(out: { stderr(text: string): void }): number {
   return 1;
 }
 
-/** Doctor's never-approved line. The other two non-verified cases share `notInForce`'s text. */
-const NEVER_APPROVED_DOCTOR = 'run `team approve`: this file was never approved on this machine';
-
 /** Pulls the dev-mode and scoped-bypass warnings out of `refusals` and joins them into the one line. */
 function waivedWarningLine(refusals: string[], standing: Standing, caller: Caller): string {
   const placement = `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
