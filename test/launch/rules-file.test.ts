@@ -486,7 +486,8 @@ describe('one seat\'s delivery', () => {
         const delivery = rulesDeliveryOf(standing, team, seat, '/nowhere', home);
         if ('refusal' in delivery) throw new Error(delivery.refusal);
         expect(delivery.text).toBe(rulesOf(team, seat, '/nowhere'));
-        expect(delivery.path).toBe(rulesFilePath(team.project, '/nowhere', home, seat.name));
+        const livePath = rulesFilePath(team.project, '/nowhere', home, seat.name);
+        expect(livePath).toBe(delivery.path);
       }
       expect(existsSync(join(home, '.config'))).toBe(false);
     } finally {
