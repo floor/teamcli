@@ -30,7 +30,8 @@ plan and runs nothing.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--abandon`, `--session` and `--file` are the owner's own |
-| a run with no terminal | nothing, including `--dry-run`: `team down: only the owner runs this, from a terminal outside herdr` |
+| a caller outside herdr whose ancestry names a create-grant's `runner` | stop the team, for a file whose root and this call's folder both sit under the paths that record covers, before it expires. `--abandon`, `--session` and `--file` are not granted |
+| a run with no terminal | nothing, including `--dry-run`, unless a create-grant's `runner` names the caller: `team down: only the owner runs this, from a terminal outside herdr` |
 | the orchestrator's seat | stop the other seats, and leave its own seat and the operator's seat running. When the file has a `grant`, this needs `down` in that grant. `--abandon`, `--session` and `--file` stay the owner's |
 | the operator's seat | stop the team; never the orchestrator's or the operator's own seat |
 | the approved delegate, when the file's `delegates` section names it | stop the whole team, the orchestrator's and the operator's seats included; never `--abandon`, `--session` or `--file` |
