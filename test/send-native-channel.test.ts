@@ -16,7 +16,7 @@ afterEach(() => {
 test('a plain send to a claude-code seat writes the drop and types one trigger', async () => {
   const made = world();
   cleanup = made.cleanup;
-  const pane = scripted(['working']);
+  const pane = scripted(['idle', 'working']);
   const host = fake(made, { native: pane });
 
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
