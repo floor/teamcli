@@ -8,7 +8,7 @@ import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/iden
 import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { usesLauncher } from '../launch/line.ts';
 import type { SeatState, SessionState } from '../state.ts';
-import { readScreen } from '../watch/screen.ts';
+import { readScreen, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
@@ -100,6 +100,24 @@ export function orderAndAnnotateDifferences(differences: Difference[]): Differen
     .filter((diff) => !diff.approval)
     .map((diff) => (diff.needs === 'approve' ? { ...diff, repair: `${diff.repair} (after: ${APPROVAL_REPAIR})` } : diff));
   return [...approval, ...rest];
+}
+
+/** The account a seat's budget counts against: its own `account:`, its vendor when it names
+ *  none — the resolution every counting rule uses (RFC 0003 § 3b). Null when neither says, and a
+ *  mark then leaves the pool out. */
+function accountOf(seat: Seat | undefined): string | null {
+  const account = seat?.account ?? seat?.vendor ?? '';
+  return account === '' ? null : account;
+}
+
+/** The mark a quiet seat's screen earns for a usage limit: the CLI's own limit screen, named for
+ *  the pool the seat spends and the reset time the screen gives, when it gives one. Null for
+ *  every other screen. */
+function limitMark(seat: Seat | undefined, screen: Screen): string | null {
+  if (screen.kind !== 'rate limit') return null;
+  const account = accountOf(seat);
+  const on = account === null ? '' : ` on ${account}`;
+  return screen.reset === null ? ` (rate limit${on})` : ` (rate limit${on}, resets at ${screen.reset})`;
 }
 
 // Compares the file and the state with the live session. Pure: every input is handed in.
@@ -216,7 +234,8 @@ export function compare(
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
-      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : '';
+      const limit = quiet ? limitMark(seat, screen) : null;
+      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : limit ?? '';
       const stateText = `${agent.status}${mark}${seat.parked ? ', parked' : ''}`;
       rows.push({
         name: seat.name,
@@ -404,10 +423,12 @@ export function compare(
       const quiet = agent.status === 'idle' || agent.status === 'done';
       const tempScreen = readScreen(likeCli, live.screens[agent.pane]);
       const unread = quiet && tempScreen.kind === 'unknown';
+      // The pool a temporary seat spends is the like-seat's, as its cli and model string are.
+      const limit = quiet ? limitMark(likeSeat, tempScreen) : null;
       rows.push({
         name,
         ...idField,
-        state: `${agent.status}${unread ? ' (screen not recognised)' : ''}, temporary`,
+        state: `${agent.status}${unread ? ' (screen not recognised)' : limit ?? ''}, temporary`,
         model: tempModel,
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),

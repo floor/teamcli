@@ -13,7 +13,7 @@ import {
 } from '../information/usage.ts';
 import type { Command, Io } from '../io.ts';
 
-export const USAGE = 'Usage: team usage [--json]\n';
+export const USAGE = 'Usage: team usage [--json] [--all]\n';
 
 /** The sentence a run outside any project contributes as its note: it names no git and no flag
  *  this command does not have, and it is a note with exit 0, not a refusal. */
@@ -48,13 +48,16 @@ export default usage;
  * itself unreadable (`usage.store`, § 2.4). Exit 0 whatever the figures.
  */
 export async function runUsage(argv: string[], io: Io, sources: UsageSources): Promise<number> {
-  const args = readArgs(argv, [], ['json']);
+  const args = readArgs(argv, [], ['json', 'all']);
   if (args.error || args.rest.length) {
     io.stderr(`team usage: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
     // exit: usage.invocation
     return 2;
   }
   const json = args.flags.has('json');
+  // `--all`: every team's seat breakdown under the full view; the report says in one note why a
+  // caller the view does not widen still reads only their own team's.
+  const allTeams = args.flags.has('all');
   const now = sources.now();
   // The caller's own project, resolved from the current folder the way every command resolves it;
   // a file that cannot be read, and a folder with no file at all, are carried as this caller's
@@ -86,7 +89,7 @@ export async function runUsage(argv: string[], io: Io, sources: UsageSources): P
     // exit: usage.store
     return 2;
   }
-  const report = reportOf(machine, view, now.getTime(), mineNotes);
+  const report = reportOf(machine, view, now.getTime(), mineNotes, allTeams);
   io.stdout(json ? `${JSON.stringify(report, null, 2)}\n` : reportText(report));
   // exit: usage.block
   return 0;

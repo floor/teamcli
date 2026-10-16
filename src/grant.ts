@@ -39,10 +39,12 @@ export function grantsDir(home: string = homedir()): string {
 }
 
 /**
- * Reads valid entity create-grant records from `~/.config/team/grants/`. Symbolic links and
- * malformed records are skipped; expiry and path containment are checked when a command asks.
+ * Every record file in the owner's grants folder, with its stem: the read the create-grants and
+ * the send-grants share. The folder and every parent up to `home` must be real directories, and
+ * each file a plain one — a symbolic link anywhere is skipped rather than followed — and the
+ * file must parse to a mapping. What each reader makes of the record's own fields is its own.
  */
-export function readEntityCreateGrants(home: string = homedir()): EntityCreateGrant[] {
+export function readGrantRecords(home: string = homedir()): { stem: string; record: Record<string, unknown> }[] {
   const homeResolved = resolve(home);
   for (const dir of [homeResolved, join(homeResolved, '.config'), join(homeResolved, '.config', 'team'), grantsDir(homeResolved)]) {
     try {
@@ -59,7 +61,7 @@ export function readEntityCreateGrants(home: string = homedir()): EntityCreateGr
   } catch {
     return [];
   }
-  const out: EntityCreateGrant[] = [];
+  const out: { stem: string; record: Record<string, unknown> }[] = [];
   for (const entry of entries) {
     if (entry.startsWith('.') || !/\.(?:yaml|yml|json)$/.test(entry)) continue;
     const full = join(folder, entry);
@@ -69,49 +71,59 @@ export function readEntityCreateGrants(home: string = homedir()): EntityCreateGr
       const text = readFileSync(full, 'utf8');
       const parsed = entry.endsWith('.json') ? JSON.parse(text) : toValue(parseYaml(text));
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-      const record = parsed as Record<string, unknown>;
-      const stem = entry.replace(/\.(?:yaml|yml|json)$/, '');
-      const entity =
-        typeof record.entity === 'string' && record.entity.trim() !== ''
-          ? record.entity.trim()
-          : ENTITY_PATHS[stem] !== undefined
-            ? stem
-            : null;
-      const rawAgent =
-        typeof record.agent === 'string'
-          ? record.agent.trim()
-          : typeof record.seat === 'string'
-            ? record.seat.trim()
-            : typeof record.pane === 'string'
-              ? record.pane.trim()
-              : '';
-      if (!rawAgent) continue;
-      let session =
-        typeof record.session === 'string' && record.session.trim() !== '' ? record.session.trim() : null;
-      let agent = rawAgent;
-      if (session === null && rawAgent.includes('/')) {
-        const slash = rawAgent.indexOf('/');
-        session = rawAgent.slice(0, slash).trim();
-        agent = rawAgent.slice(slash + 1).trim();
-        if (!session || !agent) continue;
-      }
-      let paths: string[] = [];
-      if (Array.isArray(record.paths) && record.paths.every((item) => typeof item === 'string' && item.trim() !== '')) {
-        paths = (record.paths as string[]).map((item) => item.trim());
-      } else if (typeof record.path === 'string' && record.path.trim() !== '') {
-        paths = [record.path.trim()];
-      } else if (entity !== null && ENTITY_PATHS[entity] !== undefined) {
-        paths = [...ENTITY_PATHS[entity]!];
-      }
-      if (paths.length === 0) continue;
-      const rawExpires = record.expires ?? record.expiry ?? record.expires_at ?? record.expiresAt;
-      if (typeof rawExpires !== 'string' || rawExpires.trim() === '') continue;
-      const expires = rawExpires.trim();
-      if (!Number.isFinite(Date.parse(expires))) continue;
-      out.push({ entity, agent, session, paths, expires, runners: runnersOf(record) });
+      out.push({ stem: entry.replace(/\.(?:yaml|yml|json)$/, ''), record: parsed as Record<string, unknown> });
     } catch {
       continue;
     }
+  }
+  return out;
+}
+
+/**
+ * Reads valid entity create-grant records from `~/.config/team/grants/`. Symbolic links and
+ * malformed records are skipped; expiry and path containment are checked when a command asks.
+ */
+export function readEntityCreateGrants(home: string = homedir()): EntityCreateGrant[] {
+  const out: EntityCreateGrant[] = [];
+  for (const { stem, record } of readGrantRecords(home)) {
+    const entity =
+      typeof record.entity === 'string' && record.entity.trim() !== ''
+        ? record.entity.trim()
+        : ENTITY_PATHS[stem] !== undefined
+          ? stem
+          : null;
+    const rawAgent =
+      typeof record.agent === 'string'
+        ? record.agent.trim()
+        : typeof record.seat === 'string'
+          ? record.seat.trim()
+          : typeof record.pane === 'string'
+            ? record.pane.trim()
+            : '';
+    if (!rawAgent) continue;
+    let session =
+      typeof record.session === 'string' && record.session.trim() !== '' ? record.session.trim() : null;
+    let agent = rawAgent;
+    if (session === null && rawAgent.includes('/')) {
+      const slash = rawAgent.indexOf('/');
+      session = rawAgent.slice(0, slash).trim();
+      agent = rawAgent.slice(slash + 1).trim();
+      if (!session || !agent) continue;
+    }
+    let paths: string[] = [];
+    if (Array.isArray(record.paths) && record.paths.every((item) => typeof item === 'string' && item.trim() !== '')) {
+      paths = (record.paths as string[]).map((item) => item.trim());
+    } else if (typeof record.path === 'string' && record.path.trim() !== '') {
+      paths = [record.path.trim()];
+    } else if (entity !== null && ENTITY_PATHS[entity] !== undefined) {
+      paths = [...ENTITY_PATHS[entity]!];
+    }
+    if (paths.length === 0) continue;
+    const rawExpires = record.expires ?? record.expiry ?? record.expires_at ?? record.expiresAt;
+    if (typeof rawExpires !== 'string' || rawExpires.trim() === '') continue;
+    const expires = rawExpires.trim();
+    if (!Number.isFinite(Date.parse(expires))) continue;
+    out.push({ entity, agent, session, paths, expires, runners: runnersOf(record) });
   }
   return out;
 }
