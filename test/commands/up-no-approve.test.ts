@@ -265,6 +265,8 @@ describe('team up without an approval record', () => {
       // an owner-signed grant naming it), and this scene is about a launched seat taking work
       // with no approval record, not about who may send.
       const sendIo = testIo(here.root, owner);
+      // The seat takes the brief: idle until the Enter, working after it.
+      let working = false;
       const sendHost: SendHost = {
         agents: () => [{ name: 'builder-1', pane: seats['builder-1']?.pane ?? 'w2:p1' }],
         processInfo: () => ({ shell: 1, foreground: [2] }),
@@ -272,8 +274,11 @@ describe('team up without an approval record', () => {
         deliver: async () => ({ ok: true }),
         native: {
           typeText: () => true,
-          pressEnter: () => true,
-          status: () => 'working',
+          pressEnter: () => {
+            working = true;
+            return true;
+          },
+          status: () => (working ? 'working' : 'idle'),
           wait: async () => {},
         },
         now: () => NOW,

@@ -309,14 +309,19 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
   const sockets = join(fixture.home, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
   writeFileSync(join(sockets, `${String(SEND_PID)}.sock`), '');
+  // The seat's own evidence for this line: idle until the Enter, working after it.
+  let working = false;
   return {
     agents: () => seats.map((name, index) => ({ name, pane: `w1:p${String(index + 1)}` })),
     processInfo: () => ({ shell: SEND_PID, foreground: [] }),
     socketsDir: sockets,
     native: {
       typeText: () => true,
-      pressEnter: () => true,
-      status: () => 'working',
+      pressEnter: () => {
+        working = true;
+        return true;
+      },
+      status: () => (working ? 'working' : 'idle'),
       wait: async () => {},
     },
     deliver: async () => {

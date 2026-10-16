@@ -230,6 +230,8 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       // The owner sends the brief: an orchestrator's own-team seats are outside the reach the
       // send rules admit, and this scene is about the create-grant covering init and up.
       const sendIo = testIo(v4, { kind: 'owner' });
+      // The seat takes the brief: idle until the Enter, working after it.
+      let working = false;
       const sendHost: SendHost = {
         agents: () => [{ name: 'builder-1', pane: seats['builder-1']?.pane ?? 'seat-pane-2' }],
         processInfo: () => ({ shell: 1, foreground: [2] }),
@@ -237,8 +239,11 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
         deliver: async () => ({ ok: true }),
         native: {
           typeText: () => true,
-          pressEnter: () => true,
-          status: () => 'working',
+          pressEnter: () => {
+            working = true;
+            return true;
+          },
+          status: () => (working ? 'working' : 'idle'),
           wait: async () => {},
         },
         now: () => NOW,
