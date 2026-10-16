@@ -44,9 +44,9 @@ and a process of the same user that writes its own pane there under the orchestr
 renames its pane, passes. The check guards a mistaken agent, not a hostile process running as the
 same user. `--file` and `--session` are the owner's alone, from a terminal outside herdr: a
 non-owner aiming either is refused before the flagged file or session is read at all. Everything `up`
-refuses on — a file that is not the approved one, a `MISS`
-finding from [team doctor](doctor.md), the machine past its limits, the approval's ceilings — refuses
-here too, for the one seat being started.
+refuses on — a `MISS` finding from [team doctor](doctor.md), the machine past its limits, the
+ceilings — refuses here too, for the one seat being started. A file that differs from a stored
+copy is not a refusal: the live file is the record.
 
 A file with a `delegates` section also admits one more caller: the approved delegate, a pane the
 owner named in that section as `<session>/<pane id>`, outside the team. When the ordinary rule
@@ -127,9 +127,11 @@ refused in the same paragraph as any other `MISS` finding: `team add: <name>: it
 \`<word>\`, which is not on the PATH`, or `team add: <name>: its launch line runs \`<path>\`, not
 found from its start folder <folder>; the same file is at \`<absolute>\` from the project root —
 write that path` — and the file is left alone. A seat this `add` adopts into a pane that is already
-there — its state names the workspace, and an unnamed pane is in it — runs nothing now: its line is
-checked where that pane runs when the state records the folder it was started in, and otherwise is
-not checked at all, the note saying so, and a miss found there is never refused. A `--dry-run`
+there — its state names the workspace, no other seat's record is on that workspace or on the seat's
+recorded pane, the pane still holds the process the record launched where the record carries one,
+and an unnamed pane is in it — runs nothing now: its line is checked where that pane runs when the
+state records the folder it was started in, and otherwise is not checked at all, the note saying
+so, and a miss found there is never refused. A `--dry-run`
 prints a refusal in the plan instead — `  skip <name>: would refuse: …` above `dry run: nothing was
 run` — and makes nothing. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch). It returns before these real-run failures, and never takes their status:
 
@@ -148,7 +150,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | `team add: line <n>: <message>` / `team add: <message>` | 2 |
 | `team add: only the owner, the orchestrator or the operator runs it; this call is <caller>` | 1 |
 | `team add: only the owner, the orchestrator, the operator or the approved delegate runs it; this call is <caller>` — the file names a delegate, and this call is not it | 1 |
-| ``team add: delegation needs a verified approval: <reason>`` / ``team add: delegation needs a readable approved copy: run `team approve` `` / ``team add: delegation needs the approved file: the file is not the approved one (<differences>): run `team approve` `` — the delegate gate, reading the same approval every other check reads | 1 |
+| ``team add: delegation needs a verified approval: <reason>`` — the delegate gate. A fingerprint difference is not a refusal; the live file names the delegate | 1 |
 | ``team add: delegation cannot verify its placement or seats: <reason>`` | 1 |
 | `team add: the approved delegate must be an external non-seat pane` | 1 |
 | ``team add: the approved delegate <session>/<pane id> may not run `add`; its approved commands are <list>`` | 1 |
@@ -160,11 +162,8 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | ``team add: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
 | ``team add: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team add: <name>: its pane holds a process this record cannot tie to the launch` — the record holds the pane's own shell pid and the CLI's pids, read when the seat was launched; the pane is running neither, and the agent session herdr shows there is not the stored one. Nothing is closed and no second CLI is started in it | 1 |
-| ``team add: the file was never approved on this machine: run `team approve` `` | 1 |
-| ``team add: approved before records were signed: run `team approve` once`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
-| ``team add: the file is not the approved one (<differences>): run `team approve` `` | 1 |
-| ``team add: the approved copy can't be read: run `team approve` `` | 1 |
-| `team add: the approved file has no seat "<name>"` | 1 |
+| ``team add: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify. A missing record is not a refusal, and neither is a file that differs from a stored copy | 1 |
+| `team add: the file has no seat "<name>"` | 1 |
 | `team add: <name> is already running`. When that seat's screen is one the profile does not recognise, the owner is also told `team remove <name> --abandon closes its workspace without typing`; anyone else is told `the owner runs team remove <name> --abandon, which closes its workspace without typing` | 1 |
 | `team add: no launch profile for \`<cli>\` in this version` | 1 |
 | `team add: the approval allows <n> seats; <m> would be running` / `… <n> temporary seats; …` / `… <n> <vendor> seats; …` | 1 |
@@ -303,12 +302,12 @@ claude-beacon-tmp-1: ready
 exit 0
 ```
 
-The seat's name must be one the approved file has, so a name that is not is refused before herdr is
+The seat's name must be one the live file has, so a name that is not is refused before herdr is
 asked anything:
 
 ```console
 $ team add scratch ; echo "exit $?"
-team add: the approved file has no seat "scratch"
+team add: the file has no seat "scratch"
 exit 1
 $ team add --temporary --like claude-beacon --until later ; echo "exit $?"
 team add: --until is result:<path> or merged:<branch>

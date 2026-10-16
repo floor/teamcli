@@ -188,3 +188,86 @@ seats:
     display: GPT-5.6 Terra
     launch: codex
 
+
+  # 2026-10-16: seats reassigned across labs as quotas ran out sign with their new model.
+  - role: builder
+    name: builder-deepseek
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    display: DeepSeek V4.1 Flash
+    launch: claude
+
+  - role: builder
+    name: builder-kimi
+    cli: claude-code
+    vendor: moonshot
+    model: Kimi
+    version: "K3"
+    display: Kimi K3
+    launch: claude
+
+  - role: builder
+    name: builder-astra
+    cli: codex
+    vendor: openai
+    model: GPT Astra
+    version: "6"
+    display: GPT-6 Astra
+    launch: codex
+
+  - role: builder
+    name: builder-sonnet
+    cli: antigravity
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    display: Claude Sonnet 5.5
+    launch: agy
+
+  - role: tester
+    name: tester-kimi
+    cli: claude-code
+    vendor: moonshot
+    model: Kimi
+    version: "K3"
+    display: Kimi K3
+    launch: claude
+
+  - role: tester
+    name: tester-astra
+    cli: codex
+    vendor: openai
+    model: GPT Astra
+    version: "6"
+    display: GPT-6 Astra
+    launch: codex
+
+  - role: archivist
+    name: archivist
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    display: DeepSeek V4.1 Flash
+    launch: claude
+
+  # 2026-10-16: testers move off Codex as its weekly quota runs low.
+  - role: tester
+    name: tester-deepseek
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    display: DeepSeek V4.1 Flash
+    launch: claude
+
+  - role: tester
+    name: tester-sonnet
+    cli: antigravity
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    display: Claude Sonnet 5.5
+    launch: agy

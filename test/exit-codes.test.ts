@@ -34,7 +34,9 @@ import { runTempo } from '../src/commands/tempo.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
+import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
@@ -49,6 +51,7 @@ import { findRoot, loadTeamFile } from '../src/file/load.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
 import type { Key, Terminal } from '../src/launch/terminal.ts';
@@ -563,20 +566,8 @@ scene('add.default-session', async (place) => {
 scene('add.never-approved', async (place) => {
   write(place, TWO);
   return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, {
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
-});
-scene('add.differs', async (place) => {
-  approve(place, TWO);
-  write(place, TWO.replace('label: worker', 'label: renamed'));
-  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place)), 'not the approved one');
-});
-scene('add.approved-copy', async (place) => {
-  approve(place, TWO);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, { standing: () => broken })), "approved copy can't be read");
 });
 scene('add.herdr', async (place) => {
   approve(place, TWO);
@@ -705,11 +696,14 @@ scene('add.machine-again', async (place) => {
 });
 scene('add.ceiling', async (place) => {
   approve(place, TWO);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const approval = { ...standing.record.approval, ceilings: { ...standing.record.approval.ceilings, seats: 0 } };
-  const capped = { ...standing, record: { ...standing.record, approval } };
-  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, { standing: () => capped })), 'allows 0 seats');
+  // The ceiling is the live file's. One seat is already running, and the file allows one.
+  // `approve` writes the absolute trust this command requires before it reaches the ceiling.
+  const text = readFileSync(place.file, 'utf8');
+  writeFileSync(place.file, text.replace('workspace:\n', 'limits:\n  seats: 1\nworkspace:\n'));
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, {
+    sessionState: () => 'running',
+    agents: () => [agent('lead')],
+  })), 'allows 1 seats');
 });
 scene('add.dry-run', async (place) => {
   approve(place, TWO);
@@ -781,8 +775,6 @@ const addRemoveCaller = { kind: 'seat', name: 'pilot', pane: 'w1:p1', session: '
 const refused = (id: string, text: string) => ({ kind: 'refused' as const, id, text });
 
 const ADD_GATE_REFUSALS: [suffix: string, sentence: string, needle: string][] = [
-  ['delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`', 'readable approved copy'],
-  ['delegate-drift', 'delegation needs the approved file: the file is not the approved one (seat worker changed): run `team approve`', 'not the approved one'],
   ['delegate-evidence', "delegation cannot verify its placement or seats: herdr doesn't answer", 'placement or seats'],
   ['delegate-placement', 'the approved delegate must be an external non-seat pane', 'non-seat pane'],
   ['delegate', 'only the owner, the orchestrator, the operator or the approved delegate runs it; this call is pilot', 'or the approved delegate runs it'],
@@ -1141,17 +1133,9 @@ scene('down.delegate-approval', async (place) => {
   write(place, DELEGATED);
   return show(await down(place, [], other, delegated('down.delegate-approval', 'delegation needs a verified approval: no approval is in force')), 'delegation needs a verified approval');
 });
-scene('down.delegate-approved-copy', async (place) => {
-  write(place, DELEGATED);
-  return show(await down(place, [], other, delegated('down.delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`')), 'readable approved copy');
-});
 scene('down.delegate-command', async (place) => {
   write(place, DELEGATED);
-  return show(await down(place, [], other, delegated('down.delegate-command', 'the approved delegate hook/w2:p9 may not run `down`; its approved commands are up')), 'its approved commands are up');
-});
-scene('down.delegate-drift', async (place) => {
-  write(place, DELEGATED);
-  return show(await down(place, [], other, delegated('down.delegate-drift', 'delegation needs the approved file: the file is not the approved one (seats: a seat was added): run `team approve`')), 'is not the approved one');
+  return show(await down(place, [], other, delegated('down.delegate-command', 'the delegate may not run down')), 'may not run down');
 });
 scene('down.delegate-evidence', async (place) => {
   write(place, DELEGATED);
@@ -1184,17 +1168,6 @@ scene('down.grant-approval', async (place) => {
   write(place, GRANTED);
   recordLead(place, 'w1:p1');
   return show(await down(place, [], leadSeat, grantDown(place)), 'a grant needs a verified approval');
-});
-scene('down.grant-approved-copy', async (place) => {
-  approve(place, GRANTED);
-  recordLead(place, 'w1:p1');
-  return show(await down(place, [], leadSeat, grantDown(place, { approvedCopy: () => null })), 'a grant needs a readable approved copy');
-});
-scene('down.grant-drift', async (place) => {
-  approve(place, GRANTED);
-  write(place, readFileSync(place.file, 'utf8').replace('label: lead', 'label: renamed'));
-  recordLead(place, 'w1:p1');
-  return show(await down(place, [], leadSeat, grantDown(place)), 'a grant needs the approved file');
 });
 scene('down.grant-scope', async (place) => {
   approve(place, GRANT_UP);
@@ -1236,7 +1209,7 @@ scene('down.never-approved', async (place) => {
   write(place, TEAM);
   return show(await down(place, [], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('lead')], home: place.home,
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
 });
 scene('down.legacy', async (place) => {
@@ -1258,15 +1231,6 @@ scene('down.refused', async (place) => {
   return show(await down(place, [], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('lead')], home: place.home,
   })), 'valid signature');
-});
-scene('down.approved-copy', async (place) => {
-  approve(place, TEAM);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(await down(place, [], owner, downSources({
-    sessionRunning: () => true, agents: () => [agent('lead')], home: place.home, standing: () => broken,
-  })), 'cannot be read');
 });
 
 async function initial(
@@ -1405,6 +1369,22 @@ scene('remove.coordinator', async (place) => {
   });
   return show(await removed(place, ['lead'], leadSeat, downSources({ home: place.home })), 'only the owner removes the orchestrator');
 });
+// A lead's `--keep` is a swap. The seat never swaps itself; another lead swaps it only
+// under a grant that lists `swap`; the owner's swap stops it and leaves the file as it was.
+scene('remove.swap-self', async (place) => {
+  write(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await removed(place, ['lead', '--keep'], leadSeat, downSources({ home: place.home })), "can't swap its own seat");
+});
+scene('remove.swap-grant', async (place) => {
+  write(place, TWO.replace('operator: lead', 'operator: worker').replace('    stopped: true\n', ''));
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await removed(place, ['worker', '--keep'], leadSeat, downSources({ home: place.home })), 'swaps the orchestrator');
+});
 scene('remove.no-seat', async (place) => {
   write(place, TWO);
   return show(await removed(place, ['missing'], owner, downSources({ home: place.home })), 'no seat "missing"');
@@ -1442,7 +1422,7 @@ scene('remove.unverified', async (place) => {
   });
   return show(await removed(place, ['extra'], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('extra')], home: place.home,
-  })), 'not an approved seat');
+  })), 'not a declared seat');
 });
 scene('remove.ambiguous', async (place) => {
   approve(place, TWO);
@@ -1452,20 +1432,11 @@ scene('remove.ambiguous', async (place) => {
     home: place.home,
   })), 'more than one agent of this name');
 });
-scene('remove.approved-copy', async (place) => {
-  approve(place, TWO);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(await removed(place, ['worker'], owner, downSources({
-    sessionRunning: () => true, agents: () => [agent('worker')], home: place.home, standing: () => broken,
-  })), 'cannot be read');
-});
 scene('remove.never-approved', async (place) => {
   write(place, TWO);
   return show(await removed(place, ['worker'], owner, downSources({
     home: place.home,
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
 });
 scene('remove.no-launch', async (place) => {
@@ -1536,6 +1507,10 @@ scene('remove.kept', async (place) => {
   approve(place, TWO);
   return show(await removed(place, ['worker', '--keep'], owner, downSources({ home: place.home })), 'stopped worker');
 });
+scene('remove.swapped', async (place) => {
+  approve(place, TWO);
+  return show(await removed(place, ['lead', '--keep'], owner, downSources({ home: place.home })), 'stopped lead for a swap');
+});
 scene('remove.temporary', async (place) => {
   approve(place, TEAM);
   updateState(join(place.root, '.agents'), (state) => {
@@ -1550,8 +1525,6 @@ scene('remove.temporary', async (place) => {
 // herdr is asked; the rest hand the verdict in, and the scene proves the command prints it and
 // exits 1 with nothing stopped.
 const REMOVE_GATE_REFUSALS: [suffix: string, sentence: string, needle: string][] = [
-  ['delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`', 'readable approved copy'],
-  ['delegate-drift', 'delegation needs the approved file: the file is not the approved one (seat worker changed): run `team approve`', 'not the approved one'],
   ['delegate-evidence', "delegation cannot verify its placement or seats: herdr doesn't answer", 'placement or seats'],
   ['delegate-placement', 'the approved delegate must be an external non-seat pane', 'non-seat pane'],
   ['delegate', 'only the owner, the orchestrator, the operator or the approved delegate runs it; this call is pilot', 'or the approved delegate runs it'],
@@ -1731,13 +1704,8 @@ scene('up.deny', async (place) => {
 scene('up.never-approved', async (place) => {
   write(place, TEAM);
   return show(await up(place, ['--file', place.file], owner, upSources(place, {
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
-});
-scene('up.differs', async (place) => {
-  approve(place, TEAM);
-  write(place, TEAM.replace('label: lead', 'label: renamed'));
-  return show(await up(place, ['--file', place.file], owner, upSources(place)), 'not the approved one');
 });
 scene('up.doctor', async (place) => {
   approve(place, TEAM);
@@ -1849,15 +1817,6 @@ scene('up.delegate-approval', async (place) => {
   write(place, `${TEAM}${DELEGATES}`);
   return show(await up(place, ['--file', place.file], other, upSources(place, gateAt(place))), 'deny');
 });
-scene('up.delegate-approved-copy', async (place) => {
-  approve(place, `${TEAM}${DELEGATES}`);
-  return show(await up(place, ['--file', place.file], other, upSources(place, gateAt(place, { approvedCopy: () => null }))), 'deny');
-});
-scene('up.delegate-drift', async (place) => {
-  approve(place, `${TEAM}${DELEGATES}`);
-  write(place, `${TEAM.replace('label: lead', 'label: renamed')}${DELEGATES}`);
-  return show(await up(place, ['--file', place.file], other, upSources(place, gateAt(place))), 'deny');
-});
 scene('up.delegate-evidence', async (place) => {
   approve(place, `${TEAM}${DELEGATES}`);
   // A herdr that does not answer answers nothing: no agent list, and no session answer either —
@@ -1889,15 +1848,6 @@ function grantRead(over: GrantSources = {}): Partial<UpSources> {
 
 scene('up.grant-approval', async (place) => {
   write(place, GRANTED);
-  return show(await up(place, [], leadSeat, upSources(place)), 'deny');
-});
-scene('up.grant-approved-copy', async (place) => {
-  approve(place, GRANTED);
-  return show(await up(place, [], leadSeat, upSources(place, grantRead({ approvedCopy: () => null }))), 'deny');
-});
-scene('up.grant-drift', async (place) => {
-  approve(place, GRANTED);
-  write(place, readFileSync(place.file, 'utf8').replace('label: lead', 'label: renamed'));
   return show(await up(place, [], leadSeat, upSources(place)), 'deny');
 });
 scene('up.grant-caller', async (place) => {
@@ -2052,19 +2002,6 @@ scene('worktree.never-approved', async (place) => {
   write(place, worktreeText());
   return show(await worktree(place, ['new', 'task']), 'never approved');
 });
-scene('worktree.approved-copy', async (place) => {
-  approve(place, worktreeText());
-  // The file differs from the approval, and the copy the record stored is one this version
-  // can't read: there is no approved value to run with.
-  write(place, worktreeText({ limit: 4 }));
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(
-    await worktree(place, ['new', 'task', '--kind', 'fix'], owner, { ...worktreeSources(place), standing: () => broken }),
-    "approved copy can't be read",
-  );
-});
 scene('worktree.task', async (place) => {
   approve(place, worktreeText());
   return show(await worktree(place, ['new', '../task']), 'one segment');
@@ -2103,7 +2040,7 @@ scene('worktree.forbidden', async (place) => {
 });
 scene('worktree.trust', async (place) => {
   approve(place, worktreeText({ trust: '../worktrees/acme/task' }));
-  return show(await worktree(place, ['new', 'select-width', '--kind', 'fix']), 'outside the approved trust');
+  return show(await worktree(place, ['new', 'select-width', '--kind', 'fix']), "outside the file's trust paths");
 });
 scene('worktree.symlink', async (place) => {
   approve(place, worktreeText());
@@ -2116,19 +2053,6 @@ scene('worktree.seat', async (place) => {
   publish(place);
   approve(place, worktreeText());
   return show(await worktree(place, ['new', 'task', '--kind', 'fix', '--seat', 'missing']), 'names no declared seat');
-});
-scene('worktree.seat-unapproved', async (place) => {
-  approve(place, worktreeText());
-  write(place, `${worktreeText()}  - role: implementer
-    name: added-later
-    label: later
-    cli: claude-code
-    vendor: anthropic
-    model: Claude Opus
-    version: "5.5"
-    launch: claude --model claude-opus-5-5
-`);
-  return show(await worktree(place, ['new', 'task', '--kind', 'fix', '--seat', 'added-later']), 'is not in the approved file');
 });
 scene('worktree.limit', async (place) => {
   approve(place, worktreeText({ limit: 1 }));
@@ -2450,7 +2374,7 @@ scene('answer.unverified', async (place) => {
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { extra: { stage: 'ready', pane: 'w9:p1' } }, worktrees: {} };
   });
-  return show(await answered(place, ['extra', 'trust', '--file', place.file], owner, answerHost(place, '')), 'not an approved seat');
+  return show(await answered(place, ['extra', 'trust', '--file', place.file], owner, answerHost(place, '')), 'not a declared seat');
 });
 scene('answer.ambiguous', async (place) => {
   const lobby = lobbyDir(place.home);
@@ -2729,7 +2653,7 @@ async function tempo(place: Place, argv: string[], caller: Caller = owner): Prom
 
 scene('tempo.set', async (place) => {
   write(place, TEAM);
-  return show(await tempo(place, ['urgent']), 'it takes effect when the file is approved');
+  return show(await tempo(place, ['urgent']), 'tempo: urgent');
 });
 scene('tempo.unchanged', async (place) => {
   write(place, TEAM.replace('format: 1\n', 'format: 1\ntempo: urgent\n'));
@@ -3176,6 +3100,170 @@ scene('mcp.clear', async (place) => show(await mcpRan(place, ['doctor']), 'nothi
 scene('mcp.missing', async (place) => show(await mcpRan(place, ['doctor'], { listDir: () => [] }), 'no bridge configuration'));
 scene('mcp.invocation', async (place) => show(await mcpRan(place, []), 'a subcommand is required'));
 
+const RELOAD_FILE = TEAM.replace(
+  'launch: claude --model claude-opus-5-5\n',
+  'launch: claude --model claude-opus-5-5\n    effort: high\n',
+);
+const RELOAD_GRANT = `${TWO.replace('    stopped: true\n', '')}grant:\n  session: acme\n  seat: lead\n  scope:\n    - reload\n`;
+
+function recordReload(place: Place, name: string, recorded = true): void {
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats[name] = {
+      stage: 'ready',
+      pane: 'w1:p1',
+      workspace: 'w1',
+      launched: { shell: 1, cli: [2] },
+      ...(recorded ? { model: 'Claude Opus', version: '5.5' } : {}),
+    };
+  });
+}
+
+function reloadLaunch(options: { create?: boolean; agents?: HerdrAgent[]; text?: string } = {}): Launch {
+  const panes = new Map<string, string>([['w1:p1', options.text ?? IDLE]]);
+  let clock = Date.parse('2026-10-14T09:00:00Z');
+  let n = 0;
+  return {
+    sessionState: () => 'running',
+    startServer: () => true,
+    sessionUp: () => true,
+    createWorkspace() {
+      if (options.create === false) return null;
+      n += 1;
+      const pane = `made-${n}`;
+      panes.set(pane, IDLE);
+      return { pane, workspace: `ws-${n}` };
+    },
+    paneRun(_session, pane) {
+      panes.set(pane, IDLE);
+      return true;
+    },
+    renameAgent: () => true,
+    closeWorkspace: () => true,
+    agentPanes: () => [...panes.keys()],
+    agents: () => options.agents ?? [agent('lead')],
+    workspacePanes: () => ['w1:p1'],
+    paneText: (_session, pane) => panes.get(pane) ?? options.text ?? IDLE,
+    foreground: () => ['claude'],
+    processInfo: () => ({ shell: 1, foreground: [1, 2] }),
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => new Date(clock),
+  };
+}
+
+async function reloaded(place: Place, argv: string[], caller: Caller = owner, sources: Partial<ReloadSources> = {}): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return {
+    code: await runReload(argv, io, { launch: reloadLaunch(), home: place.home, ...sources }),
+    out: io.out,
+    err: io.err,
+  };
+}
+
+scene('reload.reloaded', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead']), 'lead reloaded');
+});
+scene('reload.same', async (place) => {
+  write(place, TEAM);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead']), 'already running what the file declares');
+});
+scene('reload.absent', async (place) => {
+  write(place, TEAM);
+  return show(await reloaded(place, ['missing']), 'no seat of that name');
+});
+scene('reload.changed', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ agents: [] }) }), 'changed before it closed');
+});
+scene('reload.launch', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ create: false }) }), 'did not reach ready');
+});
+scene('reload.not-idle', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ text: 'no prompt here' }) }), 'not at an idle prompt');
+});
+scene('reload.not-running', async (place) => {
+  write(place, TEAM);
+  return show(await reloaded(place, ['lead']), 'no ready pane to close');
+});
+scene('reload.unrecorded', async (place) => {
+  write(place, TEAM);
+  recordReload(place, 'lead', false);
+  return show(await reloaded(place, ['lead']), 'were not recorded at launch');
+});
+scene('reload.unsent', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ text: claudeBox('draft') }) }), 'holds unsent text');
+});
+scene('reload.working', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ agents: [agent('lead', 'working')] }) }), 'is working');
+});
+scene('reload.run-lock', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  const held = acquireRunLock(join(place.root, '.agents'), 'acme');
+  try {
+    return show(await reloaded(place, ['lead']), 'another session-mutating run');
+  } finally {
+    if (!('held' in held)) held.release();
+  }
+});
+scene('reload.invocation', async (place) => show(await reloaded(place, []), 'a <seat> is required'));
+scene('reload.file', async (place) => show(await reloaded(place, ['lead', '--file', 'missing.yaml']), 'no team file'));
+scene('reload.self', async (place) => {
+  approve(place, RELOAD_GRANT);
+  recordLead(place);
+  return show(await reloaded(place, ['lead'], leadSeat), "does not close the caller's seat");
+});
+scene('reload.grant-approval', async (place) => {
+  write(place, RELOAD_GRANT);
+  return show(await reloaded(place, ['worker'], leadSeat), 'a grant needs a verified approval');
+});
+scene('reload.grant-caller', async (place) => {
+  approve(place, RELOAD_GRANT);
+  recordLead(place);
+  return show(await reloaded(place, ['worker'], other), 'only the seat the grant names');
+});
+scene('reload.grant-no-pane', async (place) => {
+  approve(place, RELOAD_GRANT);
+  return show(await reloaded(place, ['worker'], leadSeat), 'no pane is recorded for seat lead');
+});
+scene('reload.grant-another-pane', async (place) => {
+  approve(place, RELOAD_GRANT);
+  recordLead(place, 'w2:p1');
+  return show(await reloaded(place, ['worker'], leadSeat), 'the state records pane w2:p1 for seat lead');
+});
+scene('reload.grant-scope', async (place) => {
+  approve(place, RELOAD_GRANT.replace('    - reload\n', '    - up\n'));
+  recordLead(place);
+  return show(await reloaded(place, ['worker'], leadSeat), 'the grant does not list `reload`');
+});
+scene('reload.grant-flag', async (place) => {
+  approve(place, RELOAD_GRANT);
+  recordLead(place);
+  return show(await reloaded(place, ['worker', '--file', 'other.yaml'], leadSeat), "--file is the owner's");
+});
+scene('reload.grant-omitted', async (place) => {
+  approve(place, TEAM);
+  return show(await reloaded(place, ['lead'], leadSeat), 'the file grants nothing');
+});
+scene('reload.grant-file', async (place) => {
+  write(place, 'format: [\n');
+  return show(await reloaded(place, ['lead'], leadSeat), 'line');
+});
+
 // Outcomes that are listed and kept, and that no scene can produce. An edit the earlier checks
 // have already validated reads here (add.prepared, add.locked, add.not-restored), and so do
 // answer.action and up.delegate-placement. add.no-profile and
@@ -3194,6 +3282,131 @@ scene('send.detached', async (place) => show(await sent(place, ['--list'], detac
 scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), SENTENCE));
 scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), SENTENCE));
 scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), SENTENCE));
+
+const ACTIVE_TWO = TWO.replace('    stopped: true\n', '');
+
+function restartSources(place: Place, over: Partial<RestartSources> = {}): RestartSources {
+  return {
+    ...downSources({ home: place.home }),
+    home: place.home,
+    sessionRunning: () => true,
+    sessionState: () => 'running',
+    agents: () => [],
+    workspaces: () => [],
+    doctor: doctor(place.home),
+    now: () => NOW,
+    launch: downLaunch(),
+    upLaunch: launching(IDLE),
+    ...over,
+  };
+}
+
+async function restarted(
+  place: Place,
+  argv: string[],
+  caller: Caller = owner,
+  over: Partial<RestartSources> = {},
+): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const code = await runRestart(argv, io, restartSources(place, over));
+  return { code, out: io.out, err: io.err };
+}
+
+scene('restart.usage', async (place) => show(await restarted(place, []), 'a seat name is required'));
+scene('restart.configuration', async (place) => show(await restarted(place, ['worker', '--file', 'missing.yaml']), 'no team file'));
+scene('restart.detached', async (place) => show(await restarted(place, ['worker'], detachedCaller), SENTENCE));
+scene('restart.caller', async (place) => {
+  write(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker'], other), 'only the owner, the orchestrator or the operator');
+});
+scene('restart.self', async (place) => {
+  write(place, ACTIVE_TWO);
+  recordLead(place, leadSeat.pane);
+  return show(await restarted(place, ['lead'], leadSeat), 'cannot restart its own recorded pane');
+});
+scene('restart.temporary', async (place) => {
+  write(place, ACTIVE_TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats['worker-tmp-1'] = { stage: 'ready', temporary: { like: 'worker', until: 'result:out.md' } };
+  });
+  return show(await restarted(place, ['worker-tmp-1']), 'is a temporary copy');
+});
+scene('restart.unknown', async (place) => {
+  write(place, ACTIVE_TWO);
+  return show(await restarted(place, ['missing']), 'not a signed declared seat');
+});
+scene('restart.lead', async (place) => {
+  write(place, ACTIVE_TWO);
+  const opCaller = { kind: 'seat', name: 'worker', pane: 'pane-op', session: 'acme' } as const;
+  write(place, ACTIVE_TWO.replace('operator: lead', 'operator: worker'));
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-op' };
+  });
+  return show(await restarted(place, ['lead', '--abandon'], opCaller), 'does not abandon the orchestrator');
+});
+scene('restart.signed-off', async (place) => {
+  write(place, TWO);
+  return show(await restarted(place, ['worker']), 'is signed off');
+});
+scene('restart.herdr', async (place) => {
+  write(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker'], owner, { sessionState: () => null }), "doesn't answer");
+});
+scene('restart.no-session', async (place) => {
+  write(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker'], owner, { sessionState: () => 'absent', sessionRunning: () => false }), 'is not running');
+});
+scene('restart.replaced', async (place) => {
+  write(place, ACTIVE_TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.worker = {
+      stage: 'ready',
+      pane: 'pane-old',
+      workspace: 'ws-old',
+      launched: { shell: 400, cli: [401] },
+    };
+  });
+  const upLaunch = launching(IDLE);
+  upLaunch.processInfo = () => ({ shell: 400, foreground: [999] });
+  return show(await restarted(place, ['worker'], owner, { upLaunch }), 'has a process in its old pane');
+});
+scene('restart.abandon-working', async (place) => {
+  write(place, ACTIVE_TWO);
+  recordLead(place, leadSeat.pane);
+  return show(await restarted(place, ['worker', '--abandon'], leadSeat, {
+    agents: () => [agent('worker', 'working')],
+    screen: () => ({ kind: 'working' }),
+  }), 'a granted abandon leaves it');
+});
+scene('restart.busy', async (place) => {
+  write(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker'], owner, {
+    agents: () => [agent('worker', 'working')],
+    screen: () => ({ kind: 'working' }),
+  }), 'is working; left as it is');
+});
+scene('restart.not-ready', async (place) => {
+  approve(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker'], owner, {
+    doctor: doctor(place.home, { version: () => null }),
+  }), 'install');
+});
+scene('restart.dry-run', async (place) => {
+  approve(place, ACTIVE_TWO);
+  return show(await restarted(place, ['worker', '--dry-run'], owner), 'dry run: nothing was run');
+});
+scene('restart.run-lock', async (place) => {
+  approve(place, ACTIVE_TWO);
+  const dir = join(place.root, '.agents');
+  mkdirSync(join(dir, 'seat-locks', 'acme'), { recursive: true });
+  writeFileSync(seatLockPath(dir, 'acme', '.run'), `${process.pid} 0a1b2c3d\n`);
+  return show(await restarted(place, ['worker'], owner), 'another session-mutating run is holding');
+});
+scene('restart.ready', async (place) => {
+  approve(place, ACTIVE_TWO);
+  return show(await restarted(place, ['lead'], owner), 'restarted lead');
+});
 
 const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
 

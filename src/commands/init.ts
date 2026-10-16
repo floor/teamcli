@@ -5,6 +5,7 @@ import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { TEAM_FILE, findRoot } from '../file/load.ts';
 import { validateTeamFile } from '../file/validate.ts';
+import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
@@ -68,7 +69,7 @@ export function skeleton(project: string, head: string | null, teamVersion = ver
   const launch = profileFor(cli)?.binary ?? 'claude';
   return `# yaml-language-server: $schema=https://raw.githubusercontent.com/floor/teamcli/v${teamVersion}/schema/team.schema.json
 # The team of ${project}. Private to this clone: see .git/info/exclude.
-# Nothing here runs until the owner has read it and run \`team approve\`.
+# The live file is what the commands read. Edit it, then run the seats.
 format: 1
 project: ${project}
 # visibility: public          # public | private: whether forbidden_public applies
@@ -144,7 +145,7 @@ export async function runInit(
   io: Io,
   home?: string,
   readStanding?: (root: string) => Standing,
-  sources: Pick<DoctorSources, 'loggedIn'> = doctorSources,
+  sources: Pick<DoctorSources, 'loggedIn'> & { now?: () => Date } = doctorSources,
 ): Promise<number> {
   const args = readArgs(argv, [], ['restore']);
   if (args.error || args.rest.length) {
@@ -153,18 +154,30 @@ export async function runInit(
     return 2;
   }
   const caller = callerOf(io);
+  let foundRoot: string | null | undefined;
+  const rootOf = () => (foundRoot === undefined ? (foundRoot = findRoot(io.cwd)) : foundRoot);
+  const createGranted =
+    !isOwner(caller) &&
+    !args.flags.has('restore') &&
+    readEntityCreateGrants(home).length > 0 &&
+    (() => {
+      const candidateRoot = rootOf();
+      return candidateRoot !== null && entityGrantAdmits(candidateRoot, io, { home, now: sources.now?.(), cwd: io.cwd });
+    })();
+  // A detached run is refused unless a create-grant admits it: the grant holder's own runner
+  // outside herdr is the one detached caller the grant may name.
   const detached = detachedRefusal(caller);
-  if (detached !== undefined) {
+  if (detached !== undefined && !createGranted) {
     io.stderr(`team init: ${detached}\n`);
     // exit: init.detached
     return 1;
   }
-  if (!isOwner(caller)) {
+  if (!isOwner(caller) && !createGranted) {
     io.stderr(`team init: only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
     // exit: init.not-owner
     return 1;
   }
-  const root = findRoot(io.cwd);
+  const root = rootOf();
   if (!root) {
     io.stderr('team init: not inside a git repository\n');
     // exit: init.not-a-repo
@@ -222,7 +235,7 @@ export async function runInit(
   logLine(dirname(path), 'init', describeCaller(caller), `${what} as ${TEAM_FILE}; excluded ${added.length} path(s)`);
   io.stdout(args.flags.has('restore')
     ? `Restored ${TEAM_FILE} from the copy you last approved on this machine.\n\n${PRIVACY}\n`
-    : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run team approve.\n\n${PRIVACY}\n`);
+    : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run the seats.\n\n${PRIVACY}\n`);
   // exit: init.wrote
   // exit: init.restored
   return 0;

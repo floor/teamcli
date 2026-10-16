@@ -6,7 +6,7 @@ import { approvalOf, notInForce } from '../src/approve/approval.ts';
 import { fingerprints } from '../src/approve/fingerprint.ts';
 import type { CallerSources, Process } from '../src/caller.ts';
 import { ADD_DELEGATE_EDIT, DELEGATE_EXIT_IDS, delegateGate, logDelegated, type DelegateVerdict } from '../src/delegate.ts';
-import { DELEGATE_COMMANDS, type DelegateCommand } from '../src/delegate-types.ts';
+import { ACTING_COMMANDS as DELEGATE_COMMANDS, type ActingCommand, type DelegateCommand } from '../src/delegate-types.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -80,11 +80,10 @@ const under: Process[] = [{ pid: 100, name: 'zsh' }, { pid: 10, name: 'herdr' }]
 const terminal: Process[] = [{ pid: 50, name: 'zsh' }, { pid: 40, name: 'login' }];
 
 type Scene = {
-  command?: DelegateCommand;
+  command?: ActingCommand;
   team?: TeamFile;
   file?: string;
   standing?: Standing;
-  copy?: string | null;
   state?: State | null;
   stateError?: string;
   agents?: (session: string) => HerdrAgent[] | null;
@@ -94,6 +93,7 @@ type Scene = {
   stdinIsTTY?: boolean;
   flags?: readonly string[];
   callerSources?: (session: string | undefined) => CallerSources;
+  swap?: boolean;
 };
 
 function gate(scene: Scene = {}): DelegateVerdict {
@@ -111,6 +111,7 @@ function gate(scene: Scene = {}): DelegateVerdict {
     stdinIsTTY: scene.stdinIsTTY ?? true,
   }));
   return delegateGate({
+    ...(scene.swap ? { swap: true } : {}),
     command: scene.command ?? 'up',
     team,
     root: '/proj',
@@ -119,7 +120,6 @@ function gate(scene: Scene = {}): DelegateVerdict {
     io: { env: {}, stdinIsTTY: scene.stdinIsTTY ?? true },
     sources: {
       standing: () => standing,
-      approvedCopy: () => (scene.copy === undefined ? file : scene.copy),
       state: () => {
         if (scene.stateError) throw new Error(scene.stateError);
         return scene.state === undefined ? empty : scene.state;
@@ -254,12 +254,18 @@ describe('refusal priority', () => {
   };
 
   test('each earlier refusal wins, and an unlisted command wins over a prohibited flag', () => {
-    expect(refused({ standing: { kind: 'none' }, copy: null, team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-approval');
-    expect(refused({ copy: null, team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-approved-copy');
+    expect(refused({ standing: { kind: 'none' }, team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-approval');
+    // A fingerprint difference is not a refusal for `up`: the live file is the record. Unreadable
+    // evidence still is, and a prohibited flag still is, after the live file is read.
+    expect(gate({ team: drifted })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(refused({ team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-evidence');
     const approved = verified(base, yaml);
-    expect(refused({ team: drifted, standing: approved, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-drift');
+    expect(gate({ team: drifted, standing: approved })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(refused({ team: drifted, standing: approved, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-evidence');
     expect(refused({ stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-evidence');
-    expect(refused({ team: { ...base, session: 'other' }, standing: approved, flags: ['session'] }).id).toBe('up.delegate-drift');
+    // The delegate pane lives in session "other", so a file whose session is "other" is a placement
+    // refusal, and that check is earlier than a prohibited flag.
+    expect(refused({ team: { ...base, session: 'other' }, standing: approved, flags: ['session'] }).id).toBe('up.delegate-placement');
     const outside = { ...base, delegates: [{ pane: 'alpha/w9:p9', commands: ['up'] as DelegateCommand[] }] };
     expect(refused({ team: outside, standing: verified(outside, yaml), ancestors: terminal }).id).toBe('up.delegate-placement');
     expect(refused({ ancestors: terminal, flags: ['session'] }).id).toBe('up.delegate');
@@ -280,13 +286,12 @@ describe('refusal priority', () => {
     );
   });
 
-  test('the standing text is notInForce, and drift names every difference', () => {
+  test('the standing text is notInForce, and up reads the live file', () => {
     expect(refused({ standing: { kind: 'none' } }).text).toBe(`delegation needs a verified approval: ${notInForce({ kind: 'none' })}`);
     expect(refused({ standing: { kind: 'legacy' } }).text).toContain(LEGACY_LINE);
-    expect(refused({ copy: 'not a team file' }).text).toBe('delegation needs a readable approved copy: run `team approve`');
-    expect(refused({ team: drifted, standing: verified(base, yaml) }).text).toBe(
-      'delegation needs the approved file: the file is not the approved one (`rules` changed; seat lead changed): run `team approve`',
-    );
+    expect(gate({ team: drifted, standing: verified(base, yaml) })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    const delegated = { ...base, delegates: [{ pane: 'other/w1:p1', commands: ['up'] as DelegateCommand[] }] };
+    expect(refused({ command: 'approve', team: delegated, standing: verified(base, yaml) }).text).toContain('this change needs the owner');
   });
 });
 
@@ -412,9 +417,9 @@ describe('commands and flags', () => {
   test('every preflight id of the four commands', () => {
     for (const command of commands) {
       expect(refused({ command, standing: { kind: 'none' } }).id).toBe(`${command}.delegate-approval`);
-      expect(refused({ command, copy: null }).id).toBe(`${command}.delegate-approved-copy`);
+      expect(gate({ command })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
       const drifted = { ...base, rules: ['changed'] };
-      expect(refused({ command, team: drifted, standing: verified(base, yaml) }).id).toBe(`${command}.delegate-drift`);
+      expect(gate({ command, team: drifted, standing: verified(base, yaml) })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
       expect(refused({ command, state: null }).id).toBe(`${command}.delegate-evidence`);
       const inside = { ...base, delegates: [{ pane: 'alpha/w9:p9', commands: [command] }] };
       expect(refused({ command, team: inside, standing: verified(inside, yaml) }).id).toBe(`${command}.delegate-placement`);
@@ -461,15 +466,18 @@ describe('the match is the whole pane string', () => {
     expect(gate({ state: recorded })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
   });
 
-  test('a reordered command list and a reordered entry are drift', () => {
+  test('a reordered command list and a reordered entry admit the live pane', () => {
     const reordered = parsed(yaml.replace('commands: [up, down, add, remove]', 'commands: [remove, add, down, up]'));
-    expect(refused({ team: reordered, standing: verified(base, yaml) }).text).toContain('`delegates` changed');
+    expect(gate({ team: reordered, standing: verified(base, yaml) })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
     const swapped = parsed(`${yaml}  - pane: other/w2:p1\n    commands: [add]\n`.replace(
       '  - pane: other/w1:p1\n    commands: [up, down, add, remove]\n  - pane: other/w2:p1\n    commands: [add]\n',
       '  - pane: other/w2:p1\n    commands: [add]\n  - pane: other/w1:p1\n    commands: [up, down, add, remove]\n',
     ));
     const approved = parsed(`${yaml}  - pane: other/w2:p1\n    commands: [add]\n`);
-    expect(refused({ team: swapped, file: yaml, standing: verified(approved, `${yaml}  - pane: other/w2:p1\n    commands: [add]\n`) }).id).toBe('up.delegate-drift');
+    expect(gate({ team: swapped, file: yaml, standing: verified(approved, `${yaml}  - pane: other/w2:p1\n    commands: [add]\n`) })).toEqual({
+      kind: 'passed',
+      pane: 'other/w1:p1',
+    });
   });
 });
 
@@ -510,9 +518,39 @@ describe('the approval home', () => {
 
 describe('the exit ids', () => {
   test('lists every refusal of the five commands, the delegated approval\'s own guard included', () => {
-    expect(DELEGATE_EXIT_IDS).toHaveLength(41);
+    expect(DELEGATE_EXIT_IDS).toHaveLength(32);
     expect(DELEGATE_EXIT_IDS).toContain('approve.delegate-not-ordinary');
     expect(DELEGATE_EXIT_IDS).not.toContain('approve.delegate-drift');
-    expect(new Set(DELEGATE_EXIT_IDS).size).toBe(41);
+    expect(new Set(DELEGATE_EXIT_IDS).size).toBe(32);
+  });
+});
+
+// `swap` admits the replacement of a lead seat's agent — `remove <lead> --keep` and
+// `add <lead>` — and nothing else. `remove` in an entry never reaches a lead.
+describe('the swap word', () => {
+  const swapping = yaml.replace('commands: [up, down, add, remove]', 'commands: [swap]');
+  const only = parsed(swapping);
+
+  test('remove of a lead needs swap; remove alone is refused and --keep stays the owner\'s for it', () => {
+    const verdict = refused({ command: 'remove', swap: true, flags: ['keep'] });
+    expect(verdict.id).toBe('remove.delegate-command');
+    expect(verdict.text).toBe('the approved delegate other/w1:p1 may not swap a lead seat (`swap`); its approved commands are up, down, add, remove');
+    expect(refused({ command: 'remove', flags: ['keep'] }).id).toBe('remove.delegate-flag');
+  });
+
+  test('an entry that lists swap passes a lead\'s remove --keep, and nothing else of remove', () => {
+    expect(gate({ command: 'remove', swap: true, flags: ['keep'], team: only, file: swapping })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(refused({ command: 'remove', team: only, file: swapping }).id).toBe('remove.delegate-command');
+    expect(refused({ command: 'remove', swap: true, flags: ['keep', 'abandon'], team: only, file: swapping }).id).toBe('remove.delegate-flag');
+  });
+
+  test('add of a lead passes on add or on swap', () => {
+    expect(gate({ command: 'add', swap: true })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(gate({ command: 'add', swap: true, team: only, file: swapping })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(refused({ command: 'add', team: only, file: swapping }).id).toBe('add.delegate-command');
+  });
+
+  test('swap is a word of the section, never a command with exit ids of its own', () => {
+    expect(DELEGATE_EXIT_IDS.some((id) => id.startsWith('swap.'))).toBe(false);
   });
 });
