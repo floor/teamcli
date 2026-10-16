@@ -18,7 +18,7 @@ import { LINK_NOT_FOLLOWED, loadTeamFile, NOT_A_REPO } from '../../src/file/load
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval, type Standing } from '../../src/store/store.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
 const SESSION = 'acme-web';
@@ -90,7 +90,7 @@ seats:
 `;
 }
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 function approve(cwd: string, file: string, home: string, text: string): void {
   mkdirSync(dirname(file), { recursive: true });
@@ -118,9 +118,15 @@ function doctor(home: string): DoctorSources {
   };
 }
 
-function world(): { launch: Launch; creates: { label: string; cwd: string }[]; runs: { pane: string; command: string }[] } {
+function world(): {
+  launch: Launch;
+  creates: { label: string; cwd: string }[];
+  runs: { pane: string; command: string }[];
+  watches: { command: string; cwd: string }[];
+} {
   const creates: { label: string; cwd: string }[] = [];
   const runs: { pane: string; command: string }[] = [];
+  const watches: { command: string; cwd: string }[] = [];
   const panes = new Map<string, { text: string; agent: boolean }>();
   let session: 'absent' | 'running' = 'absent';
   let n = 0;
@@ -145,6 +151,10 @@ function world(): { launch: Launch; creates: { label: string; cwd: string }[]; r
       if (known) known.agent = true;
       return true;
     },
+    spawnWatch(command, cwd) {
+      watches.push({ command, cwd });
+      return 4242;
+    },
     renameAgent: () => true,
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
@@ -160,7 +170,7 @@ function world(): { launch: Launch; creates: { label: string; cwd: string }[]; r
     },
     now: () => new Date(clock),
   };
-  return { launch, creates, runs };
+  return { launch, creates, runs, watches };
 }
 
 function upSources(home: string, made: ReturnType<typeof world>): UpSources {
@@ -242,15 +252,15 @@ while [ "$1" = "--session" ]; do
   shift 2
 done
 if [ "$1" = agent ] && [ "$2" = list ]; then
-  printf '%s\\n' '{"result":{"agents":[]}}'
+  printf '%s\\n' '{"id":"cli:agent:list","result":{"agents":[],"type":"agent_list"}}'
   exit 0
 fi
 if [ "$1" = pane ] && [ "$2" = process-info ]; then
-  printf '%s\\n' "{\\"result\\":{\\"process_info\\":{\\"shell_pid\\":$PANE_ROOT_PID}}}"
+  printf '%s\\n' "{\\"id\\":\\"cli:pane:process_info\\",\\"result\\":{\\"process_info\\":{\\"foreground_processes\\":[{\\"argv0\\":\\"-zsh\\",\\"name\\":\\"zsh\\",\\"pid\\":$PANE_ROOT_PID,\\"ppid\\":1,\\"start_epoch\\":1776221303,\\"start_lstart\\":\\"Wed Apr 15 04:48:23 2026\\"}],\\"pane_id\\":\\"\${HERDR_PANE_ID:-}\\",\\"shell_name\\":\\"zsh\\",\\"shell_pid\\":$PANE_ROOT_PID,\\"shell_start_epoch\\":1776221303,\\"shell_start_lstart\\":\\"Wed Apr 15 04:48:23 2026\\",\\"tty\\":\\"ttys015\\"},\\"type\\":\\"pane_process_info\\"}}"
   exit 0
 fi
 if [ "$1" = session ] && [ "$2" = list ]; then
-  printf '%s\\n' '{"sessions":[]}'
+  printf '%s\\n' '{"default":"default","sessions":[{"attached_clients":0,"created_at":1776221303,"id":"s1","name":"default","pid":51289,"socket":"/Users/shared/herdr-default.sock","status":"running","version":"0.7.1","workspaces":1}]}'
   exit 0
 fi
 exit 1
@@ -346,10 +356,10 @@ describe('a folder with no git repository', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', '.agents/team.yaml'], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    const watchdog = made.creates.find((created) => created.label === 'watchdog');
+    const watchdog = made.watches[0];
     expect(watchdog?.cwd).toBe(root);
     expect(io.err).toContain('watch: started\n');
-    const command = made.runs.find((run) => run.command.includes(' watch'))?.command ?? '';
+    const command = watchdog?.command ?? '';
     expect(command).toContain(' watch');
     expect(command).not.toContain('--file');
 
@@ -410,11 +420,6 @@ describe('a folder with no git repository', () => {
     const root = join(base, 'acme');
     mkdirSync(join(root, '.agents'), { recursive: true });
     writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
-    const owner = testIo(root, { kind: 'owner' });
-    const added = await runAdd(['claude-coordinator-acme'], owner, addSources(home));
-    expect(added).toBe(1);
-    expect(owner.err).toBe('team add: the file was never approved on this machine: run `team approve`\n');
-    expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
 
     const seat = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'w9:p1', session: 'elsewhere' });
     const refused = await runAdd(['claude-coordinator-acme'], seat, addSources(home));
@@ -438,6 +443,13 @@ describe('a folder with no git repository', () => {
     expect(watched).toBe(0);
     expect(watching.err).not.toContain('not inside a git repository');
     expect(watching.out).toContain('the file was never approved on this machine');
+
+    // The owner adds a seat the file already names. A missing record does not refuse that.
+    const owner = testIo(root, { kind: 'owner' });
+    const added = await runAdd(['claude-coordinator-acme'], owner, addSources(home));
+    expect(added, owner.err + owner.out).toBe(0);
+    expect(owner.err).not.toContain('never approved');
+    expect(owner.out).toContain('claude-coordinator-acme: ready\n');
   });
 });
 
@@ -458,27 +470,28 @@ describe('a file the watch would not read', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', custom], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    const watchdog = made.creates.find((created) => created.label === 'watchdog');
+    const watchdog = made.watches[0];
     expect(watchdog?.cwd).toBe(customDir);
-    const run = made.runs.find((item) => item.command.includes(' watch'));
-    expect(run?.command).toContain(' watch');
-    expect(run?.command).not.toContain('--file');
-    expect(run?.command).toContain(`--session ${SESSION}`);
+    expect(watchdog?.command).toContain(' watch');
+    expect(watchdog?.command).not.toContain('--file');
+    expect(watchdog?.command).toContain(`--session ${SESSION}`);
 
     const other = testIo(customDir, { kind: 'pane', pane: 'w9:p1' });
     const refused = await runWatch(['--session', SESSION], other, watchSources(home));
     expect(refused).toBe(1);
-    expect(other.err).toContain('watchdog');
-    expect(readState(customDir).sessions[SESSION]?.watch).toBeUndefined();
+    expect(other.err).toContain('only the watch this session records');
+    expect(readState(customDir).sessions[SESSION]?.watch?.pid).toBe(4242);
 
-    const watching = testIo(customDir, { kind: 'pane', pane: run?.pane ?? '' });
-    const watched = await runWatch(['--session', SESSION], watching, watchSources(home));
+    updateState(customDir, (state) => {
+      const record = state.sessions[SESSION];
+      if (record?.watch) record.watch.pid = process.pid;
+    });
+    const watching = testIo(customDir, { kind: 'pane', pane: 'w9:p1' });
+    const watched = await runWatch(['--session', SESSION], watching, { ...watchSources(home), pid: process.pid });
     expect(watched, watching.out + watching.err).toBe(0);
     expect(watching.out).toContain(`watching the session "${SESSION}"`);
-    const pane = run?.pane;
-    if (!pane) throw new Error('the watchdog pane was not recorded');
     expect(readState(customDir).last_valid?.file).toBe(customBody);
-    expect(readState(customDir).sessions[SESSION]?.watchdog).toEqual({ file: custom, pane });
+    expect(readState(customDir).sessions[SESSION]?.watchdog).toEqual({ file: custom });
     expect(readState(join(root, '.agents')).last_valid?.file).not.toBe(customBody);
     expect(readState(join(root, '.agents')).sessions[SESSION]?.watch).toBeUndefined();
   });
@@ -499,7 +512,7 @@ describe('a file the watch would not read', () => {
     const preview = await runUp(['--dry-run', '--file', custom], dry, upSources(home, world()));
     expect(preview).toBe(0);
     expect(dry.out).toContain('dry run: nothing was run\n');
-    expect(dry.out).toContain('watchdog');
+    expect(dry.out).toContain('detached; the state records its pid');
     expect(dry.out).not.toContain('--file');
     expect(dry.out).not.toContain('watch: not started');
     expect(dry.err).not.toContain('watch: not started');
@@ -517,8 +530,8 @@ describe('a file the watch would not read', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', custom], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    expect(made.creates.some((created) => created.label === 'watchdog')).toBe(true);
-    const command = made.runs.find((run) => run.command.includes(' watch'))?.command ?? '';
+    expect(made.watches).toHaveLength(1);
+    const command = made.watches[0]?.command ?? '';
     expect(command).not.toContain('--file');
     expect(command.includes('\x1b')).toBe(false);
     expect(io.out.includes('\x1b')).toBe(false);
@@ -546,7 +559,7 @@ describe('a file the watch would not read', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', file], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    expect(made.creates.some((created) => created.label === 'watchdog')).toBe(true);
+    expect(made.watches).toHaveLength(1);
     expect(io.err).toContain('watch: started\n');
     expect(io.out).not.toContain('watch: not started');
     expect(io.err).not.toContain('watch: not started');

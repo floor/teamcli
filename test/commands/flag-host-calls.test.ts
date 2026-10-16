@@ -320,7 +320,7 @@ describe('doctor: --session for a non-owner', () => {
   });
 });
 
-const OWNER_REFUSAL = 'team up: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr)\n';
+const OWNER_REFUSAL = 'deny\n';
 
 /** The fingerprint of this folder's approved record: the token a matching owner authorization carries. */
 function matchingOwnerToken(): string {
@@ -549,7 +549,7 @@ describe('up: --file and --session for a non-owner', () => {
     const code = await runUp([], io, recordingUp(calls));
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toContain('team up: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs in a herdr pane without an agent)\n');
+    expect(io.err).toBe('deny\n');
     expect(calls.some((call) => call.startsWith('sessionState('))).toBe(true);
   });
 });
