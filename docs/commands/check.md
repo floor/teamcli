@@ -1,9 +1,10 @@
 # team check
 
 One answer to one question: **is anything wrong with this team that someone should act on?**
-It reads the team file, the approval, the state and herdr, and changes nothing — no git is
-needed, so it answers as well in a plain folder as in a repository. Where [`team status`](status.md)
-says what the team is, the check says what to act on: the differences alone, each with its repair.
+It reads the team file, the approval, the state, herdr and the registries, and changes nothing —
+no git is needed, so it answers as well in a plain folder as in a repository. Where
+[`team status`](status.md) says what the team is, the check says what to act on: the differences
+alone, each with its repair.
 It is also the old name of [`team commits check`](commits.md) and [`team pr check`](pr.md), still
 read through 0.3.3. A `<ref>` (a range when it holds `..`, passed to git as given, otherwise that
 one commit) runs that older reading, as do `--pr <file>` (check a pull request's body as well;
@@ -11,6 +12,15 @@ one commit) runs that older reading, as do `--pr <file>` (check a pull request's
 it). `--file` is read by both readings; `--session` is this one's alone, and the older one meets
 it with `team check: unknown option --session` and exit 2. A run of the older reading says once
 on stderr which command now holds it, and `--pr` adds its own line.
+
+The registries answer for the team's place: a team the project registry names in two projects is a
+difference naming both, repaired by fixing the registry file, and so is a registry that cannot be
+read. A team whose file sets `project_lead: true` while another team of the same project sets it
+too is one as well — `the project <name> has <n> lead teams: <names>`, repaired with
+`take "project_lead: true" off all but one of them`. The two herdr sidebar lines each file seat
+carries are compared on the same pass: a workspace label or display line that reads as neither the
+file's own text nor a line the watch may paint is a difference repaired with
+`team register <seat>`, which re-applies both lines from the file without a relaunch.
 
 ## Synopsis
 
