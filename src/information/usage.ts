@@ -15,7 +15,9 @@ import { TEAM_FILE } from '../file/load.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile, defaultBudgets } from '../file/validate.ts';
 import type { Io } from '../io.ts';
+import { machineAccountsOf, payingAccountOf } from './machine-accounts.ts';
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
+import { shippedQuotaAccounts } from '../profiles/profile.ts';
 import type { WindowName } from '../profiles/quota.ts';
 import { readState, type State } from '../state.ts';
 import { approvalStanding, readApproval, storesFolder, type ApprovalRecord, type Standing } from '../store/store.ts';
@@ -48,12 +50,14 @@ export function viewFor(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSo
 /** The line a team's rows read when neither its file nor an approved copy of it can be read. */
 export const NO_FIGURES = 'no figures (the file could not be read)';
 
-/** The line a block prints when its file names no account: a person or an agent asking what is
- *  left must not get rows with no reason. It prints under the rows too, when the state still
- *  holds a reading the budgets in force do not name — such a row is that reading, not something
- *  a budget counts, so "nothing is counted" stays true. `status` has no words for this case to
- *  borrow — it omits its `budgets:` section and says nothing else (`status.ts:286-290`) — so the
- *  sentence is the coordinator's, ruled after their real run on this command. */
+/** The line a block prints when its file names no account and the machine's own accounts file
+ *  names none either: a person or an agent asking what is left must not get rows with no reason.
+ *  It prints under the rows too, when the state still holds a reading the budgets in force do
+ *  not name — such a row is that reading, not something a budget counts, so "nothing is counted"
+ *  stays true. A machine whose `accounts.yaml` lists subscriptions never prints it: those count
+ *  for every team. `status` has no words for this case to borrow — it omits its `budgets:`
+ *  section and says nothing else (`status.ts:286-290`) — so the sentence is the coordinator's,
+ *  ruled after their real run on this command. */
 export const NOTHING_COUNTED = "not known: this team's file declares no account, so nothing is counted";
 
 /** The line a block shows a caller who is not the owner in place of a refused approval's own
@@ -102,9 +106,12 @@ export type UsageRow = { row: BudgetRow; changedAt: number | null; pace: number 
 
 /** One account a team's file in force declares, as the machine view reads it: the kind a machine
  *  line is built by, and the lab the design's rule (§ 2.3) puts it under — the vendor of the first
- *  in-force seat that spends it (`seat.account ?? seat.vendor`, the counting rule's own resolution,
- *  `budgets/gate.ts:31`), else the account's own name. */
+ *  in-force seat that draws on it (`payingAccountOf`, the CLI-and-launcher rule,
+ *  `machine-accounts.ts`), else the account's own name. */
 export type DeclaredAccount = { account: string; kind: 'subscription' | 'spend'; lab: string };
+
+/** One row of the per-team breakdown: a seat, its CLI, and the account that pays for it. */
+export type SeatAccountRow = { seat: string; cli: string; account: string };
 
 /** Why nothing counts for an account, in the tool's own kinds — the words are the renderer's
  *  (`doctor.ts:154`, `:187`, `gate.ts:90`), never a message a read produced. `first-sight` is the
@@ -140,8 +147,18 @@ export type ProjectUsage = {
   /** The budgets in force's staleness, in seconds: a machine spend line reads `fresh` or `stale`
    *  by the same rule the gate applies (`gate.ts:40`), and the numbers must be this team's own. */
   staleAfter: number;
-  /** The accounts the file in force declares, kind and lab (§ 2.3's lab rule), sorted by name. */
+  /** The accounts the file in force declares, kind and lab (§ 2.3's lab rule), sorted by name:
+   *  the file's own `budgets.accounts`, plus the machine's accounts (`accounts.yaml`) the file
+   *  does not name — every team draws on those, so a file with no budgets section still counts
+   *  them. */
   accounts: DeclaredAccount[];
+  /** The per-seat breakdown: every seat in force with the account that pays for it, in file
+   *  order. The report prints it for the caller's own team, and for every team under `--all`. */
+  seatAccounts: SeatAccountRow[];
+  /** The accounts this team's own seats' quota patterns (shipped, plus the overrides in force)
+   *  can read: the machine report's `not readable from a CLI screen` sentence is the truth for
+   *  an account neither this list nor any shipped pattern names. */
+  quotaAccounts: string[];
   /** The labs a seat of this team puts in use — its vendors, distinct, in file order — whether or
    *  not an account is declared for them: the machine view's `not known (no team declares an
    *  account for it yet)` line counts a lab with none. */
@@ -194,6 +211,9 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
   const { home, now, restricted } = options;
   const standing = approvalStanding(root, home);
   const team = teamOf(root, standing, home);
+  // The machine's own accounts, read once for this block: every team draws on them, so they
+  // count for this one whatever its own file declares.
+  const machine = machineAccountsOf(home);
   const notes: string[] = [];
   let readings: Seen[] = [];
   let spend: SpendReading[] = [];
@@ -216,7 +236,7 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     // plus the state's own problem when there is one.
     const problems: TeamProblem[] = [{ kind: 'no-figures', text: NO_FIGURES }];
     if (stateProblem !== null) problems.push(stateProblem);
-    return { project: null, rows: [], whyNotCounted: null, spend: [], watch: 'not-known', staleAfter: defaultBudgets().staleAfter, accounts: [], vendors: [], whys: [], problems, notes };
+    return { project: null, rows: [], whyNotCounted: null, spend: [], watch: 'not-known', staleAfter: defaultBudgets().staleAfter, accounts: [], seatAccounts: [], quotaAccounts: [], vendors: [], whys: [], problems, notes };
   }
   const inForce = teamInForceOf(standing, team);
   // The rows a caller who is not the owner reads are built from the one validated copy in force,
@@ -228,13 +248,13 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
   const budgets = restricted && standing.kind === 'verified'
     ? inForce?.budgets ?? defaultBudgets()
     : budgetsInForceOf(standing, team);
-  const bound = restricted ? boundReadings(readings, budgets, inForce, notes) : readings;
+  const bound = restricted ? boundReadings(readings, budgets, inForce, machine, notes) : readings;
   const rows = budgetTable(budgets, bound, now).map((row) => ({
     row,
     changedAt: countedMoment(budgets, bound, row, now),
     pace: paceOf(budgets, bound, row, now),
   }));
-  const whyNotCounted = whyNotCountedOf(standing, team, budgets, restricted);
+  const whyNotCounted = whyNotCountedOf(standing, team, budgets, restricted, machine);
   // The project name this caller reads. A caller who is not the owner reads the one validated
   // copy in force's own name — a live `project:` edit is not approved, and the approval stays
   // verified whatever it says, so the live value must not stand in — and no name at all when
@@ -256,7 +276,9 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     spend,
     watch: recordedWatch(state, team, watchInForceOf(standing, team), now),
     staleAfter: budgets.staleAfter,
-    accounts: declaredOf(budgets, seats),
+    accounts: declaredOf(budgets, seats, machine),
+    seatAccounts: seats.map((seat) => ({ seat: seat.name, cli: seat.cli, account: payingAccountOf(seat) })),
+    quotaAccounts: [...new Set(seats.flatMap((seat) => quotaWith(seat.cli, patterns).map((one) => one.account)))].sort(),
     vendors: [...new Set(seats.map((seat) => seat.vendor))],
     whys: Object.entries(budgets.accounts).flatMap(([account, entry]) => {
       const why = unknownWhyOf(account, entry, seats, patterns, standing, rows);
@@ -267,16 +289,29 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
   };
 }
 
-/** The account list a machine line is built from: every declared account, sorted by name, each
- *  with its kind and its lab (§ 2.3's rule). */
-function declaredOf(budgets: TeamFile['budgets'], seats: readonly Seat[]): DeclaredAccount[] {
-  return Object.entries(budgets.accounts)
-    .map(([account, entry]): DeclaredAccount => ({
-      account,
-      kind: entry.kind,
-      lab: seats.find((seat) => (seat.account ?? seat.vendor) === account)?.vendor ?? account,
-    }))
-    .sort((a, b) => (a.account < b.account ? -1 : 1));
+/** The account list a machine line is built from: every account the file's own budgets declare,
+ *  plus every machine account the file does not name (the owner's subscriptions count for every
+ *  team; a file entry of the same name overrides one), sorted by name, each with its kind and its
+ *  lab (§ 2.3's rule, the paying rule's own attribution). */
+function declaredOf(budgets: TeamFile['budgets'], seats: readonly Seat[], machine: readonly string[]): DeclaredAccount[] {
+  const declared = Object.entries(budgets.accounts).map(([account, entry]): DeclaredAccount => ({
+    account,
+    kind: entry.kind,
+    lab: labOfAccount(account, seats),
+  }));
+  const named = new Set(declared.map((one) => one.account));
+  for (const account of machine) {
+    if (named.has(account)) continue;
+    // The machine's file names subscriptions only: it is the owner's own list of them.
+    declared.push({ account, kind: 'subscription', lab: labOfAccount(account, seats) });
+  }
+  return declared.sort((a, b) => (a.account < b.account ? -1 : 1));
+}
+
+/** § 2.3's lab rule under the paying attribution: the vendor of the first in-force seat that
+ *  draws on the account, else the account's own name. */
+function labOfAccount(account: string, seats: readonly Seat[]): string {
+  return seats.find((seat) => payingAccountOf(seat) === account)?.vendor ?? account;
 }
 
 /** The tool's own reason nothing counts for an account, or null when no such reason applies (the
@@ -298,7 +333,7 @@ function unknownWhyOf(
   rows: readonly UsageRow[],
 ): UnknownWhy | null {
   const readable = seats
-    .filter((seat) => (seat.account ?? seat.vendor) === account)
+    .filter((seat) => payingAccountOf(seat) === account)
     .some((seat) => quotaWith(seat.cli, patterns).some((one) => one.account === account));
   if (entry.sources.includes('status_line') && !readable) return 'no-pattern';
   if (entry.sources.includes('check') && entry.check === null) return 'no-pattern';
@@ -336,8 +371,9 @@ function stateTailOf(message: string): 'json' | 'format' | null {
  * value from outside the program passes (`state.ts`'s `cleanClassification`) does not reach budget
  * readings, so every string a stored reading carries is the state's, whatever it looks like. A
  * reading is bound when its account is one the budgets in force name — for this caller those are
- * the copy in force's own, never one the fingerprint shortcut let stand in for it — or the account
- * one of the in-force seats' own `account:`/`vendor:` resolves to (the counting rule's own
+ * the copy in force's own, never one the fingerprint shortcut let stand in for it — one of the
+ * machine's accounts (`accounts.yaml`, every team's to draw on), or the account
+ * one of the in-force seats' CLI and launcher resolve to (the paying rule's own
  * resolution, `budgets/gate.ts:31`, over the same budgets); its window and source are ones this
  * tool writes (`WINDOWS`, and the two `ReadingSource`s — no file can write any other value). The
  * seat names come from the one object `teamInForceOf` returns, never from the live file when a
@@ -350,15 +386,16 @@ function stateTailOf(message: string): 'json' | 'format' | null {
  * (the string `watch` writes, `watch/pass.ts:331`) prints with no seat (`-` in the block, null in
  * `--json`). The owner reads every reading the state holds, as before.
  */
-function boundReadings(list: readonly Seen[], budgets: TeamFile['budgets'], inForce: TeamFile | null, notes: string[]): Seen[] {
+function boundReadings(list: readonly Seen[], budgets: TeamFile['budgets'], inForce: TeamFile | null, machine: readonly string[], notes: string[]): Seen[] {
   if (inForce === null) {
     notes.push(NO_COPY);
     return [];
   }
-  const accounts = new Set(Object.keys(budgets.accounts));
+  const accounts = new Set<string>(machine);
+  for (const account of Object.keys(budgets.accounts)) accounts.add(account);
   const seats = new Set<string>();
   for (const seat of inForce.seats) {
-    accounts.add(seat.account ?? seat.vendor);
+    accounts.add(payingAccountOf(seat));
     seats.add(seat.name);
   }
   const kept: Seen[] = [];
@@ -383,7 +420,9 @@ function boundReadings(list: readonly Seen[], budgets: TeamFile['budgets'], inFo
 /** The one line the block prints when nothing its file declares is counted, in the tool's own
  *  words; null when the file's own accounts are the ones in force. Two conditions, ruled after
  *  the coordinator's real run. A file that names no account prints the ruled sentence — also
- *  when leftover readings print rows under it, while no budget in force names one. A file that
+ *  when leftover readings print rows under it, while no budget in force names one — unless the
+ *  machine's own accounts (`accounts.yaml`) count for every team anyway: those still count, so
+ *  the sentence belongs to a machine that lists none of them either. A file that
  *  declares accounts the approval does not back counts none of them, rows or no rows: not
  *  verified prints `notInForce`'s why-line for that standing (`approval.ts:47-52`), and a
  *  verified standing prints `status`'s own line for a file the owner has not approved
@@ -392,9 +431,9 @@ function boundReadings(list: readonly Seen[], budgets: TeamFile['budgets'], inFo
  *  refused approval's `why` is the store's own text and is the owner's; a caller who is not the
  *  owner gets `NOT_VERIFIED` instead, while `none` and `legacy` — the tool's own two lines, with
  *  no path in them (`approval.ts:47-52`) — print to everyone. */
-function whyNotCountedOf(standing: Standing, team: TeamFile, budgets: TeamFile['budgets'], restricted: boolean): string | null {
+function whyNotCountedOf(standing: Standing, team: TeamFile, budgets: TeamFile['budgets'], restricted: boolean, machine: readonly string[]): string | null {
   if (Object.keys(team.budgets.accounts).length === 0) {
-    return Object.keys(budgets.accounts).length === 0 ? NOTHING_COUNTED : null;
+    return Object.keys(budgets.accounts).length === 0 && machine.length === 0 ? NOTHING_COUNTED : null;
   }
   if (standing.kind !== 'verified') {
     // The switch is on the structured standing, never on the store's wording: a new refusal
@@ -841,7 +880,7 @@ export type ReportSpendRow = {
 
 /** One machine line's entry. One entry per line, so the text and the array walk side by side. */
 export type ReportAccount =
-  | { account: string; kind: 'subscription'; machine: ReportMachine; teams: ReportTeamRow[] }
+  | { account: string; kind: 'subscription'; machine: ReportMachine; teams: ReportTeamRow[]; readable: boolean }
   | { account: string; kind: 'spend'; machine: ReportSpendMachine; teams: ReportSpendRow[] };
 
 export type ReportLab = {
@@ -855,6 +894,13 @@ export type ReportLab = {
 export type ReportWhy = { scope: string; account: string; why: string };
 export type ReportNote = { scope: string; why: string; count?: number };
 
+/** One seat of a breakdown block: the seat's name, its CLI, and the account that pays for it. */
+export type ReportSeatRow = { seat: string; cli: string; account: string };
+
+/** One team's breakdown block: its seats and the account each draws on. The default report
+ *  carries the caller's own team; `--all` under the full view carries every team's. */
+export type ReportTeamBlock = { team: string; root?: string; seats: ReportSeatRow[] };
+
 /** The one report both renderers print (design § 2.3, restricted shape). */
 export type UsageReport = {
   format: 1;
@@ -865,6 +911,10 @@ export type UsageReport = {
   labs: ReportLab[];
   unknown: ReportWhy[];
   notes: ReportNote[];
+  /** The per-team seat breakdowns this view prints: the caller's own team by default, every
+   *  team under `--all` — a flag only the full view honours, so another team's names stay the
+   *  owner's. */
+  teams: ReportTeamBlock[];
 };
 
 /** The tool's own words for the three whys nothing counts (`doctor.ts:154`, `:192`, `gate.ts:90`). */
@@ -955,8 +1005,10 @@ function anonOf(problem: TeamProblem): { why: string; sentence: (count: number) 
  * names — never a name, a root, a seat, a path or a message a read produced. When the caller
  * stands outside any project (`view.mine` null, `mineNotes` the position's own notes) every lab,
  * account and row belonging to another team is out, and the counts and fixed sentences stand in.
+ * `allTeams` is the command's `--all`: under the full view it widens the breakdown blocks to
+ * every team; a caller the view does not widen gets one note saying so, and no other team's name.
  */
-export function reportOf(machine: MachineUsage, view: UsageView, now: number, mineNotes: readonly string[]): UsageReport {
+export function reportOf(machine: MachineUsage, view: UsageView, now: number, mineNotes: readonly string[], allTeams = false): UsageReport {
   const mineEntry = view.mine === null ? null : machine.teams.find((team) => realKey(team.root) === realKey(view.mine as string)) ?? null;
   const mineName = mineEntry?.usage.project ?? null;
   const nameOf = (team: TeamEntry) => team.usage.project ?? team.root;
@@ -965,6 +1017,12 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   // The accounts the caller's own file names: the only accounts the restricted view may name.
   const mineAccounts = new Set((mineEntry?.usage.accounts ?? []).map((declared) => declared.account));
   const visible = (account: string) => view.full || mineAccounts.has(account);
+  // The accounts a CLI screen on this machine can expose a figure for: any shipped quota
+  // pattern's account, plus any account a team's own seats' patterns read. An account outside
+  // the set prints `not readable from a CLI screen` — the truth about where its figure can come
+  // from, never `unknown`, which reads as a figure not yet seen.
+  const readable = new Set<string>(shippedQuotaAccounts());
+  for (const team of machine.teams) for (const account of team.usage.quotaAccounts) readable.add(account);
 
   const labs: ReportLab[] = [];
   /** The accounts some line of this report carries a figure for: the why-lines print only under
@@ -987,7 +1045,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
         accounts.push(entry);
       } else {
         for (const line of account.lines) {
-          const entry = subscriptionEntryOf(account.account, line, view, mineEntry, now);
+          const entry = subscriptionEntryOf(account.account, line, view, mineEntry, now, readable.has(account.account));
           if (entry.machine.state !== 'unknown') withFigure.add(account.account);
           accounts.push(entry);
         }
@@ -1047,6 +1105,23 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     notes.push({ scope: 'store', why: 'a store on this machine cannot be read', ...(machine.stores.length > 1 ? { count: machine.stores.length } : {}) });
   }
 
+  // The breakdown blocks: the caller's own team first, then — only under `--all` and only in the
+  // full view, where another team's name is already allowed — every other team by name. A caller
+  // the view does not widen reads one note instead, never a name the view holds back.
+  const breakdowns: ReportTeamBlock[] = [];
+  if (mineEntry !== null) {
+    breakdowns.push({ team: mineName ?? 'mine', seats: mineEntry.usage.seatAccounts });
+  }
+  if (allTeams && view.full) {
+    for (const team of teamOrder) {
+      if (team === mineEntry) continue;
+      breakdowns.push({ team: nameOf(team), root: team.root, seats: team.usage.seatAccounts });
+    }
+  }
+  if (allTeams && !view.full) {
+    notes.push({ scope: 'usage', why: "the full team list is the owner's view: --all shows this team's seats only" });
+  }
+
   return {
     format: 1,
     at: new Date(now).toISOString(),
@@ -1058,6 +1133,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     labs,
     unknown,
     notes,
+    teams: breakdowns,
   };
 }
 
@@ -1076,6 +1152,7 @@ function subscriptionEntryOf(
   view: UsageView,
   mineEntry: TeamEntry | null,
   now: number,
+  readable: boolean,
 ): ReportAccount {
   const newest = line.newest;
   const other = newest !== null && newest.team !== mineEntry;
@@ -1101,7 +1178,7 @@ function subscriptionEntryOf(
   const teams: ReportTeamRow[] = rows
     .map((one) => ({ team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '', ...(view.full ? { root: one.team.root } : {}), row: reportRowOf(one.row, one.pace) }))
     .sort((a, b) => (a.team < b.team ? -1 : 1));
-  return { account, kind: 'subscription', machine, teams };
+  return { account, kind: 'subscription', machine, teams, readable };
 }
 
 /** The row's figure, copied field by field — `BudgetRow`'s own order, so the `--json` face stays
@@ -1160,7 +1237,10 @@ function spendEntryOf(account: MachineAccount & { kind: 'spend' }, view: UsageVi
 
 /**
  * The text both views print (§ 2.3): the header's counts, then each lab's lines — an account's
- * machine line, its allowed rows, its why-lines — then the notes. The full view differs only in
+ * machine line, its allowed rows, its why-lines — then the per-team seat breakdowns, then the
+ * notes. An account no CLI screen can expose a figure for prints `not readable from a CLI
+ * screen` in place of a figure line, and its `no pattern can read this account` why-line is the
+ * same fact said per team, so the line does not repeat under it. The full view differs only in
  * what the report carries, never here: one renderer, one shape.
  */
 export function reportText(report: UsageReport): string {
@@ -1185,16 +1265,21 @@ export function reportText(report: UsageReport): string {
           for (const row of entry.teams) lines.push(teamRowText(row));
         }
       }
-      for (const why of report.unknown.filter((one) => one.account === first.account)) {
+      // A not-readable account's `no pattern can read this account` why is the same fact the
+      // machine line above it just said, machine-wide; every other why still prints.
+      const unreadable = first !== undefined && first.kind === 'subscription' && !first.readable;
+      for (const why of report.unknown.filter((one) => one.account === first.account && !(unreadable && one.why === WHY_WORDS['no-pattern']))) {
         lines.push(`  (${why.scope === 'another' ? 'another team' : why.scope}: ${why.why})`);
       }
       at = end;
     }
-    if (lab.accounts.length === 0 && lab.others === undefined) {
-      lines.push(`${lab.lab}  not known (no team declares an account for it yet)`);
-    } else if (lab.others !== undefined) {
+    if (lab.others !== undefined) {
       lines.push(`${lab.lab}: ${lab.others} other account${lab.others === 1 ? '' : 's'}`);
     }
+  }
+  for (const block of report.teams) {
+    lines.push('', block.team);
+    for (const seat of block.seats) lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}`);
   }
   for (const note of report.notes) lines.push(`note: ${noteText(note)}`);
   return `${lines.join('\n')}\n`;
@@ -1210,6 +1295,9 @@ function paceWord(pace: number | null): string {
 function subscriptionText(entry: ReportAccount & { kind: 'subscription' }, report: UsageReport): string {
   const m = entry.machine;
   if (m.state === 'unknown' || m.left === null || m.used === null) {
+    // An account no CLI screen can expose a figure for says so, machine-wide: `unknown` reads as
+    // a figure not yet seen, and this account cannot be seen at all.
+    if (!entry.readable) return `${entry.account}  not readable from a CLI screen`;
     return [entry.account, m.window, 'unknown'].filter((part) => part).join('  ');
   }
   const reset = m.resetsIn === null ? 'resets unknown' : `resets in ${m.resetsIn}`;

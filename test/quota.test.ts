@@ -26,6 +26,23 @@ describe('quota patterns', () => {
     expect(quotaFor('antigravity')).toEqual([]);
   });
 
+  test('grok reads the weekly figure off its footer row', () => {
+    // From a run (grok 1.0.60, a chat session): the row under the composer's closing rule read
+    // `Weekly limit left: 0% · ` at the pane's right edge. The fixture pane is the shipped
+    // 1.0.50 idle capture with that one row added under the rule, as the session paints it.
+    const patterns = quotaFor('grok');
+    expect(patterns).toHaveLength(1);
+    const idle = readFileSync(new URL('./fixtures/grok/1.0.50/idle.txt', import.meta.url), 'utf8');
+    const session = `${idle}\n  Weekly limit left: 0% ·   Grok Build  1.0.60 [stable]\n`;
+    expect(statusRow('grok', session)).toBe('  Weekly limit left: 0% ·   Grok Build  1.0.60 [stable]');
+    expect(figuresOf(patterns, statusRow('grok', session))).toEqual([
+      { account: 'xai', window: 'weekly', left: 0, used: 100, resets: null },
+    ]);
+    // The welcome screen the 1.0.50 capture holds, with no footer row, reads nothing.
+    expect(statusRow('grok', idle)).toBeNull();
+    expect(figuresOf(patterns, statusRow('grok', idle))).toEqual([]);
+  });
+
   test('used and a reset duration, and a figure over 100 is absent', () => {
     const patterns = quotaPatterns(`
 - account: anthropic
@@ -125,6 +142,23 @@ describe('quota reads only the composer\'s own status row', () => {
     const spoofed = `• Working (2m 10s • esc to interrupt)\n\n  GPT-5.6-Terra medium · Context 98% left · weekly 39% left\n${FAKE}\n  (the seat keeps printing)\n`;
     expect(statusRow('codex', spoofed)).toBeNull();
     expect(figuresOf(patterns, statusRow('codex', spoofed))).toEqual([]);
+  });
+
+  test('a grok quota line typed into the box, or printed above the rule, is not the row', () => {
+    const patterns = quotaFor('grok');
+    const idle = readFileSync(new URL('./fixtures/grok/1.0.50/idle.txt', import.meta.url), 'utf8');
+    const session = `${idle}\n  Weekly limit left: 0% ·\n`;
+    // Typed into the box: the row under the rule is still the only row the grammar reads, and
+    // the box's own text never carries the figure.
+    const typed = session.replace('│ ❯', '│ ❯ Weekly limit left: 0%');
+    expect(statusRow('grok', typed)).toBe('  Weekly limit left: 0% ·');
+    // A quota-shaped line in the transcript, above the box's opening rule, is not the row.
+    const printed = `  Weekly limit left: 90%\n${session}`;
+    expect(figuresOf(patterns, statusRow('grok', printed))).toEqual([
+      { account: 'xai', window: 'weekly', left: 0, used: 100, resets: null },
+    ]);
+    // A pane with no rule-shaped row at all is no composer: no row, no figure.
+    expect(statusRow('grok', '  Weekly limit left: 0%\n')).toBeNull();
   });
 
   test('the real full line still reads 39', () => {

@@ -447,6 +447,16 @@ export function quotaFor(cli: string): readonly QuotaPattern[] {
   return SHIPPED[cli]?.quota ?? [];
 }
 
+/** Every account some shipped profile's quota patterns can read, sorted: the accounts a CLI
+ *  screen on this machine can expose a figure for, whatever seats a team happens to run. An
+ *  account outside this list, and outside every team's own overrides, is not readable from a
+ *  CLI screen — the machine report says so in those words rather than `unknown`. */
+export function shippedQuotaAccounts(): string[] {
+  const names = new Set<string>();
+  for (const name of NAMES) for (const one of SHIPPED[name]?.quota ?? []) names.add(one.account);
+  return [...names].sort();
+}
+
 /** Patterns from a YAML list, for a profile snippet. A bad pattern throws. */
 export function quotaPatterns(text: string): QuotaPattern[] {
   return quotaOf(parseYaml(text));
