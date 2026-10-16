@@ -17,6 +17,7 @@ import {
   type RegistryTeam,
 } from '../src/commands/list.ts';
 import type { FoundTeam } from '../src/list/find.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { testIo } from './helpers.ts';
 
 async function listed(argv: string[], sources: ListSources): Promise<{ code: number; out: string; err: string }> {
@@ -67,6 +68,36 @@ function sources(registry: RegistryTeam[] | null, overrides: Partial<ListSources
     },
     ...overrides,
   };
+}
+
+/** A valid team file for a record's root: one declared seat, and nothing a read needs beyond it. */
+function teamFileOf(): string {
+  return [
+    'format: 1',
+    'project: acme',
+    'coordinator: lead',
+    'operator: lead',
+    'workspace:',
+    '  mode: shared',
+    'seats:',
+    '  - role: coordinator',
+    '    name: lead',
+    '    label: lead',
+    '    cli: claude-code',
+    '    vendor: anthropic',
+    '    model: Claude Opus',
+    '    version: "5.5"',
+    '    launch: claude --model claude-opus-5-5',
+    '',
+  ].join('\n');
+}
+
+/** A project root under `base`, holding a valid team file. */
+function makeRoot(base: string, name = 'acme'): string {
+  const root = join(base, name);
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  writeFileSync(join(root, '.agents', 'team.yaml'), teamFileOf());
+  return root;
 }
 
 test('one row per registered team: defined, approved from its file, running from herdr', () => {
@@ -240,26 +271,7 @@ test('the table pads every column but the last, and never leaves a trailing run 
 test('home with a registry file: the record and its team file are read from disk', async () => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'list-registry-')));
   try {
-    const root = join(base, 'acme');
-    mkdirSync(join(root, '.agents'), { recursive: true });
-    writeFileSync(join(root, '.agents', 'team.yaml'), [
-      'format: 1',
-      'project: acme',
-      'coordinator: lead',
-      'operator: lead',
-      'workspace:',
-      '  mode: shared',
-      'seats:',
-      '  - role: coordinator',
-      '    name: lead',
-      '    label: lead',
-      '    cli: claude-code',
-      '    vendor: anthropic',
-      '    model: Claude Opus',
-      '    version: "5.5"',
-      '    launch: claude --model claude-opus-5-5',
-      '',
-    ].join('\n'));
+    const root = makeRoot(base);
     const home = join(base, 'home');
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(join(home, '.config', 'team', 'teams.yaml'), [
@@ -307,6 +319,47 @@ test('home with a registry file: the record and its team file are read from disk
     mkdirSync(bare, { recursive: true });
     const none = await listed([], { ...realListSources(bare), sessions: () => [] });
     expect(none.out).toBe('no running sessions\n');
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// The registry writer and the view, end to end: the record `up` and `add` write through
+// `upsertTeam` is the one the real sources read back, with nothing hand-written in between.
+test('a record the writer wrote lists with its roster and its file state', async () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'list-registry-write-')));
+  try {
+    const root = makeRoot(base);
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    upsertTeam(home, teamIdOf(root), {
+      project: 'acme',
+      entity: 'acme',
+      session: 'acme',
+      root,
+      lobby: '/home/.config/team/lobbies/acme',
+      roster: [{ agent: 'agt_0123456789ab', seat: 'lead', role: 'coordinator' }],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    const run = await listed(['--json', '--seats'], {
+      ...realListSources(home),
+      sessions: () => [{ name: 'acme', running: true }],
+      team: () => null,
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.out)).toEqual([{
+      entity: 'acme',
+      team: 'acme',
+      project: 'acme',
+      lobby: '/home/.config/team/lobbies/acme',
+      seats: 1,
+      defined: true,
+      approved: true,
+      running: true,
+      source: 'registry',
+      roster: [{ seat: 'lead', agent: 'agt_0123456789ab', role: 'coordinator' }],
+    }]);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
