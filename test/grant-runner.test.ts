@@ -652,3 +652,126 @@ describe("a create-grant's runner and the team's other commands", () => {
     }
   });
 });
+
+/** A record naming one seat in one session, rather than a runner by ancestry. */
+const SEAT_RECORD = (expires: string): string =>
+  `entity: beacon\nsession: dispatch\nagent: builder-2\npaths:\n  - ~/Code/beacon\nexpires: "${expires}"\n`;
+
+const seatOf = (name: string, session = 'dispatch') =>
+  ({ kind: 'seat', name, pane: `seat-pane-${name}`, session }) as const;
+
+describe("a create-grant's named seat", () => {  test('the named seat is admitted on add and remove, and every other seat, session, path and an expired record is refused', async () => {
+    const sb = makeSandbox();
+    try {
+      const v9 = join(sb.code, 'v9');
+      initGitRepo(v9);
+      mkdirSync(join(v9, '.agents'), { recursive: true });
+      const five = fiveSeatTeam('beacon-v9', v9, sb.home);
+      writeFileSync(join(v9, '.agents', 'team.yaml'), five);
+      const elsewhere = join(sb.home, 'Code', 'elsewhere');
+      initGitRepo(elsewhere);
+      mkdirSync(join(elsewhere, '.agents'), { recursive: true });
+      writeFileSync(join(elsewhere, '.agents', 'team.yaml'), fiveSeatTeam('elsewhere', elsewhere, sb.home));
+
+      writeGrant(sb.home, 'beacon.yaml', SEAT_RECORD(FUTURE));
+
+      // The record names builder-2 in dispatch: that seat is admitted where the runner is — the
+      // early ask on the cwd and the late ask on the loaded root both pass — and the run goes on
+      // to its own work, with no caller sentence on either way.
+      const addIo = testIo(v9, seatOf('builder-2'));
+      expect(await runAdd(['builder-3'], addIo, addSources(sb.home)), `${addIo.err}${addIo.out}`).toBe(1);
+      expect(addIo.err).toBe('team add: herdr doesn\'t answer\n');
+
+      const stopped = { n: 0 };
+      const removeIo = testIo(v9, seatOf('builder-2'));
+      expect(await runRemove(['builder-1'], removeIo, stopSources(sb.home, stopped)), `${removeIo.err}${removeIo.out}`).toBe(0);
+      expect(removeIo.err).not.toContain('only the owner');
+      const after = readFileSync(join(v9, '.agents', 'team.yaml'), 'utf8');
+      expect(after).not.toContain('builder-1');
+      expect(after).toContain('builder-2');
+      writeFileSync(join(v9, '.agents', 'team.yaml'), five);
+
+      // Every seat, session and path the record does not name keeps today's caller sentence.
+      for (const one of [
+        { name: 'another seat', who: seatOf('tester-1'), cwd: v9 },
+        { name: 'the named seat in another session', who: seatOf('builder-2', 'elsewhere'), cwd: v9 },
+        { name: 'a team outside the covered path', who: seatOf('builder-2'), cwd: elsewhere },
+      ]) {
+        const add = testIo(one.cwd, one.who);
+        expect(await runAdd(['builder-3'], add, addSources(sb.home)), one.name).toBe(1);
+        expect(add.err, one.name).toContain('only the owner, the orchestrator or the operator runs it');
+        const remove = testIo(one.cwd, one.who);
+        expect(await runRemove(['builder-1'], remove, stopSources(sb.home, stopped)), one.name).toBe(1);
+        expect(remove.err, one.name).toContain('only the owner, the orchestrator or the operator runs it');
+      }
+
+      // An expired record admits nobody, the seat it names included.
+      writeGrant(sb.home, 'beacon.yaml', SEAT_RECORD(PAST));
+      const expired = testIo(v9, seatOf('builder-2'));
+      expect(await runRemove(['builder-1'], expired, stopSources(sb.home, stopped))).toBe(1);
+      expect(expired.err).toContain('only the owner, the orchestrator or the operator runs it');
+      expect(readFileSync(join(v9, '.agents', 'team.yaml'), 'utf8')).toBe(five);
+      // No run but the admitted removal had an effect.
+      expect(stopped.n).toBe(0);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('remove --keep is not granted, for the seat the record names and for its runner', async () => {
+    const sb = makeSandbox();
+    try {
+      const v9 = join(sb.code, 'v9');
+      initGitRepo(v9);
+      mkdirSync(join(v9, '.agents'), { recursive: true });
+      const five = fiveSeatTeam('beacon-v9', v9, sb.home);
+      writeFileSync(join(v9, '.agents', 'team.yaml'), five);
+
+      writeGrant(sb.home, 'beacon.yaml', SEAT_RECORD(FUTURE));
+      const stopped = { n: 0 };
+      // A non-lead `--keep` re-signs the approval, so the record does not admit it.
+      const seat = testIo(v9, seatOf('builder-2'));
+      expect(await runRemove(['builder-1', '--keep'], seat, stopSources(sb.home, stopped))).toBe(1);
+      expect(seat.err).toContain('only the owner, the orchestrator or the operator runs it');
+      writeGrant(sb.home, 'beacon.yaml', WITH_RUNNER);
+      const runner = walkIo(v9, OUTSIDE_HERDR);
+      expect(await runRemove(['builder-1', '--keep'], runner, stopSources(sb.home, stopped))).toBe(1);
+      expect(runner.err).toBe(
+        'team remove: only the owner, the orchestrator or the operator runs it; this call is unplaced (it doesn\'t run on a terminal)\n',
+      );
+      // A lead's `--keep` is a swap: the record is not the team file's swap grant.
+      const swap = walkIo(v9, OUTSIDE_HERDR);
+      expect(await runRemove(['orchestrator', '--keep'], swap, stopSources(sb.home, stopped))).toBe(1);
+      expect(swap.err).toContain('swaps the orchestrator\'s or the operator\'s seat');
+      // Not one of them touched the file.
+      expect(readFileSync(join(v9, '.agents', 'team.yaml'), 'utf8')).toBe(five);
+      expect(stopped.n).toBe(0);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('a lead seat is not granted on add either', async () => {
+    const sb = makeSandbox();
+    try {
+      const v9 = join(sb.code, 'v9');
+      initGitRepo(v9);
+      mkdirSync(join(v9, '.agents'), { recursive: true });
+      const five = fiveSeatTeam('beacon-v9', v9, sb.home);
+      writeFileSync(join(v9, '.agents', 'team.yaml'), five);
+
+      writeGrant(sb.home, 'beacon.yaml', WITH_RUNNER);
+      // The second half of a swap is the owner's: the record admits the caller for its own work,
+      // never for a seat that leads.
+      const add = walkIo(v9, OUTSIDE_HERDR);
+      expect(await runAdd(['orchestrator'], add, addSources(sb.home))).toBe(1);
+      expect(add.err).toContain('only the owner, the orchestrator or the operator runs it');
+      const remove = walkIo(v9, OUTSIDE_HERDR);
+      expect(await runRemove(['orchestrator'], remove, stopSources(sb.home, { n: 0 }))).toBe(1);
+      expect(remove.err).toContain('only the owner removes the orchestrator\'s or the operator\'s seat');
+      expect(readFileSync(join(v9, '.agents', 'team.yaml'), 'utf8')).toBe(five);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+});
