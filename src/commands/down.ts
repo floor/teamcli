@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, callerOf, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { grantGate, logGranted } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
@@ -409,7 +409,15 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.invocation
     return 2;
   }
+  const detached = detachedRefusal(walkCaller(io));
+  if (detached !== undefined) {
+    io.stderr(`team down: ${detached}\n`);
+    // exit: down.detached
+    return 1;
+  }
   const dry = args.flags.has('dry-run');
+  // Set to exactly `1`. Anything else, including unset, leaves the caller refusal where it is.
+  const dev = io.env.TEAMCLI_DEV_MODE === '1';
   const refusals: string[] = [];
 
   // --- the delegate branch -----------------------------------------------------------------
@@ -635,25 +643,45 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
   const branchRun = branching();
 
+  // Dev mode says the caller-placement line once, as a warning, and the stop continues.
+  // Every other refusal stays a refusal. Unset, the list is unchanged. Nothing here writes
+  // an approval, a key, or a grant.
+  const placement = `only the owner, the orchestrator or the operator stops the team; this call is ${describeCaller(caller)}`;
+  let warning = '';
+  if (dev) {
+    const kept: string[] = [];
+    for (const line of refusals) {
+      if (line === placement) warning = line;
+      else kept.push(line);
+    }
+    if (warning) refusals.splice(0, refusals.length, ...kept);
+  }
+
   const state = readState(dir).sessions[session];
   const home = sources.home ?? homedir();
   let acting = team;
   if (refusals.length === 0) {
     const standing = sources.standing?.(root) ?? approvalStanding(root, home);
-    if (standing.kind !== 'verified') {
+    if (standing.kind !== 'verified' && standing.kind !== 'none') {
+      if (warning) io.stderr(`team down: warning: ${warning}\n`);
       io.stderr(`team down: ${notInForce(standing)}\n`);
       // exit: down.never-approved
       // exit: down.legacy
       // exit: down.refused
       return 1;
     }
-    const approved = validateTeamFile(standing.record.file);
-    if (!approved.ok) {
-      io.stderr('team down: the approved copy of the team file cannot be read\n');
-      // exit: down.approved-copy
-      return 1;
+    if (standing.kind === 'none') {
+      acting = team;
+    } else {
+      const approved = validateTeamFile(standing.record.file);
+      if (!approved.ok) {
+        if (warning) io.stderr(`team down: warning: ${warning}\n`);
+        io.stderr('team down: the approved copy of the team file cannot be read\n');
+        // exit: down.approved-copy
+        return 1;
+      }
+      acting = approved.team;
     }
-    acting = approved.team;
   }
   // The stop list is the copy in force. A name that copy carries, listed once, is that seat.
   // Any other agent — no name, or a name the copy does not carry — is this team's only when
@@ -803,11 +831,15 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if (dry) {
     // A refusal leaves through the real run's return below, so the status and the exit id
     // are that refusal's. The words stay the dry run's, and nothing is written.
+    if (warning) io.stdout(`! warning: ${warning}\n`);
     for (const refusal of refusals) io.stdout(`! down would refuse: ${refusal}\n`);
     io.stdout(formatPlan(plan));
   }
   if (refusals.length) {
-    if (!dry) for (const refusal of refusals) io.stderr(`team down: ${refusal}\n`);
+    if (!dry) {
+      if (warning) io.stderr(`team down: warning: ${warning}\n`);
+      for (const refusal of refusals) io.stderr(`team down: ${refusal}\n`);
+    }
     // exit: down.caller
     // exit: down.abandon
     // exit: down.no-pane
@@ -826,6 +858,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.grant-scope
     return 1;
   }
+  if (!dry && warning) io.stderr(`team down: warning: ${warning}\n`);
   if (dry) {
     // exit: down.dry-run
     return 0;
@@ -932,9 +965,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       drop(name) {
         let pane: string | undefined;
         updateState(dir, (file) => {
-          const seatsOf = (file.sessions[session] ??= emptySession()).seats;
-          pane = seatsOf[name]?.pane;
-          delete seatsOf[name];
+          const current = (file.sessions[session] ??= emptySession());
+          const prior = current.seats[name];
+          pane = prior?.pane;
+          if (prior?.id && !prior.temporary) {
+            (current.retained_seats ??= {})[name] = {
+              id: prior.id,
+              ...(prior.last_active ? { last_active: prior.last_active } : {}),
+            };
+          }
+          delete current.seats[name];
         });
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
       },

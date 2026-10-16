@@ -3,17 +3,20 @@ import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, callerVerdict, describeCaller, judgeCallerIn, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
+import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
+import { appendHistory } from '../send/history.ts';
+import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { dropMessage, submitTrigger, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { classify } from '../watch/screen.ts';
+import { classify, readScreen } from '../watch/screen.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -31,12 +34,15 @@ it; a worker seat may not. --list sends nothing: it prints the file's seats and 
 no caller check. --dry-run resolves the seat and the channel, writes no drop file, and
 types nothing. It appends one line to the team log.
 
-The outcome is one of five, and none of them is silent:
+The outcome is one of six, and none of them is silent:
   delivered    the drop path (exit 0): herdr reported the seat working — or done or
                blocked, changed from the status read before Enter — and the pane was
                not one of the dialogs listed above
   answered     --wait to a Claude Code seat: the reply came back; the reply follows
                on stdout (exit 0)
+  held         the message is safely on disk, and the pane was left untouched because
+               the seat remained busy, locked, in a dialog, or holding an unsent draft
+               (exit 1)
   timeout      --wait to a Claude Code seat: the frame was sent on the socket, and no
                reply came within the window (exit 1). A seat which does not accept
                messages from other sessions holds the frame until a person lets it
@@ -74,6 +80,8 @@ export type SendHost = {
   native: NativePane;
   now(): Date;
   home: string;
+  /** Optional override for the per-project send daemon socket path. */
+  daemonSocket?: string;
 };
 
 export const realHost: SendHost = {
@@ -113,6 +121,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const seatName = args.rest[0];
   const report: Report = { json: args.flags.has('json'), seat: seatName ?? null, sent: null };
   if (args.error) return usage(io, args.error, report);
+  const detached = detachedRefusal(callerOf(io));
+  if (detached !== undefined) {
+    io.stderr(`team send: ${detached}\n`);
+    // exit: send.detached
+    return 1;
+  }
   if (args.flags.has('list')) return listSeats(io, host, report);
 
   const words = args.rest.slice(1);
@@ -143,7 +157,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return configuration(io, message || 'the team file cannot be read', report);
   }
-  const { team } = loaded;
+  const { team, root } = loaded;
   const dir = dirname(loaded.path);
 
   // The caller check mirrors `answer`'s: the owner, or the orchestrator from its own seat on
@@ -152,6 +166,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const judged = judgeCallerIn(io, dir, team);
   const { caller } = judged;
   const who = logWho(caller, team);
+  const from = caller.kind === 'seat' ? caller.name : 'owner';
   const callerProblem = callerProblemOf(caller, team, standingOf(dir, judged.session, caller));
   if (callerProblem) return refuse(io, dir, who, callerProblem, host, report);
 
@@ -179,7 +194,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return refuse(io, dir, who, `${seatName} runs ${configured.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`, host, report);
   }
   if (wait && configured.cli === 'claude-code') {
-    return deliverSocket(io, dir, who, team, seatName, body, dry, timeoutS, host, report);
+    return deliverSocket(io, dir, root, who, from, team, seatName, body, dry, timeoutS, host, report);
   }
 
   // A plain send, every seat: the body is never typed. It is written whole to a 0600 drop
@@ -194,13 +209,44 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (dry) {
     return dryRun(io, dir, who, seatName, `${configured.cli} via a 0600 drop file and one trigger line; nothing was written`, host, report);
   }
+
+  const daemonSock = host.daemonSocket ?? daemonSocketPath(team.project, root, host.home);
+  const viaDaemon = await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: seatName, body });
+  if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
+    return finishDaemonSend(io, dir, who, seatName, timeoutS, host, report, viaDaemon);
+  }
+
   const found = findAgent(host, team.session, seatName);
   if (!found.ok) {
     if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
+    appendHistory(team.project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
     return unreachable(io, dir, who, seatName, found.reason, host, report);
   }
+  if (isBareShellPane(dir, team.session, seatName, host.processInfo(team.session, found.pane))) {
+    appendHistory(team.project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
+    return unreachable(io, dir, who, seatName, 'the seat is back at its shell; nothing was typed', host, report);
+  }
   report.sent = msgId;
-  return deliverNative(io, dir, who, team.session, seatName, configured.cli, found.pane, dropDir, msgId, body, trigger, host, report);
+  return deliverNative(io, dir, root, who, from, team.project, team.session, seatName, configured.cli, found.pane, dropDir, msgId, body, trigger, host, report);
+}
+
+function finishDaemonSend(
+  io: Io,
+  dir: string,
+  who: string,
+  seatName: string,
+  timeoutS: number,
+  host: SendHost,
+  report: Report,
+  res: DaemonSendResponse,
+): number {
+  report.sent = res.id;
+  if (res.outcome === 'delivered') return delivered(io, seatName, report);
+  if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
+  if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
+  if (res.outcome === 'held') return held(io, dir, who, seatName, res.detail, host, report);
+  if (res.outcome === 'unreachable') return unreachable(io, dir, who, seatName, res.detail, host, report);
+  return refuse(io, dir, who, res.detail, host, report);
 }
 
 /**
@@ -211,8 +257,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 async function deliverSocket(
   io: Io,
   dir: string,
+  root: string,
   who: string,
-  team: { session: string },
+  from: string,
+  team: { project: string; session: string },
   seatName: string,
   body: string,
   dry: boolean,
@@ -237,18 +285,31 @@ async function deliverSocket(
     return dryRun(io, dir, who, seatName, 'claude-code via the cross-session socket; nothing was sent', host, report);
   }
 
+  const daemonSock = host.daemonSocket ?? daemonSocketPath(team.project, root, host.home);
+  const viaDaemon = await requestDaemon(
+    daemonSock,
+    { v: 1, op: 'send', id: msgId, from, to: seatName, body, wait: true, timeout_s: timeoutS },
+    (timeoutS + 30) * 1000,
+  );
+  if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
+    return finishDaemonSend(io, dir, who, seatName, timeoutS, host, report, viaDaemon);
+  }
+
   const found = findAgent(host, team.session, seatName);
   if (!found.ok) {
     if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
+    appendHistory(team.project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
     return unreachable(io, dir, who, seatName, found.reason, host, report);
   }
   const pane = found.pane;
   const processes = host.processInfo(team.session, pane);
   if (processes === null) {
+    appendHistory(team.project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
     return unreachable(io, dir, who, seatName, "the pane's processes could not be read", host, report);
   }
   const socketPath = socketOf(host, processes);
   if (socketPath === null) {
+    appendHistory(team.project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
     return unreachable(io, dir, who, seatName, `no cross-session socket was found for its pane's processes (looked in ${host.socketsDir})`, host, report);
   }
 
@@ -270,6 +331,7 @@ async function deliverSocket(
     try {
       const taken = await host.deliver(socketPath, frame);
       if (!taken.ok) {
+        appendHistory(team.project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
         return unreachable(io, dir, who, seatName, taken.reason, host, report);
       }
       // The log keeps the seat and the frame's size; never the message's text, and never
@@ -279,9 +341,11 @@ async function deliverSocket(
       if (outcome.kind === 'answered') {
         const read = readReply(outcome.line);
         logLine(dir, 'send', who, `${seatName}: answered (reply ${String(read.reply.length)} characters)`, host.now());
+        appendHistory(team.project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'answered' });
         return answered(io, seatName, read, report);
       }
       logLine(dir, 'send', who, `${seatName}: timeout (sent, no reply within ${String(timeoutS)}s)`, host.now());
+      appendHistory(team.project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'timeout' });
       return timedOut(io, seatName, timeoutS, report);
     } finally {
       listener.close();
@@ -322,7 +386,10 @@ function dialogKind(cli: string, screen: string | null): string | null {
 async function deliverNative(
   io: Io,
   dir: string,
+  root: string,
   who: string,
+  from: string,
+  project: string,
   session: string,
   seatName: string,
   cli: string,
@@ -346,25 +413,61 @@ async function deliverNative(
     } catch {
       return refuse(io, dir, who, `${seatName}: the drop file could not be written; nothing was typed`, host, report);
     }
+    const initialScreen = host.native.paneText?.(session, pane) ?? null;
+    if (initialScreen !== null && dialogKind(cli, initialScreen) === null && readScreen(cli, initialScreen).kind === 'unsent') {
+      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'held' });
+      return held(io, dir, who, seatName, `the composer already holds unsent text; the drop file is at ${path}`, host, report);
+    }
+    let readBackFailed = false;
+    const checkBeforeEnter = (): boolean => {
+      const preEnterScreen = host.native.paneText?.(session, pane) ?? null;
+      if (preEnterScreen === null || dialogKind(cli, preEnterScreen) !== null) return false;
+      if (readScreen(cli, preEnterScreen).kind === 'unsent' && !boxHoldsText(cli, trigger, preEnterScreen)) {
+        readBackFailed = true;
+        return true;
+      }
+      return false;
+    };
     // One read of the pane. It is asked before a second Enter, and again only when that
     // second Enter was never reached, so a dialog is never given another key.
     let looked = false;
     let kind: string | null = null;
+    let midScreen: string | null = null;
     const look = (): string | null => {
       if (looked) return kind;
       looked = true;
-      kind = dialogKind(cli, host.native.paneText?.(session, pane) ?? null);
+      midScreen = host.native.paneText?.(session, pane) ?? null;
+      kind = dialogKind(cli, midScreen);
       return kind;
     };
-    const outcome = await submitTrigger(host.native, session, pane, trigger, () => look() !== null);
+    const outcome = await submitTrigger(
+      host.native,
+      session,
+      pane,
+      trigger,
+      () => look() !== null || (midScreen !== null && !boxHoldsText(cli, trigger, midScreen)),
+      checkBeforeEnter,
+    );
+    if (readBackFailed) {
+      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'held' });
+      return held(io, dir, who, seatName, `the composer read-back did not match the trigger; the drop file is at ${path}`, host, report);
+    }
     const shown = look();
     if (shown !== null) {
+      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
       return unreachable(io, dir, who, seatName, `not reached; the screen reads ${shown}; the drop file is at ${path}`, host, report);
     }
     if (!outcome.ok) {
+      const endScreen = host.native.paneText?.(session, pane) ?? null;
+      if (endScreen !== null && boxHoldsText(cli, trigger, endScreen)) {
+        appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'held' });
+        return held(io, dir, who, seatName, `the trigger stayed unsent in the composer; the drop file is at ${path}`, host, report);
+      }
+      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
       return unreachable(io, dir, who, seatName, `${outcome.reason}; the drop file is at ${path}`, host, report);
     }
     logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, herdr status ${outcome.status})`, host.now());
+    appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'delivered' });
     return delivered(io, seatName, report);
   } finally {
     lock.release();
@@ -490,6 +593,17 @@ function timedOut(io: Io, seat: string, seconds: number, report: Report): number
     io.stderr(`team send: ${seat}: timeout: ${why}\n`);
   }
   return 1; // exit: send.timeout
+}
+
+/** The message is on disk, and the pane was left untouched. Exit 1, always. */
+function held(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
+  logLine(dir, 'send', who, `${seat}: held: ${reason}`, host.now());
+  if (report.json) {
+    io.stdout(document({ seat, status: 'held', exit: 1, error: reason, ids: { sent: report.sent, reply: null } }));
+  } else {
+    io.stderr(`team send: ${seat}: held: ${reason}\n`);
+  }
+  return 1; // exit: send.held
 }
 
 /** A refusal: the message was not written, and the reason says why. Exit 1, always. */

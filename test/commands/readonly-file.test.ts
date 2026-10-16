@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { placeCaller, type Caller, type CallerSources } from '../../src/caller.ts';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { loadConfig } from '../../src/commands/check.ts';
 import { commits } from '../../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
@@ -719,6 +719,10 @@ describe('a team whose owner ran up --file', () => {
       paneRun: (_session, _pane, command) => {
         lines.push(command);
         return true;
+      },
+      spawnWatch: (command) => {
+        lines.push(command);
+        return 4242;
       },
       renameAgent: () => true,
       closeWorkspace: () => true,

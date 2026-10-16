@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { notInForce, worktreeTeamInForceOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, describeCaller, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
+import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { insideTrust } from '../file/paths.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
@@ -56,6 +56,12 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     io.stderr(`team worktree: ${sub ? `unknown subcommand "${sub}"` : 'a subcommand is required'}\n${USAGE}`);
     // exit: worktree.subcommand
     return 2;
+  }
+  const detached = detachedRefusal(walkCaller(io));
+  if (detached !== undefined) {
+    io.stderr(`team worktree: ${detached}\n`);
+    // exit: worktree.detached
+    return 1;
   }
   if (sub !== 'list' && !task) {
     io.stderr(`team worktree: a task name is required\n${USAGE}`);
@@ -399,6 +405,15 @@ export function removeWorktree(
       refused = `uncommitted or untracked files:\n${list(dirty)}`;
       return false;
     }
+    const expectedFolder = team.workspace.path ? fillPattern(team.workspace.path, { repo: team.project, task }) : null;
+    if (expectedFolder && absolute !== resolve(root, expectedFolder)) {
+      refused = `the recorded path ${JSON.stringify(record.path)} is not ${JSON.stringify(expectedFolder)}; nothing was removed`;
+      return false;
+    }
+    if (!matchesBranchPattern(team.workspace.branch, task, record.branch, team.workspace.base)) {
+      refused = `the recorded branch ${JSON.stringify(record.branch)} does not match ${JSON.stringify(team.workspace.branch)} for ${JSON.stringify(task)}; nothing was removed`;
+      return false;
+    }
     const unpublished = commitsOnNoRemote(root, absolute, record.branch, team.workspace.base);
     if (unpublished.length) {
       refused = `commits on no remote branch:\n${list(unpublished)}`;
@@ -515,6 +530,27 @@ function startPoint(root: string, base: string): { ref: string; note?: string } 
     return { error: `couldn't fetch ${remote}: ${firstLine(fetched.stderr || fetched.stdout) || 'fetch failed'}. Nothing was created.` };
   }
   return { ref: remote };
+}
+
+function matchesBranchPattern(pattern: string, task: string, branch: string, base: string | null): boolean {
+  if (!branch || (base !== null && branch === base)) return false;
+  if (!pattern.includes('{kind}')) {
+    const expected = fillPattern(pattern, { task });
+    return expected !== null && branch === expected;
+  }
+  const token = '\0';
+  const templated = fillPattern(pattern, { task, kind: token });
+  if (templated === null) return false;
+  const parts = templated.split(token);
+  const first = parts[0] ?? '';
+  const last = parts[parts.length - 1] ?? '';
+  if (!branch.startsWith(first) || !branch.endsWith(last) || branch.length <= first.length + last.length) {
+    return false;
+  }
+  const rest = branch.slice(first.length, branch.length - last.length);
+  const kind = parts.length === 2 ? rest : rest.split(parts[1] ?? '')[0] ?? '';
+  if (taskProblem(kind) !== null) return false;
+  return fillPattern(pattern, { task, kind }) === branch;
 }
 
 // The recorded branch and whatever HEAD the worktree has checked out. A detached HEAD, or

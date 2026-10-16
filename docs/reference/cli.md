@@ -31,17 +31,19 @@ Hidden: no
 
 Usage:
 
-    team add <name> [--dry-run] [--session <name>] [--file <path>]
-    team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--dry-run] [--session <name>] [--file <path>]
+    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+    team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--effort` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--like` | yes | no | no |
+| `--model` | yes | no | no |
 | `--session` | yes | no | no |
 | `--temporary` | no | no | no |
 | `--until` | yes | no | no |
@@ -79,28 +81,6 @@ Literal: `trust`
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `seat` | no | no |
-
-## `approve`
-
-Hidden: no
-
-Usage:
-
-    team approve [--show] [--confirm] [--file <path>]
-
-### Flags
-
-| Flag | Takes a value | Repeatable | Hidden |
-| --- | --- | --- | --- |
-| `--confirm` | no | no | no |
-| `--file` | yes | no | no |
-| `--help` | no | no | no |
-| `--show` | no | no | no |
-| `-h` | no | no | yes |
-
-### Positionals
-
-None.
 
 ## `ask-show`
 
@@ -273,6 +253,32 @@ Usage:
 
 None.
 
+## `feed`
+
+Hidden: no
+
+Usage:
+
+    team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--audit` | yes | no | no |
+| `--briefs` | yes | no | no |
+| `--follow` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--limit` | yes | no | no |
+| `--seat` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `help`
 
 Hidden: yes
@@ -334,7 +340,7 @@ Hidden: no
 
 Usage:
 
-    team list [--all] [--json]
+    team list [--all] [--seats] [--watch] [--json]
 
 ### Flags
 
@@ -343,6 +349,8 @@ Usage:
 | `--all` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--seats` | no | no | no |
+| `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -600,6 +608,30 @@ Usage:
 | --- | --- | --- |
 | `name` | no | no |
 
+## `seats`
+
+Hidden: no
+
+Usage:
+
+    team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
+| `--watch` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `send`
 
 Hidden: no
@@ -636,12 +668,13 @@ Hidden: no
 
 Usage:
 
-    team status [--session <name>] [--file <path>] [--json]
+    team status [--session <name>] [--file <path>] [--all] [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--all` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
@@ -651,6 +684,27 @@ Usage:
 ### Positionals
 
 None.
+
+## `tempo`
+
+Hidden: no
+
+Usage:
+
+    team tempo <word>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `word` | no | no |
 
 ## `unlock`
 
@@ -679,7 +733,7 @@ Hidden: no
 
 Usage:
 
-    team up [--dry-run] [--session <name>] [--file <path>]
+    team up [--dry-run] [--serial] [--session <name>] [--file <path>]
 
 ### Flags
 
@@ -688,6 +742,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--serial` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

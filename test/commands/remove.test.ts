@@ -569,6 +569,32 @@ describe('team remove', () => {
     expect(text).toContain('name: lead');
   });
 
+  test('--keep retains the seat id and last_active while a full remove clears them', async () => {
+    const id = 'seat_0123456789ab';
+    const lastActive = '2026-10-14T10:00:00.000Z';
+    updateState(join(dir, '.agents'), (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        id,
+        stage: 'ready',
+        pane: 'pane-1',
+        workspace: 'ws-1',
+        last_active: lastActive,
+      };
+    });
+    const made = world();
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'pane-1', workspace: 'ws-1', status: 'idle', cwd: null });
+    expect(await runRemove(['worker', '--keep', '--file', file], testIo(dir, owner), made.sources)).toBe(0);
+    const afterKeep = readState(join(dir, '.agents')).sessions.acme;
+    expect(afterKeep?.seats.worker).toBeUndefined();
+    expect(afterKeep?.retained_seats?.worker).toEqual({ id, last_active: lastActive });
+
+    made.agents.length = 0;
+    expect(await runRemove(['worker', '--file', file], testIo(dir, owner), made.sources)).toBe(0);
+    const afterFull = readState(join(dir, '.agents')).sessions.acme;
+    expect(afterFull?.seats.worker).toBeUndefined();
+    expect(afterFull?.retained_seats?.worker).toBeUndefined();
+  });
+
   test('remove --keep by the coordinator leaves a hand-edited launch line as drift', async () => {
     const parsed = validateTeamFile(FILE);
     if (!parsed.ok) throw new Error('fixture');
@@ -1500,12 +1526,12 @@ describe('team remove, the session mutator lock', () => {
   test('a refusal decided above the lock leaves no lock behind', async () => {
     const made = world();
     made.agents.push({ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
-    // No approval under this home: `remove.never-approved` is decided before the lock site, so
-    // the refused run must not leave a lock file the next real run would meet.
-    made.sources.home = join(dir, 'nowhere');
+    // A refused record is decided before the lock site, so the refused run must not leave a
+    // lock file the next real run would meet. A missing record is not that refusal.
+    made.sources.standing = () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' });
     const io = testIo(dir, owner);
     expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(1);
-    expect(io.err).toContain('never approved');
+    expect(io.err).toContain('cannot be verified');
     expect(made.typed).toEqual([]);
     expect(existsSync(lockFile())).toBe(false);
   });

@@ -2,13 +2,13 @@ import { closeSync, constants, fstatSync, openSync, readdirSync, readSync, readl
 import { homedir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { approvedFingerprints, approvalOf, ceilingsOf } from '../approve/approval.ts';
+import { approvedFingerprints, approvalOf, ceilingsOf } from './approval.ts';
 import { checkDrift, resolveChecks } from '../budgets/checks.ts';
-import { formatDiff } from '../approve/diff.ts';
-import { compare, describe, fingerprints } from '../approve/fingerprint.ts';
-import { approveFingerprint, ownerAuthorized } from '../approve/owner-token.ts';
+import { formatDiff } from './diff.ts';
+import { compare, describe, fingerprints } from './fingerprint.ts';
+import { approveFingerprint, ownerAuthorized } from './owner-token.ts';
 import { readArgs } from '../args.ts';
-import { callerOf, describeCaller, isOwner, walkCaller, type Caller } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, isOwner, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources } from '../delegate.ts';
 import { TEAM_FILE, loadTeamFile, placedProblems } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -362,6 +362,12 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   };
 
   const caller = callerOf(io);
+  const detached = detachedRefusal(caller);
+  if (detached !== undefined) {
+    io.stderr(`team approve: ${detached}\n`);
+    // exit: approve.detached
+    return 1;
+  }
   // An out-of-band owner token admits a non-owner caller as the owner for this one change: the
   // fingerprint it carries must equal the one just recomputed from the live file. When it does,
   // the delegate gate is skipped and the run rejoins the owner's path — the same key, the same

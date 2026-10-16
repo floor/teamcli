@@ -1,6 +1,7 @@
 import { trustPolicy } from '../file/dialogs.ts';
 import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
+import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
@@ -21,7 +22,7 @@ export type Live = {
   processes?: Record<string, PaneProcesses | null>;
 };
 
-export type Row = { name: string; state: string; model: string; pane: string; stored?: string; start_cwd?: string };
+export type Row = { name: string; id?: string; state: string; model: string; pane: string; stored?: string; start_cwd?: string };
 
 /** The repair of the one precondition `status` knows: the file is not the approved one. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
@@ -118,9 +119,21 @@ export function compare(
   const labels = new Map(live.workspaces.map((workspace) => [workspace.id, workspace.label]));
   const anyRunning = team.seats.some((seat) => live.agents.some((agent) => agent.name === seat.name));
 
-  for (const seat of team.seats) {
-    const agent = live.agents.find((candidate) => candidate.name === seat.name);
-    const recorded = state.seats[seat.name];
+  for (const declared of team.seats) {
+    const agent = live.agents.find((candidate) => candidate.name === declared.name);
+    const recorded = state.seats[declared.name];
+    const seat: Seat = recorded?.model && recorded?.version && recorded?.launch_line && recorded.launch_line !== declared.launch
+      ? {
+          ...declared,
+          model: recorded.model,
+          version: recorded.version,
+          display: defaultLabel(recorded.model, recorded.version),
+          ...(recorded.effort ? { effort: recorded.effort } : {}),
+          launch: recorded.launch_line,
+        }
+      : declared;
+    const seatId = recorded?.id ?? state.retained_seats?.[seat.name]?.id;
+    const idField = seatId ? { id: seatId } : {};
     if (agent) {
       claimed.add(agent.pane);
       // The pane is the seat only while the process team launched is still in it. A pane that
@@ -138,7 +151,7 @@ export function compare(
         const found = verdict === 'gone'
           ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
           : cannotTie(seat, agent.pane, live.screens[agent.pane], team);
-        rows.push(found.row);
+        rows.push({ ...found.row, ...idField });
         differences.push(found.difference);
         if (found.note) notes.push(found.note);
         continue;
@@ -166,6 +179,7 @@ export function compare(
       if (held) {
         rows.push({
           name: seat.name,
+          ...idField,
           state: held.state,
           stored: held.stored,
           model,
@@ -186,7 +200,7 @@ export function compare(
       // was reported above; `up` resumes that into the pause, which has its own refusal.
       if (shell) {
         const found = unidentifiedShell(seat, agent.pane, team);
-        rows.push({ ...found.row, ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
+        rows.push({ ...found.row, ...idField, ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
         differences.push(found.difference);
         continue;
       }
@@ -196,6 +210,7 @@ export function compare(
       // watch's unsent check covers both (`pass.ts`). The report reads them the same way.
       const quiet = agent.status === 'idle' || agent.status === 'done';
       const isUnsent = quiet && screen.kind === 'unsent';
+      const isPermission = screen.kind === 'permission' || screen.kind === 'trust';
       // A quiet seat on a screen no profile reads: herdr's word alone would show a bare done (the
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
@@ -204,6 +219,7 @@ export function compare(
       const stateText = `${agent.status}${mark}${seat.parked ? ', parked' : ''}`;
       rows.push({
         name: seat.name,
+        ...idField,
         state: stateText,
         model,
         pane: agent.pane,
@@ -242,6 +258,13 @@ export function compare(
           });
         }
       }
+      if (isPermission) {
+        differences.push({
+          what: `${seat.name} waits at a permission prompt: its owner's to answer`,
+          repair: 'the owner answers it in the pane',
+          owner: true,
+        });
+      }
       if (recorded?.rules === 'undelivered') {
         differences.push({
           what: `${seat.name}: its rules were not delivered`,
@@ -254,6 +277,7 @@ export function compare(
     if (seat.stopped) {
       rows.push({
         name: seat.name,
+        ...idField,
         state: 'stopped',
         model: seat.display,
         pane: '-',
@@ -271,7 +295,7 @@ export function compare(
     if (held && verdict === 'gone') {
       claimed.add(held);
       const { row, difference, note } = notLaunched(seat, held, verdict, live.screens[held]);
-      rows.push(row);
+      rows.push({ ...row, ...idField });
       differences.push(difference);
       if (note) notes.push(note);
       continue;
@@ -279,7 +303,7 @@ export function compare(
     if (held && verdict === 'replaced') {
       claimed.add(held);
       const found = cannotTie(seat, held, live.screens[held], team);
-      rows.push(found.row);
+      rows.push({ ...found.row, ...idField });
       differences.push(found.difference);
       if (found.note) notes.push(found.note);
       continue;
@@ -287,7 +311,7 @@ export function compare(
     if (held && recorded && !recorded.launched && paneHoldsShell(paneProc)) {
       claimed.add(held);
       const found = unidentifiedShell(seat, held, team);
-      rows.push({ ...found.row, ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
+      rows.push({ ...found.row, ...idField, ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
       differences.push(found.difference);
       continue;
     }
@@ -298,6 +322,7 @@ export function compare(
     if (waiting && recorded?.pane) {
       rows.push({
         name: seat.name,
+        ...idField,
         state: waiting.state,
         stored: waiting.stored,
         model: seat.display,
@@ -317,6 +342,7 @@ export function compare(
       claimed.add(stray.pane);
       rows.push({
         name: seat.name,
+        ...idField,
         state: 'wrong name',
         model: unverifiedModel(seat, live.screens[stray.pane]),
         pane: stray.pane,
@@ -330,10 +356,11 @@ export function compare(
     }
     rows.push({
       name: seat.name,
+      ...idField,
       state: 'missing',
       model: seat.display,
       pane: '-',
-      ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
+      ...(recorded?.start_cwd ? { start_cwd: recorded?.start_cwd } : {}),
     });
     differences.push({
       what: `${seat.name} is in the file and is not running`,
@@ -345,6 +372,12 @@ export function compare(
 
   for (const [name, recorded] of Object.entries(state.seats)) {
     if (!recorded.temporary) continue;
+    const idField = recorded.id ? { id: recorded.id } : {};
+    const like = recorded.temporary.like;
+    const likeSeat = team.seats.find((seat) => seat.name === like);
+    const tempModel = recorded.model && recorded.version && (!likeSeat || recorded.model !== likeSeat.model || recorded.version !== likeSeat.version)
+      ? `${defaultLabel(recorded.model, recorded.version)} (like ${like})`
+      : `like ${like}`;
     const agent = live.agents.find((candidate) => candidate.name === name);
     if (agent) {
       claimed.add(agent.pane);
@@ -352,9 +385,10 @@ export function compare(
       if (held) {
         rows.push({
           name,
+          ...idField,
           state: held.state,
           stored: held.stored,
-          model: `like ${recorded.temporary.like}`,
+          model: tempModel,
           pane: agent.pane,
           ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
         });
@@ -365,17 +399,25 @@ export function compare(
       // A quiet temporary seat on a screen no profile reads: this row must not show a bare done
       // either. The cli comes from the like-seat, as the model string does; a like-seat gone reads
       // nothing, and the suffix is true then too.
-      const like = recorded.temporary.like;
-      const likeCli = team.seats.find((seat) => seat.name === like)?.cli ?? '';
+      const likeCli = likeSeat?.cli ?? '';
       const quiet = agent.status === 'idle' || agent.status === 'done';
-      const unread = quiet && readScreen(likeCli, live.screens[agent.pane]).kind === 'unknown';
+      const tempScreen = readScreen(likeCli, live.screens[agent.pane]);
+      const unread = quiet && tempScreen.kind === 'unknown';
       rows.push({
         name,
+        ...idField,
         state: `${agent.status}${unread ? ' (screen not recognised)' : ''}, temporary`,
-        model: `like ${recorded.temporary.like}`,
+        model: tempModel,
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
       });
+      if (tempScreen.kind === 'permission' || tempScreen.kind === 'trust') {
+        differences.push({
+          what: `${name} waits at a permission prompt: its owner's to answer`,
+          repair: 'the owner answers it in the pane',
+          owner: true,
+        });
+      }
       notes.push(`${name} is temporary, until ${recorded.temporary.until}`);
     } else {
       differences.push({ what: `${name}: a temporary seat is recorded and is not running`, repair: `team remove ${name}` });

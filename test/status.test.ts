@@ -531,7 +531,7 @@ describe('team status', () => {
     live = null;
     expect(await status()).toMatchObject({ code: 2, err: expect.stringContaining('herdr doesn\'t answer') });
     expect(await status('--fix')).toMatchObject({ code: 2, err: expect.stringContaining('unknown option --fix') });
-    expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--json]\n');
+    expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n');
   });
 
   test('--json: pins the stable format 1 shape on a clean team', async () => {
@@ -769,6 +769,34 @@ describe('team status', () => {
     live = { ...built(), agents: [...built().agents, tmp], screens: { ...built().screens, 'w5:p1': codexScreen('idle') } };
     const readable = await status();
     expect(readable.out).toMatch(/codex-acme-tmp-1\s+done, temporary/);
+  });
+
+  test('a seat waiting at a permission or trust prompt is a difference for the owner', async () => {
+    const codexPane = built().agents.find((one) => one.name === 'codex-acme')?.pane ?? '';
+    const permScreen = codexScreen('permission');
+    live = {
+      ...built(),
+      screens: { ...built().screens, [codexPane]: permScreen },
+    };
+    const permRes = await status();
+    expect(permRes.code).toBe(1);
+    expect(permRes.out).toContain(
+      "difference: codex-acme waits at a permission prompt: its owner's to answer\n" +
+        '  repair: the owner answers it in the pane\n',
+    );
+    expect(permRes.out).toContain('1 difference(s), 1 for the owner\n');
+
+    const trustScreen = codexScreen('trust-folder');
+    live = {
+      ...built(),
+      screens: { ...built().screens, [codexPane]: trustScreen },
+    };
+    const trustRes = await status();
+    expect(trustRes.code).toBe(1);
+    expect(trustRes.out).toContain(
+      "difference: codex-acme waits at a permission prompt: its owner's to answer\n" +
+        '  repair: the owner answers it in the pane\n',
+    );
   });
 
   test('D: summary line: with and without an owner repair', async () => {
