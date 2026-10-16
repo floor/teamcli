@@ -14,6 +14,14 @@ identity:
     - "^[Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:"   # no co-authorship trailer: a commit carries its one Agent line only
     - "\\bw[0-9A-Z]+:p[0-9]+\\b"   # pane ids the session prints (w2A:p1): an internal pane is not for a public log
     - "\\bfloor-[0-9a-f]{2}\\b"   # internal session names (floor-3a): the public name is floor/teamcli
+    # The names and paths of the machines this repository is built on: tests, fixtures and docs
+    # carry samples (`acme`, `alpha`, `beta`, `/Users/dev`) instead. test/public-names.test.ts
+    # holds the same list for file contents; these five guard commits, PR bodies and branches.
+    - "\\bradiooooo\\b"   # a sample folder off a real machine
+    - "\\bjvial\\b"   # a real machine's account name
+    - "\\bDr Jones\\b"   # a real person's name
+    - "\\b[Ii]ris\\b"   # a live team's seat name
+    - "\\b[Aa]tlas\\b"   # a live team's seat name
 
 trust:
   - ~/.config/team/lobby
