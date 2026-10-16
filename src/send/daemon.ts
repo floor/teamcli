@@ -37,7 +37,7 @@ import { logLine } from '../log.ts';
 import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
-import { appendHistory } from './history.ts';
+import { appendHistory, type HistoryEntry } from './history.ts';
 import { bindPane, deliverTrigger } from './deliver.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
@@ -867,8 +867,8 @@ async function executeQueuedSend(
     };
   }
 
-  const recordHeld = (detail: string): DaemonSendResponse => {
-    appendHistory(team.project, root, host.home, {
+  const recordHeld = (detail: string, via?: 'typed'): DaemonSendResponse => {
+    const entry: HistoryEntry = {
       ts: host.now().toISOString(),
       from,
       to: seatName,
@@ -876,12 +876,15 @@ async function executeQueuedSend(
       id: msgId,
       outcome: 'held',
       ms: Date.now() - startedAt,
-    });
+    };
+    // The path is named only once the trigger had been typed, never for a refusal before it.
+    if (via !== undefined) entry.via = via;
+    appendHistory(team.project, root, host.home, entry);
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail, drop_path: dropPath };
   };
 
-  const recordUnreachable = (detail: string): DaemonSendResponse => {
-    appendHistory(team.project, root, host.home, {
+  const recordUnreachable = (detail: string, via?: 'typed'): DaemonSendResponse => {
+    const entry: HistoryEntry = {
       ts: host.now().toISOString(),
       from,
       to: seatName,
@@ -889,7 +892,10 @@ async function executeQueuedSend(
       id: msgId,
       outcome: 'unreachable',
       ms: Date.now() - startedAt,
-    });
+    };
+    // The path is named only once the trigger had been typed, never for a refusal before it.
+    if (via !== undefined) entry.via = via;
+    appendHistory(team.project, root, host.home, entry);
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail, drop_path: dropPath };
   };
 
@@ -959,9 +965,9 @@ async function executeQueuedSend(
     // typed, and `delivered` only once the trigger has left the box and the seat is working.
     const result = await deliverTrigger(bindPane(host.native, team.session), pane, trigger, configured.cli);
     const where = `the drop file is at ${dropPath}`;
-    if (result.dialog !== undefined) return recordHeld(`the screen reads ${result.dialog}; ${where}`);
-    if (result.outcome === 'held') return recordHeld(`${result.reason ?? 'the composer holds text'}; ${where}`);
-    if (result.outcome === 'unreachable') return recordUnreachable(`${result.reason ?? 'the seat was not reached'}; ${where}`);
+    if (result.dialog !== undefined) return recordHeld(`the screen reads ${result.dialog}; ${where}`, 'typed');
+    if (result.outcome === 'held') return recordHeld(`${result.reason ?? 'the composer holds text'}; ${where}`, 'typed');
+    if (result.outcome === 'unreachable') return recordUnreachable(`${result.reason ?? 'the seat was not reached'}; ${where}`, 'typed');
     if (result.outcome === 'not-submitted') {
       appendHistory(team.project, root, host.home, {
         ts: host.now().toISOString(),

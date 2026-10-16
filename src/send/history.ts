@@ -38,7 +38,7 @@ export type HistoryEntry = {
   outcome: string;
   /** Send to outcome in whole milliseconds, written when the sender measured it. */
   ms?: number;
-  /** The path the send took: `socket` or `typed`; absent for outcomes with no delivery. */
+  /** The path the message travelled: `typed` (a composer trigger) or `socket` (a frame); absent when it never left the sender. */
   via?: string;
 };
 
