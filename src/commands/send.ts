@@ -483,23 +483,21 @@ async function deliverNative(
     }
     const result = await deliverTrigger(bindPane(host.native, session), pane, trigger, cli);
     const where = `the drop file is at ${path}`;
-    const record = (outcome: string): void => {
-      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome });
-    };
+    const entry = { ts: host.now().toISOString(), from, to: seatName, body, id: msgId };
     if (result.outcome === 'held') {
-      record('held');
+      appendHistory(project, root, host.home, { ...entry, outcome: 'held' });
       return held(io, dir, who, seatName, `${result.reason ?? 'the composer holds text'}; ${where}`, host, report);
     }
     if (result.outcome === 'unreachable') {
-      record('unreachable');
+      appendHistory(project, root, host.home, { ...entry, outcome: 'unreachable' });
       return unreachable(io, dir, who, seatName, `${result.reason ?? 'the seat was not reached'}; ${where}`, host, report);
     }
     if (result.outcome === 'not-submitted') {
-      record('not-submitted');
+      appendHistory(project, root, host.home, { ...entry, outcome: 'not-submitted' });
       return notSubmitted(io, dir, who, seatName, result, where, host, report);
     }
     logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
-    record('delivered');
+    appendHistory(project, root, host.home, { ...entry, outcome: 'delivered' });
     return delivered(io, seatName, report);
   } finally {
     lock.release();

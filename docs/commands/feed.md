@@ -4,7 +4,7 @@ Reads and follows the project's message history from `~/.config/team/<project>-<
 (mode `0600`, inside the project's state folder and never in a lobby or the repository), together
 with any `briefs/<from>-to-<to>.md` files and Desk audit lines when present.
 
-Each completed `team send` run (`delivered`, `answered`, `held`, `timeout`, or `unreachable`)
+Each completed `team send` run (`delivered`, `answered`, `held`, `not-submitted`, `timeout`, or `unreachable`)
 appends one JSON object per line to `messages.jsonl`:
 
     {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>"}
