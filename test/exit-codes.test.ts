@@ -566,20 +566,8 @@ scene('add.default-session', async (place) => {
 scene('add.never-approved', async (place) => {
   write(place, TWO);
   return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, {
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
-});
-scene('add.differs', async (place) => {
-  approve(place, TWO);
-  write(place, TWO.replace('label: worker', 'label: renamed'));
-  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place)), 'not the approved one');
-});
-scene('add.approved-copy', async (place) => {
-  approve(place, TWO);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, { standing: () => broken })), "approved copy can't be read");
 });
 scene('add.herdr', async (place) => {
   approve(place, TWO);
@@ -708,11 +696,14 @@ scene('add.machine-again', async (place) => {
 });
 scene('add.ceiling', async (place) => {
   approve(place, TWO);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const approval = { ...standing.record.approval, ceilings: { ...standing.record.approval.ceilings, seats: 0 } };
-  const capped = { ...standing, record: { ...standing.record, approval } };
-  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, { standing: () => capped })), 'allows 0 seats');
+  // The ceiling is the live file's. One seat is already running, and the file allows one.
+  // `approve` writes the absolute trust this command requires before it reaches the ceiling.
+  const text = readFileSync(place.file, 'utf8');
+  writeFileSync(place.file, text.replace('workspace:\n', 'limits:\n  seats: 1\nworkspace:\n'));
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, {
+    sessionState: () => 'running',
+    agents: () => [agent('lead')],
+  })), 'allows 1 seats');
 });
 scene('add.dry-run', async (place) => {
   approve(place, TWO);
@@ -1188,17 +1179,6 @@ scene('down.grant-approval', async (place) => {
   recordLead(place, 'w1:p1');
   return show(await down(place, [], leadSeat, grantDown(place)), 'a grant needs a verified approval');
 });
-scene('down.grant-approved-copy', async (place) => {
-  approve(place, GRANTED);
-  recordLead(place, 'w1:p1');
-  return show(await down(place, [], leadSeat, grantDown(place, { approvedCopy: () => null })), 'a grant needs a readable approved copy');
-});
-scene('down.grant-drift', async (place) => {
-  approve(place, GRANTED);
-  write(place, readFileSync(place.file, 'utf8').replace('label: lead', 'label: renamed'));
-  recordLead(place, 'w1:p1');
-  return show(await down(place, [], leadSeat, grantDown(place)), 'a grant needs the approved file');
-});
 scene('down.grant-scope', async (place) => {
   approve(place, GRANT_UP);
   recordLead(place, 'w1:p1');
@@ -1239,7 +1219,7 @@ scene('down.never-approved', async (place) => {
   write(place, TEAM);
   return show(await down(place, [], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('lead')], home: place.home,
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
 });
 scene('down.legacy', async (place) => {
@@ -1261,15 +1241,6 @@ scene('down.refused', async (place) => {
   return show(await down(place, [], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('lead')], home: place.home,
   })), 'valid signature');
-});
-scene('down.approved-copy', async (place) => {
-  approve(place, TEAM);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(await down(place, [], owner, downSources({
-    sessionRunning: () => true, agents: () => [agent('lead')], home: place.home, standing: () => broken,
-  })), 'cannot be read');
 });
 
 async function initial(
@@ -1455,20 +1426,11 @@ scene('remove.ambiguous', async (place) => {
     home: place.home,
   })), 'more than one agent of this name');
 });
-scene('remove.approved-copy', async (place) => {
-  approve(place, TWO);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(await removed(place, ['worker'], owner, downSources({
-    sessionRunning: () => true, agents: () => [agent('worker')], home: place.home, standing: () => broken,
-  })), 'cannot be read');
-});
 scene('remove.never-approved', async (place) => {
   write(place, TWO);
   return show(await removed(place, ['worker'], owner, downSources({
     home: place.home,
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
 });
 scene('remove.no-launch', async (place) => {
@@ -1734,13 +1696,8 @@ scene('up.deny', async (place) => {
 scene('up.never-approved', async (place) => {
   write(place, TEAM);
   return show(await up(place, ['--file', place.file], owner, upSources(place, {
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
-});
-scene('up.differs', async (place) => {
-  approve(place, TEAM);
-  write(place, TEAM.replace('label: lead', 'label: renamed'));
-  return show(await up(place, ['--file', place.file], owner, upSources(place)), 'not the approved one');
 });
 scene('up.doctor', async (place) => {
   approve(place, TEAM);
@@ -2065,7 +2022,7 @@ scene('worktree.approved-copy', async (place) => {
   const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
   return show(
     await worktree(place, ['new', 'task', '--kind', 'fix'], owner, { ...worktreeSources(place), standing: () => broken }),
-    "approved copy can't be read",
+    "stored copy can't be read",
   );
 });
 scene('worktree.task', async (place) => {
@@ -2131,7 +2088,7 @@ scene('worktree.seat-unapproved', async (place) => {
     version: "5.5"
     launch: claude --model claude-opus-5-5
 `);
-  return show(await worktree(place, ['new', 'task', '--kind', 'fix', '--seat', 'added-later']), 'is not in the approved file');
+  return show(await worktree(place, ['new', 'task', '--kind', 'fix', '--seat', 'added-later']), 'is not in the stored copy');
 });
 scene('worktree.limit', async (place) => {
   approve(place, worktreeText({ limit: 1 }));

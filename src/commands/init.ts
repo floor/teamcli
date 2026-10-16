@@ -69,7 +69,7 @@ export function skeleton(project: string, head: string | null, teamVersion = ver
   const launch = profileFor(cli)?.binary ?? 'claude';
   return `# yaml-language-server: $schema=https://raw.githubusercontent.com/floor/teamcli/v${teamVersion}/schema/team.schema.json
 # The team of ${project}. Private to this clone: see .git/info/exclude.
-# Nothing here runs until the owner has read it and run \`team approve\`.
+# The live file is what the commands read. Edit it, then run the seats.
 format: 1
 project: ${project}
 # visibility: public          # public | private: whether forbidden_public applies
@@ -233,7 +233,7 @@ export async function runInit(
   logLine(dirname(path), 'init', describeCaller(caller), `${what} as ${TEAM_FILE}; excluded ${added.length} path(s)`);
   io.stdout(args.flags.has('restore')
     ? `Restored ${TEAM_FILE} from the copy you last approved on this machine.\n\n${PRIVACY}\n`
-    : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run team approve.\n\n${PRIVACY}\n`);
+    : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run the seats.\n\n${PRIVACY}\n`);
   // exit: init.wrote
   // exit: init.restored
   return 0;

@@ -91,7 +91,7 @@ export function findStore(root: string, home: string = homedir()): string | null
 }
 
 /** The repair every refused record names, and the one a legacy record names. */
-export const LEGACY_LINE = 'approved before records were signed: run `team approve` once';
+export const LEGACY_LINE = 'approved before records were signed';
 
 /**
  * What the approval store says about a root, verified. The one snapshot every
@@ -152,7 +152,7 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
     record = readApproval(store);
   } catch (error) {
     const detail = error instanceof Error ? ` (${error.message})` : '';
-    return { kind: 'refused', why: `the approval record cannot be read${detail}: run \`team approve\` once` };
+    return { kind: 'refused', why: `the approval record cannot be read${detail}` };
   }
   if (record === null) return { kind: 'none' };
   if (record.approval.format === 1) return { kind: 'legacy' };
@@ -160,11 +160,11 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
   // `shapeProblem` guarantees both on a format-2 record; the check below only
   // narrows the type to what it already proved.
   if (generation === undefined || signature === undefined) {
-    return { kind: 'refused', why: 'the record is not in the signed form this version writes: run `team approve` once' };
+    return { kind: 'refused', why: 'the record is not in the signed form this version writes' };
   }
   const key = keyState(home);
   if (key.kind === 'missing') {
-    return { kind: 'refused', why: 'the record is signed, but its key is missing: run `team approve` once to approve again' };
+    return { kind: 'refused', why: 'the record is signed, but its key is missing' };
   }
   if (key.kind === 'unreadable') {
     return { kind: 'refused', why: `${key.why} — no record verifies until it is back` };
@@ -177,22 +177,22 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
     // encoder refuses (a signed number outside the safe range), and this catch
     // turns that from an invariant into a promise — no record on disk, however
     // shaped, makes a reader throw.
-    return { kind: 'refused', why: 'the record cannot be verified: run `team approve` once' };
+    return { kind: 'refused', why: 'the record cannot be verified' };
   }
   if (!valid) {
-    return { kind: 'refused', why: 'the record does not carry a valid signature: it was changed after approval, or written without the key: run `team approve` once' };
+    return { kind: 'refused', why: 'the record does not carry a valid signature: it was changed after approval, or written without the key' };
   }
   if (!sameRoot(record.approval.root, root)) {
-    return { kind: 'refused', why: `the record approves another project root (${record.approval.root}): run \`team approve\` once` };
+    return { kind: 'refused', why: `the record approves another project root (${record.approval.root})` };
   }
   const recorded = recordedGeneration(root, home);
   if (recorded === null) {
-    return { kind: 'refused', why: 'no generation is recorded for this project: run `team approve` once' };
+    return { kind: 'refused', why: 'no generation is recorded for this project' };
   }
   if (generation !== recorded.generation) {
     return generation < recorded.generation
-      ? { kind: 'refused', why: `the record is approval #${generation} but #${recorded.generation} is recorded: an approval was interrupted or an older record was replayed: run \`team approve\` once` }
-      : { kind: 'refused', why: `the record is approval #${generation} but only #${recorded.generation} is recorded: the key folder was rolled back: run \`team approve\` once` };
+      ? { kind: 'refused', why: `the record is approval #${generation} but #${recorded.generation} is recorded: an approval was interrupted or an older record was replayed` }
+      : { kind: 'refused', why: `the record is approval #${generation} but only #${recorded.generation} is recorded: the key folder was rolled back` };
   }
   return { kind: 'verified', record: frozen(record), generation, signedAt: recorded.at };
 }
