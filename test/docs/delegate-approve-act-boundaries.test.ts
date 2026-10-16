@@ -21,8 +21,8 @@ describe('the delegates bullet after the approve command left the build', () => 
   test('the page says it parses and is not consulted, as written', () => {
     const page = prose(PAGE);
     expect(
-      page.includes('`commands` names at most one each of the five `up`, `down`, `add`, `remove` and `approve`.'),
-      'team-file.md lost the five-worded parse rule the still-parses claim leans on',
+      page.includes('`commands` names at most one each of the six `up`, `down`, `add`, `remove`, `approve` and `swap`.'),
+      'team-file.md lost the six-worded parse rule the still-parses claim leans on',
     ).toBe(true);
     expect(
       page.includes(
@@ -49,6 +49,6 @@ describe('the delegates bullet after the approve command left the build', () => 
     expect(
       readFileSync(new URL(DELEGATE_TYPES, import.meta.url), 'utf8'),
       'the loader dropped approve from the words it reads; the page says it still parses',
-    ).toContain("export const DELEGATE_COMMANDS: readonly DelegateCommand[] = ['up', 'down', 'add', 'remove', 'approve'];");
+    ).toContain("export const DELEGATE_COMMANDS: readonly DelegateCommand[] = ['up', 'down', 'add', 'remove', 'approve', 'swap'];");
   });
 });
