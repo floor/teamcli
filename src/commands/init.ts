@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { declaredRoots } from '../entities.ts';
@@ -15,7 +15,7 @@ import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { hasJsonFlag, pluralCount, refuse, writeJson } from '../output/index.ts';
 import { noteTeam } from '../registry/teams.ts';
-import { LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
+import { createAtomic, LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { version } from '../version.ts';
 import { realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -28,8 +28,9 @@ import { readStoredTeamConfig, teamConfigRecordPath } from '../registry/team-con
 
 // What git must never pick up: the file and the runtime files beside it — the start files of
 // the services included: the socket and its lock, the lock's takeover claim (a killed
-// claim-holder can leave it), and the private temp an atomic create keeps only while it runs.
-export const EXCLUDED = [TEAM_FILE, `.agents/${STATE_FILE}`, `.agents/${LOG_FILE}*`, `.agents/${LOCK_FILE}`, '.agents/seat-locks', '.agents/messages/', '.agents/send-drops/', '.agents/leases/', '.agents/hooks/', '.agents/seat-state/', '.agents/broker.sock', '.agents/broker.sock.lock', '.agents/broker.sock.lock.takeover', '.agents/broker.sock.lock.*.new', '.agents/bus.sock', '.agents/bus.sock.lock', '.agents/bus.sock.lock.takeover', '.agents/bus.sock.lock.*.new'];
+// claim-holder can leave it), and the private temps an atomic write keeps only while it runs —
+// the team file's own and the state's included, which a killed process can leave behind.
+export const EXCLUDED = [TEAM_FILE, `${TEAM_FILE}.*.tmp`, `.agents/${STATE_FILE}`, `.agents/${STATE_FILE}.*.tmp`, `.agents/${LOG_FILE}*`, `.agents/${LOCK_FILE}`, '.agents/seat-locks', '.agents/messages/', '.agents/send-drops/', '.agents/leases/', '.agents/hooks/', '.agents/seat-state/', '.agents/broker.sock', '.agents/broker.sock.lock', '.agents/broker.sock.lock.takeover', '.agents/broker.sock.lock.*.new', '.agents/bus.sock', '.agents/bus.sock.lock', '.agents/bus.sock.lock.takeover', '.agents/bus.sock.lock.*.new'];
 
 export const PRIVACY = `The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or
@@ -467,7 +468,10 @@ export async function runInit(
     const wrote = writeTeamText(path, text, { home: target.home, command: 'init', create: true, ...(sources.now ? { now: sources.now } : {}) });
     if (!wrote.ok) throw new Error(`team init: the team doesn't validate: ${wrote.errors[0]?.message}`);
   } else {
-    writeFileSync(path, text, { flag: 'wx' });
+    // The create, the atomic way: a temp in the same folder, hard-linked into place, so the file
+    // appears whole — never as a prefix a killed process could leave behind — and an existing
+    // file is refused (EEXIST) rather than clobbered.
+    createAtomic(path, text);
   }
   const what = args.flags.has('restore') ? 'restored the copy this machine stored' : 'wrote a skeleton';
   const into = target.kind === 'registry' ? 'into the registry' : `as ${TEAM_FILE}`;

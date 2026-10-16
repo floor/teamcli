@@ -154,7 +154,7 @@ export function loadTeamFile(cwd: string, options: { file?: string; home?: strin
   } catch {
     return { ok: false, path, errors: [{ line: 0, message: `the team file at ${path} could not be read`, unreadable: true }] };
   }
-  return loadTeamText(text, root, path, options);
+  return loadTeamText(text, root, path, options, () => readFileSync(path, 'utf8'));
 }
 
 // Validates a team's text as the file reader does once it has read it: the same validation, the
@@ -165,8 +165,21 @@ export function loadTeamText(
   root: string,
   path: string,
   options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string } = {},
+  reread?: () => string,
 ): LoadResult {
-  const result = validateWithWorkspaceMode(text, root, options);
+  let result = validateWithWorkspaceMode(text, root, options);
+  if (!result.ok && result.parse === true && reread !== undefined) {
+    // The parse itself failed, which a file replaced under this reader can do transiently
+    // (a writer that is not the atomic one): read and validate the settled file once more,
+    // and report that attempt's problems if it fails too. A file that parses and then fails
+    // validation is not re-read: its problems are its own.
+    try {
+      text = reread();
+    } catch {
+      return { ok: false, path, errors: [{ line: 0, message: `the team file at ${path} could not be read`, unreadable: true }] };
+    }
+    result = validateWithWorkspaceMode(text, root, options);
+  }
   if (!result.ok) return { ...result, path };
   if (options.checkOnly) return { ...result, root, path, text };
   const errors = placedProblems(result.team, root, options.home, options.fs, options.session);

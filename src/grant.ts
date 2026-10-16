@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { approvedFingerprints, notInForce } from './approve/approval.ts';
@@ -12,6 +12,7 @@ import type { GrantScope, LoadResult } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
 import { isAgentId, readAgents, type Agent } from './registry/agents.ts';
+import { readParsed } from './state.ts';
 import { approvalStanding, type Standing } from './store/store.ts';
 import { parseYaml, toValue } from './yaml.ts';
 
@@ -69,8 +70,9 @@ export function readGrantRecords(home: string = homedir()): { stem: string; reco
     try {
       const stat = lstatSync(full);
       if (stat.isSymbolicLink() || !stat.isFile()) continue;
-      const text = readFileSync(full, 'utf8');
-      const parsed = entry.endsWith('.json') ? JSON.parse(text) : toValue(parseYaml(text));
+      // A record replaced under this reader can parse as a torn prefix on the first read: the
+      // retry reads the settled file once more, so a transient failure never drops a grant.
+      const parsed = readParsed(full, (text) => (entry.endsWith('.json') ? JSON.parse(text) : toValue(parseYaml(text))));
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
       out.push({ stem: entry.replace(/\.(?:yaml|yml|json)$/, ''), record: parsed as Record<string, unknown> });
     } catch {
