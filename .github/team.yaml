@@ -271,3 +271,40 @@ seats:
     version: "5.5"
     display: Claude Sonnet 5.5
     launch: agy
+
+  # 2026-10-16: Meta Muse Code seats (Muse Wonder Full for builders, Muse Wonder for reviewers and operators).
+  - role: builder
+    name: builder-muse-full
+    cli: claude-code
+    vendor: meta
+    model: Muse Wonder Full
+    version: "1.0"
+    display: Muse Wonder Full 1.0
+    launch: muse
+
+  - role: tester
+    name: tester-muse
+    cli: claude-code
+    vendor: meta
+    model: Muse Wonder
+    version: "1.0"
+    display: Muse Wonder 1.0
+    launch: muse
+
+  - role: reviewer
+    name: reviewer-muse
+    cli: claude-code
+    vendor: meta
+    model: Muse Wonder
+    version: "1.0"
+    display: Muse Wonder 1.0
+    launch: muse
+
+  - role: operator
+    name: operator-muse
+    cli: claude-code
+    vendor: meta
+    model: Muse Wonder
+    version: "1.0"
+    display: Muse Wonder 1.0
+    launch: muse
