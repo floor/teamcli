@@ -138,6 +138,71 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--abandon",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--keep-running",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--out",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--wait",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "archive",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team archive [--out <folder>] [--keep-running] [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--ask",
           "repeatable": false,
           "takesValue": true
@@ -504,6 +569,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--from-archive",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -526,7 +597,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team init [--restore]"
+        "team init [--restore] [--from-archive <folder>]"
       ]
     },
     {

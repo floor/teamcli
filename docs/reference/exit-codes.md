@@ -87,6 +87,16 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.version` | `answer` | 1 | this version has no trust answer | `team answer lead trust` |
 | `answer.configuration` | `answer` | 2 | the team file cannot be read | `team answer lead trust --file missing.yaml` |
 | `answer.usage` | `answer` | 2 | the invocation is not a seat and trust | `team answer` |
+| `archive.keep-running` | `archive` | 0 | the snapshot was written and the team was left running | `team archive --keep-running` |
+| `archive.detached` | `archive` | 1 | a run with no terminal | `team archive` |
+| `archive.exists` | `archive` | 1 | the archive folder already exists | `team archive, when this run’s folder is already there` |
+| `archive.file-owner` | `archive` | 1 | --file is the owner’s | `team archive --file .agents/team.yaml` |
+| `archive.out-owner` | `archive` | 1 | --out is the owner’s | `team archive --out ~/archives` |
+| `archive.file` | `archive` | 2 | the team file can’t be read | `team archive --file missing.yaml` |
+| `archive.file-invalid` | `archive` | 2 | the team file can’t be parsed | `team archive --file team.yaml` |
+| `archive.invocation` | `archive` | 2 | the invocation can’t be read | `team archive extra` |
+| `archive.not-a-repo` | `archive` | 2 | not inside a git repository | `team archive` |
+| `archive.stop-flags` | `archive` | 2 | --keep-running with a flag that only describes the stop | `team archive --keep-running --abandon` |
 | `ask-show.shown` | `ask-show` | 0 | the question is printed | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.expired` | `ask-show` | 1 | the marker matches and the ask is past expires_at plus 5 seconds | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.refused` | `ask-show` | 1 | the marker does not verify, or a file cannot be read | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
@@ -173,9 +183,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
 | `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |
 | `init.restored` | `init` | 0 | the approved copy was restored | `team init --restore` |
+| `init.restored-archive` | `init` | 0 | the team file was restored from an archive | `team init --from-archive ~/.config/team/archive/beacon-<hash>-20261014T100000Z` |
 | `init.wrote` | `init` | 0 | a skeleton was written | `team init` |
 | `init.detached` | `init` | 1 | a run with no terminal | `team init` |
 | `init.exists` | `init` | 1 | the team file already exists | `team init` |
+| `init.from-archive` | `init` | 1 | the archive can’t be read or verified | `team init --from-archive <folder>` |
+| `init.from-archive-invalid` | `init` | 1 | the archived team file doesn’t validate | `team init --from-archive <folder>` |
 | `init.git-silent` | `init` | 1 | git doesn't answer for this folder | `team init` |
 | `init.legacy` | `init` | 1 | the record predates signed records | `team init --restore` |
 | `init.not-owner` | `init` | 1 | not the owner | `team init` |
@@ -185,6 +198,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `init.tracked` | `init` | 1 | the team file is tracked | `team init` |
 | `init.invocation` | `init` | 2 | the invocation can't be read | `team init extra` |
 | `init.not-a-repo` | `init` | 2 | not inside a git repository | `team init` |
+| `init.sources` | `init` | 2 | --restore and --from-archive together | `team init --restore --from-archive <folder>` |
 | `issues.none` | `issues` | 0 | nothing is waiting | `team issues` |
 | `issues.shown` | `issues` | 0 | the task list was shown | `team issues` |
 | `issues.file` | `issues` | 1 | the team file can't be read, it declares no task source, or its source is a broker's | `team issues` |

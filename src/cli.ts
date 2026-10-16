@@ -10,6 +10,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   check: () => import('./commands/check.ts'),
   commits: () => import('./commands/commits.ts'),
   doctor: () => import('./commands/doctor.ts'),
+  archive: () => import('./commands/archive.ts'),
   down: () => import('./commands/down.ts'),
   init: () => import('./commands/init.ts'),
   status: () => import('./commands/status.ts'),
