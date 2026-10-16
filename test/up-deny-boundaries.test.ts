@@ -1,8 +1,10 @@
 // The up page's `deny` answer, held to the binary that prints it. A caller the run does not
 // admit — not the owner, not the granted seat, not a named delegate — is answered with the one
-// word, and the page says so three ways: an admission row, an outcome row, two worked examples.
-// The pins hold each sentence to the page, and the promise itself to the command: a real run
-// and a `--dry-run` are answered alike, the named `--file` never read, no plan, nothing else.
+// word on a real run, and the page says so three ways: an admission row, an outcome row, two
+// worked examples. A dry run is never denied: it names the refusal, the owner's own command and
+// the plan. The pins hold each sentence to the page, and the promise itself to the command: the
+// word alone on a real run, the two lines a dry run answers with, the named `--file` never read
+// on either, no plan for it.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
