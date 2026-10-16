@@ -924,6 +924,29 @@ Usage:
 
 None.
 
+## `route`
+
+Hidden: no
+
+Usage:
+
+    team route <seat> [--json] [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `seats`
 
 Hidden: no

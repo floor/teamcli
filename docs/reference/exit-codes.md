@@ -390,6 +390,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `revoke.refused` | `revoke` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team revoke grant` |
 | `revoke.invalid` | `revoke` | 2 | the team file, the named target or the proposed authority record is invalid or cannot be read | `team revoke delegate malformed` |
 | `revoke.invocation` | `revoke` | 2 | the command arguments are invalid | `team revoke all` |
+| `route.dry-run` | `route` | 0 | the pair is admitted; the address is answered and nothing was written | `team route builder-2 --dry-run` |
+| `route.routed` | `route` | 0 | the pair is admitted and the recipient's address is answered and recorded | `team route builder-2` |
+| `route.detached` | `route` | 1 | a run with no terminal | `team route builder-2` |
+| `route.refused` | `route` | 1 | no address was answered, on purpose | `team route builder-2` |
+| `route.unrecorded` | `route` | 1 | the pair is admitted and the route record could not be written | `team route builder-2` |
+| `route.configuration` | `route` | 2 | the team file cannot be read | `team route builder-2` |
+| `route.usage` | `route` | 2 | the invocation cannot be read | `team route` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
 | `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
 | `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |

@@ -24,6 +24,7 @@ import { runDown, type DownLaunch, type DownSources } from '../src/commands/down
 import { runFeed } from '../src/commands/feed.ts';
 import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
+import { runRoute } from '../src/commands/route.ts';
 import { historyPath } from '../src/send/history.ts';
 import { plantMessage, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { runIssues } from '../src/commands/issues.ts';
@@ -63,7 +64,8 @@ import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
 import type { Key, Terminal } from '../src/launch/terminal.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
-import { upsertTeam } from '../src/registry/teams.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
@@ -3226,6 +3228,67 @@ scene('send.listed', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['--list'], owner, sendHost(place)), 'lead  claude-code');
 });
+
+/** The file's lead seat, registered and rostered: `route` hands out addresses from the registry
+ *  only, so its scenes give the registry the record `up` would have written. */
+function registeredLead(place: Place): void {
+  const id = teamIdOf(place.root);
+  const lead = registerAgent(place.home, {
+    name: 'lead',
+    signing: { model: 'Test', version: '1', role: 'coordinator' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude-code --model test',
+    reach: { team: id, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  upsertTeam(place.home, id, {
+    project: 'acme',
+    entity: 'acme',
+    session: 'acme',
+    root: place.root,
+    lobby: lobbyDir(place.home),
+    roster: [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }],
+    lifecycle: 'running',
+  });
+}
+
+async function routed(place: Place, argv: string[], caller: Caller, host: SendHost): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const code = await runRoute(argv, io, host);
+  return { code, out: io.out, err: io.err };
+}
+
+scene('route.routed', async (place) => {
+  write(place, TEAM);
+  registeredLead(place);
+  return show(await routed(place, ['lead'], owner, sendHost(place)), 'admitted by: the owner');
+});
+scene('route.dry-run', async (place) => {
+  write(place, TEAM);
+  registeredLead(place);
+  return show(await routed(place, ['lead', '--dry-run'], owner, sendHost(place)), '(dry run; nothing was recorded)');
+});
+scene('route.detached', async (place) => show(await routed(place, ['lead'], detachedCaller, sendHost(place)), SENTENCE));
+scene('route.refused', async (place) => {
+  write(place, TEAM);
+  return show(await routed(place, ['missing'], owner, sendHost(place)), 'this team has no registry record yet');
+});
+scene('route.unrecorded', async (place) => {
+  write(place, TEAM);
+  registeredLead(place);
+  // A file where the project's state folder would be: the ladder refuses it, so the record can
+  // not be written — and a route answers nothing it can not account for.
+  mkdirSync(join(place.home, '.config', 'team'), { recursive: true });
+  writeFileSync(storePath('acme', place.root, place.home), '');
+  return show(await routed(place, ['lead'], owner, sendHost(place)), 'the route record could not be written');
+});
+scene('route.configuration', async (place) => show(await routed(place, ['lead'], owner, sendHost(place)), 'no team file'));
+scene('route.usage', async (place) => show(await routed(place, [], owner, sendHost(place)), 'a seat, a seat@team or an agent id is required'));
 
 async function fed(place: Place, argv: string[]): Promise<Ran> {
   const io = testIo(place.root);
