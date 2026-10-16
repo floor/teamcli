@@ -80,10 +80,11 @@ function repo(): { root: string; home: string; agents: string } {
 }
 
 /** What the tests stand in for `down`'s own reads: an idle session, and one that counts the
- *  stops it was asked for. A stop is only ever asked for through the real `runDown`. */
+ *  stops it was asked for. A stop is only ever asked for through the real `runDown`. A stopped
+ *  session reports stopped — that is what lets `down` clear it, and its own run tests that. */
 function downSources(home: string, stopped: { n: number } = { n: 0 }, running = false): DownSources {
   return {
-    sessionRunning: () => running,
+    sessionRunning: () => running && stopped.n === 0,
     agents: () => [],
     alive: () => false,
     screen: () => ({ kind: 'idle' }),
@@ -217,10 +218,10 @@ test('the stop is the real one: a running session is stopped, and the snapshot i
 
 test("a refused stop leaves the snapshot behind, in the stop's own words", async () => {
   const { root, home } = repo();
-  // A seat that is neither the orchestrator nor the operator: stopping is `down`'s refusal, and
-  // the archive this run wrote before asking stays where it is.
+  // A running session and a seat that is neither the orchestrator nor the operator: stopping is
+  // `down`'s refusal, and the archive this run wrote before asking stays where it is.
   const io = testIo(root, SEAT);
-  expect(await runArchive([], io, downSources(home))).toBe(1);
+  expect(await runArchive([], io, downSources(home, { n: 0 }, true))).toBe(1);
   expect(io.err).toContain('team down: ');
   expect(io.out).toContain('archived ');
   expect(readdirSync(archiveRoot(home))).toHaveLength(1);
