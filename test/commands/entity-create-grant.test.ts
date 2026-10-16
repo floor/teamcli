@@ -252,9 +252,9 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       };
       mkdirSync(sendHost.socketsDir, { recursive: true });
       expect(await runSend(['builder-1', 'first brief'], sendIo, sendHost)).toBe(0);
-      // No socket file under the host's sockets folder: the typed trigger is the fallback, and
-      // the outcome names that path and the socket's reason.
-      expect(sendIo.out).toMatch(/builder-1: delivered \(typed, socket .+\)/);
+      // No socket file under the host's sockets folder: a plain send is the typed trigger, and
+      // the outcome is the plain word.
+      expect(sendIo.out).toBe('builder-1: delivered\n');
 
       // 2. Under ~/Documents/radio/archive: also admitted by the same radiooooo grant.
       const archive = join(sb.radioDocs, 'archive');

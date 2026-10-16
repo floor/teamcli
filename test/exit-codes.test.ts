@@ -3146,7 +3146,7 @@ scene('send.delivered', async (place) => {
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via its cross-session socket, falling back to a 0600 drop file and one trigger line; nothing was written');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written');
 });
 scene('send.answered', async (place) => {
   write(place, TEAM);
