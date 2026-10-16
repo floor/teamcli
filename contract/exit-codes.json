@@ -1900,6 +1900,20 @@
     },
     {
       "code": 0,
+      "command": "projects",
+      "id": "projects.listed",
+      "meaning": "the projects are listed",
+      "trigger": "team projects"
+    },
+    {
+      "code": 2,
+      "command": "projects",
+      "id": "projects.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team projects extra"
+    },
+    {
+      "code": 0,
       "command": "register",
       "id": "register.already",
       "meaning": "the seat is already recorded on that pane",
@@ -2830,6 +2844,13 @@
       "trigger": "team status"
     },
     {
+      "code": 0,
+      "command": "status",
+      "id": "status.project-listed",
+      "meaning": "the project's teams are listed",
+      "trigger": "team status --project TeamCLI"
+    },
+    {
       "code": 1,
       "command": "status",
       "id": "status.difference",
@@ -2842,6 +2863,13 @@
       "id": "status.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team status --file .agents/team.yaml"
+    },
+    {
+      "code": 1,
+      "command": "status",
+      "id": "status.project-unknown",
+      "meaning": "no project is named that",
+      "trigger": "team status --project nope"
     },
     {
       "code": 1,

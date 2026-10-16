@@ -35,6 +35,7 @@ import { runIssues } from '../../src/commands/issues.ts';
 import { runNext } from '../../src/commands/next.ts';
 import { runPlan } from '../../src/commands/plan.ts';
 import { runProc } from '../../src/commands/proc.ts';
+import { runProjects } from '../../src/commands/projects.ts';
 import { runUsage } from '../../src/commands/usage.ts';
 import { runLock } from '../../src/commands/lock.ts';
 import { runUnlock } from '../../src/commands/unlock.ts';
@@ -51,7 +52,7 @@ import { emptySession, updateState } from '../../src/state.ts';
 import { blocksOf, EXIT_SUFFIX, transcript, type Block } from './blocks.ts';
 import { createFixture, type Fixture } from './fixture.ts';
 import { DEFAULT_SPEC, specOf, type ScreenKind, type Spec, type ToolState } from './spec.ts';
-import { createWorld, RUN_WATCH_PID, WATCH_PID, type World } from './world.ts';
+import { createWorld, projectsAt, RUN_WATCH_PID, WATCH_PID, type World } from './world.ts';
 
 export type Failure = { page: string; line: number; message: string };
 
@@ -281,6 +282,10 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
         // the machine running the suite happens to have.
         alive: (pid) => pid === PROC_PID,
       });
+    case 'projects':
+      // The page's registry is its own fence, `~/.config/team/projects.yaml` under the
+      // fixture's home: the reads are the registry module's, pointed at that home.
+      return runProjects(rest, io, projectsAt(fixture.home));
     case 'tempo':
       return runTempo(rest, io, { home: fixture.home });
     case 'unlock':
@@ -364,6 +369,10 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
     },
     now: () => new Date(now),
     home: fixture.home,
+    // The roster's project column reads the fixture's own registry: a page that seeds
+    // `~/.config/team/projects.yaml` shows the registry's grouping, one that does not shows
+    // each team's own `project:` line.
+    projects: projectsAt(fixture.home),
   };
 }
 

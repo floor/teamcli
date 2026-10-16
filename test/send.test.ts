@@ -7,6 +7,7 @@ import { createConnection, createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
+import type { ProjectSources, ProjectView } from '../src/commands/projects.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
@@ -746,7 +747,7 @@ describe('team send: --timeout', () => {
 });
 
 describe('team send: --list', () => {
-  test("the file's seats print with their cli and their role", async () => {
+  test("the file's seats print with their cli, their role and the project they sit in", async () => {
     const { root, sockets } = world();
     const io = owner(root);
 
@@ -754,7 +755,9 @@ describe('team send: --list', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('lead  claude-code  coordinator\nhelper  claude-code  implementer\nnative  codex  reviewer\n');
+    // No project source is handed in: each seat's project is its team's own (a team the registry
+    // places in none is its own project).
+    expect(io.out).toBe('lead  claude-code  coordinator  acme\nhelper  claude-code  implementer  acme\nnative  codex  reviewer  acme\n');
   });
 
   test('a worker seat may read the roster: no caller check', async () => {
@@ -766,6 +769,31 @@ describe('team send: --list', () => {
 
     expect(code).toBe(0);
     expect(io.out).toContain('lead  claude-code  coordinator');
+  });
+
+  test("a registry that names the team's project shows that project on every row", async () => {
+    const { root, sockets } = world();
+    const io = owner(root);
+    // The team file calls its project "acme"; the registry places this team in the project named
+    // "TeamCLI" — its name is the one the roster carries.
+    const project: ProjectView = {
+      id: '4f2a1b7c9d0e',
+      name: 'TeamCLI',
+      entity: 'floor',
+      lead: 'agt_2b9f',
+      teams: [teamIdOf(root)],
+      provenance: { registered_by: 'test', registered_at: NOW.toISOString(), updated_at: NOW.toISOString() },
+    };
+    const projects: ProjectSources = {
+      list: () => [project],
+      byName: (key) => (project.name === key ? project : null),
+      ofTeam: (teamId) => (project.teams.includes(teamId) ? project : null),
+    };
+
+    const code = await runSend(['--list'], io, fake(sockets, { projects }));
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('lead  claude-code  coordinator  TeamCLI\nhelper  claude-code  implementer  TeamCLI\nnative  codex  reviewer  TeamCLI\n');
   });
 
   test('--list marks a stopped seat; --json carries the same roster as a document', async () => {
@@ -784,14 +812,14 @@ describe('team send: --list', () => {
       exit: 0,
       ids: { sent: null, reply: null },
       seats: [
-        { name: 'lead', cli: 'claude-code', role: 'coordinator', stopped: false },
-        { name: 'helper', cli: 'claude-code', role: 'implementer', stopped: false },
-        { name: 'native', cli: 'codex', role: 'reviewer', stopped: true },
+        { name: 'lead', cli: 'claude-code', role: 'coordinator', stopped: false, project: 'acme' },
+        { name: 'helper', cli: 'claude-code', role: 'implementer', stopped: false, project: 'acme' },
+        { name: 'native', cli: 'codex', role: 'reviewer', stopped: true, project: 'acme' },
       ],
     });
     const plain = owner(root);
     expect(await runSend(['--list'], plain, fake(sockets))).toBe(0);
-    expect(plain.out).toContain('native  codex  reviewer  (stopped)');
+    expect(plain.out).toContain('native  codex  reviewer  acme  (stopped)');
   });
 });
 

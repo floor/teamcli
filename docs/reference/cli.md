@@ -696,6 +696,26 @@ Usage:
 
 None.
 
+## `projects`
+
+Hidden: no
+
+Usage:
+
+    team projects [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `register`
 
 Hidden: no
@@ -955,7 +975,7 @@ Hidden: no
 
 Usage:
 
-    team status [--session <name>] [--file <path>] [--all] [--json]
+    team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
 
 ### Flags
 
@@ -965,6 +985,7 @@ Usage:
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--project` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

@@ -261,13 +261,14 @@ team send: claude-keeper: timeout: sent, no reply within 1s; a seat which does n
 exit 1
 ```
 
-`--list` prints the addressable seats — the same roster `team status` reads — and sends
-nothing:
+`--list` prints the addressable seats — the same roster `team status` reads — each with the
+project its team sits in: the registry's grouping when the machine has one, the file's own
+`project:` name otherwise. It sends nothing:
 
 ```console
 $ team send --list ; echo "exit $?"
-claude-keeper  claude-code  coordinator
-gpt-reviewer  codex  reviewer
+claude-keeper  claude-code  coordinator  beacon
+gpt-reviewer  codex  reviewer  beacon
 exit 0
 ```
 
@@ -275,7 +276,7 @@ With `--json`, every outcome is one document on stdout:
 
 ```console
 $ team send --list --json ; echo "exit $?"
-{"seat":null,"status":"listed","exit":0,"ids":{"sent":null,"reply":null},"seats":[{"name":"claude-keeper","cli":"claude-code","role":"coordinator","stopped":false},{"name":"gpt-reviewer","cli":"codex","role":"reviewer","stopped":false}]}
+{"seat":null,"status":"listed","exit":0,"ids":{"sent":null,"reply":null},"seats":[{"name":"claude-keeper","cli":"claude-code","role":"coordinator","stopped":false,"project":"beacon"},{"name":"gpt-reviewer","cli":"codex","role":"reviewer","stopped":false,"project":"beacon"}]}
 exit 0
 ```
 

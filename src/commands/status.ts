@@ -21,6 +21,8 @@ import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { profileFor } from '../profiles/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
+import { readTeams } from '../registry/teams.ts';
+import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
@@ -37,6 +39,8 @@ export type StatusSources = {
   now(): Date;
   /** The home whose store holds the override file and the key. Absent in a test that does not set one. */
   home?: string;
+  /** The project registry, for `--project`. The real one when absent; a test stands in for it. */
+  projects?: ProjectSources;
   /** This machine's own figures, read for the one check no machine can ever meet. Absent in a test
    *  that does not read them; absent is not "fine", it is nothing said. */
   machine?(root: string): Machine;
@@ -98,6 +102,7 @@ export const realSources: StatusSources = {
   standing: standingSource(homedir()),
   now: () => new Date(),
   home: homedir(),
+  projects: realProjectSources,
   machine: readMachine,
 };
 
@@ -145,15 +150,25 @@ export interface StatusJson {
   }>;
 }
 
-export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n';
+export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]\n';
 
 export async function runStatus(argv: string[], io: Io, sources: StatusSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'file'], ['all', 'json']);
-  if (args.error || args.rest.length) {
-    out.stderr(`team status: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
+  const args = readArgs(argv, ['session', 'file', 'project'], ['all', 'json']);
+  // `--project` reads the project level instead of one team: the project's teams, from the
+  // registry, wherever the run stands — no team file and no caller gate, the way `team projects`
+  // reads. `--session` and `--file` name one team's readings and do not apply beside it.
+  const beside = args.values.project !== undefined && (args.values.session !== undefined || args.values.file !== undefined);
+  if (args.error || args.rest.length || beside) {
+    const why = args.error ?? (args.rest.length
+      ? `unexpected "${args.rest[0]}"`
+      : '--project reads the project; --session and --file name one team');
+    out.stderr(`team status: ${plainText(why)}\n${USAGE}`);
     // exit: status.invocation
     return 2;
+  }
+  if (args.values.project !== undefined) {
+    return projectReport(args.values.project, out, io, sources, args.flags.has('json'));
   }
   // `--file` and `--session` are the owner's. The walk decides that before any file or session
   // is read, the same gate `worktree` and `watch` use. A plain folder's own seats need no flag:
@@ -371,6 +386,47 @@ export function protectedCheckouts(team: TeamFile, root: string, sources: { bran
     });
   }
   return out;
+}
+
+/**
+ * `team status --project <name>`: the project's teams, from the registry — the project itself
+ * through the projects source, each team's record through the team registry. The reading covers
+ * every team of the project the way the plain reading covers every seat of a team: a team the
+ * registry does not know is said as such, never left out.
+ */
+function projectReport(name: string, out: Io, io: Io, sources: StatusSources, json: boolean): number {
+  const project = sources.projects?.byName(name) ?? null;
+  if (!project) {
+    out.stderr(`team status: no project named ${JSON.stringify(name)}; nothing to show\n`);
+    // exit: status.project-unknown
+    return 1;
+  }
+  const records = readTeams(sources.home ?? homedir());
+  const teams = project.teams.map((teamId) => {
+    const record = records[teamId] ?? null;
+    return {
+      name: teamId,
+      session: record?.session ?? null,
+      lifecycle: record?.lifecycle ?? null,
+      seats: record ? record.roster.length : null,
+    };
+  });
+  if (json) {
+    io.stdout(`${JSON.stringify({ format: 1, project, teams }, null, 2)}\n`);
+  } else {
+    const head = [`project ${plainLine(project.name)}  ${plainLine(project.id ?? '-')}`];
+    if (project.entity !== null) head.push(`entity ${plainLine(project.entity)}`);
+    head.push(`lead ${plainLine(project.lead ?? '-')}`);
+    const lines = [head.join('  ')];
+    for (const team of teams) {
+      lines.push(team.session === null
+        ? `  ${plainLine(team.name)}  not registered`
+        : `  ${plainLine(team.name)}  session "${plainLine(team.session)}"  ${plainLine(team.lifecycle ?? '?')}  ${String(team.seats ?? '?')} seat(s)`);
+    }
+    out.stdout(`${lines.join('\n')}\n`);
+  }
+  // exit: status.project-listed
+  return 0;
 }
 
 function render(

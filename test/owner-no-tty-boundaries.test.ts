@@ -594,7 +594,9 @@ describe('the owner at a terminal outside herdr still passes', () => {
     const io = atATerminal();
     const code = await runSend(['--list'], io, host);
     expect(code).toBe(0);
-    expect(io.out).toContain('lead  claude-code  coordinator\n');
+    // Each row carries the project its team sits in: no registry names this team, so the project
+    // its own file writes.
+    expect(io.out).toContain('lead  claude-code  coordinator  acme\n');
   });
 });
 
