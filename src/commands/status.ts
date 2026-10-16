@@ -13,7 +13,7 @@ import type { Problem, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { emptySession, liveProcs, pidAlive, readState, type SessionState } from '../state.ts';
+import { emptySession, holdText, liveHold, liveProcs, pidAlive, readState, type HoldRecord, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -137,6 +137,8 @@ export interface StatusJson {
   notice: string | null;
   /** Present when the file names an account, or a reading is stored. */
   budgets?: BudgetRow[];
+  /** Present while a hold stands and has not lapsed (`team hold`). */
+  hold?: HoldRecord;
   /** The live records of `team proc`, present only when the session's seats hold some. */
   procs?: Array<{
     name: string;
@@ -236,6 +238,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     if (problem !== null) comparison.notes.unshift(problem);
   }
   if (!live.running) comparison.notes.unshift(`the herdr session "${session}" is not running`);
+  // The team's hold first of all, the way it is the first thing a reader should know: a hold
+  // past its `until` reads as none (`liveHold`), so neither the note nor the document carries
+  // one that has lapsed.
+  const hold = liveHold(whole, now);
+  if (hold) comparison.notes.unshift(holdText(hold));
   // What the seats recorded with `team proc add`: one note per live process, read the same way
   // `team proc list` reads it — a record whose pid is gone is skipped here and left for the next
   // write to clear. The reading is the note and the document, one derivation for both.
@@ -290,6 +297,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       differences: comparison.differences.map(({ what, repair }) => ({ what, repair })),
       notice: current.notice ?? null,
       ...(budgets.length ? { budgets } : {}),
+      ...(hold ? { hold } : {}),
       ...(procs.length ? { procs } : {}),
     };
     io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
