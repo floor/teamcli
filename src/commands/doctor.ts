@@ -373,7 +373,7 @@ export function holdFindings(dir: string, sources: DoctorSources): Finding[] {
   return hold === null ? [] : [{ level: 'note', text: `${holdText(hold)} (\`team hold --release\` clears it)` }];
 }
 
-// `watch` is the watch values in force — the approved ones — so an unapproved interval edit can't
+// `watch` is the watch values in force — the live file's under a verified standing — so a standing
 // move the verdict either way.
 function watchFindings(
   watch: TeamFile['watch'],

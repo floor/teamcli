@@ -172,7 +172,7 @@ describe('a pass with checks turned off', () => {
     // The caller passed this file's own list. Naming the checks as a difference does not turn
     // that list back on: disk stays off, and the difference is still the owner's to answer.
     expect(reported([WATCH_CHECKS_CHANGED])).not.toContain('free disk is 5.0 GB, below 10.0 GB');
-    expect(reported([WATCH_CHECKS_CHANGED])).toContain('the file differs from the approved one: `watch.checks` changed');
+    expect(reported([WATCH_CHECKS_CHANGED])).toContain('the file has changed since the last approval: `watch.checks` changed');
     // A file that was never approved turns nothing off.
     expect(reported(null)).toContain('free disk is 5.0 GB, below 10.0 GB');
     expect(reported(null)).toContain('the file was never approved on this machine');
@@ -237,7 +237,7 @@ describe('a pass with checks turned off', () => {
     expect(reported).toContain('deepseek-acme-2 is in the file and is not running');
     expect(reported).toContain('claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)');
     expect(reported).toContain("deepseek-acme waits at a permission prompt: its owner's to answer");
-    expect(reported).toContain('the file differs from the approved one: `rules` changed');
+    expect(reported).toContain('the file has changed since the last approval: `rules` changed');
   });
 });
 
@@ -305,7 +305,7 @@ describe('team approve and watch.checks', () => {
     expect(readApproval(storePath('acme-web', root, home))).toBeNull();
   });
 
-  test('an unapproved checks: { idle: off } stays out of the section in force, and idle is still reported', async () => {
+  test('a live checks: { idle: off } edit takes effect immediately', async () => {
     write(source());
     expect((await approve()).code).toBe(0);
     write(source('  checks:\n    idle: off\n'));
@@ -313,7 +313,7 @@ describe('team approve and watch.checks', () => {
     // The real approval, not a list built by hand: a checks-only edit is this one line.
     expect(approvalDifferences(edited, root, home)).toEqual([WATCH_CHECKS_CHANGED]);
     const inForce = watchInForce(edited, root, home);
-    expect(inForce.checks).toEqual([]);
+    expect(inForce.checks).toEqual(['idle']);
     expect(inForce.idleFirst).toBe(edited.watch.idleFirst);
     const quiet = live({ 'deepseek-acme': { status: 'done', screen: idle } });
     const memory = newMemory();
@@ -321,8 +321,8 @@ describe('team approve and watch.checks', () => {
       team: edited, state: emptySession(), live: quiet, machine: fine, now: minute * 60_000, memory,
       approval: approvalDifferences(edited, root, home), watch: inForce,
     }));
-    expect(at(0)).toContain('the file differs from the approved one: `watch.checks` changed');
-    expect(at(10)).toContain('deepseek-acme has been idle since the watch started');
+    expect(at(0)).toContain('the file has changed since the last approval: `watch.checks` changed');
+    expect(at(10)).not.toContain('deepseek-acme has been idle since the watch started');
   });
 
   test('an approved check stays off when a later edit adds another', async () => {
@@ -330,12 +330,12 @@ describe('team approve and watch.checks', () => {
     expect((await approve()).code).toBe(0);
     const edited = teamFile('  checks:\n    disk: off\n    idle: off\n');
     const inForce = watchInForce(edited, root, home);
-    expect(inForce.checks).toEqual(['disk']);
+    expect(inForce.checks).toEqual(['disk', 'idle']);
     const reported = texts(pass({
       team: edited, state: emptySession(), live: live(), machine: tight, now: 0, memory: newMemory(),
       approval: approvalDifferences(edited, root, home), watch: inForce,
     }));
-    expect(reported).toContain('the file differs from the approved one: `watch.checks` changed');
+    expect(reported).toContain('the file has changed since the last approval: `watch.checks` changed');
     expect(reported).not.toContain('free disk is 5.0 GB, below 10.0 GB');
   });
 

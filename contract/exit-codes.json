@@ -61,14 +61,14 @@
       "code": 1,
       "command": "add",
       "id": "add.ceiling",
-      "meaning": "the approval ceiling would be passed",
+      "meaning": "the file's seat ceiling would be passed",
       "trigger": "team add worker"
     },
     {
       "code": 1,
       "command": "add",
       "id": "add.ceilings",
-      "meaning": "the approved ceilings can't be read",
+      "meaning": "a record that does not verify is not in force",
       "trigger": "team add worker"
     },
     {
@@ -102,22 +102,8 @@
     {
       "code": 1,
       "command": "add",
-      "id": "add.delegate-approved-copy",
-      "meaning": "delegation needs a readable approved copy",
-      "trigger": "team add worker"
-    },
-    {
-      "code": 1,
-      "command": "add",
       "id": "add.delegate-command",
       "meaning": "the approved delegate may not run add",
-      "trigger": "team add worker"
-    },
-    {
-      "code": 1,
-      "command": "add",
-      "id": "add.delegate-drift",
-      "meaning": "delegation needs the approved file",
       "trigger": "team add worker"
     },
     {
@@ -215,7 +201,7 @@
       "code": 1,
       "command": "add",
       "id": "add.no-like",
-      "meaning": "the approved file has no seat to copy",
+      "meaning": "the file has no seat to copy",
       "trigger": "team add --temporary --like missing --until result:out.md"
     },
     {
@@ -236,7 +222,7 @@
       "code": 1,
       "command": "add",
       "id": "add.no-seat",
-      "meaning": "the approved file has no such seat",
+      "meaning": "the file has no such seat",
       "trigger": "team add missing"
     },
     {
@@ -250,7 +236,7 @@
       "code": 1,
       "command": "add",
       "id": "add.not-restored",
-      "meaning": "the seat can't be put back from the approved copy",
+      "meaning": "the seat can't be put back into the file",
       "trigger": "team add worker"
     },
     {
@@ -544,7 +530,7 @@
       "code": 1,
       "command": "answer",
       "id": "answer.unverified",
-      "meaning": "the name is not a seat of the approved copy",
+      "meaning": "the name is not a declared seat",
       "trigger": "team answer lead trust"
     },
     {
@@ -970,23 +956,9 @@
     {
       "code": 1,
       "command": "down",
-      "id": "down.delegate-approved-copy",
-      "meaning": "delegation needs a readable approved copy",
-      "trigger": "team down, when the approved copy can't be read"
-    },
-    {
-      "code": 1,
-      "command": "down",
       "id": "down.delegate-command",
       "meaning": "the approved delegate may not run `down`",
       "trigger": "team down, from the approved delegate whose commands leave it out"
-    },
-    {
-      "code": 1,
-      "command": "down",
-      "id": "down.delegate-drift",
-      "meaning": "the file is not the approved one",
-      "trigger": "team down, after the file changed since approval"
     },
     {
       "code": 1,
@@ -1859,22 +1831,8 @@
     {
       "code": 1,
       "command": "reload",
-      "id": "reload.grant-approved-copy",
-      "meaning": "a grant needs a readable approved copy",
-      "trigger": "team reload worker"
-    },
-    {
-      "code": 1,
-      "command": "reload",
       "id": "reload.grant-caller",
       "meaning": "only the seat the grant names runs this",
-      "trigger": "team reload worker"
-    },
-    {
-      "code": 1,
-      "command": "reload",
-      "id": "reload.grant-drift",
-      "meaning": "a grant needs the approved file",
       "trigger": "team reload worker"
     },
     {
@@ -1902,7 +1860,7 @@
       "code": 1,
       "command": "reload",
       "id": "reload.grant-omitted",
-      "meaning": "the approved file grants nothing",
+      "meaning": "the file grants nothing",
       "trigger": "team reload worker"
     },
     {
@@ -2083,22 +2041,8 @@
     {
       "code": 1,
       "command": "remove",
-      "id": "remove.delegate-approved-copy",
-      "meaning": "delegation needs a readable approved copy",
-      "trigger": "team remove worker"
-    },
-    {
-      "code": 1,
-      "command": "remove",
       "id": "remove.delegate-command",
       "meaning": "the approved delegate may not run remove",
-      "trigger": "team remove worker"
-    },
-    {
-      "code": 1,
-      "command": "remove",
-      "id": "remove.delegate-drift",
-      "meaning": "delegation needs the approved file",
       "trigger": "team remove worker"
     },
     {
@@ -2224,7 +2168,7 @@
       "code": 1,
       "command": "remove",
       "id": "remove.unverified",
-      "meaning": "a name the approved copy does not carry is left as it is",
+      "meaning": "a name the file does not carry is left as it is",
       "trigger": "team remove extra"
     },
     {
@@ -2797,22 +2741,8 @@
     {
       "code": 1,
       "command": "up",
-      "id": "up.delegate-approved-copy",
-      "meaning": "the delegate gate needs a readable approved copy",
-      "trigger": "team up"
-    },
-    {
-      "code": 1,
-      "command": "up",
       "id": "up.delegate-command",
       "meaning": "the approved delegate may not run up",
-      "trigger": "team up"
-    },
-    {
-      "code": 1,
-      "command": "up",
-      "id": "up.delegate-drift",
-      "meaning": "the delegate gate needs the approved file",
       "trigger": "team up"
     },
     {
@@ -2874,22 +2804,8 @@
     {
       "code": 1,
       "command": "up",
-      "id": "up.grant-approved-copy",
-      "meaning": "a grant needs a readable approved copy",
-      "trigger": "team up"
-    },
-    {
-      "code": 1,
-      "command": "up",
       "id": "up.grant-caller",
       "meaning": "only the seat the grant names runs this",
-      "trigger": "team up"
-    },
-    {
-      "code": 1,
-      "command": "up",
-      "id": "up.grant-drift",
-      "meaning": "a grant needs the approved file",
       "trigger": "team up"
     },
     {
@@ -3168,13 +3084,6 @@
     {
       "code": 1,
       "command": "worktree",
-      "id": "worktree.approved-copy",
-      "meaning": "the approved copy can't be read",
-      "trigger": "team worktree new task --kind fix"
-    },
-    {
-      "code": 1,
-      "command": "worktree",
       "id": "worktree.base",
       "meaning": "workspace.base is not a branch here",
       "trigger": "team worktree new task --kind fix"
@@ -3385,13 +3294,6 @@
     {
       "code": 1,
       "command": "worktree",
-      "id": "worktree.seat-unapproved",
-      "meaning": "--seat names a seat only the file declares",
-      "trigger": "team worktree new task --kind fix --seat added-later"
-    },
-    {
-      "code": 1,
-      "command": "worktree",
       "id": "worktree.session-owner",
       "meaning": "--session is the owner's",
       "trigger": "team worktree new task --session other"
@@ -3435,7 +3337,7 @@
       "code": 1,
       "command": "worktree",
       "id": "worktree.trust",
-      "meaning": "the worktree is outside the approved trust paths",
+      "meaning": "the worktree is outside the file's trust paths",
       "trigger": "team worktree new select-width --kind fix"
     },
     {

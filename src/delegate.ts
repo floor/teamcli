@@ -1,4 +1,4 @@
-import { approvalDifferencesOf, approvedFingerprints, notInForce } from './approve/approval.ts';
+import { approvedFingerprints, notInForce } from './approve/approval.ts';
 import { compare, describe, fingerprints } from './approve/fingerprint.ts';
 import { callerOf, describeCaller, readAncestors, type Caller, type CallerSources } from './caller.ts';
 import type { ActingCommand, Delegate, DelegateCommand } from './delegate-types.ts';
@@ -9,7 +9,7 @@ import { agentList, paneRootPid, sessionRunning, type HerdrAgent } from './herdr
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
 import { readState, type State } from './state.ts';
-import { approvalStanding, approvedCopy, type Standing } from './store/store.ts';
+import { approvalStanding, type Standing } from './store/store.ts';
 
 /**
  * A delegated run, decided and not yet done. `passed` names the approved pane the caller
@@ -22,15 +22,13 @@ export type DelegateVerdict =
 
 /**
  * The reads a test replaces. Each one left out is the real read: the approval standing and
- * its stored copy for `root` under `home`, the state in `dir`, the agent list herdr gives
- * for a session.
+ * the approval standing for `root` under `home`, the state in `dir`, the agent list herdr
+ * gives for a session.
  * Placement is not here. It is `io`, asked about a session, the same way every other command
  * places its caller.
  */
 export type DelegateSources = {
   standing?: (root: string) => Standing;
-  /** Null when the approved copy cannot be read. */
-  approvedCopy?: (root: string) => string | null;
   /** Null when the state cannot be read. */
   state?: (dir: string) => State | null;
   /** Null when herdr doesn't answer for that session. */
@@ -50,7 +48,7 @@ export const ADD_DELEGATE_EDIT: { id: 'add.delegate-edit'; text: string } = {
   text: 'the approved delegate cannot change the file or the approval; the owner adds a missing or stopped seat',
 };
 
-const PREFLIGHT = ['delegate-approval', 'delegate-approved-copy', 'delegate-evidence', 'delegate-placement'] as const;
+const PREFLIGHT = ['delegate-approval', 'delegate-evidence', 'delegate-placement'] as const;
 
 /**
  * The sections a delegated `approve` may move: `rules` alone — instructions for the team,
@@ -63,14 +61,14 @@ const PREFLIGHT = ['delegate-approval', 'delegate-approved-copy', 'delegate-evid
 export const ORDINARY_SECTIONS: readonly string[] = ['rules'];
 
 /**
- * The refusals before the evidence walk, in gate order. Between the approved copy and the
- * evidence each command has one difference step: the drift refusal for the four, and the
- * ordinary-change guard for `approve`, which admits the roster and `rules` where the others
- * refuse any difference at all.
+ * The refusals before the evidence walk, in gate order. `approve` alone keeps a difference
+ * step — the ordinary-change guard, which admits the roster and `rules`; the four read the
+ * live file and refuse on no difference at all.
  */
 function preflightOf(command: ActingCommand): readonly string[] {
-  const difference = command === 'approve' ? 'delegate-not-ordinary' : 'delegate-drift';
-  return [PREFLIGHT[0], PREFLIGHT[1], difference, PREFLIGHT[2], PREFLIGHT[3]];
+  return command === 'approve'
+    ? [PREFLIGHT[0], 'delegate-not-ordinary', PREFLIGHT[1], PREFLIGHT[2]]
+    : [PREFLIGHT[0], PREFLIGHT[1], PREFLIGHT[2]];
 }
 
 /** Every exit id the gate and `ADD_DELEGATE_EDIT` define. The command files record them. */
@@ -150,14 +148,10 @@ export function delegateGate(input: {
     return refuse('delegate-approval', `delegation needs a verified approval: ${notInForce(standing)}`);
   }
 
-  // `approve` still refuses an owner section outside the ordinary list, and still needs a
-  // readable stored copy. Every other act reads the live file. A fingerprint difference is
-  // not a refusal, and a stored copy that cannot be read does not block the act.
+  // `approve` still refuses an owner section outside the ordinary list — read from the record's
+  // own fingerprints, never from a stored copy. Every act reads the live file. A fingerprint
+  // difference is not a refusal, and a stored copy that cannot be read does not block the act.
   if (command === 'approve') {
-    const copy = sources.approvedCopy ? sources.approvedCopy(root) : approvedCopy(root, home);
-    if (copy === null || validated(copy) === null) {
-      return refuse('delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`');
-    }
     const kept = compare(approvedFingerprints(standing.record), fingerprints(team)).filter(
       (difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name),
     );
@@ -211,9 +205,6 @@ export function delegateReadGate(input: {
   const sources = input.sources ?? {};
   const standing = sources.standing ? sources.standing(root) : approvalStanding(root, home);
   if (standing.kind !== 'verified') return false;
-  const copy = sources.approvedCopy ? sources.approvedCopy(root) : approvedCopy(root, home);
-  if (copy === null || validated(copy) === null) return false;
-  if (approvalDifferencesOf(standing, team).length > 0) return false;
   const entries = team.delegates ?? [];
   const io = sources.callerSources ? { ...input.io, callerSources: sources.callerSources } : input.io;
   const evidence = evidenceOf(team, dir, io, sources, entries);
@@ -232,15 +223,6 @@ const NON_DELEGATE: Record<ActingCommand, (caller: string) => string> = {
 
 function nonDelegate(command: ActingCommand, caller: string): string {
   return NON_DELEGATE[command](caller);
-}
-
-function validated(text: string): TeamFile | null {
-  try {
-    const result = validateTeamFile(text);
-    return result.ok ? result.team : null;
-  } catch {
-    return null;
-  }
 }
 
 function splitPane(pane: string): { session: string; id: string } | null {
