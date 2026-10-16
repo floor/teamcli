@@ -54,6 +54,12 @@ type Behaviour = {
   lagMs?: number;
   /** The transcript rows the pane draws once a line was submitted. */
   transcript?: string[];
+  /** The status herdr reports before the seat has taken a line; `working` is a seat mid-turn. */
+  statusBefore?: string;
+  /** The screen the pane shows once an Enter was pressed, in place of the box. */
+  dialogAfterEnter?: string;
+  /** The pane cannot be read once an Enter was pressed. */
+  unreadAfterEnter?: boolean;
 };
 
 /** A seat's pane: one box, one herdr status, every key logged. */
@@ -90,7 +96,7 @@ function fakeCli(behaviour: Behaviour = {}): DeliverHost & { typed: string[]; en
       return true;
     },
     status: (_pane: string): string | null => {
-      if (submittedAt === null || clock - submittedAt < (behaviour.lagMs ?? 0)) return 'idle';
+      if (submittedAt === null || clock - submittedAt < (behaviour.lagMs ?? 0)) return behaviour.statusBefore ?? 'idle';
       return behaviour.after ?? 'working';
     },
     wait: async (ms: number): Promise<void> => {
@@ -99,6 +105,8 @@ function fakeCli(behaviour: Behaviour = {}): DeliverHost & { typed: string[]; en
     },
     readAnsi: (_pane: string): string | null => {
       if (behaviour.dialog !== undefined) return behaviour.dialog;
+      if (cli.enters > 0 && behaviour.dialogAfterEnter !== undefined) return behaviour.dialogAfterEnter;
+      if (cli.enters > 0 && behaviour.unreadAfterEnter) return null;
       if (box !== '') return screenWith(`${PROMPT}${box}`);
       const rows = submittedAt === null ? [] : (behaviour.transcript ?? []);
       return screenWith(behaviour.empty === 'blank' ? PROMPT : `${PROMPT}${FAINT('Try "fix typecheck errors"')}`, rows);
@@ -320,6 +328,72 @@ describe('a seat whose status lags', () => {
     const blind: DeliverHost = { ...cli };
     delete blind.readAnsi;
     expect((await deliverTrigger(blind, 'w1:p1', LINE, PROFILE)).outcome).toBe('not-submitted');
+  });
+});
+
+describe('evidence has to come from this line', () => {
+  const explored = `\u25cf Explored 1 file (${DROP_ID})`;
+
+  test('a seat already working before Enter, still working after, with an empty box and no transcript, is not delivered', async () => {
+    const cli = fakeCli({ statusBefore: 'working', after: 'working' });
+    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    expect(result).toMatchObject({ outcome: 'not-submitted', box: '', tries: 1 });
+    expect(result.evidence).toBeUndefined();
+    expect(cli.enters).toBe(1);
+  });
+
+  test('a seat already working that finishes its turn is not delivered either', async () => {
+    const cli = fakeCli({ statusBefore: 'working', after: 'done' });
+    expect((await deliverTrigger(cli, 'w1:p1', LINE, PROFILE)).outcome).toBe('not-submitted');
+  });
+
+  test('a seat already working is delivered when the transcript shows the drop read', async () => {
+    const cli = fakeCli({ statusBefore: 'working', after: 'working', transcript: [explored] });
+    expect(await deliverTrigger(cli, 'w1:p1', LINE, PROFILE)).toMatchObject({ outcome: 'delivered', evidence: 'transcript' });
+  });
+
+  test('a status that moved while the screen is a permission dialog is not delivered, and gets no key', async () => {
+    const cli = fakeCli({ dialogAfterEnter: capture('permission-read-wide-ansi.txt') });
+    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    expect(result.outcome).toBe('unreachable');
+    expect(result.dialog).toBe('permission');
+    expect(cli.enters).toBe(1);
+  });
+});
+
+describe('an unreadable box gets no second Enter', () => {
+  test('a read that fails after a swallowed first Enter stops at one key, and is not-submitted with no box text', async () => {
+    const cli = fakeCli({ swallow: Infinity, unreadAfterEnter: true });
+    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    expect(result.outcome).toBe('not-submitted');
+    expect(result.box).toBeUndefined();
+    expect(result.tries).toBe(1);
+    expect(cli.enters).toBe(1);
+  });
+
+  test('a box that reads again later, still holding the trigger, is pressed again then', async () => {
+    const cli = fakeCli({ swallow: 1 });
+    const read = cli.readAnsi;
+    let reads = 0;
+    // The reads of the first window after the first Enter fail (the transcript read and the
+    // re-read); the next re-read shows the box still holding the trigger.
+    cli.readAnsi = (pane) => {
+      if (cli.enters > 0 && reads++ < 2) return null;
+      return read?.(pane) ?? null;
+    };
+    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    expect(result.outcome).toBe('delivered');
+    expect(cli.enters).toBe(2);
+  });
+
+  test('a box that cannot be read at all gets one Enter, and no more however long the status is silent', async () => {
+    const cli = fakeCli({ lagMs: Infinity });
+    const blind: DeliverHost = { ...cli };
+    delete blind.readAnsi;
+    const result = await deliverTrigger(blind, 'w1:p1', LINE, PROFILE);
+    expect(result.outcome).toBe('not-submitted');
+    expect(result.tries).toBe(1);
+    expect(cli.enters).toBe(1);
   });
 });
 

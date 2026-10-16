@@ -17,9 +17,6 @@ import { POLL_MS, SETTLE_MS, sawSubmission, type NativePane } from './native.ts'
 /** The most Enters one delivery presses. */
 export const MAX_TRIES = 3;
 
-/** The most Enters pressed when the box cannot be read at all. */
-export const BLIND_TRIES = 2;
-
 /** How long each try waits for the seat to show the submission: 1s, 3s, then 9s. */
 export const BACKOFF_MS: readonly number[] = [1000, 3000, 9000];
 
@@ -154,9 +151,11 @@ function boxOf(seen: Look, line: string): string | undefined {
  * (`unreachable`). After Enter, a submission is verified when herdr shows the seat working (or a
  * new `done`/`blocked`) and the trigger has left the box. A try that is not verified is followed
  * by a re-read: another Enter goes only to a box that still holds exactly the trigger line, never
- * to an empty one, to one that holds something else, or to a dialog; at most `MAX_TRIES` Enters,
- * each waiting longer than the last (`BACKOFF_MS`). When the box cannot be read at all the status
- * alone decides, and an unverified Enter is repeated once, as the run before this one did.
+ * to an empty one, to one that holds something else, to one that cannot be read, or to a dialog; at
+ * most `MAX_TRIES` Enters, each waiting longer than the last (`BACKOFF_MS`). Evidence has to come
+ * from this line: a status that moved after Enter (never the one a seat already had), or the drop
+ * in the transcript. A box that cannot be read keeps the first Enter and is judged by the status
+ * alone, and never gets a second.
  */
 export async function deliverTrigger(host: DeliverHost, pane: string, line: string, profile: string): Promise<DeliverResult> {
   const before = host.status(pane);
@@ -181,9 +180,9 @@ export async function deliverTrigger(host: DeliverHost, pane: string, line: stri
   let tries = 0;
   let seen: Look = typed;
   for (let round = 0; round < MAX_TRIES; round++) {
-    // The first Enter always goes. Later ones go only where the box still holds the trigger (or,
-    // with the box unreadable, where nothing says otherwise); an empty box waits another window.
-    const enter = round === 0 || seen.state === 'trigger' || seen.state === 'unread';
+    // The first Enter goes, read or not. Later ones go only where a fresh read shows the box still
+    // holds exactly the trigger; an empty or unreadable box waits another window, and gets no key.
+    const enter = round === 0 || seen.state === 'trigger';
     if (enter) {
       if (!host.pressEnter(pane)) {
         // An Enter herdr did not take, with the line still sitting in the box, is a line typed and
@@ -201,12 +200,10 @@ export async function deliverTrigger(host: DeliverHost, pane: string, line: stri
     seen = look(host, pane, line, profile);
     if (seen.state === 'dialog') return dialogStop(seen.kind, tries);
     if (seen.state === 'other') break;
-    // With the box unreadable an Enter is a guess: the one repeat the run before this had, no more.
-    if (seen.state === 'unread' && tries >= BLIND_TRIES) break;
   }
   // A box that has cleared with no sign yet is not given up on at the end of the tries: the seat
   // may be working while herdr still reads it idle.
-  if (seen.state === 'empty') {
+  if (seen.state === 'empty' || seen.state === 'unread') {
     const spent = BACKOFF_MS.slice(0, MAX_TRIES).reduce((sum, ms) => sum + ms, 0);
     const late = await verify(host, pane, line, profile, before, Math.max(0, VERIFY_TOTAL_MS - spent));
     if (late !== null) return { outcome: 'delivered', tries, ...late };
@@ -247,7 +244,11 @@ async function verify(
     }
     if (!changed && polls % TRANSCRIPT_EVERY !== 0) continue;
     const seen = look(host, pane, line, profile);
-    if (changed && sample !== null && seen.state !== 'trigger') return { status: sample, evidence: 'status' };
+    // A status that moved counts once the line has left the box and the screen is not a dialog:
+    // a seat that is working under a permission dialog took nothing from this send.
+    if (changed && sample !== null && seen.state !== 'trigger' && seen.state !== 'dialog') {
+      return { status: sample, evidence: 'status' };
+    }
     if (seen.state === 'empty' && showsDrop(seen.screen, line)) return { status: 'transcript', evidence: 'transcript' };
   }
   return null;

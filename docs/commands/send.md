@@ -156,8 +156,10 @@ file (<id>)`. herdr's status can lag or stay idle while a CLI works, so a box th
 waited on for up to 20 seconds in all before the run gives up. A try that shows neither is followed by a
 re-read, and another Enter goes only to a box that still holds exactly the trigger line — never
 to an empty one, to one that holds something else, or to a dialog — at most three Enters in all,
-waiting 1, 3 and then 9 seconds for the seat to show it. A box that cannot be read at all is
-judged by herdr's status alone and gets one repeat Enter. An unverified send writes one line to
+waiting 1, 3 and then 9 seconds for the seat to show it. A box that cannot be read keeps the first
+Enter and is judged by herdr's status alone, and no other Enter goes to it. A seat that was already
+working before Enter proves nothing by its status, and a status that moved under a dialog counts
+for nothing: only the transcript can show that seat took this line. An unverified send writes one line to
 `team.log` for the orchestrator.
 
 `unreachable` is the seat not reached: no live agent of that name, a screen that is one of the

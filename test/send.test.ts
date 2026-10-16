@@ -859,16 +859,18 @@ describe('team send: native drop', () => {
     }
   });
 
-  test('a seat that stays idle through the first Enter is submitted by the second', async () => {
+  test('a seat that stays idle through the first window is delivered on its status, with one Enter', async () => {
     const { root, sockets } = world();
-    // Before Enter, then five polls of idle, then working on the next read.
+    // Before Enter, then five polls of idle, then working on the next read. The pane cannot be
+    // read, so nothing confirms the trigger is still in the box and no second Enter goes: the
+    // status that moves in the next window is the evidence.
     const { host, pane } = nativeHost(sockets, ['idle', 'idle', 'idle', 'idle', 'idle', 'idle', 'working']);
     const io = owner(root);
 
     const code = await runSend(['native', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(pane.enters).toBe(2);
+    expect(pane.enters).toBe(1);
     expect(pane.typed.length).toBe(1);
   });
 
@@ -881,8 +883,8 @@ describe('team send: native drop', () => {
 
     expect(code).toBe(1);
     expect(io.err).toContain('not-submitted');
-    expect(io.err).toContain('the seat did not take the trigger after 2 Enters; the box could not be read');
-    expect(pane.enters).toBe(2);
+    expect(io.err).toContain('the seat did not take the trigger after 1 Enter; the box could not be read');
+    expect(pane.enters).toBe(1);
     expect(pane.typed.length).toBe(1);
     const drops = join(dir, 'send-drops', 'acme', 'native');
     const name = readdirSync(drops)[0] as string;
@@ -1031,6 +1033,10 @@ describe('native delivery core', () => {
     expect(sawSubmission('idle', ['done'])).toBe(true);
     expect(sawSubmission('idle', ['idle', 'idle'])).toBe(false);
     expect(sawSubmission('idle', ['blocked'])).toBe(true);
+    // A seat that was already working proves nothing by its status: its turn is not this line.
+    expect(sawSubmission('working', ['working'])).toBe(false);
+    expect(sawSubmission('working', ['working', 'done'])).toBe(false);
+    expect(sawSubmission('working', ['idle', 'working'])).toBe(false);
   });
 
   test('dropMessage keeps a long body whole at mode 0600', () => {
