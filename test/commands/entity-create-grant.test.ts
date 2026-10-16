@@ -177,6 +177,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
           agent: 'orchestrator',
           paths: ['~/Code/radiooooo', '~/Documents/radio'],
           expires: FUTURE,
+          runners: [],
         },
       ]);
 

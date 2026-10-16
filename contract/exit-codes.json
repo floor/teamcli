@@ -1929,6 +1929,13 @@
     {
       "code": 0,
       "command": "remove",
+      "id": "remove.swapped",
+      "meaning": "a lead seat was stopped for a swap; the file still names it",
+      "trigger": "team remove lead --keep"
+    },
+    {
+      "code": 0,
+      "command": "remove",
       "id": "remove.temporary",
       "meaning": "a temporary seat was removed",
       "trigger": "team remove worker"
@@ -2128,6 +2135,20 @@
       "id": "remove.stop-failed",
       "meaning": "the seat could not be stopped",
       "trigger": "team remove worker"
+    },
+    {
+      "code": 1,
+      "command": "remove",
+      "id": "remove.swap-grant",
+      "meaning": "no grant or delegate admits this caller's swap of a lead seat",
+      "trigger": "team remove lead --keep, from a seat the grant does not admit"
+    },
+    {
+      "code": 1,
+      "command": "remove",
+      "id": "remove.swap-self",
+      "meaning": "a seat can't swap its own lead seat",
+      "trigger": "team remove lead --keep, from the lead's own pane"
     },
     {
       "code": 1,
