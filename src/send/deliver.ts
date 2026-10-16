@@ -80,6 +80,19 @@ export function dialogKind(profile: string, screen: string | null): string | nul
   return DIALOGS.has(kind) ? kind : null;
 }
 
+/** The dialog a Claude Code session shows when a cross-session frame arrived while it was busy:
+ *  the frame is held for a person to let through, and the input box is blocked until then. */
+const HELD_FRAME_DIALOG = 'Held message from another session';
+
+/** Whether a pane's text shows the held-frame dialog. SGR styling is stripped and the frame's
+ *  borders and pipes flatten to space with every other whitespace run, so the sentence is found
+ *  whole whether it sits on one row or wraps inside the dialog's own frame. */
+export function showsHeldFrameDialog(screen: string | null): boolean {
+  if (screen === null) return false;
+  const flat = stripSgr(screen).replace(/[─-╿|]/g, ' ').replace(/\s+/g, ' ');
+  return flat.includes(HELD_FRAME_DIALOG);
+}
+
 type Look =
   | { state: 'unread' }
   | { state: 'dialog'; kind: string }

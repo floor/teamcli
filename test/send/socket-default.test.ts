@@ -1,12 +1,13 @@
-// `team send` to a Claude Code seat: the cross-session socket is the default channel, and the
-// typed trigger (a 0600 drop file and one line) is the named fallback when the socket is
-// missing or refuses. The outcome says which path carried the message.
+// `team send` to a Claude Code seat: the typed trigger (a 0600 drop file and one line) is the
+// default channel again, and the cross-session socket is `--wait`'s. The socket-first default
+// sits behind SOCKET_FIRST in src/commands/send.ts, off while the owner decides on attestation;
+// these scenes pin the flipped state, so flipping the constant back reddens them loudly.
 //
 // Fixtures only: a fake seat, a fake sockets folder, and a real unix socket listener this test
 // owns — the shape `test/send.test.ts` measured. No pane is read and no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -144,20 +145,12 @@ async function listen(sockets: string, pid: number): Promise<{ path: string; rec
   return { path, received };
 }
 
-async function until(check: () => boolean, ms = 2000): Promise<void> {
-  const start = Date.now();
-  while (!check() && Date.now() - start < ms) await new Promise((resolve) => setTimeout(resolve, 5));
-}
-
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
-describe('team send: the socket is the default for a Claude Code seat', () => {
-  test('a plain send goes through the socket, and nothing is typed', async () => {
-    const { root, sockets } = world();
+describe('team send: the typed trigger is the default for a Claude Code seat', () => {
+  test('a plain send is typed while a live socket stands, and the frame is not written', async () => {
+    const { root, dir, sockets } = world();
     const { received } = await listen(sockets, 222);
-    // Samples the typed path would consume: an idle pane, then one that takes the line. They are
-    // here so a run that wrongly falls back still delivers, and the `typed`/`enters` assertions
-    // below catch it — rather than the run stopping at the typed path's own refusal.
     const host = claudeHost(sockets, ['idle', 'working']);
     realDeliver(host);
     const io = owner(root);
@@ -166,65 +159,22 @@ describe('team send: the socket is the default for a Claude Code seat', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('lead: delivered (socket)\n');
-    // The trigger only exists on the typed path: none may be typed, and no Enter may land,
-    // when the frame was taken.
-    expect(host.pane.typed).toEqual([]);
-    expect(host.pane.enters).toBe(0);
-    expect(host.socketsTried).toEqual([join(sockets, '222.sock')]);
-    await until(() => received.length > 0);
-    const frame = received.join('');
-    expect(frame.endsWith('\n')).toBe(true);
-    expect((frame.match(/\n/g) ?? []).length).toBe(1);
-    const parsed = JSON.parse(frame) as { type: string; message: { role: string; content: string } };
-    expect(parsed.type).toBe('user');
-    expect(parsed.message).toEqual({ role: 'user', content: 'from the owner — admitted by: the owner\n\nhello' });
-  });
-
-  test('a busy pane takes the same path: the frame is not queued behind the composer', async () => {
-    const { root, sockets } = world();
-    const { received } = await listen(sockets, 222);
-    const host = claudeHost(sockets, ['working']);
-    realDeliver(host);
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'while you work'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.out).toBe('lead: delivered (socket)\n');
-    expect(host.pane.typed).toEqual([]);
-    expect(host.pane.enters).toBe(0);
-    await until(() => received.length > 0);
-    const parsed = JSON.parse(received.join('')) as { message: { content: string } };
-    expect(parsed.message.content).toBe('from the owner — admitted by: the owner\n\nwhile you work');
-  });
-});
-
-describe('team send: the typed fallback names its reason', () => {
-  test('no socket is found: one drop file, one typed trigger, and the outcome says so', async () => {
-    const { root, dir, sockets } = world();
-    const host = claudeHost(sockets, ['idle', 'working']);
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
-    expect(host.frames).toEqual([]);
-    expect(host.pane.typed.length).toBe(1);
-    expect(host.pane.enters).toBe(1);
+    expect(io.out).toBe('lead: delivered\n');
+    // The socket is not this path's channel: it is never tried, and the live listener at the
+    // pane's pid hears nothing.
+    expect(host.socketsTried).toEqual([]);
+    expect(received).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = join(drops, readdirSync(drops)[0] as string);
-    expect(host.pane.typed[0]).toContain(path);
-    expect(host.pane.typed[0]).not.toContain('hello');
+    expect(host.pane.typed).toEqual([`Read ${path} and do that.`]);
+    expect(host.pane.enters).toBe(1);
     expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
-  test('a socket that refuses falls back the same way, and the state names the refusal', async () => {
+  test('a socket file that would refuse is not tried either', async () => {
     const { root, sockets } = world();
-    // A plain file at the measured name: what a socket left by a session that is gone holds.
-    // The real client answers ENOTSOCK on macOS and ECONNREFUSED on the ubuntu runner; both map
-    // to the one sentence this asserts.
+    // A plain file at the measured name: what a socket left by a session that is gone holds —
+    // and what the flipped default never touches.
     writeFileSync(join(sockets, '222.sock'), '');
     const host = claudeHost(sockets, ['idle', 'working']);
     realDeliver(host);
@@ -233,12 +183,37 @@ describe('team send: the typed fallback names its reason', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toMatch(/^lead: delivered \(typed, socket nothing is listening there \(.+\)\)\n$/);
+    expect(io.out).toBe('lead: delivered\n');
+    expect(host.socketsTried).toEqual([]);
     expect(host.pane.typed.length).toBe(1);
     expect(host.pane.enters).toBe(1);
   });
+});
 
-  test('--wait keeps the socket-only contract: a missing socket is unreachable, never typed', async () => {
+describe('team send: a typed send with no socket at all', () => {
+  test('one drop file, one typed trigger, and no socket sentence', async () => {
+    const { root, dir, sockets } = world();
+    const host = claudeHost(sockets, ['idle', 'working']);
+    const io = owner(root);
+
+    const code = await runSend(['lead', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('lead: delivered\n');
+    expect(host.frames).toEqual([]);
+    expect(host.socketsTried).toEqual([]);
+    expect(host.pane.typed.length).toBe(1);
+    expect(host.pane.enters).toBe(1);
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    const path = join(drops, readdirSync(drops)[0] as string);
+    expect(host.pane.typed[0]).toContain(path);
+    expect(host.pane.typed[0]).not.toContain('hello');
+    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+  });
+});
+
+describe('team send: --wait keeps the socket-only contract', () => {
+  test('a missing socket is unreachable, never typed', async () => {
     const { root, sockets } = world();
     const host = claudeHost(sockets, ['idle', 'working']);
     const io = owner(root);

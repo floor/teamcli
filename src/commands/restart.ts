@@ -57,6 +57,7 @@ import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRules
 import { rulesOf } from '../launch/rules.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
+import { shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
@@ -187,10 +188,32 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const ceilings = ceilingsOf(team);
 
   const mayChange = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
-  if (mayChange.kind === 'no-pane') return callerRefused(out, noPaneRefusal(mayChange.name));
-  if (mayChange.kind === 'another-pane') return callerRefused(out, anotherPaneRefusal(mayChange.name, mayChange.recordedPane));
-  if (mayChange.kind === 'refused') {
-    return callerRefused(out, `only the owner, the orchestrator or the operator restarts a seat; this call is ${plainLine(describeCaller(shown))}`);
+  // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
+  // `1`, dev mode says this gate once, as a warning, and the restart continues — exactly as
+  // `up` does. Every other refusal stays a refusal: the target placement, the CLI, the
+  // records, the approvals and trust. The warning is logged where this call runs; a dry run
+  // says it beside the dry answer and decides nothing.
+  const mayRun = mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
+    : mayChange.kind === 'another-pane' ? anotherPaneRefusal(mayChange.name, mayChange.recordedPane)
+      : mayChange.kind === 'refused' ? `only the owner, the orchestrator or the operator restarts a seat; this call is ${plainLine(describeCaller(shown))}`
+        : null;
+  if (mayRun !== null) {
+    if (io.env.TEAMCLI_DEV_MODE === '1') {
+      const said = `warning: ${mayRun}; dev mode continues`;
+      if (dry) out.stdout(`! ${said}\n`);
+      else {
+        out.stderr(`team restart: ${plainText(said)}\n`);
+        logLine(dir, 'restart', describeCaller(caller), said, sources.now());
+      }
+    } else {
+      // The dry answer names the refusal and the one command that unblocks it, on stdout where
+      // a dry run's answers go; both paths exit through the refusal's one exit site below.
+      return callerRefused(
+        out,
+        mayRun,
+        dry ? `! restart would refuse: ${plainText(mayRun)}\n! to unblock: ${plainText(ownerRestartRun(argv))}\n` : undefined,
+      );
+    }
   }
 
   const recordedSession = readState(dir).sessions[session] ?? emptySession();
@@ -771,8 +794,19 @@ function detachedExit(out: Io, message: string): number {
   return 1;
 }
 
-function callerRefused(out: Io, message: string): number {
-  out.stderr(`team restart: ${plainText(message)}\n`);
+/** The one command that unblocks a `restart` this caller cannot run: the owner's own, in this
+ *  folder, at a terminal outside herdr. The caller's words are kept, the dry run's own flag
+ *  dropped, so the printed line is a command that runs. */
+function ownerRestartRun(argv: string[]): string {
+  const words = ['team', 'restart', ...argv.filter((word) => word !== '--dry-run').map(shellQuote)];
+  return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+}
+
+/** The gate's refusal: the sentence on stderr, or, with `dryAnswer`, the dry run's own words on
+ *  stdout — the same outcome either way, so both leave through this one exit site. */
+function callerRefused(out: Io, message: string, dryAnswer?: string): number {
+  if (dryAnswer === undefined) out.stderr(`team restart: ${plainText(message)}\n`);
+  else out.stdout(dryAnswer);
   // exit: restart.caller
   return 1;
 }
