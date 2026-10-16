@@ -26,7 +26,7 @@ and pane.
 | SEAT | the seat name |
 | ID | the stable seat handle (`seat_<12 hex>`), or `-` before first launch |
 | ROLE | the seat's role (`temporary` when no declared seat matches) |
-| CLI | the CLI profile (`claude-code`, `codex`, `cursor`, `antigravity`, `grok`) |
+| CLI | the CLI profile (`claude-code`, `codex`, `cursor`, `antigravity`, `grok`, `muse`) |
 | MODEL | the live model reading or declared display |
 | EFFORT | the effort level, or `-` when unset |
 | STATUS | the seat's live state |
