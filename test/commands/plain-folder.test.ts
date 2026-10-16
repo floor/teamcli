@@ -442,7 +442,9 @@ describe('a folder with no git repository', () => {
     const watched = await runWatch([], watching, watchSources(home));
     expect(watched).toBe(0);
     expect(watching.err).not.toContain('not inside a git repository');
-    expect(watching.out).toContain('the file was never approved on this machine');
+    // The watch still runs here, and a file with no approval record is not a report of its own:
+    // it watches, and says nothing about the missing record.
+    expect(watching.out).not.toContain('the file was never approved on this machine');
 
     // The owner adds a seat the file already names. A missing record does not refuse that.
     const owner = testIo(root, { kind: 'owner' });

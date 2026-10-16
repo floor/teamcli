@@ -173,9 +173,10 @@ describe('a pass with checks turned off', () => {
     // that list back on: disk stays off, and the difference is still the owner's to answer.
     expect(reported([WATCH_CHECKS_CHANGED])).not.toContain('free disk is 5.0 GB, below 10.0 GB');
     expect(reported([WATCH_CHECKS_CHANGED])).toContain('the file differs from the approved one: `watch.checks` changed');
-    // A file that was never approved turns nothing off.
+    // A file that was never approved turns nothing off, and is no report of its own — the
+    // difference above is the reading's, not the watch's.
     expect(reported(null)).toContain('free disk is 5.0 GB, below 10.0 GB');
-    expect(reported(null)).toContain('the file was never approved on this machine');
+    expect(reported(null)).not.toContain('the file was never approved on this machine');
     // Approved: the check is off. A difference in another section leaves the list in force off.
     expect(reported(APPROVED)).not.toContain('free disk is 5.0 GB, below 10.0 GB');
     expect(reported(['`rules` changed'])).not.toContain('free disk is 5.0 GB, below 10.0 GB');

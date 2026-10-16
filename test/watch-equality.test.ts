@@ -178,8 +178,9 @@ function oldPass(
     memory.teamIdleTold = false;
   }
 
-  if (approval === null) once('approval', 'the file was never approved on this machine', 'owner');
-  else if (approval?.length) once('approval', `the file differs from the approved one: ${approval.join('; ')}`, 'owner');
+  // A file with no approval record (`null`) is not a report of its own, here as in the core:
+  // the never-approved line was a leftover, and only a difference is the owner's to answer.
+  if (approval?.length) once('approval', `the file differs from the approved one: ${approval.join('; ')}`, 'owner');
 
   const limits = team.machine;
   if (machine.loadPerCore !== null && machine.loadPerCore > limits.loadMax) {
