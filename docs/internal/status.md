@@ -56,11 +56,15 @@ not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim
 ## Rows
 
     team beacon, session "beacon"
-      claude-keeper  missing  Claude Opus 5.5  -
-      claude-beacon  working  Claude Opus 5.5  w1:p1
+      claude-keeper  missing  Claude Opus 5.5  -     typed
+      claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 
-The columns are the seat, its state, the model, and the pane. The state is what herdr says
-(`idle`, `working`, `blocked`…), with `, parked` added for a seat the file parks and `, temporary`
+The columns are the seat, its state, the model, the pane, and the word a send would use to reach
+the seat: `socket` when the file declares it `cli: claude-code` and the pane's own processes carry a
+live session socket, `typed` otherwise — another CLI, a pane that is gone, one herdr could not
+read. The word is read from the processes the comparison already holds, so no extra herdr call is
+made. The state is what herdr says (`idle`, `working`, `blocked`…), with `, parked` added for a seat
+the file parks and `, temporary`
 for a temporary one; or `<state> (unsent text)` when an idle or done seat — the two states `team`
 types into — holds text in its input box that was never sent; or `<state> (screen not recognised)`
 when an idle or done seat's screen is not one its profile reads: herdr's word alone would read a
