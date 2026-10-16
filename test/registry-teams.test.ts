@@ -338,6 +338,44 @@ describe('the roster line carries the lead capability', () => {
   });
 });
 
+describe('the roster line carries the assistant capability', () => {
+  test('the seat that assists is written and read back whole, beside the lead', () => {
+    upsertTeam(home, 'abcdef012345', {
+      ...seed,
+      at: AT,
+      roster: [
+        { agent: 'agt_0123456789ab', seat: 'lead', role: 'builder', leads: true },
+        { agent: 'agt_ba9876543210', seat: 'assistant', role: 'builder', assistant: true },
+        { agent: 'agt_000000000001', seat: 'worker', role: 'builder' },
+      ],
+    });
+    const text = readFileSync(teamsFile(home), 'utf8');
+    expect(text).toContain('      - { agent: agt_ba9876543210, seat: assistant, role: builder, assistant: true }');
+    expect(text).toContain('      - { agent: agt_0123456789ab, seat: lead, role: builder, leads: true }');
+    expect(getTeam(home, 'abcdef012345')?.roster.map((entry) => entry.assistant)).toEqual([undefined, true, undefined]);
+  });
+
+  test('a line written before the field existed reads as before: not the assistant', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(
+      teamsFile(home),
+      'teams:\n  abcdef012345:\n    project: acme\n    lifecycle: running\n    session: acme\n    root: /work/acme\n    roster:\n      - { agent: agt_0123456789ab, seat: assistant, role: builder }\n    provenance: { registered_by: owner, registered_at: "2026-10-16T12:00:00.000Z", updated_at: "2026-10-16T12:00:00.000Z" }\n',
+    );
+    expect(getTeam(home, 'abcdef012345')?.roster).toEqual([
+      { agent: 'agt_0123456789ab', seat: 'assistant', role: 'builder' },
+    ]);
+  });
+
+  test('an assistant of the wrong kind names the line', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(
+      teamsFile(home),
+      'teams:\n  abcdef012345:\n    project: acme\n    lifecycle: running\n    roster:\n      - { agent: agt_0123456789ab, seat: assistant, role: builder, assistant: 1 }\n    provenance: { registered_by: owner, registered_at: "2026-10-16T12:00:00.000Z", updated_at: "2026-10-16T12:00:00.000Z" }\n',
+    );
+    expect(() => readTeams(home)).toThrow(/roster line 1: "assistant" must be true or false/);
+  });
+});
+
 describe('findTeam', () => {
   beforeEach(() => {
     upsertTeam(home, 'aaaaaaaaaaaa', { project: 'acme', session: 'acme-main', root: '/r/1', at: AT });

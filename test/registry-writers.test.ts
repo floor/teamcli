@@ -148,6 +148,35 @@ describe('registry writers: the shared register-or-repoint rule', () => {
     ]);
   });
 
+  test("a launch writes the file's assistant mark on the roster, and a moved mark does not linger", () => {
+    const fixture = makeFixture();
+    const input = registryOf(fixture);
+    const teamId = teamIdOf(fixture.root);
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    // The file's own seats are what the mark is read from — its digest field, beside `parked` —
+    // so a scene marks one without rewriting the fixture's YAML, as the lead's own scene moves
+    // `orchestrator`.
+    const marks = (seatName: string) => ({
+      ...input.team,
+      seats: input.team.seats.map((seat) => (seat.name === seatName ? { ...seat, assistant: true as const } : seat)),
+    });
+    const leadId = (registerLaunch({ ...input, team: marks('lead') }, lead, 'pane-lead') as { id: string }).id;
+    const workerId = (registerLaunch({ ...input, team: marks('lead') }, worker, 'pane-worker') as { id: string }).id;
+    // The file marks `lead`, so that line says so — beside its own `leads`, which the fixture's
+    // `coordinator:` key resolves.
+    expect(getTeam(fixture.home, teamId)?.roster).toEqual([
+      { agent: leadId, seat: 'lead', role: 'coordinator', leads: true, assistant: true },
+      { agent: workerId, seat: 'worker', role: 'implementer' },
+    ]);
+    // The file moves its assistant mark to the worker: the next write re-resolves every line.
+    registerLaunch({ ...input, team: marks('worker') }, worker, 'pane-worker-2');
+    expect(getTeam(fixture.home, teamId)?.roster).toEqual([
+      { agent: leadId, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: workerId, seat: 'worker', role: 'implementer', assistant: true },
+    ]);
+  });
+
   test('a stop keeps the id and clears the pane; the next launch is the same agent', () => {
     const fixture = makeFixture();
     const input = registryOf(fixture);
