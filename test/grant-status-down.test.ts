@@ -95,8 +95,8 @@ const recordWith = (expires: string, extra = ''): string =>
 const WITH_RUNNER = recordWith(FUTURE, `runner: ${RUNNER}\n`);
 
 /** The team file a directory carries. `session` is the herdr session the file names, and the
- *  one a walk of it places a caller in; left out, the file names no session and the project
- *  name stands in for it. */
+ *  one a walk of it places a caller in; left out, the file names no session and the section's
+ *  default stands — this fixture names an entity, so that default is `<entity>-<project>`. */
 function teamAt(root: string, home: string, session?: string): void {
   mkdirSync(join(root, '.agents'), { recursive: true });
   writeFileSync(join(root, '.agents', 'team.yaml'), teamText('beacon-v1', root, home, session));
@@ -151,7 +151,9 @@ describe('a create-grant covers the read and the stop', () => {
     const sb = makeSandbox();
     try {
       writeGrant(sb.home, 'beacon.yaml', WITH_RUNNER);
-      teamAt(sb.covered, sb.home);
+      // The scene is about the grant, not the default's entity naming: the file names its own
+      // session, so the expectation reads the session under the project's own name.
+      teamAt(sb.covered, sb.home, 'beacon-v1');
       const io = walkIo(sb.covered, OUTSIDE_HERDR);
       const code = await runStatus([], io, statusSources(sb.home));
       expect(io.err).not.toContain('this team is not yours to read');
