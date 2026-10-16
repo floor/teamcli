@@ -535,15 +535,33 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--capabilities",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
         },
         {
           "hidden": false,
+          "name": "--expires",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--name",
+          "repeatable": false,
+          "takesValue": true
         },
         {
           "hidden": false,
@@ -563,13 +581,19 @@
       "positionals": [
         {
           "name": "seat",
-          "optional": false,
+          "optional": true,
+          "repeatable": false
+        },
+        {
+          "name": "seat|@team",
+          "optional": true,
           "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
-        "team grant <seat> --scope <act,...> [--dry-run]"
+        "team grant <seat> --scope <act,...> [--dry-run]",
+        "team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run]"
       ]
     },
     {
@@ -1398,6 +1422,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -1411,7 +1441,13 @@
       ],
       "hidden": false,
       "name": "revoke",
-      "positionals": [],
+      "positionals": [
+        {
+          "name": "name",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
       "subcommands": [
         {
           "flags": [
@@ -1480,7 +1516,8 @@
       ],
       "usage": [
         "team revoke grant [--dry-run]",
-        "team revoke delegate <session/pane> [--dry-run]"
+        "team revoke delegate <session/pane> [--dry-run]",
+        "team revoke <name> [--dry-run]"
       ]
     },
     {
