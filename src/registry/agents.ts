@@ -195,8 +195,9 @@ function readAgentFile(path: string, id: string): Agent | null {
     return null;
   }
   const agent = fromValue(value);
-  // The file name is the id: a file whose body says otherwise is not trusted.
-  if (!agent || agent.id !== id) return null;
+  // The file name is the id: a file whose body says otherwise is not trusted. A record the writer
+  // would refuse is not handed out either.
+  if (!agent || agent.id !== id || invalid(agent)) return null;
   return agent;
 }
 

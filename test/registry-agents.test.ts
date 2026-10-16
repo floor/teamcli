@@ -210,6 +210,28 @@ describe('reading', () => {
     expect(getAgent(home, 'agt_bbbbbbbbbbbb')).toBeNull();
   });
 
+  test('a record that breaks an invariant the writer enforces is skipped, not handed out', () => {
+    const good = registerAgent(home, init());
+    const dir = agentsDir(home);
+    const source = readFileSync(join(dir, `${good.id}.yaml`), 'utf8');
+    const broken: Record<string, (text: string) => string> = {
+      agt_111111111111: (text) => text.replace(/^name: .*/m, 'name: ""'),
+      agt_222222222222: (text) => text.replace(/^name: .*/m, 'name: "   "'),
+      agt_333333333333: (text) => text.replace(/model: .*/, 'model: ""'),
+      agt_444444444444: (text) => text.replace(/version: .*/, 'version: ""'),
+      agt_555555555555: (text) => text.replace(/role: .*/, 'role: " "'),
+      agt_666666666666: (text) => text.replace(/team: .*/, 'team: ""'),
+      agt_777777777777: (text) => text.replace(/seat: .*/, 'seat: ""'),
+      agt_888888888888: (text) => `${text}seat_handle: "seat_nope"\n`,
+      agt_999999999999: (text) => `${text}seat_handle: "SEAT_0123456789AB"\n`,
+    };
+    for (const [id, edit] of Object.entries(broken)) {
+      writeFileSync(join(dir, `${id}.yaml`), edit(source).replace(good.id, id));
+      expect(getAgent(home, id)).toBeNull();
+    }
+    expect(readAgents(home)).toEqual([good]);
+  });
+
   test('a hand-written file in the documented shape is read', () => {
     const dir = agentsDir(home);
     registerAgent(home, init());
