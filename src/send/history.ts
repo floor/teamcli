@@ -162,14 +162,6 @@ function rotateHistory(path: string): string | null {
  * at mode 0600 without following symbolic links. Rotates at 1 MB keeping 3 files at mode 0600.
  */
 export function appendHistory(project: string, root: string, home: string, entry: HistoryEntry): HistoryWrite {
-  const storeDir = storePath(project, root, home);
-  const ladderErr = ensureStoreLadder(storeDir, home);
-  if (ladderErr !== null) return { ok: false, reason: ladderErr };
-
-  const path = join(storeDir, HISTORY_FILE);
-  const targetErr = fileProblem(path);
-  if (targetErr !== null) return { ok: false, reason: targetErr };
-
   const record: HistoryEntry = {
     ts: entry.ts,
     from: entry.from,
@@ -181,6 +173,30 @@ export function appendHistory(project: string, root: string, home: string, entry
   // Written only when the sender measured them, so older lines keep their exact shape.
   if (entry.ms !== undefined) record.ms = entry.ms;
   if (entry.via !== undefined) record.via = entry.via;
+  return appendStoreLine(project, root, home, HISTORY_FILE, record);
+}
+
+/**
+ * One already-composed record, appended as one JSON line to `fileName` inside the project's
+ * state folder — the one sink every JSONL stream beside `messages.jsonl` writes through, so
+ * the ladder, the `lstat` guards, mode 0600 and the 1 MB rotation stay one implementation for
+ * all of them.
+ */
+export function appendStoreLine(
+  project: string,
+  root: string,
+  home: string,
+  fileName: string,
+  record: Record<string, unknown>,
+): HistoryWrite {
+  const storeDir = storePath(project, root, home);
+  const ladderErr = ensureStoreLadder(storeDir, home);
+  if (ladderErr !== null) return { ok: false, reason: ladderErr };
+
+  const path = join(storeDir, fileName);
+  const targetErr = fileProblem(path);
+  if (targetErr !== null) return { ok: false, reason: targetErr };
+
   const line = `${JSON.stringify(record)}\n`;
   const bytes = Buffer.from(line, 'utf8');
 
