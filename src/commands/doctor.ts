@@ -26,7 +26,7 @@ import { rulesOf } from '../launch/rules.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
-import { readState, type SeatState } from '../state.ts';
+import { holdText, liveHold, readState, type SeatState } from '../state.ts';
 import { canShowModel, seatModel } from '../status/statusline.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -362,6 +362,15 @@ export function machineFindings(team: TeamFile, root: string, sources: DoctorSou
   if (!machine) return [];
   const problem = swapTotalProblem(machine, team.machine);
   return problem === null ? [] : [{ level: 'warn', text: plainLine(problem) }];
+}
+
+// The team's hold, when one stands (`team hold`). A `--` line like the readings around it: a
+// hold is intended state, so it counts in nothing and blocks nothing, and a record past its
+// `until` reads as no hold at all. The line names the way out, because doctor is where a
+// reader goes to ask what is going on.
+export function holdFindings(dir: string, sources: DoctorSources): Finding[] {
+  const hold = liveHold(readState(dir), sources.now());
+  return hold === null ? [] : [{ level: 'note', text: `${holdText(hold)} (\`team hold --release\` clears it)` }];
 }
 
 // `watch` is the watch values in force — the approved ones — so an unapproved interval edit can't
@@ -827,6 +836,8 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
         ),
         // The machine's own reading, last: the one check no machine can ever meet here.
         ...machineFindings(team, root, sources),
+        // The team's hold, when one stands: the last line before the summary.
+        ...holdFindings(dirname(loaded.path), sources),
       ];
 
   const label: Record<Level, string> = { ok: 'ok  ', warn: 'warn', miss: 'MISS', note: '--  ' };

@@ -172,6 +172,16 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
 | `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
 | `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |
+| `hold.placed` | `hold` | 0 | the hold was placed | `team hold "freeze deploys"` |
+| `hold.released` | `hold` | 0 | the hold was released | `team hold --release` |
+| `hold.caller` | `hold` | 1 | not the owner, the orchestrator or the operator | `team hold "freeze deploys"` |
+| `hold.detached` | `hold` | 1 | a run with no terminal | `team hold "freeze deploys"` |
+| `hold.held` | `hold` | 1 | a hold already stands | `team hold "freeze deploys"` |
+| `hold.io` | `hold` | 1 | the state can't be read or written | `team hold "freeze deploys"` |
+| `hold.not-held` | `hold` | 1 | no hold stands | `team hold --release` |
+| `hold.until` | `hold` | 1 | --until is not a clock or an instant | `team hold "freeze deploys" --until tomorrow` |
+| `hold.file` | `hold` | 2 | the team file can't be read | `team hold "freeze deploys"` |
+| `hold.invocation` | `hold` | 2 | the invocation can't be read | `team hold` |
 | `init.restored` | `init` | 0 | the approved copy was restored | `team init --restore` |
 | `init.wrote` | `init` | 0 | a skeleton was written | `team init` |
 | `init.detached` | `init` | 1 | a run with no terminal | `team init` |

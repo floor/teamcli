@@ -12,7 +12,7 @@ import { currentTeam } from '../file/current.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { emptySession, readState, type SessionState } from '../state.ts';
+import { emptySession, holdText, liveHold, readState, type HoldRecord, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -129,6 +129,8 @@ export interface StatusJson {
   notice: string | null;
   /** Present when the file names an account, or a reading is stored. */
   budgets?: BudgetRow[];
+  /** Present while a hold stands and has not lapsed (`team hold`). */
+  hold?: HoldRecord;
 }
 
 export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n';
@@ -214,6 +216,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     if (problem !== null) comparison.notes.unshift(problem);
   }
   if (!live.running) comparison.notes.unshift(`the herdr session "${session}" is not running`);
+  // The team's hold first of all, the way it is the first thing a reader should know: a hold
+  // past its `until` reads as none (`liveHold`), so neither the note nor the document carries
+  // one that has lapsed.
+  const hold = liveHold(whole, now);
+  if (hold) comparison.notes.unshift(holdText(hold));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),
@@ -248,6 +255,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       differences: comparison.differences.map(({ what, repair }) => ({ what, repair })),
       notice: current.notice ?? null,
       ...(budgets.length ? { budgets } : {}),
+      ...(hold ? { hold } : {}),
     };
     io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
   } else {

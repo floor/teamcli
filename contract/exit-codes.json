@@ -1165,6 +1165,76 @@
     },
     {
       "code": 0,
+      "command": "hold",
+      "id": "hold.placed",
+      "meaning": "the hold was placed",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 0,
+      "command": "hold",
+      "id": "hold.released",
+      "meaning": "the hold was released",
+      "trigger": "team hold --release"
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.caller",
+      "meaning": "not the owner, the orchestrator or the operator",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.held",
+      "meaning": "a hold already stands",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.io",
+      "meaning": "the state can't be read or written",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.not-held",
+      "meaning": "no hold stands",
+      "trigger": "team hold --release"
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.until",
+      "meaning": "--until is not a clock or an instant",
+      "trigger": "team hold \"freeze deploys\" --until tomorrow"
+    },
+    {
+      "code": 2,
+      "command": "hold",
+      "id": "hold.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 2,
+      "command": "hold",
+      "id": "hold.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team hold"
+    },
+    {
+      "code": 0,
       "command": "init",
       "id": "init.restored",
       "meaning": "the approved copy was restored",

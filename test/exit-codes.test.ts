@@ -31,6 +31,7 @@ import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
 import { runUnlock } from '../src/commands/unlock.ts';
 import { runTempo } from '../src/commands/tempo.ts';
+import { runHold } from '../src/commands/hold.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
@@ -2726,6 +2727,52 @@ scene('tempo.invocation', async (place) => show(await tempo(place, []), 'a word 
 scene('tempo.word', async (place) => show(await tempo(place, ['faster']), 'must be relaxed, normal or urgent'));
 scene('tempo.not-a-repo', async (place) => show(await tempo(place, ['urgent']), 'not inside a git repository'), false);
 scene('tempo.file', async (place) => show(await tempo(place, ['urgent']), 'no team file'));
+
+async function held(place: Place, argv: string[], caller: Caller = owner, now: Date = NOW): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runHold(argv, io, { home: place.home, now: () => now }), out: io.out, err: io.err };
+}
+
+scene('hold.placed', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys']), 'hold: freeze deploys');
+});
+scene('hold.released', async (place) => {
+  write(place, TEAM);
+  await held(place, ['freeze deploys']);
+  return show(await held(place, ['--release']), 'hold: released');
+});
+scene('hold.held', async (place) => {
+  write(place, TEAM);
+  await held(place, ['freeze deploys']);
+  return show(await held(place, ['something else']), 'already held: freeze deploys');
+});
+scene('hold.not-held', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['--release']), 'not held');
+});
+scene('hold.until', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys', '--until', 'tomorrow']), '--until is a local <HH:MM>');
+});
+scene('hold.detached', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys'], detachedCaller), 'only the owner runs this, from a terminal outside herdr');
+});
+scene('hold.caller', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys'], other), 'only the owner, the orchestrator or the operator holds the team');
+});
+scene('hold.io', async (place) => {
+  write(place, TEAM);
+  writeFileSync(join(place.root, '.agents', 'team.state.json'), '{ not json\n');
+  return show(await held(place, ['freeze deploys']), 'is not valid JSON');
+});
+scene('hold.file', async (place) => show(await held(place, ['freeze deploys']), 'no team file'));
+scene('hold.invocation', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, []), 'a <reason> is required');
+});
 
 async function nexted(place: Place, argv: string[] = [], caller: Caller = leadSeat): Promise<Ran> {
   const io = testIo(place.root, caller);

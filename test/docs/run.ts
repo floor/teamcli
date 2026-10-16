@@ -18,6 +18,7 @@ import { pr } from '../../src/commands/pr.ts';
 import { runDoctor } from '../../src/commands/doctor.ts';
 import { runDown } from '../../src/commands/down.ts';
 import { runFeed } from '../../src/commands/feed.ts';
+import { runHold } from '../../src/commands/hold.ts';
 import { runInit } from '../../src/commands/init.ts';
 import { runMcp } from '../../src/commands/mcp.ts';
 import { runRemove } from '../../src/commands/remove.ts';
@@ -217,6 +218,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runDown(rest, io, world.downSources());
     case 'feed':
       return runFeed(rest, io, { home: fixture.home, poll: async () => false });
+    case 'hold':
+      return runHold(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'messages':
       return runMessages(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'issues':

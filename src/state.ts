@@ -99,6 +99,13 @@ export type WorktreeState = {
 
 export type SwapRecord = { by: string; at: string };
 
+/**
+ * A hold on the team's work: the reason it was placed, who placed it and when, and the instant
+ * it lapses (`until` absent: it stands until released). A hold past its `until` reads as no
+ * hold at all (`liveHold`), so an expired record needs no writer to clear it.
+ */
+export type HoldRecord = { reason: string; by: string; at: string; until?: string };
+
 export type SessionState = {
   started?: { at: string; by: string };
   seats: Record<string, SeatState>;
@@ -142,6 +149,11 @@ export type State = {
   budgets?: Record<string, StoredReading>;
   /** The project's last spend check readings, keyed by account. */
   spend?: Record<string, StoredSpend>;
+  /**
+   * The team's own hold: `team hold`'s one record, cleared by `team hold --release` and read as
+   * absent once `until` has passed. A hold is the project's, not one session's.
+   */
+  hold?: HoldRecord;
   sessions: Record<string, SessionState>;
 };
 
@@ -151,6 +163,36 @@ export const LOG_FILE = 'team.log';
 
 export function emptySession(): SessionState {
   return { seats: {}, worktrees: {} };
+}
+
+/** Whether a value from the state file is the record `team hold` writes: a reason with text, a
+ *  name and an instant that parse, and an `until`, when present, that parses too. Anything else
+ *  is dropped at the read door, so a hand-edited file can never print what it made up. */
+function isHoldRecord(value: unknown): value is HoldRecord {
+  if (value === null || typeof value !== 'object') return false;
+  const hold = value as Partial<HoldRecord>;
+  if (typeof hold.reason !== 'string' || hold.reason === '') return false;
+  if (typeof hold.by !== 'string' || typeof hold.at !== 'string') return false;
+  if (Number.isNaN(Date.parse(hold.at))) return false;
+  if (hold.until !== undefined && (typeof hold.until !== 'string' || Number.isNaN(Date.parse(hold.until)))) return false;
+  return true;
+}
+
+/** The hold in force at `now`: the stored record, or null when none stands — none stored, or
+ *  one past its `until`. The record itself is left where it is; the next hold write replaces
+ *  it. Every reader goes through here, so the expiry is one rule in one place. */
+export function liveHold(state: State, now: Date): HoldRecord | null {
+  const hold = state.hold;
+  if (hold === undefined) return null;
+  if (hold.until !== undefined && Date.parse(hold.until) <= now.getTime()) return null;
+  return hold;
+}
+
+/** The hold as its readers print it — `team hold`'s own line, `status`'s note and `doctor`'s
+ *  line: `hold until <instant>: <reason>`, or `hold: <reason>` when it names no end. One
+ *  shape for every reader, so the three can never drift apart. */
+export function holdText(hold: HoldRecord): string {
+  return hold.until === undefined ? `hold: ${hold.reason}` : `hold until ${hold.until}: ${hold.reason}`;
 }
 
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
@@ -168,6 +210,10 @@ export function readState(dir: string): State {
   if (!state || typeof state !== 'object' || state.format !== 1 || typeof state.sessions !== 'object' || !state.sessions) {
     throw new Error(`${path} is not a team state of format 1; move it aside and run the command again`);
   }
+  // The hold, cleaned at the same door: a record that is not the one `team hold` writes is
+  // dropped here, so the reason, the name and the instants later readers print are the ones
+  // the command wrote, never a hand-edited file's.
+  if (state.hold !== undefined && !isHoldRecord(state.hold)) delete state.hold;
   for (const session of Object.values(state.sessions)) {
     session.seats ??= {};
     session.worktrees ??= {};
