@@ -152,7 +152,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...comparison.differences,
     ...attentionDifferences(team, state, live),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
-    ...approvalCaseRow(standing.kind === 'verified' ? null : notInForce(standing)),
+    // The same row `status` prints: a legacy record or one the verification refused still says what
+    // it is; a machine that never approved the file is the ordinary file now, and nothing to repair.
+    ...approvalCaseRow(standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null),
     ...overrideDrift(overrides),
     ...rulesFileDifferences(standing, team, root, sources.home),
   ]);

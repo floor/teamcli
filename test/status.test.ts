@@ -48,6 +48,10 @@ function built(): Live {
   };
 }
 
+/** One of the cases `approvalStanding` refuses on: a record whose standing still says what it is,
+ *  and still carries the approval repair. */
+const REFUSED_WHY = 'the record is signed, but its key is missing';
+
 let dir: string;
 let file: string;
 let live: Live | null;
@@ -331,7 +335,7 @@ describe('team status', () => {
     expect(code).toBe(1);
   });
 
-  test('a file changed since the record was written: nothing is said, and a file with no record is', async () => {
+  test('a file changed since the record was written, and a file with no record at all: neither is a difference', async () => {
     // What the record holds: one rules line and grok's model differ from the file on disk.
     const approvedText = example
       .replace('- Run the tests your change touches, not the whole suite.', '- Run the tests your change touches.')
@@ -344,8 +348,13 @@ describe('team status', () => {
     expect(changed.out).not.toContain('changed since the last approval');
     expect(changed.out).not.toContain('difference:');
     expect(changed.code).toBe(0);
+    // A machine that never approved the file is the ordinary case: the reading says nothing and
+    // exits 0 for it.
     standing = { kind: 'none' };
-    expect((await status()).out).toContain('difference: the file was never approved on this machine');
+    const unrecorded = await status();
+    expect(unrecorded.out).not.toContain('never approved');
+    expect(unrecorded.out).toContain('0 difference(s)');
+    expect(unrecorded.code).toBe(0);
   });
 
   test('--session reads another session, with its own state', async () => {
@@ -635,22 +644,24 @@ describe('team status', () => {
     expect(watch).toBeGreaterThan(add2);
     expect(missingWatch.out).not.toContain('(after:');
 
-    // 2. An unapproved file: the approval difference first, then the repairs that name a command
-    //    that refuses on it. The watch is not blocked by the approval and is not marked either.
-    standing = { kind: 'none' };
-    const unapproved = await status();
-    expect(unapproved.code).toBe(1);
-    const approve = unapproved.out.indexOf('difference: the file was never approved on this machine\n  repair: the live file is what the commands read');
+    // 2. A record the verification refused: the record's own row first, then the repairs that
+    //    name a command that refuses on it. The watch is not blocked by it and is not marked
+    //    either. A machine with no record has no such row at all — nothing to repair.
+    standing = { kind: 'refused', why: REFUSED_WHY };
+    const refused = await status();
+    expect(refused.code).toBe(1);
+    const approve = refused.out.indexOf(`difference: ${REFUSED_WHY}\n  repair: the live file is what the commands read`);
     expect(approve).toBeGreaterThanOrEqual(0);
-    expect(unapproved.out).toContain('repair: team add deepseek-acme (after: the live file is what the commands read)');
-    expect(unapproved.out).toContain('repair: team add deepseek-acme-2 (after: the live file is what the commands read)');
-    expect(unapproved.out.indexOf('difference: deepseek-acme is in the file and is not running')).toBeGreaterThan(approve);
-    expect(unapproved.out).toContain('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
+    expect(refused.out).toContain('repair: team add deepseek-acme (after: the live file is what the commands read)');
+    expect(refused.out).toContain('repair: team add deepseek-acme-2 (after: the live file is what the commands read)');
+    expect(refused.out.indexOf('difference: deepseek-acme is in the file and is not running')).toBeGreaterThan(approve);
+    expect(refused.out).toContain('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
   });
 
   test('B: whose repair: each repair string that names an owner command asserted exactly', async () => {
-    // 1. the live file is what the commands read
-    standing = { kind: 'none' };
+    // 1. the live file is what the commands read — the record's own row, for a standing that
+    //    still says something
+    standing = { kind: 'refused', why: REFUSED_WHY };
     const approveRun = await status();
     expect(approveRun.out).toContain('repair: the live file is what the commands read');
 
@@ -825,13 +836,13 @@ describe('team status', () => {
     expect(noOwner.out).toContain('1 difference(s)\n');
     expect(noOwner.out).not.toContain('for the owner');
 
-    // 2. With an owner repair: unapproved file (repair: the live file is what the commands read)
+    // 2. With an owner repair: a refused record (repair: the live file is what the commands read)
     live = built();
-    standing = { kind: 'none' };
+    standing = { kind: 'refused', why: REFUSED_WHY };
     const withOwner = await status();
     expect(withOwner.out).toContain('1 difference(s), 1 for the owner\n');
 
-    // 3. Mixed: 1 owner repair (approve) + 1 non-owner repair (add)
+    // 3. Mixed: 1 owner repair (the record's row) + 1 non-owner repair (add)
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const mixed = await status();
     expect(mixed.out).toContain('2 difference(s), 1 for the owner\n');

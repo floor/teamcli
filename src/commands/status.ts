@@ -221,7 +221,10 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),
-    ...approvalCaseRow(standing.kind === 'verified' ? null : notInForce(standing)),
+    // `approve` is gone: a machine that never approved this file is the ordinary case now, not a
+    // difference, and the reading exits 0 for it. A legacy record and one the verification refused
+    // still say what they are.
+    ...approvalCaseRow(standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null),
     ...overrideDrift(overrides),
     // The file's own rules files, only once a record exists for a launch to have written them.
     ...rulesFileDifferences(standing, team, root, sources.home),
@@ -278,10 +281,11 @@ export function overrideDrift(report: OverrideForce): Difference[] {
   ];
 }
 
-// The file's case as one row of its own, for a standing that is not in force: no record on this
-// machine, a legacy one, or one the verification refused. A record in force is nothing to say and
-// nothing is compared against it — the live file is what the commands read, so an edit to it is
-// not a difference.
+// The file's case as one row of its own, for a standing that still says something: a legacy
+// record, or one the verification refused. No record on this machine is not one of those — with
+// `approve` gone it is the ordinary file, nothing for the owner to repair, and it never fails a
+// reading. A record in force is nothing to say either, and nothing is compared against it — the
+// live file is what the commands read, so an edit to it is not a difference.
 export function approvalCaseRow(reason: string | null): Difference[] {
   if (reason === null) return [];
   return [{ what: reason, repair: APPROVAL_REPAIR, approval: true, owner: true }];

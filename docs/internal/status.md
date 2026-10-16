@@ -98,8 +98,9 @@ The model is the seat's `display` when the running model matches the file, and
 
 A record in force is not a note of its own: the live file is what the commands read, so nothing is
 compared against the record and the reading says nothing about it. A file with no record on this
-machine, or one whose record is legacy or refused, is the file's case, in the table below — the
-commands a repair may name refuse until the file is in force again.
+machine is the ordinary file — a machine that never approved it is no difference, and the reading
+exits 0 for it. A legacy record, or one the verification refused, is the file's case, in the table
+below — the commands a repair may name refuse until the file is in force again.
 
 ## Budgets
 
@@ -168,14 +169,13 @@ here.
 | `an unnamed <cli> (w1:p2) is running and is not in the file` | add the seat to the file, or close it |
 | `worktree <task>: its setup failed` | `team worktree remove <task>` |
 | `the protected checkout "." is on "x", not on "main"` | `the owner switches it back: git -C . switch main` |
-| `the file was never approved on this machine` | `the live file is what the commands read` |
 | `approved before records were signed`, or the case a refused record names | `the live file is what the commands read` |
 
-The one precondition `status` knows and orders is the real one: the file has no record on this
-machine, or its record is legacy or refused. That difference is printed first, and a repair that
-names a command that refuses while the record is not in force — `team up`, `team add`,
-`team worktree` — is marked `(after: …)`. Nothing else is reordered or marked: a missing or stale
-watch blocks no repair, and what blocks a launch is `team doctor`'s
+The one precondition `status` knows and orders is the real one: the record is legacy, or the
+verification refused it. That difference is printed first, and a repair that names a command that
+refuses while the record is not in force — `team up`, `team add`, `team worktree` — is marked
+`(after: …)`. Nothing else is reordered or marked: a missing or stale watch blocks no repair, and
+what blocks a launch is `team doctor`'s
 to report. When at least one repair is the owner's, the summary line reports
 `N difference(s), M for the owner`.
 
