@@ -190,8 +190,10 @@ describe('a lead written role: coordinator', () => {
     approve(teamYaml(true), root, home);
     record(root, { coordinator: coordinator.pane, worker: worker.pane });
     const add = testIo(root, worker);
+    // A dry run explains the refusal on stdout instead of refusing bare; it still exits 1.
     expect(await runAdd(['worker', '--dry-run'], add, addSources(home))).toBe(1);
-    expect(add.err).toContain('only the owner, the orchestrator or the operator');
+    expect(add.out).toContain('! add would refuse:');
+    expect(add.out).toContain('only the owner, the orchestrator or the operator');
     const remove = testIo(root, worker);
     expect(await runRemove(['worker'], remove, removeSources(home, []))).toBe(1);
     expect(remove.err).toContain('only the owner, the orchestrator or the operator');
