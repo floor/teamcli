@@ -14,13 +14,13 @@ import type { Seat, TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { testIo, withWas } from './helpers.ts';
+import { CLAUDE_IDLE, testIo, withWas } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const now = NOW.getTime();
 const FILE = ['--file', '.agents/team.yaml'];
 const OWNER = { kind: 'owner' } as const;
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const TAIL = 'openai weekly left 5%, inside its 10% reserve, changed 1m ago; accounts with room: anthropic';
 const WHY = `refused: ${TAIL}`;
 /** Line 1 of the lead, its written label. The worker's written label is `worker`. */

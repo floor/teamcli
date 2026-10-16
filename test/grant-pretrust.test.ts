@@ -14,13 +14,13 @@ import { grantedFolderPretrust, type PretrustSeat } from '../src/launch/pretrust
 import type { Terminal } from '../src/launch/terminal.ts';
 import { readState } from '../src/state.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T11:00:00Z');
 const FUTURE = '2026-12-31T23:59:59Z';
 const RUNNER = 'gemini-beacon';
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const TRUST_DIALOG = [
   'Quick safety check: Is this a project you created or one you trust?',
   '❯ 1. Yes, I trust this folder',
