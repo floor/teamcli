@@ -146,9 +146,9 @@ describe('the old spelling is the new run, one notice line first', () => {
       expect(ran.code).toBe(1);
       expect(ran.stdout).toBe(
         'difference: the file was never approved on this machine\n' +
-          '  repair: the owner runs team approve\n' +
+          '  repair: the live file is what the commands read\n' +
           'difference: lead is in the file and is not running\n' +
-          '  repair: the owner runs team up (after: the owner runs team approve)\n' +
+          '  repair: the owner runs team up (after: the live file is what the commands read)\n' +
           'team check: 2 difference(s), 2 for the owner\n' +
           'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n',
       );

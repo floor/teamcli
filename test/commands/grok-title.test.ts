@@ -1,5 +1,5 @@
-// Grok's profile has no status_model. add and up still title the workspace with the
-// written label and set display_agent from the file's display and effort, not the seat name.
+// add and up title the workspace with the written label and set display_agent from the
+// file's display and effort, not the seat name. The model on the box footer is a separate read.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -105,9 +105,9 @@ const launch: Launch = {
   now: () => NOW,
 };
 
-describe('a grok seat, whose profile has no status_model', () => {
-  test('the shipped grok profile reads no model off the screen', () => {
-    expect(statusModelRules('grok')).toEqual([]);
+describe('a grok seat', () => {
+  test('the shipped grok profile can read the file model Grok off the screen', () => {
+    expect(statusModelRules('grok').some((rule) => rule.yields.includes('Grok'))).toBe(true);
   });
 
   test('team add titles the workspace with the written label and reports the file\'s display', async () => {

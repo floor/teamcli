@@ -123,7 +123,7 @@ export function seatStart(
       return {
         problem:
           `the lobby ${lobby} matches no trust pattern (${team.trust.join(', ') || 'none'}): ` +
-          'add one that covers it and run `team approve`',
+          'add one that covers it',
         once: true,
       };
     }

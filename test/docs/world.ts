@@ -13,6 +13,7 @@ import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { DownLaunch, DownSources } from '../../src/commands/down.ts';
 import type { McpSources, PathStat } from '../../src/commands/mcp.ts';
 import type { RemoveSources } from '../../src/commands/remove.ts';
+import type { RestartSources } from '../../src/commands/restart.ts';
 import type { ListSources } from '../../src/commands/list.ts';
 import type { StatusSources } from '../../src/commands/status.ts';
 import type { Launch, UpSources } from '../../src/commands/up.ts';
@@ -228,6 +229,7 @@ export type World = {
   upSources(): UpSources;
   downSources(): DownSources;
   removeSources(): RemoveSources;
+  restartSources(): RestartSources;
   addSources(): AddSources;
   checkSources(): CheckSources;
   statusSources(): StatusSources;
@@ -632,6 +634,19 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         // A non-owner's removal on an unrecognised screen renames the pane's agent out of the
         // seat's name; the fake session takes the rename like herdr's.
         renameAgent: action.renameAgent,
+      };
+    },
+    restartSources(): RestartSources {
+      const down = downSources();
+      return {
+        ...down,
+        home,
+        sessionState: () => (herdr === 'none' ? null : sessionState()),
+        workspaces: () => (herdr === 'running' ? workspaces() : []),
+        foreground: (session, pane) => down.foreground?.(session, pane) ?? ['zsh'],
+        upLaunch: launch,
+        doctor: doctorSources(),
+        machine,
       };
     },
     addSources(): AddSources {

@@ -24,6 +24,7 @@ describe('quota patterns', () => {
     expect(quotaFor('claude-code')).toEqual([]);
     expect(quotaFor('cursor')).toEqual([]);
     expect(quotaFor('antigravity')).toEqual([]);
+    expect(quotaFor('gemini')).toEqual([]);
   });
 
   test('used and a reset duration, and a figure over 100 is absent', () => {
