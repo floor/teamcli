@@ -10,6 +10,7 @@ import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../c
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
+import { entityGrantAdmits } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { emptySession, readState, type SessionState } from '../state.ts';
@@ -163,7 +164,12 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
 
   const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
   if (!owner) {
-    if (!current.ok || !mayReadTeam(current, io, sources)) {
+    // A create-grant admits its holder's runner to the read, for a team whose root is under the
+    // granted paths: the same grant `init` and `up` consult. It buys the read alone — `--file`
+    // and `--session` above stay the owner's, and this run keeps no `last_valid` copy.
+    const granted = current.ok
+      && entityGrantAdmits(current.root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
+    if (!current.ok || (!mayReadTeam(current, io, sources) && !granted)) {
       out.stderr('team status: this team is not yours to read\n');
       // exit: status.not-yours
       return 2;

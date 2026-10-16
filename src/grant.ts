@@ -5,7 +5,7 @@ import { approvedFingerprints, notInForce } from './approve/approval.ts';
 import { compare, describe, fingerprints } from './approve/fingerprint.ts';
 import { anotherPaneRefusal, callerAncestors, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf } from './caller.ts';
 import { ORDINARY_SECTIONS } from './delegate.ts';
-import { loadTeamFile } from './file/load.ts';
+import { findRoot, loadTeamFile } from './file/load.ts';
 import type { GrantScope, LoadResult, TeamFile } from './file/types.ts';
 import { validateTeamFile } from './file/validate.ts';
 import type { Io } from './io.ts';
@@ -275,6 +275,19 @@ export function entityGrantAdmits(
     if (grant.paths.some((entry) => pathUnderGranted(entry, root, cwd, home))) return true;
   }
   return false;
+}
+
+/**
+ * `entityGrantAdmits` for the cwd's own repository, found the way `init` finds it. The early ask
+ * of the commands that decide the detached sentence before any team file is read; the loaded
+ * file's own root still decides their caller rule.
+ */
+export function entityGrantAdmitsCwd(
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources' | 'cwd'>,
+  options: { home?: string; now?: Date; cwd?: string } = {},
+): boolean {
+  const root = findRoot(io.cwd);
+  return root !== null && entityGrantAdmits(root, io, options);
 }
 
 /**

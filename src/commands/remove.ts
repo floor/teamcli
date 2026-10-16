@@ -6,7 +6,7 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
-import { grantGate, logGranted } from '../grant.ts';
+import { entityGrantAdmits, entityGrantAdmitsCwd, grantGate, logGranted } from '../grant.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { markStopped, takeOut } from '../file/lines.ts';
@@ -128,8 +128,14 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // exit: remove.invocation
     return 2;
   }
+  // A create-grant's own runner is the one detached caller the record may name: this sentence is
+  // not for it, exactly as `init` asks it. Only the cwd's root is known this early, before any
+  // file is read, so this decision answers this refusal alone — the loaded file's root decides
+  // the caller rule below, and a team outside the granted paths still refuses there.
   const detached = detachedRefusal(walkCaller(io));
-  if (detached !== undefined) {
+  const runnerGranted = detached !== undefined
+    && entityGrantAdmitsCwd(io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
+  if (detached !== undefined && !runnerGranted) {
     io.stderr(`team remove: ${detached}\n`);
     // exit: remove.detached
     return 1;
@@ -177,6 +183,9 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 2;
   }
   const { team, path, root } = loaded;
+  // The create-grant, decided on the loaded root: the team this run would change must be under
+  // the granted paths. The early `runnerGranted` above answered the detached sentence alone.
+  const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   const dir = dirname(path);
   // A lead's `--keep` is a swap: the agent on the orchestrator's or the operator's seat
   // is stopped so `team add <lead>` can start its replacement. The file is never edited for it —
@@ -206,7 +215,10 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // refused it, so nothing re-signs the approval), the orchestrator and the operator still
   // refused below, and `logDelegated` attributing it at its effects.
   let delegatePane: string | null = null;
-  if (verdict.kind !== 'ok' && team.delegates) {
+  // A create-grant the record holds for this root is the run's admission: the ordinary rule's
+  // sentence is then not a refusal, and the delegate gate — which the ordinary refusal alone
+  // summons — has nothing to replace.
+  if (verdict.kind !== 'ok' && team.delegates && !createGranted) {
     const decided = (sources.delegateGate ?? delegateGate)({
       command: 'remove',
       team,
@@ -231,7 +243,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // exit: remove.another-pane
     return 1;
   }
-  if (verdict.kind === 'refused' && delegatePane === null) {
+  if (verdict.kind === 'refused' && delegatePane === null && !createGranted) {
     io.stderr(`team remove: only the owner, the orchestrator or the operator runs it; this call is ${describeCaller(shown)}\n`);
     // exit: remove.caller
     return 1;

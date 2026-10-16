@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
-import { grantGate, logGranted } from '../grant.ts';
+import { entityGrantAdmits, entityGrantAdmitsCwd, grantGate, logGranted } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -408,8 +408,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.invocation
     return 2;
   }
+  // A create-grant's own runner is the one detached caller the record may name: this sentence is
+  // not for it, exactly as `init` asks it. Only the cwd's root is known this early, before any
+  // file is read, so this decision answers this refusal alone — the loaded file's root decides
+  // the caller rule below, and a team outside the granted paths still refuses there.
   const detached = detachedRefusal(walkCaller(io));
-  if (detached !== undefined) {
+  const runnerGranted = detached !== undefined
+    && entityGrantAdmitsCwd(io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
+  if (detached !== undefined && !runnerGranted) {
     io.stderr(`team down: ${detached}\n`);
     // exit: down.detached
     return 1;
@@ -532,6 +538,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
   if (current.notice) io.stdout(`${current.notice}\n`);
   const { team, dir, root } = current;
+  // The create-grant, decided on the loaded root: the team this run would stop must be under the
+  // granted paths. The early `runnerGranted` above answered the detached sentence alone.
+  const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   // With no `--session` the session this run judges and stops is the caller's own placement: the
   // file's session first, then a session the state records this caller's pane in (`team up
   // --session <other>`) — never one a non-owner chose, and the plan then names that session. The
@@ -584,7 +593,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     else grantRefusal = said.text;
   }
 
-  const callerRefused = (rule.kind !== 'ok' && !branching()) || grantRefusal !== undefined;
+  // A caller the create-grant admits is not a refused caller: the run remembers its file exactly
+  // as `up`'s admitted runs do.
+  const callerRefused = (rule.kind !== 'ok' && !branching() && !createGranted) || grantRefusal !== undefined;
   const abandonRefused = args.flags.has('abandon') && granted === undefined && !callerOwns(caller) && verdict === undefined;
   const mayRemember = !callerRefused && !abandonRefused && !dry && current.path !== undefined;
   const remember = (): void => {
@@ -613,7 +624,11 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
 
   if (grantRefusal !== undefined) refusals.push(grantRefusal);
-  if (rule.kind !== 'ok' && !branching()) {
+  // A create-grant held for this root is the run's admission: the ordinary rule's sentence is
+  // then not a refusal, and the delegate gate — which the ordinary refusal alone summons — has
+  // nothing to replace. The run stops the team as any admitted run does, and every check below
+  // (the approval, the budgets, the machine gate) still reads exactly as it does for the owner.
+  if (rule.kind !== 'ok' && !branching() && !createGranted) {
     // The ordinary rule has refused, and only now is the gate asked. With no delegate in the live
     // file nothing changes. A refusal takes the ordinary refusal's place, in the same place and at
     // the same exit statuses: a real run stops on it, a dry run says what it would refuse and

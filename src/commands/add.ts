@@ -9,6 +9,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
+import { entityGrantAdmits, entityGrantAdmitsCwd } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
@@ -153,8 +154,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.invocation
     return 2;
   }
+  // A create-grant's own runner is the one detached caller the record may name: this sentence is
+  // not for it, exactly as `init` asks it. Only the cwd's root is known this early, before any
+  // file is read, so this decision answers this refusal alone — the loaded file's root decides
+  // the caller rule below, and a team outside the granted paths still refuses there.
   const detached = detachedRefusal(walkCaller(io));
-  if (detached !== undefined) {
+  const runnerGranted = detached !== undefined
+    && entityGrantAdmitsCwd(io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
+  if (detached !== undefined && !runnerGranted) {
     out.stderr(`team add: ${detached}\n`);
     // exit: add.detached
     return 1;
@@ -217,6 +224,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 2;
   }
   const { team, root, path } = loaded;
+  // The create-grant, decided on the loaded root: the team this run would change must be under
+  // the granted paths. The early `runnerGranted` above answered the detached sentence alone.
+  const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   const dir = dirname(path);
   // The gate judges the caller placed in the session this command asks about — the proof its pane
   // is that session's. With no `--session` the session judged is the caller's own placement: the
@@ -238,7 +248,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // command performs is then a delegated one: the would-edit refusal below keeps it from
   // writing the file or the approval, and `logDelegated` attributes it at its effects.
   let delegatePane: string | null = null;
-  if (mayChange.kind !== 'ok' && team.delegates) {
+  // A create-grant the record holds for this root is the run's admission: the ordinary rule's
+  // sentence is then not a refusal, and the delegate gate — which the ordinary refusal alone
+  // summons — has nothing to replace.
+  if (mayChange.kind !== 'ok' && team.delegates && !createGranted) {
     const verdict = (sources.delegateGate ?? delegateGate)({
       command: 'add',
       team,
@@ -264,7 +277,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.another-pane
     return 1;
   }
-  if (mayChange.kind === 'refused' && delegatePane === null) {
+  if (mayChange.kind === 'refused' && delegatePane === null && !createGranted) {
     out.stderr(`team add: only the owner, the orchestrator or the operator runs it; this call is ${plainLine(describeCaller(shown))}\n`);
     // exit: add.caller
     return 1;
