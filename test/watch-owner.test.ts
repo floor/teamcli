@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalDifferences, budgetsInForce, watchInForce } from '../src/approve/approval.ts';
 import { compare, describe as describeDifference, fingerprints, OWNER_SECTIONS } from '../src/approve/fingerprint.ts';
-import { runApprove } from '../src/commands/approve.ts';
+import { runApprove } from '../src/approve/command.ts';
 import { standingSource, runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { defaultWatch, validateTeamFile } from '../src/file/validate.ts';

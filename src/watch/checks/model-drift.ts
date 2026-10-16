@@ -11,9 +11,12 @@ export const modelDrift: SeatCheck = {
     const file = seat.seat;
     const running = seat.model;
     if (!file || !modelDiffers(running, file)) return [];
+    const repair = seat.lead
+      ? 'team down, then team up (to restart the whole team)'
+      : `team remove ${seat.name} --keep, then team add ${seat.name}`;
     return reported(ctx.once(
       `model:${seat.name}`,
-      `${seat.name} runs ${running.model} ${running.version}; the file says ${declaredModel(file)}: it signs with the wrong model`,
+      `${seat.name} runs ${running.model} ${running.version}; the file says ${declaredModel(file)}: it signs with the wrong model — ${repair}`,
     ));
   },
 };
