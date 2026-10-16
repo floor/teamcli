@@ -9,11 +9,11 @@ appends one JSON object per line to `messages.jsonl`:
 
     {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","ms":<milliseconds>,"via":"<socket|typed>"}
 
-The last two fields are optional: `ms` is the whole milliseconds from send to outcome and `via`
-is the path the send took, `socket` or `typed`. Both are written only when the send measured
-them, so a line that has neither — one written before this build, or one whose outcome took no
-delivery path — carries the six required fields alone. `team feed` shows them on the formatted
-line, after the outcome: `[delivered] via socket in 120 ms`.
+The last two fields are optional: `ms` is the whole milliseconds from send to outcome, written
+when the send measured it, and `via` is the path the message actually travelled — `typed` (a
+composer trigger) or `socket` (a frame) — absent when it never left the sender. A line that has
+neither, from a build older than these fields, carries the six required fields alone. `team feed`
+shows them on the formatted line, after the outcome: `[delivered] via socket in 120 ms`.
 
 The log rotates at 1 MB and keeps three files (`messages.jsonl`, `messages.jsonl.1`,
 `messages.jsonl.2`), each at mode `0600`. Pre-flight refusals, `--list`, and `--dry-run` write
