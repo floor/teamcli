@@ -309,13 +309,17 @@ Hidden: no
 Usage:
 
     team grant <seat> --scope <act,...> [--dry-run]
+    team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--capabilities` | yes | no | no |
 | `--dry-run` | no | no | no |
+| `--expires` | yes | no | no |
 | `--help` | no | no | no |
+| `--name` | yes | no | no |
 | `--scope` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -323,7 +327,8 @@ Usage:
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `seat` | no | no |
+| `seat` | yes | no |
+| `seat\|@team` | yes | no |
 
 ## `help`
 
@@ -861,17 +866,21 @@ Usage:
 
     team revoke grant [--dry-run]
     team revoke delegate <session/pane> [--dry-run]
+    team revoke <name> [--dry-run]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
 | `--help` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
 
-None.
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `name` | no | no |
 
 ### `delegate`
 

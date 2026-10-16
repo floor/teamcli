@@ -31,7 +31,9 @@
 // never a restore). A revoked or expired grant is not in `activeGrants`, the read every gate makes
 // fresh: revocation takes effect at the next gate check and depends on no ledger.
 //
-// This module is the records only: writing them (owner-only in 0.5.0) and reading them. What a
+// This module is the records only: writing them (owner-only in 0.5.0) and reading them. Writing is
+// `writeGrant`/`writeRevocation`; `planGrant`/`planRevocation` are the same validation without the
+// generation, the signature or the file, so a dry run refuses exactly what a write refuses. What a
 // caller may do with a capability — the bundle ∩ envelope intersection, the command-to-capability
 // map — is the resolver's (src/permissions/resolve.ts, src/permissions/map.ts). The capability
 // list here is the grantable side of the map's last row; the map owns the command side.
@@ -62,8 +64,10 @@ export const TEAM_GRANT_FORBIDDEN = ['grant', 'create', 'agree', 'leads'] as con
 /** A team id: twelve lowercase hex, the shape `teamIdOf` mints. */
 const TEAM_ID_PATTERN = /^[0-9a-f]{12}$/;
 
-/** A record's file stem: one path segment, no leading dot, no separators. */
-const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** A record's file stem: one path segment, no leading dot, no separators. A revocation's stem is
+ *  `revoke-` plus the revoked grant's; the command layer holds its names to the same rule before a
+ *  write is attempted. */
+export const RECORD_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** One verified grant record, exactly as written and signed. */
 export type GrantRecord = {
@@ -126,6 +130,14 @@ export type RevocationRequest = {
 export type GrantWrite = { ok: true; record: GrantRecord } | { ok: false; why: string };
 export type RevocationWrite = { ok: true; record: RevocationRecord } | { ok: false; why: string };
 
+/** A validated grant that is not yet signed or written; `record.generation` is 0 until the write
+ *  moves it. The dry run's plan and the write's first half are the same call, so a preview refuses
+ *  exactly what a write refuses. */
+export type GrantPlan = { ok: true; record: GrantRecord } | { ok: false; why: string };
+
+/** A validated revocation, not yet signed or written: generation 0, like a grant plan. */
+export type RevocationPlan = { ok: true; record: RevocationRecord } | { ok: false; why: string };
+
 export type GrantOptions = {
   now?: Date;
   /** The signing key; the real `keyOf(home)` default. Tests and callers never forge one. */
@@ -133,49 +145,82 @@ export type GrantOptions = {
 };
 
 /**
- * Writes one owner-signed grant record. Refused, with the reason named and nothing written: a
- * grantee of the wrong shape for its kind, a capability outside the closed vocabulary, one of the
- * four names a team grant never carries, a scope path outside the declared roots, an unreadable
- * issued or expires, an empty capability list, a stem that is not one safe file name. The
- * generation moves first, then the signed record is written whole or not at all.
+ * Writes one owner-signed grant record. Refused, with the reason named and nothing written, for
+ * everything {@link planGrant} refuses. The generation moves first, then the signed record is
+ * written whole or not at all.
  */
 export function writeGrant(home: string, request: GrantRequest, options: GrantOptions = {}): GrantWrite {
   const now = options.now ?? new Date();
-  const problem = grantProblem(home, request, now);
-  if (problem !== null) return { ok: false, why: problem };
+  const plan = planGrant(home, request, { ...options, now });
+  if (!plan.ok) return plan;
 
-  const scope = normalizeScope(home, request.scope ?? request.roots, request.roots);
-  const grant: GrantRecord = {
-    name: request.name,
-    grantor: 'owner',
-    grantee: request.grantee,
-    kind: request.kind,
-    capabilities: normalizeCapabilities(request.capabilities),
-    scope,
-    issued: now.toISOString(),
-    expires: request.expires ?? null,
-    generation: 0,
-    vocabulary: GRANT_VOCABULARY_VERSION,
-  };
   const folder = grantsDir(home);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
-  grant.generation = bumpGeneration(folder, home, now);
+  plan.record.generation = bumpGeneration(folder, home, now);
   const key = options.key ?? keyOf(home);
-  const disk = onDiskGrant(grant);
-  const signature = signDomain(GRANT_DOMAIN, grantPayload(grant.name, disk), key);
-  writeRecord(recordPath(home, grant.name), { grant: disk, signature });
-  return { ok: true, record: grant };
+  const disk = onDiskGrant(plan.record);
+  const signature = signDomain(GRANT_DOMAIN, grantPayload(plan.record.name, disk), key);
+  writeRecord(recordPath(home, plan.record.name), { grant: disk, signature });
+  return { ok: true, record: plan.record };
 }
 
 /**
- * Writes one owner-signed revocation record for a grant already in the folder — its stem and
- * generation together, so a typo is refused rather than left as a record that revokes nothing. A
- * revoked grant is not an edit: this appends, and the reader matches the pair.
+ * Validates one grant and builds the record a write would sign — generation 0, nothing written.
+ * Refused, with the reason named: a grantee of the wrong shape for its kind, a capability outside
+ * the closed vocabulary, one of the four names a team grant never carries, a scope path outside
+ * the declared roots, an unreadable issued or expires, an empty capability list, a stem that is
+ * not one safe file name.
+ */
+export function planGrant(home: string, request: GrantRequest, options: GrantOptions = {}): GrantPlan {
+  const now = options.now ?? new Date();
+  const problem = grantProblem(home, request, now);
+  if (problem !== null) return { ok: false, why: problem };
+  return {
+    ok: true,
+    record: {
+      name: request.name,
+      grantor: 'owner',
+      grantee: request.grantee,
+      kind: request.kind,
+      capabilities: normalizeCapabilities(request.capabilities),
+      scope: normalizeScope(home, request.scope ?? request.roots, request.roots),
+      issued: now.toISOString(),
+      expires: request.expires ?? null,
+      generation: 0,
+      vocabulary: GRANT_VOCABULARY_VERSION,
+    },
+  };
+}
+
+/**
+ * Writes one owner-signed revocation record, for the grant {@link planRevocation} accepts: the
+ * grant's stem and generation together, so a typo is refused rather than left as a record that
+ * revokes nothing. A revoked grant is not an edit: this appends, and the reader matches the pair.
  */
 export function writeRevocation(home: string, request: RevocationRequest, options: GrantOptions = {}): RevocationWrite {
   const now = options.now ?? new Date();
-  if (!NAME_PATTERN.test(request.name)) return { ok: false, why: `"${request.name}" is not one safe file name` };
-  if (!NAME_PATTERN.test(request.grant)) return { ok: false, why: `"${request.grant}" is not one safe file name` };
+  const plan = planRevocation(home, request, { ...options, now });
+  if (!plan.ok) return plan;
+
+  const folder = grantsDir(home);
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  plan.record.generation = bumpGeneration(folder, home, now);
+  const key = options.key ?? keyOf(home);
+  const disk = onDiskRevocation(plan.record);
+  const signature = signDomain(GRANT_DOMAIN, revocationPayload(plan.record.name, disk), key);
+  writeRecord(recordPath(home, plan.record.name), { revocation: disk, signature });
+  return { ok: true, record: plan.record };
+}
+
+/**
+ * Validates one revocation against the folder and builds the record a write would sign —
+ * generation 0, nothing written: both stems one safe file name, a positive integer generation,
+ * and a grant of that exact stem and generation in the folder.
+ */
+export function planRevocation(home: string, request: RevocationRequest, options: GrantOptions = {}): RevocationPlan {
+  const now = options.now ?? new Date();
+  if (!RECORD_NAME_PATTERN.test(request.name)) return { ok: false, why: `"${request.name}" is not one safe file name` };
+  if (!RECORD_NAME_PATTERN.test(request.grant)) return { ok: false, why: `"${request.grant}" is not one safe file name` };
   if (!Number.isInteger(request.generation) || request.generation < 1) {
     return { ok: false, why: `"${request.generation}" is not a generation: a positive integer is expected` };
   }
@@ -185,23 +230,17 @@ export function writeRevocation(home: string, request: RevocationRequest, option
   if (!known) {
     return { ok: false, why: `there is no grant ${request.grant} at generation ${request.generation} in ${grantsDir(home)}` };
   }
-
-  const record: RevocationRecord = {
-    name: request.name,
-    grant: request.grant,
-    grantGeneration: request.generation,
-    by: 'owner',
-    at: now.toISOString(),
-    generation: 0,
+  return {
+    ok: true,
+    record: {
+      name: request.name,
+      grant: request.grant,
+      grantGeneration: request.generation,
+      by: 'owner',
+      at: now.toISOString(),
+      generation: 0,
+    },
   };
-  const folder = grantsDir(home);
-  mkdirSync(folder, { recursive: true, mode: 0o700 });
-  record.generation = bumpGeneration(folder, home, now);
-  const key = options.key ?? keyOf(home);
-  const disk = onDiskRevocation(record);
-  const signature = signDomain(GRANT_DOMAIN, revocationPayload(record.name, disk), key);
-  writeRecord(recordPath(home, record.name), { revocation: disk, signature });
-  return { ok: true, record };
 }
 
 /**
@@ -331,7 +370,7 @@ function inside(parent: string, child: string): boolean {
 }
 
 function grantProblem(home: string, request: GrantRequest, now: Date): string | null {
-  if (!NAME_PATTERN.test(request.name)) return `"${request.name}" is not one safe file name`;
+  if (!RECORD_NAME_PATTERN.test(request.name)) return `"${request.name}" is not one safe file name`;
   if (request.kind !== 'seat' && request.kind !== 'team') return `"${request.kind}" is not a grant kind: seat or team is expected`;
   if (request.kind === 'seat' && !isAgentId(request.grantee)) {
     return `a seat grant names an agent id: "${request.grantee}" is not agt_ plus 12 hex`;
@@ -421,7 +460,7 @@ function revocationFrom(stem: string, record: Record<string, unknown>, key: KeyO
   const fields = raw as Record<string, unknown>;
   const known = ['grant', 'grant_generation', 'by', 'at', 'generation'];
   if (Object.keys(fields).some((key) => !known.includes(key))) return null;
-  if (typeof fields.grant !== 'string' || !NAME_PATTERN.test(fields.grant)) return null;
+  if (typeof fields.grant !== 'string' || !RECORD_NAME_PATTERN.test(fields.grant)) return null;
   if (!Number.isInteger(fields.grant_generation) || (fields.grant_generation as number) < 1) return null;
   if (fields.by !== 'owner') return null;
   if (typeof fields.at !== 'string' || !Number.isFinite(Date.parse(fields.at))) return null;
