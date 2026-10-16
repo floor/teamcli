@@ -48,7 +48,7 @@ Every refusal line is `<seat>: <reason>` except an unplaced caller's, which is i
 
 | Class | Reasons |
 | --- | --- |
-| caller | `only the owner, or the orchestrator from its own seat, can answer`; the unplaced caller's reason; `--session is the owner's…`; `no pane is recorded for seat <name>…`; `the state records pane <pane> for seat <name>…`; `the file was never approved on this machine: run \`team approve\``; `approved before records were signed: run \`team approve\` once`; the approval verification's own reason; `the file is not the approved one (<section> changed; …)`; `the approved copy of the team file cannot be read` |
+| caller | `only the owner, or the orchestrator from its own seat, can answer`; the unplaced caller's reason; `--session is the owner's…`; `no pane is recorded for seat <name>…`; `the state records pane <pane> for seat <name>…`; `the file was never approved on this machine`; `approved before records were signed`; the approval verification's own reason; `the file is not the approved one (<section> changed; …)`; `the approved copy of the team file cannot be read` |
 | policy | `use team up and [o]` |
 | state | `another command holds it`; `it is not a live seat`; `its record is not an approved seat; left as it is (the owner cleans it: team remove <seat> --abandon)`; `herdr lists more than one agent of this name; left as it is`; `the owner has the pane open`; `it is not waiting at a trust dialog`; `its recovery state could not be recorded`; the process refusal's own reason with `(it is still recorded as a recovery)` appended, when the rollback itself did not take |
 | version | `this version has no trust answer` |

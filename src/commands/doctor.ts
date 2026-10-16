@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
-import { approvalDifferencesOf, budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
+import { budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, isOwner, type Caller } from '../caller.ts';
 import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
@@ -11,24 +11,23 @@ import { parseOutput, runCommand, type CheckReading } from '../budgets/run.ts';
 import { canonicalLanding as showLanding } from '../file/landing.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
-import { validateTeamFile } from '../file/validate.ts';
 import { canonicalLanding, insideTrust, isLegacyTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { declaredModel } from '../file/model.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, workspaceList, workspacePanes, type HerdrAgent } from '../herdr.ts';
-import type { Command, Io } from '../io.ts';
+import { cleanedIo, type Command, type Io } from '../io.ts';
 import { resolveLobby, verifyLobby } from '../lobby/gate.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
+import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
-import { checkRulesFile, rulesFilePathOf } from '../launch/rules-file.ts';
+import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
 import { readState, type SeatState } from '../state.ts';
 import { canShowModel, seatModel } from '../status/statusline.ts';
-import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
@@ -170,12 +169,13 @@ function range(tested: { from: string; to: string }): string {
 }
 
 function versionFinding(name: string, printed: string, tested: { from: string; to: string }, cli: boolean): Finding {
-  const verdict = versionVerdict(printed, tested);
-  if (verdict === 'tested') return { level: 'ok', text: `${name} ${printed}` };
-  if (verdict === 'unread') return { level: 'warn', text: `${name}: its version can't be read from "${printed}"` };
+  const shown = plainLine(printed);
+  const verdict = versionVerdict(shown, tested);
+  if (verdict === 'tested') return { level: 'ok', text: plainLine(`${name} ${shown}`) };
+  if (verdict === 'unread') return { level: 'warn', text: plainLine(`${name}: its version can't be read from "${shown}"`) };
   // Only a CLI has screens to misread; herdr's version line says just where it sits.
   const tail = cli ? ": its screens are untested with this version; a seat that isn't read at launch is left out, never typed into" : '';
-  return { level: 'warn', text: `${name} ${printed} is ${verdict} than the tested ${range(tested)}${tail}` };
+  return { level: 'warn', text: plainLine(`${name} ${shown} is ${verdict} than the tested ${range(tested)}${tail}`) };
 }
 
 // The approved bytes rule, as the watch applies it (budgets/checks.ts): a check whose file no
@@ -233,7 +233,7 @@ export function budgetCheckFindings(team: TeamFile, standing: Standing, root: st
   for (const [name, account] of Object.entries(budgets.accounts)) {
     const noPattern = account.sources.includes('status_line') && !clisOf(team, name).some((cli) => quotaWith(cli, patterns).some((one) => one.account === name));
     const noCommand = account.sources.includes('check') && account.check === null;
-    if (noPattern || noCommand) findings.push({ level: 'warn', text: `${name}: no pattern can read this account` });
+    if (noPattern || noCommand) findings.push({ level: 'warn', text: plainLine(`${name}: no pattern can read this account`) });
   }
   const commands = checkCommands(budgets);
   if (!isOwner(caller)) {
@@ -252,14 +252,14 @@ export function budgetCheckFindings(team: TeamFile, standing: Standing, root: st
     if (!known || !entry || changedSinceApproval(known)) continue;
     const text = run(known.path);
     if (text === null) {
-      findings.push({ level: 'warn', text: `the check for ${account} failed or timed out; that account reads unknown` });
+      findings.push({ level: 'warn', text: plainLine(`the check for ${account} failed or timed out; that account reads unknown`) });
       continue;
     }
     const reading = parseOutput(entry, text, now);
     findings.push(
       reading
-        ? { level: 'ok', text: `the check for ${account} reads ${figureOf(reading)}` }
-        : { level: 'warn', text: `the check for ${account} broke its output contract; that account reads unknown` },
+        ? { level: 'ok', text: plainLine(`the check for ${account} reads ${figureOf(reading)}`) }
+        : { level: 'warn', text: plainLine(`the check for ${account} broke its output contract; that account reads unknown`) },
     );
   }
   return findings;
@@ -267,31 +267,17 @@ export function budgetCheckFindings(team: TeamFile, standing: Standing, root: st
 
 function overrideFindings(standing: Standing, team: TeamFile, root: string, home: string): Finding[] {
   const report = overridesInForceOf(standing, team.project, root, home);
-  return [
-    ...report.differences.map((line): Finding => ({ level: 'miss', text: `run \`team approve\`: ${line}` })),
-    ...report.problems.map((line): Finding => ({ level: 'miss', text: line })),
-  ];
+  // A stored copy is not a gate. A difference against it is not a miss, and doctor does not
+  // name the deleted command. A file that cannot be parsed still is.
+  return report.problems.map((line): Finding => ({ level: 'miss', text: line }));
 }
 
-function approvalFindings(standing: Standing, team: TeamFile, home: string): Finding[] {
-  if (standing.kind === 'none') {
-    return [{ level: 'miss', text: 'run `team approve`: this file was never approved on this machine' }];
-  }
-  // A line of its own for each case that is not an approval: the legacy record's
-  // repair, or the case the verification refused — never buried in drift.
+function approvalFindings(standing: Standing): Finding[] {
+  // The live file is the record. "Never approved" and "the file differs" are not misses.
+  // A legacy or refused record still names its own case.
   if (standing.kind === 'legacy') return [{ level: 'miss', text: LEGACY_LINE }];
   if (standing.kind === 'refused') return [{ level: 'miss', text: standing.why }];
-  const differences = approvalDifferencesOf(standing, team);
-  if (differences.length) return [{ level: 'miss', text: `run \`team approve\`: ${differences.join('; ')}` }];
-  // The key's fingerprint beside the generation: an owner who notes it sees a replaced key.
-  const key = keyState(home);
-  const ofKey = key.kind === 'key' ? `, key ${keyFingerprint(key.key)}` : '';
-  return [
-    {
-      level: 'ok',
-      text: `the file is the one the owner approved (approval #${standing.generation}, ${standing.signedAt.slice(0, 10)}${ofKey})`,
-    },
-  ];
+  return [];
 }
 
 function cliFindings(cli: string, seats: Seat[], sources: DoctorSources): Finding[] {
@@ -347,21 +333,21 @@ export function modelFlagFinding(
     // The owner wrote the key and approved it: that is what makes a note enough, and the note
     // says the truth for the seat — checked on the running seat, or nothing checks it.
     return shows
-      ? { level: 'note', text: `${seat.name}: the model is chosen by its launcher; checked on the running seat` }
+      ? { level: 'note', text: plainLine(`${seat.name}: the model is chosen by its launcher; checked on the running seat`) }
       : {
           level: 'note',
-          text: `${seat.name}: the model is chosen by its launcher (declared in the file); this version can't read ${declared} on this CLI's screen, so nothing checks it`,
+          text: plainLine(`${seat.name}: the model is chosen by its launcher (declared in the file); this version can't read ${declared} on this CLI's screen, so nothing checks it`),
         };
   }
   if (bare && profile.lastUsedModel) {
-    return { level: 'warn', text: `${seat.name}: the launch names no model this version knows; the file says ${declared}` };
+    return { level: 'warn', text: plainLine(`${seat.name}: the launch names no model this version knows; the file says ${declared}`) };
   }
   if (bare) {
-    return shows ? null : { level: 'warn', text: `${seat.name}: no model flag, and this version can't read ${declared} on this CLI's screen: nothing checks that it runs it` };
+    return shows ? null : { level: 'warn', text: plainLine(`${seat.name}: no model flag, and this version can't read ${declared} on this CLI's screen: nothing checks that it runs it`) };
   }
   return {
     level: 'warn',
-    text: `${seat.name}: the launch runs ${first}, not ${profile.binary}, and names no model: if the launcher chooses the model, say so with model_from: launcher`,
+    text: plainLine(`${seat.name}: the launch runs ${first}, not ${profile.binary}, and names no model: if the launcher chooses the model, say so with model_from: launcher`),
   };
 }
 
@@ -375,7 +361,7 @@ export function machineFindings(team: TeamFile, root: string, sources: DoctorSou
   const machine = sources.machine?.(root);
   if (!machine) return [];
   const problem = swapTotalProblem(machine, team.machine);
-  return problem === null ? [] : [{ level: 'warn', text: problem }];
+  return problem === null ? [] : [{ level: 'warn', text: plainLine(problem) }];
 }
 
 // `watch` is the watch values in force — the approved ones — so an unapproved interval edit can't
@@ -432,7 +418,7 @@ export function seatNameFindings(team: TeamFile, session: string): Finding[] {
     const which = same
       ? `its name and its label repeat ${quoted(hits[0]?.found ?? [])}`
       : hits.map((hit) => `its ${hit.field} repeats ${quoted(hit.found)}`).join(' and ');
-    findings.push({ level: 'warn', text: `${seat.name}: ${which}; the session already carries it` });
+    findings.push({ level: 'warn', text: plainLine(`${seat.name}: ${which}; the session already carries it`) });
   }
   return findings;
 }
@@ -547,14 +533,14 @@ function placeholderVersionFindings(team: TeamFile, dir: string, session: string
         level: 'note',
         text:
           `${seat.name}: runs ${running.model} ${running.version}; the file's version "0" is the placeholder init writes — ` +
-          `write "${running.version}" into the file, then run \`team approve\``,
+          `write "${running.version}" into the file`,
       });
     } else {
       findings.push({
         level: 'warn',
         text:
           `${seat.name}: runs ${running.model} ${running.version}; the file says ${seat.model} 0 — ` +
-          `write model: "${running.model}" and version: "${running.version}" into the file, then run \`team approve\``,
+          `write model: "${running.model}" and version: "${running.version}" into the file`,
       });
     }
   }
@@ -591,29 +577,23 @@ export function doctorFindings(
   findings.push(...seatNameFindings(team, session));
 
   findings.push(
-    ...approvalFindings(standing, approved, sources.home),
+    ...approvalFindings(standing),
     ...overrideFindings(standing, team, root, sources.home),
     ...checkFindings(standing, team),
     ...budgetChecks,
   );
-  // The rules file each message seat runs by, only when there is an approval that writes one.
-  // A file that differs is warned about, never rewritten here. A stopped seat is not checked:
-  // its file is written at the launch that starts it again. The file is written at a delivery,
+  // The rules file each message seat runs by, checked against the live file's text. A file
+  // that differs is warned about, never rewritten here. A stopped seat is not checked: its
+  // file is written at the launch that starts it again. The file is written at a delivery,
   // and a delivery happens only at a launch — which `up` skips for a ready seat, so the line
-  // names the relaunch that performs one.
+  // names the relaunch that performs one. The check runs only once a record exists, so a
+  // file that was never approved does not grow a warning for a file no launch has written.
   if (standing.kind === 'verified') {
-    // The seats of the file as approved, against the approved rules text: a seat the approval
-    // does not hold has no approved rules to check, and `up` refuses a drifted file anyway.
-    const ofRecord = validateTeamFile(standing.record.file);
-    const seats = ofRecord.ok ? ofRecord.team.seats : [];
-    for (const seat of seats) {
+    for (const seat of approved.seats) {
       if (seat.stopped || profileFor(seat.cli)?.rulesOption != null) continue;
-      // A seat name the team file's own rule refuses has no path to check — the parser already
-      // refuses it, so this only guards a record that holds one anyway. The path is resolved
-      // the one way, from the approval in force, like every other reader of the file.
-      const path = rulesFilePathOf(standing, seat.name, root, sources.home);
+      const path = rulesFilePath(approved.project, root, sources.home, seat.name);
       if (path === null) continue;
-      const check = checkRulesFile(path, rulesOf(ofRecord.ok ? ofRecord.team : approved, seat, root));
+      const check = checkRulesFile(path, rulesOf(approved, seat, root));
       if (!check.ok) findings.push({ level: 'warn', text: `${seat.name}: ${check.what}; run ${relaunch(team, seat.name)}` });
     }
   }
@@ -745,14 +725,18 @@ export function doctorFindings(
     }
   }
 
+  for (let index = 0; index < findings.length; index++) {
+    const finding = findings[index]!;
+    findings[index] = { level: finding.level, text: plainLine(finding.text) };
+  }
+
   // The legacy note is told only while the file really is legacy: once the owner has written the
-  // absolute trust entries, the approval findings carry the next step (`run \`team approve\``),
-  // and a note that still says "migrate" would name a step already taken.
+  // absolute trust entries, a note that still says "migrate" would name a step already taken.
   if (!team.trust || team.trust.length === 0 || isLegacyTrust(team.trust)) {
-    const fromText = oldLobby ? `from ${oldLobby} to ${lobby}` : `to ${lobby}`;
+    const fromText = oldLobby ? `from ${plainLine(oldLobby)} to ${plainLine(lobby)}` : `to ${plainLine(lobby)}`;
     findings.push({
       level: 'note',
-      text: `the file is legacy: migrate ${fromText} by writing:\n${migrationText(team, root, sources.home)}`,
+      text: plainText(`the file is legacy: migrate ${fromText} by writing:\n${migrationText(team, root, sources.home)}`),
     });
   }
   return findings;
@@ -767,25 +751,26 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
   for (const cli of clis) {
     const profile = profileFor(cli);
     if (!profile) {
-      findings.push({ level: 'note', text: `${cli}: no launch profile in this version` });
+      findings.push({ level: 'note', text: plainLine(`${cli}: no launch profile in this version`) });
       continue;
     }
     const loggedIn = sources.loggedIn(profile);
     if (loggedIn === false) {
-      findings.push({ level: 'miss', text: `log in to ${cli}: \`${profile.loginHint}\`` });
+      findings.push({ level: 'miss', text: plainLine(`log in to ${cli}: \`${profile.loginHint}\``) });
     } else if (loggedIn === null) {
-      findings.push({ level: 'note', text: `${cli}: the login is not checked in this version` });
+      findings.push({ level: 'note', text: plainLine(`${cli}: the login is not checked in this version`) });
     } else {
-      findings.push({ level: 'ok', text: `${cli}: logged in` });
+      findings.push({ level: 'ok', text: plainLine(`${cli}: logged in`) });
     }
   }
   return findings;
 }
 
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
+  const out = cleanedIo(io);
   const args = readArgs(argv, ['session', 'file'], ['login']);
   if (args.error || args.rest.length) {
-    io.stderr(`team doctor: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
+    out.stderr(`team doctor: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
     // exit: doctor.invocation
     return 2;
   }
@@ -798,7 +783,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   const loaded = loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), ...(home ? { home } : {}) });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
-      io.stderr(`team doctor: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
+      out.stderr(`team doctor: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
     }
     // exit: doctor.not-a-repo
     // exit: doctor.file
@@ -829,7 +814,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
       ];
 
   const label: Record<Level, string> = { ok: 'ok  ', warn: 'warn', miss: 'MISS', note: '--  ' };
-  io.stdout(findings.map((finding) => `${label[finding.level]}  ${finding.text}\n`).join(''));
+  out.stdout(findings.map((finding) => `${label[finding.level]}  ${finding.text}\n`).join(''));
   const missing = findings.filter((finding) => finding.level === 'miss').length;
   const warnings = findings.filter((finding) => finding.level === 'warn').length;
   // The same rule `up` and `add` refuse on. A missing watch is `miss` but blocks nothing, so the
@@ -839,7 +824,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   let summary = `team doctor: ${missing} missing, ${warnings} warning${plural}`;
   if (!missing) summary = `team doctor: nothing missing, ${warnings} warning${plural}`;
   else if (blockers) summary += `: ${blockers} of them block \`up\` and \`add\``;
-  io.stdout(`${summary}\n`);
+  out.stdout(`${summary}\n`);
   // exit: doctor.clear
   // exit: doctor.missing
   return missing ? 1 : 0;

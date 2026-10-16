@@ -132,7 +132,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   // until the owner approves it. With nothing verified the file's own values are read, exactly
   // as before, so the refusals are still main's. `project` on the snapshot is the live file's.
   if (standing === null || inForce === null) {
-    io.stderr('team worktree: the approved copy can\'t be read: run `team approve`\n');
+    io.stderr('team worktree: the stored copy can\'t be read\n');
     // exit: worktree.approved-copy
     return 1;
   }
@@ -177,7 +177,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   // One note, before the folder or anything else the command prints: the run goes on with the
   // approved settings, and the owner is told the file asks for more than that.
   if (inForce.differs) {
-    io.stderr('team worktree: using the approved workspace settings; the file has unapproved changes: run `team approve`\n');
+    io.stderr('team worktree: using the stored workspace settings; the file has changed since that copy was stored\n');
   }
 
   const who = describeCaller(caller);
@@ -199,8 +199,8 @@ function listWorktrees(io: Io, team: TeamFile, root: string, dir: string): numbe
 }
 
 // `team` is the approved copy for a verified standing, or the live file when nothing is verified;
-// every value below is read from it. `file` is the live file, read for one thing only: telling a
-// seat the file added — which must not be used until `team approve` — from one no section declares.
+// every value below is read from it. `file` is the live file, read for one thing only: a seat
+// the live file names and the stored copy does not.
 function create(
   io: Io, sources: WorktreeSources, team: TeamFile, file: TeamFile, root: string, dir: string, session: string, task: string,
   kind: string | undefined, seatName: string | undefined, who: string,
@@ -273,7 +273,7 @@ function create(
   }
   if (seatName !== undefined && !team.seats.some((seat) => seat.name === seatName)) {
     if (file.seats.some((seat) => seat.name === seatName)) {
-      io.stderr(`team worktree: seat ${seatName} is not in the approved file: run \`team approve\`\n`);
+      io.stderr(`team worktree: seat ${seatName} is not in the stored copy\n`);
       // exit: worktree.seat-unapproved
       return 1;
     }
