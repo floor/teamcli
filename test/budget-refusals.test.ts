@@ -832,38 +832,28 @@ describe('two accounts on one vendor', () => {
   });
 });
 
-describe('an unapproved edit to the budgets', () => {
-  // A reserve the file lowers on its own: valid, and weaker than the approved one. If it were
-  // read before approval, the same reading would unblock the launch it now refuses.
+describe('a live edit to the budgets', () => {
   const WEAKER = BASE.replace('reserve: 10%', 'reserve: 1%');
 
-  test('up: unblocks nothing until the owner approves it', async () => {
+  test('up uses the live reserve in both the plan and the launch', async () => {
     store([reading('anthropic', 80), reading('openai', 5)]);
     writeTeamYaml(WEAKER);
     const dry = await up(['--dry-run'], world());
-    expect(dry.out).toContain(`skip worker: would refuse: ${TAIL}`);
-    expect(dry.out).toContain('! up would refuse: the file is not the approved one (`budgets` changed): run `team approve`');
-    const refused = await up([], world());
-    expect(refused.code).toBe(1);
-    expect(refused.labels).toEqual([]);
-    // The owner approves the reserve the file now sets: the same reading no longer refuses.
-    approve(WEAKER);
-    const after = await up([], world());
-    expect(after.code).toBe(0);
-    expect(after.labels).toEqual([TITLE, 'worker']);
-    expect(after.out).not.toContain('would refuse');
+    expect(dry.code).toBe(0);
+    expect(dry.out).not.toContain('would refuse');
+    expect(dry.out).toContain('--label worker');
+    const live = await up([], world());
+    expect(live.code).toBe(0);
+    expect(live.labels).toEqual([TITLE, 'worker']);
+    expect(live.out).not.toContain('left out: refused');
   });
 
-  test('add: launches nothing until the owner approves it', async () => {
+  test('add uses the live reserve without another approval', async () => {
     store([reading('anthropic', 80), reading('openai', 5)]);
     writeTeamYaml(WEAKER);
-    const before = await add(['worker'], world());
-    expect(before.code).toBe(1);
-    expect(before.err).toContain('the file is not the approved one (`budgets` changed)');
-    expect(before.labels).toEqual([]);
-    approve(WEAKER);
-    const after = await add(['worker'], world());
-    expect(after.code).toBe(0);
-    expect(after.labels).toEqual(['worker']);
+    const live = await add(['worker'], world());
+    expect(live.code).toBe(0);
+    expect(live.labels).toEqual(['worker']);
+    expect(live.err).not.toContain('team approve');
   });
 });

@@ -253,6 +253,7 @@ describe('the lobby_files a profile may name', () => {
     expect(profileFor('cursor')?.lobbyFiles).toEqual([]);
     expect(profileFor('antigravity')?.lobbyFiles).toEqual([]);
     expect(profileFor('grok')?.lobbyFiles).toEqual([]);
+    expect(profileFor('gemini')?.lobbyFiles).toEqual([]);
   });
 
   test('the union of every shipped profile and the tool\'s own files is what a lobby may hold, whatever the team runs', () => {
@@ -260,7 +261,7 @@ describe('the lobby_files a profile may name', () => {
     // declaration together — plus the files the tool itself keeps there, today the reach
     // projection and its write's temporary — sorted and deduped, so a CLI another team runs
     // and the tool's own files are covered too.
-    const perCli = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok']
+    const perCli = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini']
       .flatMap((cli) => profileFor(cli)?.lobbyFiles ?? []);
     expect(shippedLobbyFiles()).toEqual([...new Set([...perCli, ...TOOL_LOBBY_FILES])].sort());
     expect(shippedLobbyFiles()).toContain('.claude/scheduled_tasks.lock');
@@ -299,7 +300,8 @@ describe('the startup_reads a profile may name', () => {
       { path: '.codex/config.toml', directory: false, clis: ['codex'] },
       { path: '.cursorrules', directory: false, clis: ['cursor'] },
       { path: '.cursor/rules', directory: true, clis: ['cursor'] },
-      { path: 'GEMINI.md', directory: false, clis: ['antigravity'] },
+      { path: 'GEMINI.md', directory: false, clis: ['antigravity', 'gemini'] },
+      { path: '.gemini/settings.json', directory: false, clis: ['gemini'] },
     ]);
   });
 });

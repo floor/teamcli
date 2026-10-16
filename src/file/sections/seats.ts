@@ -142,7 +142,7 @@ function readSeats(
     const label = check.text(fields.get('label'), `${at}: label`);
     const effort = readEffort(fields.get('effort'), at, vendor, check);
     // The written label, or the lowercase model and version, stays on the seat: `seatDigest`
-    // hashes `label`, and an approved file keeps its key. `labelWritten` is not hashed: it only
+    // hashes `label`, and a file the owner approved keeps its key. `labelWritten` is not hashed: it only
     // records that the file wrote the field, so `workspaceLabel` can tell the two apart.
     // The owner-only reach grant. In the seat's digest like every other field: a grant reaches
     // the bridge and the shuttle daemon only through an owner's approval of the file.

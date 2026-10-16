@@ -65,7 +65,7 @@ describe('grant validation', () => {
       seat: 'lead',
       scope: ['up', 'down', 'approve', 'init'],
     });
-    expect(GRANT_SCOPES).toEqual(['up', 'down', 'approve', 'init', 'reload']);
+    expect(GRANT_SCOPES).toEqual(['up', 'down', 'approve', 'init', 'reload', 'swap']);
   });
 
   test('session, seat and scope are the closed fields', () => {
@@ -76,13 +76,13 @@ describe('grant validation', () => {
       'grant.seat must name the orchestrator "lead": "helper"',
     );
     expect(messages(BASE + 'grant:\n  session: acme\n  seat: lead\n  scope: []\n')).toContain(
-      'grant.scope must name at least one of: up, down, approve, init, reload',
+      'grant.scope must name at least one of: up, down, approve, init, reload, swap',
     );
     expect(messages(BASE + 'grant:\n  session: acme\n  seat: lead\n  scope: [up, up]\n')).toContain(
       'grant.scope names "up" twice',
     );
     expect(messages(BASE + 'grant:\n  session: acme\n  seat: lead\n  scope: [worktree]\n')).toContain(
-      'grant.scope must name up, down, approve, init, reload: "worktree" is not one',
+      'grant.scope must name up, down, approve, init, reload, swap: "worktree" is not one',
     );
     expect(messages(BASE + 'grant:\n  session: acme\n  seat: lead\n  scope: up\n')).toContain(
       'grant.scope must be a list',
@@ -167,7 +167,6 @@ function ask(
     sources: {
       load,
       standing: () => standingOf(approved, dropGrant),
-      approvedCopy: () => approved,
     },
   });
 }
@@ -187,7 +186,7 @@ describe('the grant gate', () => {
     });
   });
 
-  test('a missing act, an omitted grant, an unverified approval and an unreadable copy refuse', () => {
+  test('a missing act, an omitted grant and an unverified approval refuse; no stored copy is read', () => {
     const narrow = GRANTED.replace('    - down\n    - approve\n    - init\n', '');
     expect(ask('init', narrow, narrow, seat('lead', 'alpha', 'acme'), placed)).toEqual({
       kind: 'refused',
@@ -197,14 +196,13 @@ describe('the grant gate', () => {
     expect(ask('up', BASE, BASE, seat('lead', 'alpha', 'acme'), placed, true)).toEqual({
       kind: 'refused',
       id: 'grant.omitted',
-      text: 'the approved file grants nothing',
+      text: 'the file grants nothing',
     });
     const dir = stateDir(placed);
     const home = mkdtempSync(join(tmpdir(), 'team-grant-home-'));
     const loaded = teamOf(GRANTED);
     const sources = {
       load: (): LoadResult => ({ ok: true, team: loaded, root: '/grant/root', path: join(dir, 'team.yaml'), warnings: [], text: GRANTED }),
-      approvedCopy: () => GRANTED,
     };
     expect(grantGate({
       act: 'up',
@@ -214,17 +212,27 @@ describe('the grant gate', () => {
     })).toEqual({
       kind: 'refused',
       id: 'grant.approval',
-      text: 'a grant needs a verified approval: the file was never approved on this machine: run `team approve`',
+      text: 'a grant needs a verified approval: the file was never approved on this machine',
     });
     expect(grantGate({
       act: 'up',
       io: io(seat('lead', 'alpha', 'acme')),
       home,
-      sources: { ...sources, standing: () => standingOf(GRANTED), approvedCopy: () => null },
+      sources: { ...sources, standing: () => standingOf(GRANTED) },
     })).toEqual({
-      kind: 'refused',
-      id: 'grant.approved-copy',
-      text: 'a grant needs a readable approved copy: run `team approve`',
+      kind: 'passed',
+      grant: { session: 'acme', seat: 'lead', scope: ['up', 'down', 'approve', 'init'] },
+    });
+    // `approve` reads the record's own fingerprints against the live file — the same text — so
+    // the guard finds no difference and the granted seat passes.
+    expect(grantGate({
+      act: 'approve',
+      io: io(seat('lead', 'alpha', 'acme')),
+      home,
+      sources: { ...sources, standing: () => standingOf(GRANTED) },
+    })).toEqual({
+      kind: 'passed',
+      grant: { session: 'acme', seat: 'lead', scope: ['up', 'down', 'approve', 'init'] },
     });
   });
 
@@ -268,12 +276,11 @@ describe('the grant gate', () => {
     });
   });
 
-  test('an unsigned grant edit is invisible: up drifts, and approve names the owner', () => {
+  test('an unsigned grant edit admits up, and approve names the owner', () => {
     const added = ask('up', GRANTED, BASE, seat('lead', 'alpha', 'acme'), placed, true);
     expect(added).toEqual({
-      kind: 'refused',
-      id: 'grant.drift',
-      text: 'a grant needs the approved file: the file is not the approved one (`grant` changed): run `team approve`',
+      kind: 'passed',
+      grant: { session: 'acme', seat: 'lead', scope: ['up', 'down', 'approve', 'init'] },
     });
     const narrowed = { ...teamOf(GRANTED), grant: { session: 'acme', seat: 'lead', scope: ['up' as const] } };
     expect(ask('approve', narrowed, GRANTED, seat('lead', 'alpha', 'acme'), placed)).toEqual({
@@ -309,7 +316,7 @@ describe('the grant gate', () => {
     })).toEqual({
       kind: 'refused',
       id: 'grant.approval',
-      text: 'a grant needs a verified approval: the file was never approved on this machine: run `team approve`',
+      text: 'a grant needs a verified approval: the file was never approved on this machine',
     });
   });
 });

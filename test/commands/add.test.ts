@@ -742,22 +742,8 @@ describe('team add', () => {
   });
 
   test('counts live undeclared agents against seat, temporary and vendor ceilings when removed from state', async () => {
-    const loaded = loadTeamFile(project, { home });
-    if (!loaded.ok) throw new Error('load');
-    const yaml = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
-    const baseApproval = approvalOf(loaded.team, loaded.root);
-    writeApproval(
-      storePath(loaded.team.project, loaded.root, home),
-      {
-        approval: {
-          ...baseApproval,
-          ceilings: { seats: 2, temporary: 1, vendors: { anthropic: 1, openai: 1 } },
-        },
-        file: yaml,
-      },
-      loaded.team.seats,
-      home,
-    );
+    const yaml = `${readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')}limits:\n  seats: 2\n  temporary: 1\n  vendors:\n    anthropic: 1\n    openai: 1\n`;
+    approve(yaml);
     const liveTemp: HerdrAgent = {
       name: 'worker-tmp-1',
       agent: 'claude',
@@ -778,7 +764,7 @@ describe('team add', () => {
       }),
     );
     expect(tempCode).toBe(1);
-    expect(ioTemp.err).toContain('the approval allows 1 temporary seats; 2 would be running');
+    expect(ioTemp.err).toContain('the file allows 1 temporary seats; 2 would be running');
 
     const ioVendor = testIo(project, owner);
     const vendorCode = await runAdd(
@@ -791,7 +777,7 @@ describe('team add', () => {
       }),
     );
     expect(vendorCode).toBe(1);
-    expect(ioVendor.err).toContain('the approval allows 1 anthropic seats; 2 would be running');
+    expect(ioVendor.err).toContain('the file allows 1 anthropic seats; 2 would be running');
   });
 
   test('a new seat found at a dialog waits for its owner: nothing is closed, and it exits 1', async () => {
@@ -1281,7 +1267,7 @@ describe('team add delegated', () => {
     expect(existsSync(join(project, '.agents', 'team.log'))).toBe(false);
   });
 
-  test('a delegated add that would restore a missing seat is refused the same way', async () => {
+  test('a delegated add cannot restore a seat absent from the live file', async () => {
     // `limits.seats` is fixed in the file, so a seat taken out of the live file is not drift —
     // a seat taken out needs no new approval — and putting it back is still the owner's: the
     // entry returns only with the approval.
@@ -1297,7 +1283,7 @@ describe('team add delegated', () => {
     const io = testIo(project, pilot);
     const code = await runAdd(['worker'], io, sources(made, { delegateGate: () => passed }));
     expect(code).toBe(1);
-    expect(io.err).toBe(EDIT_REFUSAL);
+    expect(io.err).toBe('team add: the file has no seat "worker"\n');
     expect(readFileSync(path, 'utf8')).not.toContain('name: worker');
     expect(readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8')).toBe(record);
     expect(made.creates).toEqual([]);
@@ -1699,3 +1685,24 @@ describe('team add --model and --effort', () => {
   });
 });
 
+
+// The second half of a swap. The lead is declared and not stopped, so the add launches
+// it without editing the file or the approval, and the swap's record goes once it runs.
+describe('team add after a lead swap', () => {
+  test('starts the lead, leaves the file as approved, and clears the swap record', async () => {
+    const agents = join(project, '.agents');
+    updateState(agents, (state) => {
+      (state.sessions.acme ??= emptySession()).swapping = { lead: { by: 'owner', at: '2026-10-15T07:00:00.000Z' } };
+    });
+    const before = readFileSync(join(agents, 'team.yaml'), 'utf8');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['lead'], io, sources(made))).toBe(0);
+    expect(made.creates).toEqual(['lead']);
+    expect(readFileSync(join(agents, 'team.yaml'), 'utf8')).toBe(before);
+    const session = readState(agents).sessions.acme;
+    expect(session?.seats.lead?.stage).toBe('ready');
+    expect(session?.swapping).toBeUndefined();
+    expect(readFileSync(join(agents, 'team.log'), 'utf8')).toContain('lead runs its new agent (swap started by owner at 2026-10-15T07:00:00.000Z)');
+  });
+});

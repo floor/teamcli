@@ -566,20 +566,8 @@ scene('add.default-session', async (place) => {
 scene('add.never-approved', async (place) => {
   write(place, TWO);
   return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, {
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
-});
-scene('add.differs', async (place) => {
-  approve(place, TWO);
-  write(place, TWO.replace('label: worker', 'label: renamed'));
-  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place)), 'not the approved one');
-});
-scene('add.approved-copy', async (place) => {
-  approve(place, TWO);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, { standing: () => broken })), "approved copy can't be read");
 });
 scene('add.herdr', async (place) => {
   approve(place, TWO);
@@ -708,11 +696,14 @@ scene('add.machine-again', async (place) => {
 });
 scene('add.ceiling', async (place) => {
   approve(place, TWO);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const approval = { ...standing.record.approval, ceilings: { ...standing.record.approval.ceilings, seats: 0 } };
-  const capped = { ...standing, record: { ...standing.record, approval } };
-  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, { standing: () => capped })), 'allows 0 seats');
+  // The ceiling is the live file's. One seat is already running, and the file allows one.
+  // `approve` writes the absolute trust this command requires before it reaches the ceiling.
+  const text = readFileSync(place.file, 'utf8');
+  writeFileSync(place.file, text.replace('workspace:\n', 'limits:\n  seats: 1\nworkspace:\n'));
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, {
+    sessionState: () => 'running',
+    agents: () => [agent('lead')],
+  })), 'allows 1 seats');
 });
 scene('add.dry-run', async (place) => {
   approve(place, TWO);
@@ -784,8 +775,6 @@ const addRemoveCaller = { kind: 'seat', name: 'pilot', pane: 'w1:p1', session: '
 const refused = (id: string, text: string) => ({ kind: 'refused' as const, id, text });
 
 const ADD_GATE_REFUSALS: [suffix: string, sentence: string, needle: string][] = [
-  ['delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`', 'readable approved copy'],
-  ['delegate-drift', 'delegation needs the approved file: the file is not the approved one (seat worker changed): run `team approve`', 'not the approved one'],
   ['delegate-evidence', "delegation cannot verify its placement or seats: herdr doesn't answer", 'placement or seats'],
   ['delegate-placement', 'the approved delegate must be an external non-seat pane', 'non-seat pane'],
   ['delegate', 'only the owner, the orchestrator, the operator or the approved delegate runs it; this call is pilot', 'or the approved delegate runs it'],
@@ -1144,17 +1133,9 @@ scene('down.delegate-approval', async (place) => {
   write(place, DELEGATED);
   return show(await down(place, [], other, delegated('down.delegate-approval', 'delegation needs a verified approval: no approval is in force')), 'delegation needs a verified approval');
 });
-scene('down.delegate-approved-copy', async (place) => {
-  write(place, DELEGATED);
-  return show(await down(place, [], other, delegated('down.delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`')), 'readable approved copy');
-});
 scene('down.delegate-command', async (place) => {
   write(place, DELEGATED);
-  return show(await down(place, [], other, delegated('down.delegate-command', 'the approved delegate hook/w2:p9 may not run `down`; its approved commands are up')), 'its approved commands are up');
-});
-scene('down.delegate-drift', async (place) => {
-  write(place, DELEGATED);
-  return show(await down(place, [], other, delegated('down.delegate-drift', 'delegation needs the approved file: the file is not the approved one (seats: a seat was added): run `team approve`')), 'is not the approved one');
+  return show(await down(place, [], other, delegated('down.delegate-command', 'the delegate may not run down')), 'may not run down');
 });
 scene('down.delegate-evidence', async (place) => {
   write(place, DELEGATED);
@@ -1187,17 +1168,6 @@ scene('down.grant-approval', async (place) => {
   write(place, GRANTED);
   recordLead(place, 'w1:p1');
   return show(await down(place, [], leadSeat, grantDown(place)), 'a grant needs a verified approval');
-});
-scene('down.grant-approved-copy', async (place) => {
-  approve(place, GRANTED);
-  recordLead(place, 'w1:p1');
-  return show(await down(place, [], leadSeat, grantDown(place, { approvedCopy: () => null })), 'a grant needs a readable approved copy');
-});
-scene('down.grant-drift', async (place) => {
-  approve(place, GRANTED);
-  write(place, readFileSync(place.file, 'utf8').replace('label: lead', 'label: renamed'));
-  recordLead(place, 'w1:p1');
-  return show(await down(place, [], leadSeat, grantDown(place)), 'a grant needs the approved file');
 });
 scene('down.grant-scope', async (place) => {
   approve(place, GRANT_UP);
@@ -1239,7 +1209,7 @@ scene('down.never-approved', async (place) => {
   write(place, TEAM);
   return show(await down(place, [], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('lead')], home: place.home,
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
 });
 scene('down.legacy', async (place) => {
@@ -1261,15 +1231,6 @@ scene('down.refused', async (place) => {
   return show(await down(place, [], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('lead')], home: place.home,
   })), 'valid signature');
-});
-scene('down.approved-copy', async (place) => {
-  approve(place, TEAM);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(await down(place, [], owner, downSources({
-    sessionRunning: () => true, agents: () => [agent('lead')], home: place.home, standing: () => broken,
-  })), 'cannot be read');
 });
 
 async function initial(
@@ -1408,6 +1369,22 @@ scene('remove.coordinator', async (place) => {
   });
   return show(await removed(place, ['lead'], leadSeat, downSources({ home: place.home })), 'only the owner removes the orchestrator');
 });
+// A lead's `--keep` is a swap. The seat never swaps itself; another lead swaps it only
+// under a grant that lists `swap`; the owner's swap stops it and leaves the file as it was.
+scene('remove.swap-self', async (place) => {
+  write(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await removed(place, ['lead', '--keep'], leadSeat, downSources({ home: place.home })), "can't swap its own seat");
+});
+scene('remove.swap-grant', async (place) => {
+  write(place, TWO.replace('operator: lead', 'operator: worker').replace('    stopped: true\n', ''));
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await removed(place, ['worker', '--keep'], leadSeat, downSources({ home: place.home })), 'swaps the orchestrator');
+});
 scene('remove.no-seat', async (place) => {
   write(place, TWO);
   return show(await removed(place, ['missing'], owner, downSources({ home: place.home })), 'no seat "missing"');
@@ -1445,7 +1422,7 @@ scene('remove.unverified', async (place) => {
   });
   return show(await removed(place, ['extra'], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('extra')], home: place.home,
-  })), 'not an approved seat');
+  })), 'not a declared seat');
 });
 scene('remove.ambiguous', async (place) => {
   approve(place, TWO);
@@ -1455,20 +1432,11 @@ scene('remove.ambiguous', async (place) => {
     home: place.home,
   })), 'more than one agent of this name');
 });
-scene('remove.approved-copy', async (place) => {
-  approve(place, TWO);
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(await removed(place, ['worker'], owner, downSources({
-    sessionRunning: () => true, agents: () => [agent('worker')], home: place.home, standing: () => broken,
-  })), 'cannot be read');
-});
 scene('remove.never-approved', async (place) => {
   write(place, TWO);
   return show(await removed(place, ['worker'], owner, downSources({
     home: place.home,
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
 });
 scene('remove.no-launch', async (place) => {
@@ -1539,6 +1507,10 @@ scene('remove.kept', async (place) => {
   approve(place, TWO);
   return show(await removed(place, ['worker', '--keep'], owner, downSources({ home: place.home })), 'stopped worker');
 });
+scene('remove.swapped', async (place) => {
+  approve(place, TWO);
+  return show(await removed(place, ['lead', '--keep'], owner, downSources({ home: place.home })), 'stopped lead for a swap');
+});
 scene('remove.temporary', async (place) => {
   approve(place, TEAM);
   updateState(join(place.root, '.agents'), (state) => {
@@ -1553,8 +1525,6 @@ scene('remove.temporary', async (place) => {
 // herdr is asked; the rest hand the verdict in, and the scene proves the command prints it and
 // exits 1 with nothing stopped.
 const REMOVE_GATE_REFUSALS: [suffix: string, sentence: string, needle: string][] = [
-  ['delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`', 'readable approved copy'],
-  ['delegate-drift', 'delegation needs the approved file: the file is not the approved one (seat worker changed): run `team approve`', 'not the approved one'],
   ['delegate-evidence', "delegation cannot verify its placement or seats: herdr doesn't answer", 'placement or seats'],
   ['delegate-placement', 'the approved delegate must be an external non-seat pane', 'non-seat pane'],
   ['delegate', 'only the owner, the orchestrator, the operator or the approved delegate runs it; this call is pilot', 'or the approved delegate runs it'],
@@ -1734,13 +1704,8 @@ scene('up.deny', async (place) => {
 scene('up.never-approved', async (place) => {
   write(place, TEAM);
   return show(await up(place, ['--file', place.file], owner, upSources(place, {
-    standing: () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' }),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
   })), 'cannot be verified');
-});
-scene('up.differs', async (place) => {
-  approve(place, TEAM);
-  write(place, TEAM.replace('label: lead', 'label: renamed'));
-  return show(await up(place, ['--file', place.file], owner, upSources(place)), 'not the approved one');
 });
 scene('up.doctor', async (place) => {
   approve(place, TEAM);
@@ -1852,15 +1817,6 @@ scene('up.delegate-approval', async (place) => {
   write(place, `${TEAM}${DELEGATES}`);
   return show(await up(place, ['--file', place.file], other, upSources(place, gateAt(place))), 'deny');
 });
-scene('up.delegate-approved-copy', async (place) => {
-  approve(place, `${TEAM}${DELEGATES}`);
-  return show(await up(place, ['--file', place.file], other, upSources(place, gateAt(place, { approvedCopy: () => null }))), 'deny');
-});
-scene('up.delegate-drift', async (place) => {
-  approve(place, `${TEAM}${DELEGATES}`);
-  write(place, `${TEAM.replace('label: lead', 'label: renamed')}${DELEGATES}`);
-  return show(await up(place, ['--file', place.file], other, upSources(place, gateAt(place))), 'deny');
-});
 scene('up.delegate-evidence', async (place) => {
   approve(place, `${TEAM}${DELEGATES}`);
   // A herdr that does not answer answers nothing: no agent list, and no session answer either —
@@ -1892,15 +1848,6 @@ function grantRead(over: GrantSources = {}): Partial<UpSources> {
 
 scene('up.grant-approval', async (place) => {
   write(place, GRANTED);
-  return show(await up(place, [], leadSeat, upSources(place)), 'deny');
-});
-scene('up.grant-approved-copy', async (place) => {
-  approve(place, GRANTED);
-  return show(await up(place, [], leadSeat, upSources(place, grantRead({ approvedCopy: () => null }))), 'deny');
-});
-scene('up.grant-drift', async (place) => {
-  approve(place, GRANTED);
-  write(place, readFileSync(place.file, 'utf8').replace('label: lead', 'label: renamed'));
   return show(await up(place, [], leadSeat, upSources(place)), 'deny');
 });
 scene('up.grant-caller', async (place) => {
@@ -2055,19 +2002,6 @@ scene('worktree.never-approved', async (place) => {
   write(place, worktreeText());
   return show(await worktree(place, ['new', 'task']), 'never approved');
 });
-scene('worktree.approved-copy', async (place) => {
-  approve(place, worktreeText());
-  // The file differs from the approval, and the copy the record stored is one this version
-  // can't read: there is no approved value to run with.
-  write(place, worktreeText({ limit: 4 }));
-  const standing = approvalStanding(place.root, place.home);
-  if (standing.kind !== 'verified') throw new Error(standing.kind);
-  const broken = { ...standing, record: { ...standing.record, file: 'nope: [[[' } };
-  return show(
-    await worktree(place, ['new', 'task', '--kind', 'fix'], owner, { ...worktreeSources(place), standing: () => broken }),
-    "approved copy can't be read",
-  );
-});
 scene('worktree.task', async (place) => {
   approve(place, worktreeText());
   return show(await worktree(place, ['new', '../task']), 'one segment');
@@ -2106,7 +2040,7 @@ scene('worktree.forbidden', async (place) => {
 });
 scene('worktree.trust', async (place) => {
   approve(place, worktreeText({ trust: '../worktrees/acme/task' }));
-  return show(await worktree(place, ['new', 'select-width', '--kind', 'fix']), 'outside the approved trust');
+  return show(await worktree(place, ['new', 'select-width', '--kind', 'fix']), "outside the file's trust paths");
 });
 scene('worktree.symlink', async (place) => {
   approve(place, worktreeText());
@@ -2119,19 +2053,6 @@ scene('worktree.seat', async (place) => {
   publish(place);
   approve(place, worktreeText());
   return show(await worktree(place, ['new', 'task', '--kind', 'fix', '--seat', 'missing']), 'names no declared seat');
-});
-scene('worktree.seat-unapproved', async (place) => {
-  approve(place, worktreeText());
-  write(place, `${worktreeText()}  - role: implementer
-    name: added-later
-    label: later
-    cli: claude-code
-    vendor: anthropic
-    model: Claude Opus
-    version: "5.5"
-    launch: claude --model claude-opus-5-5
-`);
-  return show(await worktree(place, ['new', 'task', '--kind', 'fix', '--seat', 'added-later']), 'is not in the approved file');
 });
 scene('worktree.limit', async (place) => {
   approve(place, worktreeText({ limit: 1 }));
@@ -2453,7 +2374,7 @@ scene('answer.unverified', async (place) => {
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { extra: { stage: 'ready', pane: 'w9:p1' } }, worktrees: {} };
   });
-  return show(await answered(place, ['extra', 'trust', '--file', place.file], owner, answerHost(place, '')), 'not an approved seat');
+  return show(await answered(place, ['extra', 'trust', '--file', place.file], owner, answerHost(place, '')), 'not a declared seat');
 });
 scene('answer.ambiguous', async (place) => {
   const lobby = lobbyDir(place.home);
@@ -2732,7 +2653,7 @@ async function tempo(place: Place, argv: string[], caller: Caller = owner): Prom
 
 scene('tempo.set', async (place) => {
   write(place, TEAM);
-  return show(await tempo(place, ['urgent']), 'it takes effect when the file is approved');
+  return show(await tempo(place, ['urgent']), 'tempo: urgent');
 });
 scene('tempo.unchanged', async (place) => {
   write(place, TEAM.replace('format: 1\n', 'format: 1\ntempo: urgent\n'));
@@ -3310,15 +3231,6 @@ scene('reload.grant-approval', async (place) => {
   write(place, RELOAD_GRANT);
   return show(await reloaded(place, ['worker'], leadSeat), 'a grant needs a verified approval');
 });
-scene('reload.grant-approved-copy', async (place) => {
-  approve(place, RELOAD_GRANT);
-  return show(await reloaded(place, ['worker'], leadSeat, { grantGate: (input) => grantGate({ ...input, sources: { approvedCopy: () => null } }) }), 'a grant needs a readable approved copy');
-});
-scene('reload.grant-drift', async (place) => {
-  approve(place, RELOAD_GRANT);
-  write(place, readFileSync(place.file, 'utf8').replace('label: lead', 'label: renamed'));
-  return show(await reloaded(place, ['worker'], leadSeat), 'a grant needs the approved file');
-});
 scene('reload.grant-caller', async (place) => {
   approve(place, RELOAD_GRANT);
   recordLead(place);
@@ -3345,7 +3257,7 @@ scene('reload.grant-flag', async (place) => {
 });
 scene('reload.grant-omitted', async (place) => {
   approve(place, TEAM);
-  return show(await reloaded(place, ['lead'], leadSeat), 'the approved file grants nothing');
+  return show(await reloaded(place, ['lead'], leadSeat), 'the file grants nothing');
 });
 scene('reload.grant-file', async (place) => {
   write(place, 'format: [\n');

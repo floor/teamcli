@@ -44,11 +44,11 @@ The recovery reasons are `its key could not be sent`, `its idle prompt did not c
 
 ### Refusals
 
-Every refusal line is `<seat>: <reason>` except an unplaced caller's, which is its reason alone and names no seat, and the four `team answer:` lines that speak to the caller rather than about the seat: `team answer: --file is the owner's, from a terminal outside herdr; this call is <caller>`, `team answer: --session is the owner's, from a terminal outside herdr; this call is <caller>`, ``team answer: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` ``, and ``team answer: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) ``. The classes are the log line's own (`refused trust: <class>`):
+Every refusal line is `<seat>: <reason>` except an unplaced caller's, which is its reason alone and names no seat, and the five `team answer:` lines that speak to the caller rather than about the seat: `team answer: --file is the owner's, from a terminal outside herdr; this call is <caller>`, `team answer: --session is the owner's, from a terminal outside herdr; this call is <caller>`, ``team answer: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` ``, ``team answer: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) ``, and `team answer: only the owner runs this, from a terminal outside herdr` — a run placed with no terminal, judged before the file or the caller is read. The classes are the log line's own (`refused trust: <class>`):
 
 | Class | Reasons |
 | --- | --- |
-| caller | `only the owner, or the orchestrator from its own seat, can answer`; the unplaced caller's reason; `--session is the owner's…`; `no pane is recorded for seat <name>…`; `the state records pane <pane> for seat <name>…`; `the file was never approved on this machine: run \`team approve\``; `approved before records were signed: run \`team approve\` once`; the approval verification's own reason; `the file is not the approved one (<section> changed; …)`; `the approved copy of the team file cannot be read` |
+| caller | `only the owner, or the orchestrator from its own seat, can answer`; the unplaced caller's reason; `--session is the owner's…`; `no pane is recorded for seat <name>…`; `the state records pane <pane> for seat <name>…`; `the file was never approved on this machine`; `approved before records were signed`; the approval verification's own reason; `the file is not the approved one (<section> changed; …)`; `the approved copy of the team file cannot be read` |
 | policy | `use team up and [o]` |
 | state | `another command holds it`; `it is not a live seat`; `its record is not an approved seat; left as it is (the owner cleans it: team remove <seat> --abandon)`; `herdr lists more than one agent of this name; left as it is`; `the owner has the pane open`; `it is not waiting at a trust dialog`; `its recovery state could not be recorded`; the process refusal's own reason with `(it is still recorded as a recovery)` appended, when the rollback itself did not take |
 | version | `this version has no trust answer` |
@@ -67,7 +67,9 @@ Every refusal line is `<seat>: <reason>` except an unplaced caller's, which is i
 | 0 | `answer.ready` | the trust dialog was answered and the seat is ready |
 | 1 | `answer.action` | the recorded key is not one this version sends |
 | 1 | `answer.ambiguous` | herdr lists more than one agent of this name |
+| 1 | `answer.another-pane` | the state records another pane for the caller's seat |
 | 1 | `answer.caller` | the caller may not answer a trust dialog |
+| 1 | `answer.detached` | a run with no terminal |
 | 1 | `answer.file-owner` | `--file` is the owner's |
 | 1 | `answer.folder` | the dialog's folder is not the lobby's exact trust entry |
 | 1 | `answer.label` | the trust choice is not the recorded one |

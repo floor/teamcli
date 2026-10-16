@@ -45,7 +45,9 @@ export function readLeadField(
   return mark.name;
 }
 
-/** The three ways a seat the file names cannot lead, in the words the file used to name it. */
+/** The ways a seat the file names cannot lead, in the words the file used to name it. A stopped
+ *  lead stays refused: `team remove <lead> --keep` is a swap and never writes `stopped:` on the
+ *  lead (`commands/remove.ts`), so this line only meets a hand-edited file. */
 function seatProblems(name: string, at: string, line: number, seats: DraftSeat[], broken: Set<string>, check: Check): void {
   const seat = seats.find((candidate) => candidate.name === name);
   if (!seat) {
@@ -67,8 +69,9 @@ export function isLeadSeat(
 
 /**
  * The relaunch repair command for a seat `up` leaves as it is:
- * for the orchestrator or the operator, `remove --keep` is refused because leads cannot be stopped,
- * so only `team down` then `team up` (to restart the whole team) is offered.
+ * for the orchestrator or the operator, `remove --keep` is a swap only the owner, the grant's
+ * `swap` or a delegate's `swap` admits, so the line offers `team down` then `team up`
+ * (to restart the whole team).
  * For ordinary seats, both the per-seat and whole-team sequence are offered.
  */
 export function relaunchRepair(
