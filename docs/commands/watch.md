@@ -26,13 +26,17 @@ queue depth. Paths are relative to the project root, absolute, or begin with `~/
 selected home. Each seat's queue is `<seat>.md`; top-level numbered entries and unchecked
 Markdown tasks count, while checked tasks, nested details and fenced examples do not.
 Use `[x]` to mark a finished task. A missing or unreadable queue is unknown, not empty.
+The directory's `linear-backlog.md`, when it is there, is read the same way: its top-level
+numbered items that are unchecked and carry no `claimed:` or `done:` marker are unclaimed work.
 
 When every active worker has a known empty queue, the watch waits `watch.team_idle` and
 reports `N seats idle, queues empty` once per unchanged stretch. Only workers with an idle
 screen count; leads, parked or stopped seats, quota screens, unknown screens and unsent text
-do not. Quota-blocked workers are named separately. A pending queue, an unreadable queue or
-a missing worker suppresses the summary. With no queue directory, the existing team-idle
-report remains unchanged.
+do not. Quota-blocked workers are named separately. Unclaimed items in the backlog file are
+named in the same sentence — `; 2 unclaimed backlog items` — so empty queues with a full
+backlog do not read as a team out of work; an absent, unreadable or fully claimed backlog adds
+nothing. A pending queue, an unreadable queue or a missing worker suppresses the summary. With
+no queue directory, the existing team-idle report remains unchanged.
 
 This summary goes to the declared orchestrator through a drop file, once its prompt is free.
 The watch retains the same drop across failed delivery attempts and discards a pending

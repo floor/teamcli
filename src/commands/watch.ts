@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, pressEnter, reportDisplayAgent, typeText, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
-import { readQueueDepths } from '../queues.ts';
+import { readBacklogDepth, readQueueDepths } from '../queues.ts';
 import { emptySession, readState, updateState } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
 import type { Live } from '../status/compare.ts';
@@ -389,10 +389,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         }
         const machineAccounts = sources.home === undefined ? [] : machineAccountsOf(sources.home);
         const queueDepths = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
+        const queueBacklog = queueDepths ? readBacklogDepth(team, root, sources.home) : null;
         const run = (stored: readonly Seen[]) => pass({
           machineAccounts,
           team, state, live, machine, now, memory,
           queueDepths,
+          queueBacklog,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce, outcomes, budgets: budget,
           quotaFor: (cli) => quotaWith(cli, overrides.profiles),
           readScreen: (cli, pane) => classifyWith(cli, pane, overrides.profiles),

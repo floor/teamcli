@@ -8,9 +8,15 @@ export function idleQueueSummary(team: TeamObservation): { key: string; text: st
     && seat.identity !== 'gone' && (seat.identity !== 'replaced' || seat.continuity === 'restored'));
   if (!idle.length) return null;
   const limited = workers.filter((seat) => !seat.working && seat.screen.kind === 'rate limit').map((seat) => seat.name);
+  // Claimable backlog work is named in the same sentence: the queues are empty, but the team is
+  // not out of work, and this report is the moment the orchestrator refills them. An unreadable
+  // or absent backlog file adds nothing, and the sentence's own words are unchanged.
+  const backlog = team.queueBacklog ?? 0;
   return {
     key: JSON.stringify([team.team.orchestrator, team.team.watch.queueDir, idle.map((seat) => seat.name), limited]),
-    text: `${idle.length} ${idle.length === 1 ? 'seat' : 'seats'} idle, queues empty${limited.length ? `; at a quota or limit: ${limited.join(', ')}` : ''}`,
+    text: `${idle.length} ${idle.length === 1 ? 'seat' : 'seats'} idle, queues empty`
+      + `${limited.length ? `; at a quota or limit: ${limited.join(', ')}` : ''}`
+      + `${backlog > 0 ? `; ${backlog} unclaimed backlog item${backlog === 1 ? '' : 's'}` : ''}`,
   };
 }
 

@@ -225,6 +225,8 @@ Optional directory containing one Markdown queue per seat, named `<seat>.md`. Se
 the team's notes/queue directory. A relative path starts at the project root; absolute
 paths and `~/` paths are also accepted. Omitting it disables queue reads.
 
-`team status` shows each queue's depth; `team watch` reports idle workers with empty queues
-to the orchestrator after `watch.team_idle`. See [queue reports](commands/watch.md#queue-reports)
+`team status` shows each queue's depth and the directory's `linear-backlog.md` — its unclaimed
+items, one that is unchecked and carries no `claimed:` or `done:` marker; `team watch` reports
+idle workers with empty queues, and the unclaimed items left in that backlog, to the
+orchestrator after `watch.team_idle`. See [queue reports](commands/watch.md#queue-reports)
 for the task format, unknown readings and delivery behavior.

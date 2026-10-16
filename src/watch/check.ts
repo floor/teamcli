@@ -89,6 +89,9 @@ export type SeatObservation = {
 // Everything a team check may read about the team it is handed, built after the seat loop.
 export type TeamObservation = {
   queueDepths?: QueueDepths | null;
+  // Unclaimed items in the queue directory's backlog file, when the caller read it: the queue
+  // summary names them, so an empty queue set does not read as no work left.
+  queueBacklog?: number | null;
   // The file, and the session's state: the budget check (RFC 0003 § 9) reads both.
   team: TeamFile;
   state: SessionState;

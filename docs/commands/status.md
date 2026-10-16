@@ -59,8 +59,14 @@ answer once the caller has passed the gate: without it, `status` can't say anyth
 When `watch.queue_dir` names the team's queue directory, a `queues:` section lists the depth
 for each seat. Each queue is `<seat>.md`: top-level numbered entries and unchecked Markdown
 tasks count as work; checked tasks, nested details and fenced examples do not. Missing,
-unreadable, non-file or larger-than-1-MiB queues read `unknown`, not zero. JSON rows carry the
-same reading as `queue_depth` (a number or `null`); the field is absent when queues are not configured.
+unreadable, non-file or larger-than-1-MiB queues read `unknown`, not zero.
+
+The section closes with the directory's backlog file, `linear-backlog.md`, as `backlog: <n>
+unclaimed`: its top-level numbered items that are unchecked and carry no `claimed:` or `done:`
+marker, in their own text or in the text under them. A missing or unreadable backlog file reads
+`backlog: unknown`, never zero. JSON rows carry the depth as `queue_depth` (a number or `null`)
+and the document carries the backlog count as `queue_backlog`; both fields are absent when
+queues are not configured.
 
 A recognized quota or rate-limit screen reads `rate limit` instead of `idle` or `done`.
 Its note includes the reset time when the screen supplies one.

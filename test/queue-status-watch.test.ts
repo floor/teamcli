@@ -7,7 +7,7 @@ import { runStatus } from '../src/commands/status.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
-import { queueDepth, readQueueDepths } from '../src/queues.ts';
+import { backlogDepth, queueDepth, readBacklogDepth, readQueueDepths } from '../src/queues.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
@@ -114,8 +114,8 @@ test('status text and JSON expose queue depth and identify rate limits instead o
   }
 });
 
-function cycle(memory: ReturnType<typeof newMemory>, now: number, depths = { lead: 0, first: 0, second: 0 } as Record<string, number | null>) {
-  return pass({ team, watch: team.watch, state: emptySession(), live, machine, now, memory, queueDepths: depths });
+function cycle(memory: ReturnType<typeof newMemory>, now: number, depths = { lead: 0, first: 0, second: 0 } as Record<string, number | null>, backlog: number | null = null) {
+  return pass({ team, watch: team.watch, state: emptySession(), live, machine, now, memory, queueDepths: depths, queueBacklog: backlog });
 }
 
 test('summary waits, reports once to the orchestrator, excludes quota seats and rearms after work arrives', () => {
@@ -146,10 +146,55 @@ test('unknown or pending queues, blocked screens, missing workers and working se
   expect(cycle(newMemory(), 0).queueSummary).toBeNull();
 });
 
-async function watchScenario(options: { noNudge?: boolean; busy?: boolean; clear?: boolean; failEnter?: boolean; foreign?: boolean; workers?: boolean } = {}) {
+test('counts unclaimed backlog items: numbered, unchecked, and carrying no claim marker', () => {
+  expect(backlogDepth('# Backlog\n\n1. open\n2. taken — claimed: builder-1 16 Oct\n3. finished — done: builder-2, PR #1\n4. elsewhere — Claimed: builder-3\n')).toBe(1);
+  expect(backlogDepth('1. plain numbered\n2. [x] a checked one\n3. [ ] still open\n- [ ] a task is no numbered item\n')).toBe(2);
+  // A marker under the item belongs to it, a child item does not become one, and a fenced
+  // example is no item at all.
+  expect(backlogDepth('1. first\n   — claimed: builder-2\n2. second\n   1. nested, not top level\n3. third\n```\n4. sample\n```\n')).toBe(2);
+  expect(backlogDepth('# Empty\n')).toBe(0);
+});
+
+test('backlog count is unknown, never zero, when there is no file to read', () => {
+  writeFileSync(join(root, 'notes/queue/linear-backlog.md'), '1. open\n2. claimed: builder-1\n');
+  expect(readBacklogDepth(team, root, home)).toBe(1);
+  rmSync(join(root, 'notes/queue/linear-backlog.md'));
+  expect(readBacklogDepth(team, root, home)).toBeNull();
+  mkdirSync(join(root, 'notes/queue/linear-backlog.md'));
+  expect(readBacklogDepth(team, root, home)).toBeNull();
+  rmSync(join(root, 'notes/queue/linear-backlog.md'), { recursive: true });
+  writeFileSync(join(root, 'notes/queue/linear-backlog.md'), 'x'.repeat(1024 * 1024 + 1));
+  expect(readBacklogDepth(team, root, home)).toBeNull();
+  const unconfigured = { ...team, watch: { ...team.watch, queueDir: undefined } };
+  expect(readBacklogDepth(unconfigured, root, home)).toBeNull();
+  mkdirSync(join(home, 'queue'), { recursive: true });
+  writeFileSync(join(home, 'queue/linear-backlog.md'), '1. assigned\n');
+  expect(readBacklogDepth({ ...team, watch: { ...team.watch, queueDir: '~/queue' } }, root, home)).toBe(1);
+});
+
+test('status prints the unclaimed backlog count beside the queue depths, unknown when unreadable', async () => {
+  writeFileSync(join(root, 'notes/queue/linear-backlog.md'), '1. open\n2. taken — claimed: builder-1\n3. finished — done: builder-2, PR #1\n');
+  const sources = { live: () => live, branch: () => 'main', standing: () => verifiedOf(team, text, root), now: () => new Date(), home };
+  const io = testIo(root, { kind: 'owner' });
+  await runStatus(['--file', file], io, sources);
+  expect(io.out, io.err).toContain('queues:\n  lead: 0\n  first: 0\n  second: 0\n  backlog: 1 unclaimed');
+  const json = testIo(root, { kind: 'owner' });
+  await runStatus(['--file', file, '--json'], json, sources);
+  expect(JSON.parse(json.out).queue_backlog).toBe(1);
+  rmSync(join(root, 'notes/queue/linear-backlog.md'));
+  const missing = testIo(root, { kind: 'owner' });
+  await runStatus(['--file', file], missing, sources);
+  expect(missing.out).toContain('\n  backlog: unknown');
+  const missingJson = testIo(root, { kind: 'owner' });
+  await runStatus(['--file', file, '--json'], missingJson, sources);
+  expect(JSON.parse(missingJson.out).queue_backlog).toBeNull();
+});
+
+async function watchScenario(options: { noNudge?: boolean; busy?: boolean; clear?: boolean; failEnter?: boolean; foreign?: boolean; workers?: boolean; backlog?: string } = {}) {
   let tick = 0;
   let now = 0;
   const typed: Record<string, string> = {};
+  if (options.backlog !== undefined) writeFileSync(join(root, 'notes/queue/linear-backlog.md'), options.backlog);
   if (options.workers) {
     text = text.replace('idle_first: 1h', 'idle_first: 1s');
     team.watch.idleFirst = 1;
@@ -206,6 +251,38 @@ test.each([{ noNudge: true }, { foreign: true }])('watch does not deliver with %
   const result = await watchScenario(options);
   expect(result.attempts).toEqual([]);
   expect(result.bodies).toEqual([]);
+});
+
+test('a team with no queue directory prints no queue section and no backlog field', async () => {
+  const bare = text.replace('  queue_dir: notes/queue\n', '');
+  writeFileSync(file, bare);
+  const parsed = validateTeamFile(bare, { home, root });
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+  const sources = { live: () => live, branch: () => 'main', standing: () => verifiedOf(parsed.team, bare, root), now: () => new Date(), home };
+  const io = testIo(root, { kind: 'owner' });
+  await runStatus(['--file', file, '--json'], io, sources);
+  const doc = JSON.parse(io.out);
+  expect('queue_backlog' in doc, io.err).toBe(false);
+  expect(doc.rows.every((row: { queue_depth?: number }) => row.queue_depth === undefined)).toBe(true);
+  const plain = testIo(root, { kind: 'owner' });
+  await runStatus(['--file', file], plain, sources);
+  expect(plain.out, plain.err).not.toContain('queues:');
+});
+
+test('the summary names unclaimed backlog work, and the count never extends a stretch', () => {
+  const memory = newMemory();
+  expect(cycle(memory, 0, { lead: 0, first: 0, second: 0 }, 2).queueSummary?.text).toBe('2 seats idle, queues empty; 2 unclaimed backlog items');
+  const due = cycle(memory, 1000, { lead: 0, first: 0, second: 0 }, 2).reports.filter((report) => report.key === 'queue-idle');
+  expect(due).toEqual([{ key: 'queue-idle', text: '2 seats idle, queues empty; 2 unclaimed backlog items', to: 'orchestrator' }]);
+  // The count is part of the sentence, not of the stretch: it moving sends no second report.
+  expect(cycle(memory, 2000, { lead: 0, first: 0, second: 0 }, 0).reports.some((report) => report.key === 'queue-idle')).toBe(false);
+  // A count this pass could not read is unknown, not zero: the sentence stays the one without a count.
+  expect(cycle(newMemory(), 0, { lead: 0, first: 0, second: 0 }, null).queueSummary?.text).toBe('2 seats idle, queues empty');
+});
+
+test('watch delivers the backlog count inside the queue summary, and the unchanged sentence without one', async () => {
+  const result = await watchScenario({ backlog: '1. open\n2. open\n3. taken — claimed: builder-1\n' });
+  expect(result.bodies).toEqual(['2 seats idle, queues empty; 2 unclaimed backlog items']);
 });
 
 test('worker nudges do not erase ownership of an unsent orchestrator summary', async () => {

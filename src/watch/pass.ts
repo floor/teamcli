@@ -198,6 +198,8 @@ export type PassInput = {
   now: number;
   memory: Memory;
   queueDepths?: QueueDepths | null;
+  /** Unclaimed items in the queue directory's backlog file, read beside the depths. */
+  queueBacklog?: number | null;
   approval?: string[] | null;
   // The case in one line when no verified approval is in force and the record says why. The
   // watch says it itself, once; the pass's approval check reads it and adds nothing.
@@ -234,6 +236,7 @@ export function pass({
   now,
   memory,
   queueDepths,
+  queueBacklog,
   approval,
   approvalReason,
   watch,
@@ -424,6 +427,7 @@ export function pass({
 
   const teamObservation: TeamObservation = {
     queueDepths,
+    queueBacklog,
     team,
     state,
     live,
