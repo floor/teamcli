@@ -9,15 +9,15 @@ import { recall } from '../budgets/readings.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
-import { validateTeamFile } from '../file/validate.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
+import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { emptySession, readState, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import { checkRulesFile, rulesFilePathOf } from '../launch/rules-file.ts';
+import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { profileFor } from '../profiles/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
@@ -164,7 +164,16 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
 
   const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
   if (!owner) {
-    if (!current.ok || !mayReadTeam(current, io, sources)) {
+    const read = current.ok && mayReadTeam(current, io, sources);
+    // A create-grant admits its holder's runner to the read, for a team whose root is under the
+    // granted paths: the same record `init` and `up` consult. It buys the read alone — `--file`
+    // and `--session` above stay the owner's, and this run keeps no `last_valid` copy. Asked only
+    // where the read gate has refused, and only when a record exists, so a seat's own reading
+    // reads no clock for it.
+    const granted = current.ok && !read
+      && readEntityCreateGrants(sources.home ?? homedir()).length > 0
+      && entityGrantAdmits(current.root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
+    if (!current.ok || (!read && !granted)) {
       out.stderr('team status: this team is not yours to read\n');
       // exit: status.not-yours
       return 2;
@@ -220,8 +229,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ...protectedCheckouts(team, root, sources),
     ...approvalDrift(approvalCase(standing, team)),
     ...overrideDrift(overrides),
-    // The approved file's own rules files, only when there is an approval to write them.
-    ...rulesFileDifferences(standing, root, sources.home),
+    // The file's own rules files, only when there is an approval to write them.
+    ...rulesFileDifferences(standing, team, root, sources.home),
   ]);
 
   if (args.flags.has('json')) {
@@ -275,39 +284,35 @@ export function overrideDrift(report: OverrideForce): Difference[] {
   ];
 }
 
-// A file that was never approved, or was changed since, runs nothing until the owner approves it.
-// A legacy or refused record is the whole case and its repair in one line of its own.
+// A file that was never approved runs nothing until the owner approves it; a file that changed
+// since the last approval is only said — the commands read it as it stands. A legacy or refused
+// record is the whole case and its repair in one line of its own.
 export function approvalDrift(approval: { differences: string[] | null; reason: string | null }): Difference[] {
   const withApproval = (what: string): Difference => ({ what, repair: APPROVAL_REPAIR, approval: true, owner: true });
   if (approval.reason !== null) return [withApproval(approval.reason)];
   if (approval.differences === null) return [withApproval('the file was never approved on this machine')];
-  return approval.differences.map((line) => withApproval(`the file differs from the approved one: ${line}`));
+  return approval.differences.map((line) => withApproval(`the file has changed since the last approval: ${line}`));
 }
 
 
-/** Every message-rules seat's file, against the rules the approved file gives it. A file that
+/** Every message-rules seat's file, against the rules the live file gives it. A file that
  *  differs is a difference for the owner to repair with `up` — never rewritten here. An option
  *  seat has no file, and a seat whose rules can't travel at all is `up`'s to refuse. */
-export function rulesFileDifferences(standing: Standing, root: string, home: string | undefined): Difference[] {
-  // Like the overrides: no home set is a test that stands in for no store at all.
+export function rulesFileDifferences(standing: Standing, team: TeamFile, root: string, home: string | undefined): Difference[] {
+  // Like the overrides: no home set is a test that stands in for no store at all. The check
+  // runs only once a record exists, so a file that was never approved does not grow a
+  // difference for a file no launch has written.
   if (home === undefined || standing.kind !== 'verified') return [];
-  // The seats of the file as approved, against the approved rules text: a file the current
-  // file added has no approved rules, and `up` itself refuses a drifted file.
-  const approved = validateTeamFile(standing.record.file);
-  if (!approved.ok) return [];
   const out: Difference[] = [];
-  for (const seat of approved.team.seats) {
+  for (const seat of team.seats) {
     // A stopped seat is not checked: `up` writes the file only at a delivery, so the repair
     // below could not fix a stopped seat's file. An unstopped seat's file is rewritten the
     // next time it launches, so no stale file outlives one.
     if (seat.stopped) continue;
     if (profileFor(seat.cli)?.rulesOption != null) continue;
-    // A seat name the team file's own rule refuses has no path to check — the parser already
-    // refuses it, so this only guards a record that holds one anyway. The path is resolved the
-    // one way, from the approval in force, like every other reader of the file.
-    const path = rulesFilePathOf(standing, seat.name, root, home);
+    const path = rulesFilePath(team.project, root, home, seat.name);
     if (path === null) continue;
-    const text = rulesOf(approved.team, seat, root);
+    const text = rulesOf(team, seat, root);
     const check = checkRulesFile(path, text);
     if (!check.ok) out.push({ what: `${seat.name}: ${check.what}`, repair: 'the owner runs team up', owner: true });
   }

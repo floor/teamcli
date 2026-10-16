@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
-import { approvalDifferencesOf, notInForce } from '../approve/approval.ts';
+import { notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { trustPolicy } from '../file/dialogs.ts';
@@ -9,7 +9,6 @@ import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { validateTeamFile } from '../file/validate.ts';
 import { agentList, agentRename, agentStatus, paneForeground, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey as herdrSendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { deliverRules, type Delivery } from '../launch/deliver.ts';
@@ -159,13 +158,6 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   if (callerProblem) return refused(callerProblem);
   const standing = host.standing(root);
   if (standing.kind !== 'verified') return refused({ class: 'caller', message: notInForce(standing) });
-  const drift = approvalDifferencesOf(standing, team);
-  if (drift.length) return refused({ class: 'caller', message: `the file is not the approved one (${drift.join('; ')})` });
-  // The trust entries the folder check reads come from the approved copy itself,
-  // never from the live file: the drift check above normally makes the two equal,
-  // but the check must not depend on that to be right about what was approved.
-  const approved = validateTeamFile(standing.record.file);
-  if (!approved.ok) return refused({ class: 'caller', message: 'the approved copy of the team file cannot be read' });
   if (trustPolicy(team) !== 'coordinator') return refused({ class: 'policy', message: `${seatName}: use team up and [o]` });
 
   const lock = acquireSeatLock(dir, session, seatName);
@@ -173,15 +165,15 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   try {
     const state = readState(dir).sessions[session] ?? emptySession();
     const recorded = state.seats[seatName];
-    // The seat is the approved copy's, and the pane is herdr's one agent of that name.
+    // The seat is the file's, and the pane is herdr's one agent of that name.
     // A recorded pane selects nothing: the state can name another pane, and a name the
-    // copy does not carry is left for the owner.
-    const configured = approved.team.seats.find((seat) => seat.name === seatName);
+    // file does not carry is left for the owner.
+    const configured = team.seats.find((seat) => seat.name === seatName);
     if (!configured) {
       if (!recorded) return refused({ class: 'state', message: `${seatName}: it is not a live seat` });
       return refused({
         class: 'state',
-        message: `${seatName}: its record is not an approved seat; left as it is (the owner cleans it: team remove ${seatName} --abandon)`,
+        message: `${seatName}: its record is not a declared seat; left as it is (the owner cleans it: team remove ${seatName} --abandon)`,
       });
     }
     const agents = host.agents(session);
@@ -206,12 +198,12 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
 
     const cli = configured.cli;
     const profile = profileFor(cli);
-    // The lobby the approved file resolves to: its own when the file sets `entity` or `lobby`, else
+    // The lobby the file resolves to: its own when the file sets `entity` or `lobby`, else
     // the machine-global one. The folder shown in the dialog must be this lobby, as team writes it.
-    const answerLobby = resolveLobby(host.home, approved.team);
-    const checked = inspect(seatName, host, session, pane, profile, approved.team.trust, answerLobby, root, recorded?.launched);
+    const answerLobby = resolveLobby(host.home, team);
+    const checked = inspect(seatName, host, session, pane, profile, team.trust, answerLobby, root, recorded?.launched);
     if ('class' in checked) return refused(checked);
-    const again = inspect(seatName, host, session, pane, profile, approved.team.trust, answerLobby, root, recorded?.launched);
+    const again = inspect(seatName, host, session, pane, profile, team.trust, answerLobby, root, recorded?.launched);
     if ('class' in again) return refused(again);
     if (again.folder !== checked.folder) return refused({ class: 'folder', message: `${seatName}: ${OUTSIDE}` });
     if (again.record.from !== checked.record.from || again.record.to !== checked.record.to || again.record.action !== checked.record.action) {
@@ -303,8 +295,8 @@ function checkProcess(
 
 /**
  * One fresh reading of the pane: the record this version answers, or the class that
- * refused. `trust` is the approved copy's own `trust:` list, never the live file's —
- * the folder must be an entry of what the owner approved.
+ * refused. `trust` is the file's own `trust:` list — the folder must be an entry
+ * of what the file names.
  */
 function inspect(
   seat: string,
@@ -528,12 +520,11 @@ async function recover(
   if (!named && !host.rename(session, pane, name)) return 'rule delivery';
   if (profile.rulesOption !== null) return true;
   // The rules are delivered exactly as `up` delivers them: written to the seat's per-seat
-  // file first — from the approved copy of the team file, as `up`'s are — then the one line
-  // that points at it, the only shape of rules a read-back can prove; this command shares
-  // that delivery.
+  // file first — from the live file, as `up`'s are — then the one line that points at it,
+  // the only shape of rules a read-back can prove; this command shares that delivery.
   const delivery = rulesDeliveryOf(standing, team, seat, root, host.home);
   if ('refusal' in delivery) return 'rule delivery';
-  if (!writeRulesFile(standing, seat.name, root, host.home, delivery.text, rulesFileHash(delivery.text)).ok) return 'rule delivery';
+  if (!writeRulesFile(standing, seat.name, root, host.home, delivery.text, rulesFileHash(delivery.text), undefined, team.project).ok) return 'rule delivery';
   let processRefusal: Refusal | null = null;
   const delivered = await deliverRules(
     profile.cli,
@@ -575,6 +566,7 @@ function deliveryOf(
     status: () => host.status(session, pane),
     type: (text) => host.type(session, pane, text),
     enter: () => host.enter(session, pane),
+    key: (name) => host.sendKey(session, pane, name),
     // The last look before Enter, the same no-follow read `up`'s delivery makes.
     file,
     foreground: () => host.foreground(session, pane),

@@ -30,14 +30,6 @@ export type SeatState = {
   stage: 'launched' | 'named' | 'ready';
   /** The CLI the seat was launched with: `down` stops it under it when the file renamed it. */
   cli?: string;
-  /** The model token the seat was launched with. */
-  model?: string;
-  /** The version token the seat was launched with. */
-  version?: string;
-  /** The effort word the seat was launched with, when set. */
-  effort?: string;
-  /** The full shell launch command the seat was started with. */
-  launch_line?: string;
   /** ISO 8601 timestamp when the seat last reached ready or was seen working. */
   last_active?: string;
   pane?: string;
@@ -64,6 +56,18 @@ export type SeatState = {
    * seat (`replacedSeat`). Absent when the launch's reading had none.
    */
   agent_session?: string;
+  /**
+   * What this launch declared, written when the idle prompt appears and left in place when a
+   * later ready write merges onto the record. A skip of a seat that is already ready does not
+   * set them: the file may have drifted, and the record has to stay the launch. Absent on a
+   * seat launched before they were stored.
+   */
+  model?: string;
+  version?: string;
+  /** Absent when the launch set no effort word. A later launch that sets none removes it. */
+  effort?: string;
+  /** The launch command of that idle record. Stored for the registry; reload does not compare it. */
+  launch_line?: string;
   // `own_commits` is the home for a temporary seat whose end is `merged:` and that has no worktree.
   // A seat in a worktree keeps that record on the worktree instead.
   temporary?: { like: string; until: string; task?: string; own_commits?: boolean };
@@ -93,6 +97,8 @@ export type WorktreeState = {
   setup: 'ok' | 'failed';
 };
 
+export type SwapRecord = { by: string; at: string };
+
 export type SessionState = {
   started?: { at: string; by: string };
   seats: Record<string, SeatState>;
@@ -101,6 +107,13 @@ export type SessionState = {
    * its `id` and `last_active` when relaunched, while `seats` holds only active runtime records.
    */
   retained_seats?: Record<string, RetainedSeat>;
+  /**
+   * A lead seat (the orchestrator's or the operator's) stopped for a replacement by `team remove
+   * <lead> --keep`: who stopped it and when. The file is not edited — a lead is never `stopped:` —
+   * so this record is what tells `doctor`, `status` and the next `add` that the gap is a swap in
+   * progress and not a crash. `team add <lead>` (or `up`) clears it once the seat runs again.
+   */
+  swapping?: Record<string, SwapRecord>;
   worktrees: Record<string, WorktreeState>;
   watch?: { pid: number; heartbeat: string; pane?: string; workspace?: string };
   /**
@@ -189,6 +202,15 @@ export function readState(dir: string): State {
       }
     } else if (session.retained_seats !== undefined) {
       delete session.retained_seats;
+    }
+    if (session.swapping && typeof session.swapping === 'object') {
+      for (const [name, swap] of Object.entries(session.swapping)) {
+        if (!swap || typeof swap !== 'object' || typeof swap.by !== 'string' || typeof swap.at !== 'string') {
+          delete session.swapping[name];
+        }
+      }
+    } else if (session.swapping !== undefined) {
+      delete session.swapping;
     }
     // Read old, write new: readings used to be held under a session. They are the project's
     // (§ 4.4), so every session's records are merged to the top level here — no reader loses one,

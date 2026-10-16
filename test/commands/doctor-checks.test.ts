@@ -186,7 +186,8 @@ describe('only the owner runs the checks', () => {
     expect(ran).toEqual([]);
     expect(io.out).toContain('--    the budget checks were not run: only the owner runs them');
     expect(io.out).not.toContain('the check for openai reads');
-    expect(io.out).toContain('ok    the file is the one the owner approved');
+    expect(io.out).not.toContain('team approve');
+    expect(io.out).not.toContain('the file is the one the owner approved');
     expect(io.out).toContain('ok    claude 2.1.288');
     expect(code).toBe(0);
   });

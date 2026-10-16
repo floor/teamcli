@@ -2,7 +2,7 @@ import { acquireSeatLock, seatLockPath, type SeatLock } from './seat-lock.ts';
 
 /**
  * The session mutator lock: one lock per session, under `<dir>/seat-locks/<session>/`, taken by
- * every command that mutates a session — `up`, `add`, `down` and `remove` — before its first
+ * every command that mutates a session — `up`, `add`, `down`, `remove` and `reload` — before its first
  * effect and released on every exit path. A second real run is refused, never queued, and a lock
  * left by a killed run is taken over by the next one (`seat-lock.ts`). The name is a leading
  * dot, so it can never be a seat name (`file/sections/seats.ts`) and can never collide with a
