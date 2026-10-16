@@ -108,7 +108,7 @@ describe('the registry file', () => {
 
   test('what was written reads back whole, roster and null entity included', () => {
     const roster = [
-      { agent: 'agt_0123456789ab', seat: 'builder-1', role: 'builder', leads: false },
+      { agent: 'agt_0123456789ab', seat: 'builder-1', role: 'builder' },
       { agent: 'agt_ba9876543210', seat: 'orchestrator', role: 'orchestrator', leads: true },
     ];
     upsertTeam(home, 'abcdef012345', { ...seed, lobby: '/home/lobby', roster, by: 'owner', at: AT });
@@ -191,7 +191,7 @@ describe('upsertTeam', () => {
   });
 
   test('an update changes the fields it names and nothing else, and moves only updated_at', () => {
-    const roster = [{ agent: 'agt_0123456789ab', seat: 'builder-1', role: 'builder', leads: false }];
+    const roster = [{ agent: 'agt_0123456789ab', seat: 'builder-1', role: 'builder' }];
     upsertTeam(home, 'abcdef012345', { ...seed, roster, lifecycle: 'running', by: 'owner', at: AT });
     const later = '2026-10-17T08:00:00.000Z';
     const updated = upsertTeam(home, 'abcdef012345', { session: 'renamed', by: 'someone else', at: later });
@@ -280,7 +280,7 @@ describe('a team record points to its project by id', () => {
 describe('setRoster and setTeamLifecycle', () => {
   test('set the roster, replacing it whole', () => {
     upsertTeam(home, 'abcdef012345', { ...seed, at: AT });
-    setRoster(home, 'abcdef012345', [{ agent: 'agt_000000000001', seat: 'a', role: 'builder', leads: false }]);
+    setRoster(home, 'abcdef012345', [{ agent: 'agt_000000000001', seat: 'a', role: 'builder' }]);
     const next = [{ agent: 'agt_000000000002', seat: 'b', role: 'tester', leads: true }];
     expect(setRoster(home, 'abcdef012345', next).roster).toEqual(next);
     expect(getTeam(home, 'abcdef012345')?.roster).toEqual(next);
@@ -308,23 +308,23 @@ describe('the roster line carries the lead capability', () => {
       at: AT,
       roster: [
         { agent: 'agt_0123456789ab', seat: 'lead', role: 'builder', leads: true },
-        { agent: 'agt_ba9876543210', seat: 'worker', role: 'builder', leads: false },
+        { agent: 'agt_ba9876543210', seat: 'worker', role: 'builder' },
       ],
     });
     const text = readFileSync(teamsFile(home), 'utf8');
     expect(text).toContain('      - { agent: agt_0123456789ab, seat: lead, role: builder, leads: true }');
-    expect(text).toContain('      - { agent: agt_ba9876543210, seat: worker, role: builder, leads: false }');
-    expect(getTeam(home, 'abcdef012345')?.roster.map((entry) => entry.leads)).toEqual([true, false]);
+    expect(text).toContain('      - { agent: agt_ba9876543210, seat: worker, role: builder }');
+    expect(getTeam(home, 'abcdef012345')?.roster.map((entry) => entry.leads)).toEqual([true, undefined]);
   });
 
-  test('a line written before the field existed reads as not leading', () => {
+  test('a line written before the field existed reads as before: not known to lead', () => {
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(
       teamsFile(home),
       'teams:\n  abcdef012345:\n    project: acme\n    lifecycle: running\n    session: acme\n    root: /work/acme\n    roster:\n      - { agent: agt_0123456789ab, seat: lead, role: builder }\n    provenance: { registered_by: owner, registered_at: "2026-10-16T12:00:00.000Z", updated_at: "2026-10-16T12:00:00.000Z" }\n',
     );
     expect(getTeam(home, 'abcdef012345')?.roster).toEqual([
-      { agent: 'agt_0123456789ab', seat: 'lead', role: 'builder', leads: false },
+      { agent: 'agt_0123456789ab', seat: 'lead', role: 'builder' },
     ]);
   });
 
