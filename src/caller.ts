@@ -214,7 +214,8 @@ export function noPaneRefusal(name: string): string {
  * bails on the record it can still read (`herdr no longer shows this seat on its recorded pane;
  * nothing closed`), and `team add` bails with the same line; `team remove` of the orchestrator's
  * or the operator's name — the two this refusal can name — is refused by the file's own
- * validation (`names no declared seat` / `can't be a stopped seat`, exit 2); with the recorded
+ * validation (`names no declared seat`, exit 2) or, with `--keep`, is a swap that is not this
+ * seat's to run on itself (`remove.swap-self`); with the recorded
  * pane gone (unreadable) `team up` alone does launch the seat afresh. `team down` then `team up`
  * repairs all three: the stop stops every seat it reaches and clears the session, the start
  * launches the seat again and records the pane it starts on (exit 0, 0; the caller then passes

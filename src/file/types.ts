@@ -4,8 +4,10 @@ import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
-/** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation. */
-export const GRANT_SCOPES = ['up', 'down', 'approve', 'init', 'reload'] as const;
+/** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation.
+ *  `swap` lets the granted seat stop another lead seat for a replacement (`team remove <lead>
+ *  --keep`, then `team add <lead>`); never its own seat. */
+export const GRANT_SCOPES = ['up', 'down', 'approve', 'init', 'reload', 'swap'] as const;
 export type GrantScope = (typeof GRANT_SCOPES)[number];
 
 /**
