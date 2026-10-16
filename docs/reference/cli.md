@@ -888,12 +888,13 @@ Hidden: no
 
 Usage:
 
-    team usage [--json]
+    team usage [--json] [--all]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--all` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `-h` | no | no | yes |

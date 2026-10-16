@@ -139,9 +139,29 @@ function statusIndex(
  * The one line a quota figure may be read from: the composer's own status row, or null when the
  * window shows none. A dialog, a transcript line, the input box — anything the seat printed or
  * typed — is never the row. The caller still has to know the screen is a composer screen.
+ *
+ * A box composer draws its status row under the box's closing rule — the rule the classification
+ * itself reads (`boxToRule`'s own last rule row) — so the row is the last line under that rule
+ * matching the profile's `status` grammar, and a grammar-less box reads none. The box itself
+ * sits above the rule: a line the seat typed cannot be the row, wherever the box's text wraps.
  */
 export function statusRowOf(data: ScreenData, lines: string[], options?: ScreenOptions): string | null {
   const composer = data.composer;
+  if (composer.mode === 'box-to-rule') {
+    if (composer.status.length === 0) return null;
+    let close = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (ruleRun(composer, lines[i] ?? '') !== null) {
+        close = i;
+        break;
+      }
+    }
+    if (close < 0) return null;
+    for (let i = lines.length - 1; i > close; i--) {
+      if (composer.status.some((pattern) => pattern.test(lines[i] ?? ''))) return lines[i] ?? null;
+    }
+    return null;
+  }
   if (composer.mode !== 'status-last' && composer.mode !== 'status-then-one') return null;
   const at = statusIndex(composer, lines, composer.mode === 'status-then-one', () => false, options?.cwd, options?.home);
   return at === 'stop' || at < 0 ? null : (lines[at] ?? null);
