@@ -21,12 +21,16 @@ needs it, and refuses the same folders `up` refuses, before it writes anything.
 Reads the team file (or the one `--file` names), this machine's approval store (the record, and the
 approved copy the seat is put back from), the session's state (`.agents/team.state.json`, including
 the project's stored budget readings), herdr (the session's state, its agents and their workspaces),
+the seat's CLI's own config under the seat's home when the seat is about to start in the lobby,
 and, like `up`: the doctor's findings and the machine's load, free memory, free disk and free swap.
 
 Writes the team file when the seat has to be put back into it, `.agents/team.state.json` (the seat's
 stage, pane and workspace; a seat stopped at a dialog's `waiting-owner` record, with the process
 identity read at that moment; a temporary seat's entry), `.agents/team.log`, the store's ledger of
-seats the team has had, and, through herdr: the workspace, the launch, and the name.
+seats the team has had, the CLI's own trust record for the lobby when the seat is about to start
+there — the file that CLI already reads for a folder it was told to trust, written under the seat's
+home before the workspace is made, and left untouched when it or a folder above it is a link — and,
+through herdr: the workspace, the launch, and the name.
 
 ## Who may run it
 
@@ -40,9 +44,9 @@ and a process of the same user that writes its own pane there under the orchestr
 renames its pane, passes. The check guards a mistaken agent, not a hostile process running as the
 same user. `--file` and `--session` are the owner's alone, from a terminal outside herdr: a
 non-owner aiming either is refused before the flagged file or session is read at all. Everything `up`
-refuses on — a file that is not the approved one, a `MISS`
-finding from [team doctor](doctor.md), the machine past its limits, the approval's ceilings — refuses
-here too, for the one seat being started.
+refuses on — a `MISS` finding from [team doctor](doctor.md), the machine past its limits, the
+ceilings — refuses here too, for the one seat being started. A file that differs from a stored
+copy is not a refusal: the live file is the record.
 
 A file with a `delegates` section also admits one more caller: the approved delegate, a pane the
 owner named in that section as `<session>/<pane id>`, outside the team. When the ordinary rule
@@ -123,9 +127,11 @@ refused in the same paragraph as any other `MISS` finding: `team add: <name>: it
 \`<word>\`, which is not on the PATH`, or `team add: <name>: its launch line runs \`<path>\`, not
 found from its start folder <folder>; the same file is at \`<absolute>\` from the project root —
 write that path` — and the file is left alone. A seat this `add` adopts into a pane that is already
-there — its state names the workspace, and an unnamed pane is in it — runs nothing now: its line is
-checked where that pane runs when the state records the folder it was started in, and otherwise is
-not checked at all, the note saying so, and a miss found there is never refused. A `--dry-run`
+there — its state names the workspace, no other seat's record is on that workspace or on the seat's
+recorded pane, the pane still holds the process the record launched where the record carries one,
+and an unnamed pane is in it — runs nothing now: its line is checked where that pane runs when the
+state records the folder it was started in, and otherwise is not checked at all, the note saying
+so, and a miss found there is never refused. A `--dry-run`
 prints a refusal in the plan instead — `  skip <name>: would refuse: …` above `dry run: nothing was
 run` — and makes nothing. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch). It returns before these real-run failures, and never takes their status:
 
@@ -144,7 +150,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | `team add: line <n>: <message>` / `team add: <message>` | 2 |
 | `team add: only the owner, the orchestrator or the operator runs it; this call is <caller>` | 1 |
 | `team add: only the owner, the orchestrator, the operator or the approved delegate runs it; this call is <caller>` — the file names a delegate, and this call is not it | 1 |
-| ``team add: delegation needs a verified approval: <reason>`` / ``team add: delegation needs a readable approved copy: run `team approve` `` / ``team add: delegation needs the approved file: the file is not the approved one (<differences>): run `team approve` `` — the delegate gate, reading the same approval every other check reads | 1 |
+| ``team add: delegation needs a verified approval: <reason>`` — the delegate gate. A fingerprint difference is not a refusal; the live file names the delegate | 1 |
 | ``team add: delegation cannot verify its placement or seats: <reason>`` | 1 |
 | `team add: the approved delegate must be an external non-seat pane` | 1 |
 | ``team add: the approved delegate <session>/<pane id> may not run `add`; its approved commands are <list>`` | 1 |
@@ -155,10 +161,8 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | `team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat` — any caller but the owner; a temporary seat takes them from any caller | 1 |
 | ``team add: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
 | ``team add: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
-| ``team add: the file was never approved on this machine: run `team approve` `` | 1 |
-| ``team add: approved before records were signed: run `team approve` once`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
-| ``team add: the file is not the approved one (<differences>): run `team approve` `` | 1 |
-| ``team add: the approved copy can't be read: run `team approve` `` | 1 |
+| `team add: <name>: its pane holds a process this record cannot tie to the launch` — the record holds the pane's own shell pid and the CLI's pids, read when the seat was launched; the pane is running neither, and the agent session herdr shows there is not the stored one. Nothing is closed and no second CLI is started in it | 1 |
+| ``team add: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify. A missing record is not a refusal, and neither is a file that differs from a stored copy | 1 |
 | `team add: the approved file has no seat "<name>"` | 1 |
 | `team add: <name> is already running`. When that seat's screen is one the profile does not recognise, the owner is also told `team remove <name> --abandon closes its workspace without typing`; anyone else is told `the owner runs team remove <name> --abandon, which closes its workspace without typing` | 1 |
 | `team add: no launch profile for \`<cli>\` in this version` | 1 |
@@ -177,6 +181,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | ``team add: the file is legacy: migrate trust to absolute paths including the lobby ~/.config/team/lobby: ...`` | 1 |
 | ``team add: trust: must list the lobby ~/.config/team/lobby`` | 1 |
 | ``team add: the lobby ~/.config/team/lobby: <check>`` | 1 |
+| `team add: refused: the lobby is not trusted for <cli>: run <cli> in <lobby> and accept the folder` — the CLI's own record for the lobby can't be written, so the seat would open that folder untrusted; `grok` and `cursor` seats are told their own flag instead (`run grok --trust in <lobby>`, `run cursor-agent --trust in <lobby>`) | 1 |
 | ``team add: seat beacon-qa would start in live, inside the protected checkout live; a seat that isn't `mode: shared` never starts in one`` | 1 |
 | `team add: the file changed while add was checking; nothing was written` | 1 |
 | `team add: the load is <n> per core, above <n>` / `team add: free memory is <n>%, below <n>%` | 1 |
@@ -322,3 +327,28 @@ Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--sess
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
 exit 2
 ```
+
+A seat that starts in the lobby is about to open a folder its CLI has never been asked to trust, so
+the record that CLI reads for a trusted folder is written under the seat's home first, for that
+lobby, before any workspace is made; a CLI whose record this build does not know starts with
+nothing written. A record that cannot be written refuses the seat before the file is edited — a
+config file, or a folder above it, that is a link is never read or written, and neither is a config
+the command cannot read. The seat the page stopped above, started again against such a config:
+
+```file file=../../.claude.json
+not json
+```
+
+```console
+$ team remove claude-beacon --keep ; echo "exit $?"
+claude-beacon: stopped
+stopped claude-beacon
+exit 0
+$ team add claude-beacon ; echo "exit $?"
+team add: refused: the lobby is not trusted for claude: run claude in ~/.config/team/lobby and accept the folder
+exit 1
+```
+
+The line names the repair the seat's own CLI needs: a `grok` or `cursor` seat is told `run grok
+--trust in <lobby>`, or `run cursor-agent --trust in <lobby>`. A `--dry-run` reports it as
+`<name>: would refuse: <line>` and writes nothing.

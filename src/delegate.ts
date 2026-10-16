@@ -118,10 +118,10 @@ export function logDelegated(dir: string, pane: string, command: DelegateCommand
  * file and nothing remembered: no earlier valid copy and no unverified approval is consulted.
  * It decides and stops. It does not print, write, or launch.
  *
- * An earlier refusal wins. Any approval difference refuses — a reorder of the delegates list
- * or of a command list included, both part of the canonical value — except under `approve`,
- * whose own step is the ordinary-change guard below: it admits an ordinary difference — the
- * roster and `rules` — and refuses every other owner section.
+ * An earlier refusal wins. The live file is the record for every act but `approve`: a
+ * stored copy and a fingerprint difference are not a gate. `approve` keeps the ordinary-change
+ * guard: it admits an ordinary difference — the roster and `rules` — and refuses every other
+ * owner section.
  */
 export function delegateGate(input: {
   command: DelegateCommand;
@@ -143,35 +143,19 @@ export function delegateGate(input: {
     return refuse('delegate-approval', `delegation needs a verified approval: ${notInForce(standing)}`);
   }
 
-  const copy = sources.approvedCopy ? sources.approvedCopy(root) : approvedCopy(root, home);
-  if (copy === null || validated(copy) === null) {
-    return refuse('delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`');
-  }
-
-  // The difference step. A delegated approval admits an ordinary difference — the day's
-  // roster and rules edits are exactly what it is for — and refuses, fail-closed, every other
-  // owner section: authority, money, the ceilings, identity, trust, the workspace's setup
-  // commands, and any section the parser grows later, since the test is membership in the
-  // ordinary list and never exclusion from a list of the known-bad. Seat differences are
-  // admitted here; the ceiling is what bounds the roster, on both sides of this step: `limits`
-  // itself is refused above by name, the ceiling a launch runs under is fixed by the record
-  // (`up` reads it there, never from the file, and refuses a seat past it before it runs), and
-  // a file that declares no ceiling derives one from its seats — so that add moves the section
-  // and is refused here.
+  // `approve` still refuses an owner section outside the ordinary list, and still needs a
+  // readable stored copy. Every other act reads the live file. A fingerprint difference is
+  // not a refusal, and a stored copy that cannot be read does not block the act.
   if (command === 'approve') {
+    const copy = sources.approvedCopy ? sources.approvedCopy(root) : approvedCopy(root, home);
+    if (copy === null || validated(copy) === null) {
+      return refuse('delegate-approved-copy', 'delegation needs a readable approved copy: run `team approve`');
+    }
     const kept = compare(approvedFingerprints(standing.record), fingerprints(team)).filter(
       (difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name),
     );
     if (kept.length > 0) {
       return refuse('delegate-not-ordinary', `this change needs the owner: ${kept.map(describe).join('; ')}`);
-    }
-  } else {
-    const differences = approvalDifferencesOf(standing, team);
-    if (differences.length > 0) {
-      return refuse(
-        'delegate-drift',
-        `delegation needs the approved file: the file is not the approved one (${differences.join('; ')}): run \`team approve\``,
-      );
     }
   }
 
@@ -405,6 +389,18 @@ type Found =
  * The caller is placed in each entry's session, because a pane id only means something inside
  * the session that lists it.
  */
+/** Whether the live file names this caller for `command`. No approval record is read. */
+export function delegateNamedFor(
+  team: TeamFile,
+  command: DelegateCommand,
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+): boolean {
+  const entries = team.delegates;
+  if (!entries || entries.length === 0) return false;
+  const found = findEntry(entries, io);
+  return found.kind === 'match' && found.entry.commands.includes(command);
+}
+
 function findEntry(entries: readonly Delegate[], io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>): Found {
   let shown: Caller | undefined;
   for (const entry of entries) {

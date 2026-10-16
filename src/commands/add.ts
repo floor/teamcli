@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { approvalDifferencesOf, budgetsInForceOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
+import { budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
@@ -26,7 +26,7 @@ import { defaultLabel, validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
 import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
 import {
-  agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, reportDisplayAgent, sessionRunning,
+  agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, reportDisplayAgent, sendKey, sessionRunning,
   sessionState, startServer, typeText, workspaceClose, workspaceCreate, workspaceList, workspacePanes,
   type HerdrAgent, type PaneProcesses,
 } from '../herdr.ts';
@@ -44,7 +44,7 @@ import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
-import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
+import { approvalStanding, approvedCopy, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
@@ -89,6 +89,7 @@ const realLaunch: Launch = {
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
   pressEnter: (session, pane) => pressEnter(pane, aim(session)),
+  sendKey: (session, pane, key) => sendKey(pane, key, aim(session)),
   agentStatus: (session, pane) => agentStatus(pane, aim(session)),
   foreground: (session, pane) => paneForeground(pane, aim(session)),
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
@@ -270,28 +271,19 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.default-session
     return 1;
   }
-  // One verified snapshot for the whole command: a legacy or refused record is not
-  // an approval in force, and the approved copy the seat is built from is the record's own.
+  // A missing record is the live file, and so is a verified one: the edit starts from
+  // the live text. A seat the live file no longer names is put back from the stored
+  // copy's stanza alone. A legacy or refused record is still not in force.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
-  if (standing.kind !== 'verified') {
+  if (standing.kind !== 'verified' && standing.kind !== 'none') {
     out.stderr(`team add: ${plainText(notInForce(standing))}\n`);
     // exit: add.never-approved
     // exit: add.ceilings
     return 1;
   }
-  const differences = approvalDifferencesOf(standing, team);
-  if (differences.length) {
-    out.stderr(`team add: the file is not the approved one (${plainText(differences.join('; '))}): run \`team approve\`\n`);
-    // exit: add.differs
-    return 1;
-  }
-  const approvedText = standing.record.file;
-  const approved = validateTeamFile(approvedText, { home: sources.home, fs: sources.fs, root });
-  if (!approved.ok) {
-    out.stderr('team add: the approved copy can\'t be read: run `team approve`\n');
-    // exit: add.approved-copy
-    return 1;
-  }
+  const approvedText = readFileSync(path, 'utf8');
+  const approvedTeam = team;
+  const ceilings = ceilingsOf(team);
 
   const live = sources.sessionState(session);
   if (live === null) {
@@ -314,12 +306,21 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const recorded = readState(dir).sessions[session] ?? emptySession();
-  const ceilings: Ceilings = standing.record.approval.ceilings;
 
   const original = readFileSync(path, 'utf8');
+  const asked = args.rest[0] ?? '';
+  const stored = seatSource(standing, root, sources.home);
+  const fromStore = stored !== null && !team.seats.some((seat) => seat.name === asked);
   const built = temporary
-    ? temporarySeat(args.values, original, approved.team, recorded, agents, root, team.workspace.base)
-    : declaredSeat(args.rest[0] ?? '', original, approvedText, approved.team, sources.home, sources.fs);
+    ? temporarySeat(args.values, original, approvedTeam, recorded, agents, root, team.workspace.base)
+    : declaredSeat(
+      asked,
+      original,
+      fromStore ? stored.text : approvedText,
+      fromStore ? stored.team : approvedTeam,
+      sources.home,
+      sources.fs,
+    );
   if ('error' in built) {
     out.stderr(`team add: ${plainText(built.error)}\n`);
     // exit: add.no-seat
@@ -382,8 +383,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
   // A delegated add may start only a declared, not-stopped seat that is not running: one that
-  // would restore a missing seat or clear `stopped` edits the file and re-signs the approval,
-  // and that stays the owner's. Refused after the already-running refusal, before the write,
+  // would restore a missing seat or clear `stopped` edits the file, and that stays the owner's.
+  // Refused after the already-running refusal, before the write,
   // the digest and any dry-run plan — so a delegated add writes neither file nor approval.
   if (delegatePane !== null && built.edited !== original) {
     out.stderr(`team add: ${plainText(ADD_DELEGATE_EDIT.text)}\n`);
@@ -475,7 +476,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // says it. A `miss` joins the doctor findings below, for a seat this `add` would launch.
   // A seat whose pane holds a process team did not launch is never adopted into that pane:
   // it is closed and launched fresh, so no stray is looked for.
-  const stray = repair ? undefined : unnamedIn(recorded.seats[built.name]?.workspace, agents);
+  const stray =
+    repair || (held?.launched !== undefined && verdict !== 'same')
+      ? undefined
+      : unnamedIn(built.name, recorded.seats, agents);
   const resumeCwd = recorded.seats[built.name]?.start_cwd;
   const line = !stray
     ? launchLineFinding(prepared.team, built.seat, root, {
@@ -531,6 +535,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       : []),
   ]) {
     if (blocksLaunch(finding)) {
+      // A missing approval record is the live file, the same way `up` reads it. The doctor's
+      // never-approved miss is that record's absence, and it does not stop this add.
+      if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
       // A file a CLI reads at start is said here and refused later, only when this seat is
       // about to start in the lobby. Other misses still stop the run here.
       if (finding.text.includes(' is read at start by ')) {
@@ -708,7 +715,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       }
       const parsed = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
       // The amendment re-signs from the command's own one snapshot, read at its gate.
-      if (parsed.ok) recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);
+      if (parsed.ok && standing.kind === 'verified') recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);
       // The reach projection, from the file just written: a seat added with a `reach` grant
       // reaches the bridge and the shuttle at this approval, without waiting for an `up`.
       if (parsed.ok) {
@@ -746,6 +753,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   } finally {
     runLock.release();
   }
+}
+
+/** The stored copy, when this standing has one that still parses. Used only to put back a
+ *  seat the live file no longer names. The edit itself stays on the live text. */
+function seatSource(standing: Standing, root: string, home: string | undefined): { text: string; team: TeamFile } | null {
+  if (standing.kind !== 'verified') return null;
+  const text = approvedCopy(root, home);
+  if (text === null) return null;
+  const parsed = validateTeamFile(text, { home });
+  return parsed.ok ? { text, team: parsed.team } : null;
 }
 
 function declaredSeat(
@@ -833,21 +850,35 @@ function seatPlan(
     displayAgent: displayAgent(seat),
     model: seat.model,
     version: seat.version,
+    ...(seat.effort ? { effort: seat.effort } : {}),
     // The team file's own repair for this seat — a lead seat is told only the whole-team
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
     stopped: false,
-    // An option seat's rules keep coming from the live file, as main's launch line does; a
-    // message seat's file and line are the approved copy's, whatever the live file says now.
+    // An option seat's launch line and a message seat's rules file both come from the live file.
     rules: rulesOf(team, seat, root),
-    ...seatDeliveryOf(standing, team, seat, root, home),
+    ...seatDeliveryOf(standing, team, seat, root, home, true),
     ...(start.lobby ? { lobby: true } : {}),
   };
 }
 
-function unnamedIn(workspace: string | undefined, agents: readonly HerdrAgent[]): HerdrAgent | undefined {
+function unnamedIn(
+  seatName: string,
+  seats: Readonly<Record<string, SeatState>>,
+  agents: readonly HerdrAgent[],
+): HerdrAgent | undefined {
+  const held = seats[seatName];
+  const workspace = held?.workspace;
   if (!workspace) return undefined;
-  return agents.find((agent) => !agent.name && agent.workspace === workspace);
+  const shared = Object.entries(seats).some(
+    ([name, other]) =>
+      name !== seatName
+      && (other.workspace === workspace || (held.pane !== undefined && other.pane === held.pane)),
+  );
+  if (shared) return undefined;
+  return agents.find(
+    (agent) => !agent.name && agent.workspace === workspace && (held.pane === undefined || agent.pane === held.pane),
+  );
 }
 
 function runningOf(agents: readonly HerdrAgent[], team: TeamFile, state: SessionState): Running[] {
@@ -857,9 +888,12 @@ function runningOf(agents: readonly HerdrAgent[], team: TeamFile, state: Session
     if (!agent.name) continue;
     const seat = seats.get(agent.name);
     const known = state.seats[agent.name];
-    if (!seat && !known?.temporary) continue;
     const like = known?.temporary ? seats.get(known.temporary.like) : undefined;
-    running.push({ name: agent.name, vendor: seat?.vendor ?? like?.vendor ?? 'unknown', temporary: Boolean(known?.temporary) });
+    running.push({
+      name: agent.name,
+      vendor: seat?.vendor ?? like?.vendor ?? 'unknown',
+      temporary: !seat || Boolean(known?.temporary),
+    });
   }
   return running;
 }
@@ -872,7 +906,7 @@ function ceilingProblem(ceilings: Ceilings, running: readonly Running[], seat: S
   }
   const cap = ceilings.vendors[seat.vendor];
   if (cap !== undefined) {
-    const vendors = running.filter((item) => item.vendor === seat.vendor).length + 1;
+    const vendors = running.filter((item) => item.vendor === seat.vendor || item.vendor === 'unknown').length + 1;
     if (vendors > cap) return `the approval allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
   }
   return null;
@@ -936,8 +970,10 @@ function hostOf(input: {
     typeLine: () => false,
     deliverRules: async (session, pane, cli, file, seconds) => {
       // The rules go to the file first; nothing is typed until it holds them. The writer
-      // builds the path itself, from the approval in force and the seat's name.
-      const written = writeRulesFile(input.standing, file.seat, input.root, input.home, file.text, rulesFileHash(file.text));
+      // builds the path itself, from the live project and the seat's name.
+      const written = writeRulesFile(
+        input.standing, file.seat, input.root, input.home, file.text, rulesFileHash(file.text), undefined, input.team.project,
+      );
       if (!written.ok) return fileRefusalOf(written);
       if (!typeablePath(file.path)) {
         return { stop: 'path', typed: false, sent: false, kind: 'unknown' as const, row: null };
@@ -948,6 +984,9 @@ function hostOf(input: {
         status: () => launch.agentStatus?.(session, pane) ?? null,
         type: (value) => launch.typeText?.(session, pane, value) ?? false,
         enter: () => launch.pressEnter?.(session, pane) ?? false,
+        ...(launch.sendKey
+          ? { key: (name: string) => launch.sendKey!(session, pane, name) }
+          : {}),
         // The last look before Enter: the file, read without following a link, must still hold
         // the text whose hash the line names.
         file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),
@@ -1037,7 +1076,8 @@ function hostOf(input: {
           }
         }
         // `waiting: null` removes the field alone; anything else written replaces it.
-        const { waiting: written, ...rest } = patch;
+        // `effort: null` is a launch that set no word: the stored word goes with it.
+        const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,
           ...rest,
@@ -1053,6 +1093,8 @@ function hostOf(input: {
         };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;
+        if (patchedEffort === null) delete seatState.effort;
+        else if (patchedEffort !== undefined) seatState.effort = patchedEffort;
         current.seats[name] = seatState;
         if (patch.pane) {
           replaced = prior.pane !== patch.pane ? prior.pane : undefined;
@@ -1069,8 +1111,8 @@ function hostOf(input: {
     },
     drop(name) {
       // A temporary seat's rules file goes with the seat. The remover builds the path itself,
-      // from the approval in force and the seat's name, and walks the writer's checked chain.
-      if (temporary && name === seat.name) removeRulesFile(input.standing, name, input.root, input.home);
+      // from the live project and the seat's name, and walks the writer's checked chain.
+      if (temporary && name === seat.name) removeRulesFile(input.standing, name, input.root, input.home, input.team.project);
       let pane: string | undefined;
       updateState(dir, (file) => {
         const current = file.sessions[session];

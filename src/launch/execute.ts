@@ -103,6 +103,11 @@ export type Host = {
       launched?: LaunchedIdentity;
       /** The agent session read with the process, stored beside `launched`. */
       agent_session?: string;
+      /** The declaration this launch reached the prompt with. `effort: null` clears a stored word. */
+      model?: string;
+      version?: string;
+      effort?: string | null;
+      launch_line?: string;
       /** A waiting record to write, or null to remove the seat's waiting field. */
       waiting?: WaitingRecord | null;
     },
@@ -830,6 +835,9 @@ export async function executePlan(
               launched: identity,
               ...(here.workspace ? { workspace: here.workspace } : {}),
               ...(sessionId ? { agent_session: sessionId } : {}),
+              ...(model !== undefined && version !== undefined
+                ? { model, version, launch_line: op.command, effort: op.effort ?? null }
+                : {}),
             });
           }
           // After the idle wait, before the rename and the rules: the same "differs" the watch uses.
@@ -1229,7 +1237,39 @@ export async function executePlan(
           break;
         }
         const verdict = seatProcessVerdict(op.launched, host.processInfo?.(session, op.pane));
-        if (op.drift) {
+        // Set when this repair is a reload whose re-read passed. Logged once, immediately
+        // before the close, and not on any refusal above it.
+        let reloadDetail: string | undefined;
+        if (op.reload) {
+          const refuse = (reason: string) => {
+            held = true;
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason });
+          };
+          if (verdict === 'unknown') {
+            refuse('its pane could not be read; nothing closed');
+            break;
+          }
+          if (verdict !== 'same') {
+            refuse('the process in its pane is not the one team launched; nothing closed');
+            break;
+          }
+          const kind = host.classify(session, op.pane, op.cli);
+          const status = listed.status;
+          if (status === 'working' || kind === 'working') {
+            refuse('is working; nothing closed');
+            break;
+          }
+          if (kind === 'unsent') {
+            refuse('holds unsent text; nothing closed');
+            break;
+          }
+          if (!((status === 'idle' || status === 'done') && kind === 'idle')) {
+            refuse('is not at an idle prompt; nothing closed');
+            break;
+          }
+          reloadDetail = op.reload.detail;
+        } else if (op.drift) {
           // The process must still be the one team launched: a drift close is not the
           // stale-pane repair. Then the model must still differ, and the seat must still
           // be free. A match is the seat's again and is not an error. Anything unreadable
@@ -1327,6 +1367,7 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'its pane holds a process this record cannot tie to the launch' });
           break;
         }
+        if (reloadDetail !== undefined) host.log(op.seat, reloadDetail);
         if (!host.closeWorkspace(session, op.workspace)) {
           held = true;
           dropped.add(op.seat);
@@ -1334,7 +1375,7 @@ export async function executePlan(
           break;
         }
         host.drop(op.seat);
-        relaunched.set(op.seat, op.drift || verdict === 'same' ? 'drift' : verdict);
+        relaunched.set(op.seat, op.drift || op.reload || verdict === 'same' ? 'drift' : verdict);
         break;
       }
       case 'close': {
@@ -1607,6 +1648,6 @@ function modelLeft(running: Running, declared: { model: string; version: string 
   const id = flag.id ?? '<id>';
   return (
     `runs ${running.model} ${running.version}; the file says ${declared.model} ${declared.version}; ` +
-    `left at launched, not named. Add ${flag.option} ${id} to its launch, or correct the file's model and version and run \`team approve\``
+    `left at launched, not named. Add ${flag.option} ${id} to its launch, or correct the file's model and version`
   );
 }
