@@ -3636,6 +3636,10 @@ function registerSources(place: Place, over: Partial<RegisterSources> = {}): Reg
     // The address a register records for the seat: the scene runs no sockets.
     refreshAddress: () => ({ address: null }),
     paneText: () => IDLE,
+    // The two sidebar writes an adoption re-applies (`register-label.test.ts` holds their
+    // scenes): noops that report "done", so these scenes spawn no herdr.
+    renameWorkspace: () => true,
+    reportDisplayAgent: () => true,
     now: () => NOW,
     ...over,
   };
