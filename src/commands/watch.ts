@@ -23,6 +23,7 @@ import { beatWatch, ownWatchPane, placedWatch } from '../watch/pane.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
+import { labelSweep } from '../watch/label-tick.ts';
 import { newMemory, ownUnsent, pass, type MailboxWaiting } from '../watch/pass.ts';
 import { readScreen } from '../watch/screen.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
@@ -65,8 +66,10 @@ export type WatchSources = {
   sleep(ms: number): Promise<void>;
   notify(text: string): void;
   now(): Date;
-  // Waits between passes; false ends the watch.
-  wait(seconds: number): Promise<boolean>;
+  // Waits between passes; false ends the watch. `onTick`, when the source honours it, runs
+  // about every five seconds inside the wait: the label sweep, so a running seat's status line
+  // reaches line 2 without a whole interval.
+  wait(seconds: number, onTick?: () => void): Promise<boolean>;
   alive(pid: number): boolean;
   pid: number;
   /** This process's pane, `'gone'` when herdr answered and none has it, null when herdr can't say. */
@@ -275,6 +278,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // continues. The watch ends only when the next pass says 'gone' again. A pass that finds the
   // pane, or where herdr cannot say, forgets it.
   let paneGoneOnce = false;
+  // The agents and panes of the last whole read: what the label sweep between passes works on.
+  let lastLive: Live | null = null;
   try {
     for (;;) {
       // The file is read again on every pass, so a seat parked or stopped since is seen.
@@ -332,6 +337,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       const own = sources.ownPane?.(session, sources.pid);
       const ownPane = own && own !== 'gone' ? own.pane : null;
       const live = sources.live(session, team);
+      lastLive = live;
       if (!live) {
         if (!silent) tell('herdr doesn\'t answer; the watch keeps trying', true);
         silent = true;
@@ -469,7 +475,23 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       }
       paneGoneOnce = place === 'end';
       beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place);
-      if (!(await sources.wait(inForce.interval))) break;
+      // The label sweep, inside the wait: a running seat's own status line reaches line 2 in
+      // about five seconds, not a whole interval. It repeats the pass's own rule on the panes
+      // the last live read named — the same memory, so the two cannot disagree — and the next
+      // pass re-reads everything and stays the authority.
+      const sweep = () => {
+        const last = lastLive;
+        if (last === null) return;
+        const { failed } = labelSweep({
+          seats: team.seats,
+          agents: last.agents,
+          memory,
+          read: (pane) => sources.screen(pane, session),
+          report: (pane, text) => sources.reportDisplayAgent?.(session, pane, text) ?? false,
+        });
+        for (const seat of failed) say(`${seat.name}: its display was not reported`, false);
+      };
+      if (!(await sources.wait(inForce.interval, sweep))) break;
     }
   } finally {
     updateState(dir, (state) => {
