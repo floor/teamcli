@@ -26,7 +26,7 @@ import { defaultLabel, validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
 import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
 import {
-  agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, reportDisplayAgent, sessionRunning,
+  agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, reportDisplayAgent, sendKey, sessionRunning,
   sessionState, startServer, typeText, workspaceClose, workspaceCreate, workspaceList, workspacePanes,
   type HerdrAgent, type PaneProcesses,
 } from '../herdr.ts';
@@ -89,6 +89,7 @@ const realLaunch: Launch = {
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
   pressEnter: (session, pane) => pressEnter(pane, aim(session)),
+  sendKey: (session, pane, key) => sendKey(pane, key, aim(session)),
   agentStatus: (session, pane) => agentStatus(pane, aim(session)),
   foreground: (session, pane) => paneForeground(pane, aim(session)),
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
@@ -848,6 +849,7 @@ function seatPlan(
     displayAgent: displayAgent(seat),
     model: seat.model,
     version: seat.version,
+    ...(seat.effort ? { effort: seat.effort } : {}),
     // The team file's own repair for this seat — a lead seat is told only the whole-team
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
@@ -980,6 +982,9 @@ function hostOf(input: {
         status: () => launch.agentStatus?.(session, pane) ?? null,
         type: (value) => launch.typeText?.(session, pane, value) ?? false,
         enter: () => launch.pressEnter?.(session, pane) ?? false,
+        ...(launch.sendKey
+          ? { key: (name: string) => launch.sendKey!(session, pane, name) }
+          : {}),
         // The last look before Enter: the file, read without following a link, must still hold
         // the text whose hash the line names.
         file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),
@@ -1069,7 +1074,8 @@ function hostOf(input: {
           }
         }
         // `waiting: null` removes the field alone; anything else written replaces it.
-        const { waiting: written, ...rest } = patch;
+        // `effort: null` is a launch that set no word: the stored word goes with it.
+        const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,
           ...rest,
@@ -1085,6 +1091,8 @@ function hostOf(input: {
         };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;
+        if (patchedEffort === null) delete seatState.effort;
+        else if (patchedEffort !== undefined) seatState.effort = patchedEffort;
         current.seats[name] = seatState;
         if (patch.pane) {
           replaced = prior.pane !== patch.pane ? prior.pane : undefined;

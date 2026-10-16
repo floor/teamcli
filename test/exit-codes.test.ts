@@ -34,6 +34,7 @@ import { runTempo } from '../src/commands/tempo.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
+import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -49,6 +50,7 @@ import { findRoot, loadTeamFile } from '../src/file/load.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
 import type { Key, Terminal } from '../src/launch/terminal.ts';
@@ -3175,6 +3177,179 @@ scene('mcp.not-set-up', async (place) => show(await mcpRan(place, ['status'], { 
 scene('mcp.clear', async (place) => show(await mcpRan(place, ['doctor']), 'nothing missing'));
 scene('mcp.missing', async (place) => show(await mcpRan(place, ['doctor'], { listDir: () => [] }), 'no bridge configuration'));
 scene('mcp.invocation', async (place) => show(await mcpRan(place, []), 'a subcommand is required'));
+
+const RELOAD_FILE = TEAM.replace(
+  'launch: claude --model claude-opus-5-5\n',
+  'launch: claude --model claude-opus-5-5\n    effort: high\n',
+);
+const RELOAD_GRANT = `${TWO.replace('    stopped: true\n', '')}grant:\n  session: acme\n  seat: lead\n  scope:\n    - reload\n`;
+
+function recordReload(place: Place, name: string, recorded = true): void {
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats[name] = {
+      stage: 'ready',
+      pane: 'w1:p1',
+      workspace: 'w1',
+      launched: { shell: 1, cli: [2] },
+      ...(recorded ? { model: 'Claude Opus', version: '5.5' } : {}),
+    };
+  });
+}
+
+function reloadLaunch(options: { create?: boolean; agents?: HerdrAgent[]; text?: string } = {}): Launch {
+  const panes = new Map<string, string>([['w1:p1', options.text ?? IDLE]]);
+  let clock = Date.parse('2026-10-14T09:00:00Z');
+  let n = 0;
+  return {
+    sessionState: () => 'running',
+    startServer: () => true,
+    sessionUp: () => true,
+    createWorkspace() {
+      if (options.create === false) return null;
+      n += 1;
+      const pane = `made-${n}`;
+      panes.set(pane, IDLE);
+      return { pane, workspace: `ws-${n}` };
+    },
+    paneRun(_session, pane) {
+      panes.set(pane, IDLE);
+      return true;
+    },
+    renameAgent: () => true,
+    closeWorkspace: () => true,
+    agentPanes: () => [...panes.keys()],
+    agents: () => options.agents ?? [agent('lead')],
+    workspacePanes: () => ['w1:p1'],
+    paneText: (_session, pane) => panes.get(pane) ?? options.text ?? IDLE,
+    foreground: () => ['claude'],
+    processInfo: () => ({ shell: 1, foreground: [1, 2] }),
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => new Date(clock),
+  };
+}
+
+async function reloaded(place: Place, argv: string[], caller: Caller = owner, sources: Partial<ReloadSources> = {}): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return {
+    code: await runReload(argv, io, { launch: reloadLaunch(), home: place.home, ...sources }),
+    out: io.out,
+    err: io.err,
+  };
+}
+
+scene('reload.reloaded', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead']), 'lead reloaded');
+});
+scene('reload.same', async (place) => {
+  write(place, TEAM);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead']), 'already running what the file declares');
+});
+scene('reload.absent', async (place) => {
+  write(place, TEAM);
+  return show(await reloaded(place, ['missing']), 'no seat of that name');
+});
+scene('reload.changed', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ agents: [] }) }), 'changed before it closed');
+});
+scene('reload.launch', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ create: false }) }), 'did not reach ready');
+});
+scene('reload.not-idle', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ text: 'no prompt here' }) }), 'not at an idle prompt');
+});
+scene('reload.not-running', async (place) => {
+  write(place, TEAM);
+  return show(await reloaded(place, ['lead']), 'no ready pane to close');
+});
+scene('reload.unrecorded', async (place) => {
+  write(place, TEAM);
+  recordReload(place, 'lead', false);
+  return show(await reloaded(place, ['lead']), 'were not recorded at launch');
+});
+scene('reload.unsent', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ text: claudeBox('draft') }) }), 'holds unsent text');
+});
+scene('reload.working', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ agents: [agent('lead', 'working')] }) }), 'is working');
+});
+scene('reload.run-lock', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  const held = acquireRunLock(join(place.root, '.agents'), 'acme');
+  try {
+    return show(await reloaded(place, ['lead']), 'another session-mutating run');
+  } finally {
+    if (!('held' in held)) held.release();
+  }
+});
+scene('reload.invocation', async (place) => show(await reloaded(place, []), 'a <seat> is required'));
+scene('reload.file', async (place) => show(await reloaded(place, ['lead', '--file', 'missing.yaml']), 'no team file'));
+scene('reload.self', async (place) => {
+  approve(place, RELOAD_GRANT);
+  recordLead(place);
+  return show(await reloaded(place, ['lead'], leadSeat), "does not close the caller's seat");
+});
+scene('reload.grant-approval', async (place) => {
+  write(place, RELOAD_GRANT);
+  return show(await reloaded(place, ['worker'], leadSeat), 'a grant needs a verified approval');
+});
+scene('reload.grant-approved-copy', async (place) => {
+  approve(place, RELOAD_GRANT);
+  return show(await reloaded(place, ['worker'], leadSeat, { grantGate: (input) => grantGate({ ...input, sources: { approvedCopy: () => null } }) }), 'a grant needs a readable approved copy');
+});
+scene('reload.grant-drift', async (place) => {
+  approve(place, RELOAD_GRANT);
+  write(place, readFileSync(place.file, 'utf8').replace('label: lead', 'label: renamed'));
+  return show(await reloaded(place, ['worker'], leadSeat), 'a grant needs the approved file');
+});
+scene('reload.grant-caller', async (place) => {
+  approve(place, RELOAD_GRANT);
+  recordLead(place);
+  return show(await reloaded(place, ['worker'], other), 'only the seat the grant names');
+});
+scene('reload.grant-no-pane', async (place) => {
+  approve(place, RELOAD_GRANT);
+  return show(await reloaded(place, ['worker'], leadSeat), 'no pane is recorded for seat lead');
+});
+scene('reload.grant-another-pane', async (place) => {
+  approve(place, RELOAD_GRANT);
+  recordLead(place, 'w2:p1');
+  return show(await reloaded(place, ['worker'], leadSeat), 'the state records pane w2:p1 for seat lead');
+});
+scene('reload.grant-scope', async (place) => {
+  approve(place, RELOAD_GRANT.replace('    - reload\n', '    - up\n'));
+  recordLead(place);
+  return show(await reloaded(place, ['worker'], leadSeat), 'the grant does not list `reload`');
+});
+scene('reload.grant-flag', async (place) => {
+  approve(place, RELOAD_GRANT);
+  recordLead(place);
+  return show(await reloaded(place, ['worker', '--file', 'other.yaml'], leadSeat), "--file is the owner's");
+});
+scene('reload.grant-omitted', async (place) => {
+  approve(place, TEAM);
+  return show(await reloaded(place, ['lead'], leadSeat), 'the approved file grants nothing');
+});
+scene('reload.grant-file', async (place) => {
+  write(place, 'format: [\n');
+  return show(await reloaded(place, ['lead'], leadSeat), 'line');
+});
 
 // Outcomes that are listed and kept, and that no scene can produce. An edit the earlier checks
 // have already validated reads here (add.prepared, add.locked, add.not-restored), and so do

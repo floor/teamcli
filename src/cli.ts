@@ -26,6 +26,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   answer: () => import('./commands/answer.ts'),
   'ask-show': () => import('./commands/ask-show.ts'),
   pr: () => import('./commands/pr.ts'),
+  reload: () => import('./commands/reload.ts'),
   remove: () => import('./commands/remove.ts'),
   send: () => import('./commands/send.ts'),
   feed: () => import('./commands/feed.ts'),
