@@ -35,8 +35,8 @@ function displayOf(seat: LabelSeat, screen: string | undefined): string {
 
 /** The effort word on this pane, or none. Codex and Cursor read only the status row the model
  *  read already uses, so a dialog that hides the row does not invent a word. The others are
- *  read from the whole pane: Claude's banner leaves the last rows, and Antigravity's and
- *  Grok's word sits on a footer the model rules do not yield. */
+ *  read from the whole pane. Claude's banner leaves the last rows. Antigravity's word and
+ *  Grok's paren sit on the same footer the model rule reads; the word is not part of the model. */
 function effortOnScreen(cli: string, screen: string): string | undefined {
   const plain = stripSgr(screen);
   if (cli === 'codex' || cli === 'cursor') {

@@ -38,7 +38,7 @@ export const grant: Section = {
         minItems: 1,
         uniqueItems: true,
         items: { enum: [...GRANT_SCOPES] },
-        $comment: 'non-empty, distinct, order kept: up, down, approve, init',
+        $comment: 'non-empty, distinct, order kept: up, down, approve, init, reload, swap',
       },
     },
     $comment:

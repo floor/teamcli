@@ -26,6 +26,7 @@ describe('Antigravity launch and captured screens', () => {
     expect(antigravity.loginCheck).toEqual(['models']);
     expect(antigravity.loginHint).toBe('agy');
     expect(antigravity.exit).toBe('/exit');
+    expect(antigravity.exitClear).toBe('ctrl+u');
     expect(versionVerdict('1.2.16', antigravity.tested)).toBe('tested');
     expect(versionVerdict('1.2.18', antigravity.tested)).toBe('tested');
     expect(versionVerdict('1.3.5', antigravity.tested)).toBe('tested');
@@ -566,7 +567,9 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
     expect(why?.typed).toBe(true);
     expect(why?.sent).toBe(false);
     expect(why?.row).not.toBeNull();
+    expect(why?.cleared).toBeUndefined();
     expect(refusalReport(why!)).toContain("the read-back didn't match");
+    expect(refusalReport(why!)).toContain('the line sits in its box, unsent');
   });
 
   test('a row of the line with one character more than the line has gets no Enter', async () => {
@@ -614,12 +617,16 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
       d.io.screen = () => (++reads <= 1 ? fixture('rules-line') : fixture('trust'));
       return true;
     };
+    const keys: string[] = [];
+    d.io.key = (name) => { keys.push(name); return true; };
     expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
     expect(d.calls).toEqual([capturedLine]);
+    expect(keys).toEqual([]);
     const why = d.refusals.at(-1);
     expect(why?.stop).toBe('read-back');
     expect(why?.sent).toBe(false);
     expect(why?.kind).toBe('trust');
+    expect(why?.cleared).toBeUndefined();
   });
 
   test('the file changing after it was written gets no Enter', async () => {
@@ -657,17 +664,20 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
   });
 
   test('a box already holding this CLI\'s exit text is named for its owner, not typed onto', async () => {
-    // An earlier stop typed `/exit` and never confirmed it. Antigravity has no clearing key,
-    // so nothing is sent: the report names the text and leaves the box to its owner.
+    // An earlier stop typed `/exit` and never confirmed it. This run did not type it, so the
+    // clearing key is named and not sent.
     const d = delivery();
+    const keys: string[] = [];
+    d.io.key = (name) => { keys.push(name); return true; };
     d.showText(fixture('exit-typed'));
     expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
     expect(d.calls).toEqual([]);
+    expect(keys).toEqual([]);
     const why = d.refusals.at(-1);
     expect(why?.stop).toBe('leftover');
     expect(refusalReport(why!)).toBe(
       "rules not typed: its box already holds this CLI's exit text (/exit), unsent from an earlier stop; "
-      + 'clear its box in its pane, then run up again',
+      + 'press Ctrl+U in its pane to clear it, then run up again',
     );
   });
 
@@ -694,6 +704,106 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
     d.io.type = (text) => { d.calls.push(text); d.showText(text === capturedLine ? fixture('rules-line') : boxed(text)); return true; };
     expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(true);
     expect(d.calls).toEqual([capturedLine, 'Enter']);
+  });
+
+  test('the 1.3.5 rules box reads unsent and holds the line', () => {
+    const screen = readFileSync(new URL('../fixtures/antigravity/1.3.5/rules-line.txt', import.meta.url), 'utf8');
+    expect(readScreen('antigravity', screen).kind).toBe('unsent');
+    expect(boxHoldsText('antigravity', capturedLine, screen)).toBe(true);
+  });
+
+  test('the 1.3.5 rules box is read back and entered', async () => {
+    const screen = readFileSync(new URL('../fixtures/antigravity/1.3.5/rules-line.txt', import.meta.url), 'utf8');
+    const d = delivery();
+    d.io.type = (text) => { d.calls.push(text); d.showText(text === capturedLine ? screen : boxed(text)); return true; };
+    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(true);
+    expect(d.calls).toEqual([capturedLine, 'Enter']);
+  });
+
+  test('a mismatched read-back clears the line this run typed', async () => {
+    const d = delivery();
+    const keys: string[] = [];
+    d.io.type = (text) => {
+      d.calls.push(text);
+      d.showText(fixture('rules-line').replace('5e1d0a9c4b2f', '5e1d0a9c4b2e'));
+      return true;
+    };
+    d.io.key = (name) => { keys.push(name); d.show('idle'); return true; };
+    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
+    expect(d.calls).toEqual([capturedLine]);
+    expect(keys).toEqual(['ctrl+u']);
+    const why = d.refusals.at(-1);
+    expect(why?.stop).toBe('read-back');
+    expect(why?.sent).toBe(false);
+    expect(why?.cleared).toBe('yes');
+    expect(refusalReport(why!)).toBe(
+      "rules typed, not sent: the read-back didn't match; the line team typed was cleared (Ctrl+U); run up again",
+    );
+  });
+
+  test('a clearing key the pane does not take leaves the line', async () => {
+    const d = delivery();
+    const keys: string[] = [];
+    d.io.type = (text) => {
+      d.calls.push(text);
+      d.showText(fixture('rules-line').replace('5e1d0a9c4b2f', '5e1d0a9c4b2e'));
+      return true;
+    };
+    d.io.key = (name) => { keys.push(name); return false; };
+    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
+    expect(keys).toEqual(['ctrl+u']);
+    expect(d.calls).toEqual([capturedLine]);
+    const why = d.refusals.at(-1);
+    expect(why?.cleared).toBe('undelivered');
+    expect(refusalReport(why!)).toBe(
+      "rules typed, not sent: the read-back didn't match; the clearing key (Ctrl+U) was not delivered; "
+      + 'the line sits in its box, unsent: press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again',
+    );
+  });
+
+  test('a clearing key that leaves the box unsent names the reading', async () => {
+    const d = delivery();
+    const keys: string[] = [];
+    d.io.type = (text) => {
+      d.calls.push(text);
+      d.showText(fixture('rules-line').replace('5e1d0a9c4b2f', '5e1d0a9c4b2e'));
+      return true;
+    };
+    d.io.key = (name) => { keys.push(name); return true; };
+    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
+    expect(keys).toEqual(['ctrl+u']);
+    const why = d.refusals.at(-1);
+    expect(why?.cleared).toBe('stayed');
+    expect(why?.kind).toBe('unsent');
+    expect(refusalReport(why!)).toContain('the clearing key (Ctrl+U) left the screen reading unsent');
+  });
+
+  test('a box already holding someone else\'s text is not cleared', async () => {
+    const d = delivery();
+    const keys: string[] = [];
+    d.io.key = (name) => { keys.push(name); return true; };
+    d.showText(boxed('the person\'s own message'));
+    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
+    expect(d.calls).toEqual([]);
+    expect(keys).toEqual([]);
+  });
+
+  test('a resumed line that then changes is not cleared', async () => {
+    // The box already held today's line, so this run typed nothing. A later row that is not
+    // the line's own is a read-back stop, and the key stays unsent.
+    const d = delivery();
+    const keys: string[] = [];
+    let reads = 0;
+    d.io.screen = () => {
+      reads += 1;
+      return reads <= 2 ? fixture('rules-line') : fixture('rules-line').replace('your brief.', 'your brief!');
+    };
+    d.io.key = (name) => { keys.push(name); d.show('idle'); return true; };
+    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
+    expect(d.calls).toEqual([]);
+    expect(keys).toEqual([]);
+    expect(d.refusals.at(-1)?.stop).toBe('read-back');
+    expect(d.refusals.at(-1)?.cleared).toBeUndefined();
   });
 });
 
@@ -755,7 +865,7 @@ describe('Antigravity rules delivery through a wrapper', () => {
     const d = wrapper(Number.POSITIVE_INFINITY);
     expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(false);
     expect(d.calls).toEqual([]);
-    expect(d.refusals).toEqual([{ stop: 'launch', typed: false, sent: false, kind: 'unknown', row: null, clearKey: null }]);
+    expect(d.refusals).toEqual([{ stop: 'launch', typed: false, sent: false, kind: 'unknown', row: null, clearKey: 'ctrl+u' }]);
     expect(d.at()).toBe(1000); // the whole second, not a refusal at the first poll
     expect(refusalReport(d.refusals[0]!)).toContain(
       'the CLI never appeared as its pane\'s foreground process (the screen read unknown)',
@@ -779,7 +889,7 @@ describe('Antigravity rules delivery through a wrapper', () => {
       sleep: async (ms) => { clock += ms; },
     };
     expect(await deliverRules('antigravity', 'Rules.', 1, io)).toBe(false);
-    expect(refusals).toEqual([{ stop: 'screen', typed: false, sent: false, kind: 'unknown', row: null, clearKey: null }]);
+    expect(refusals).toEqual([{ stop: 'screen', typed: false, sent: false, kind: 'unknown', row: null, clearKey: 'ctrl+u' }]);
   });
 
   test('a dialog at the CLI\'s first frame is refused at once, nothing typed', async () => {
@@ -788,7 +898,7 @@ describe('Antigravity rules delivery through a wrapper', () => {
     const d = wrapper(100, 'trust');
     expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(false);
     expect(d.calls).toEqual([]);
-    expect(d.refusals).toEqual([{ stop: 'screen', typed: false, sent: false, kind: 'trust', row: null, clearKey: null }]);
+    expect(d.refusals).toEqual([{ stop: 'screen', typed: false, sent: false, kind: 'trust', row: null, clearKey: 'ctrl+u' }]);
     expect(d.at()).toBe(100);
   });
 });

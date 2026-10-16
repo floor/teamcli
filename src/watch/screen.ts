@@ -40,6 +40,7 @@ const DATA: Record<string, ScreenData> = {
   cursor: load('cursor'),
   antigravity: load('antigravity'),
   grok: load('grok'),
+  gemini: load('gemini'),
 };
 
 /** The shipped screen for a CLI, or null when this version has none. */
