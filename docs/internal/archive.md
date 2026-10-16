@@ -25,9 +25,9 @@ prints `down`'s plan in place of its run.
 
 The folder's name is `storePath(project, root, home)`'s own name — the store folder's basename,
 a hash of the project's path — with `-<stamp>` appended, the stamp being `now.toISOString()` with
-`-` and `:` dropped and the milliseconds removed, so `20261004T090000Z`. Two runs of the same
-second, and of two checkouts of one project, land on different folders; a folder that exists is
-refused, never merged into.
+`-` and `:` dropped and the milliseconds removed, so `20261004T090000Z`. Two checkouts of one
+project land on different folders; two runs of the same second name the same one, and a folder
+that exists is refused, never merged into.
 
 ## The manifest
 
