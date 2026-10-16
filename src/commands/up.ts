@@ -8,7 +8,7 @@ import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
-import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
+import { entityGrantAdmits, grantGate, logGranted, pathlessGrantFiles } from '../grant.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { insideTrust, isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -810,6 +810,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // outside herdr is the one detached caller the grant may name.
   if (detached !== undefined && !createGranted) {
     refusals.push(detached);
+    // A record that names no `paths` covers nothing and admits nobody: name it here, since it is
+    // the likely reason the runner expected to be admitted.
+    for (const file of pathlessGrantFiles(sources.home)) {
+      refusals.push(`the create-grant record ${file} names no \`paths\`, so it covers nothing; add \`paths:\` to it`);
+    }
   } else if (!named) {
     // Dev mode mounts and says the placement as a warning; a dry run says it beside the plan it
     // would refuse. Anyone else is denied, and the bare word is the whole answer.

@@ -215,7 +215,7 @@ describe('the screen the close demands', () => {
 
   test('a shell prompt is never closed over', async () => {
     remember('worker', 'low');
-    const { sources, closed } = harness({ text: 'jvial@mac acme % ' });
+    const { sources, closed } = harness({ text: 'dev@mac acme % ' });
     const io = testIo(root, OWNER);
     const code = await runReload(['worker'], io, sources);
     expect(code).toBe(1);

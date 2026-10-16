@@ -23,7 +23,7 @@ seats:
     version: "5.5"
     launch: claude --model claude-opus-5-5
   - role: assistant
-    name: iris
+    name: alpha
     cli: claude-code
     vendor: anthropic
     model: Claude Opus
@@ -56,25 +56,25 @@ function seatOf(name: string, text: string = teamText()): TeamFile['seats'][numb
 
 describe('a seat\'s reach grant', () => {
   test('reads as written, and a seat without one carries none', () => {
-    const granted = seatOf('iris', teamText('    reach:\n      to: [grokbot]\n      alias: iris-x\n      route: floor-20\n      key_id: seat-iris-1\n      guard_dir: /Users/x/guard-floor-iris\n'));
-    expect(granted.reach).toEqual({ to: ['grokbot'], alias: 'iris-x', route: 'floor-20', keyId: 'seat-iris-1', guardDir: '/Users/x/guard-floor-iris' });
-    const bare = seatOf('iris', teamText(REACH));
+    const granted = seatOf('alpha', teamText('    reach:\n      to: [grokbot]\n      alias: alpha-x\n      route: floor-20\n      key_id: seat-alpha-1\n      guard_dir: /Users/x/guard-floor-alpha\n'));
+    expect(granted.reach).toEqual({ to: ['grokbot'], alias: 'alpha-x', route: 'floor-20', keyId: 'seat-alpha-1', guardDir: '/Users/x/guard-floor-alpha' });
+    const bare = seatOf('alpha', teamText(REACH));
     expect(bare.reach).toEqual({ to: ['grokbot'] });
     expect(seatOf('lead', teamText(REACH)).reach).toBeUndefined();
   });
 
   test('refuses what the projection readers would refuse, by name and line', () => {
     const cases: Array<[string, string]> = [
-      ['    reach: 5\n', 'seat "iris": reach must be a map of fields'],
-      ['    reach:\n', 'seat "iris": reach.to is required: at least one front'],
-      ['    reach:\n      from: [grokbot]\n', 'unknown field "from" in seat "iris": reach'],
-      ['    reach:\n      to: []\n', 'seat "iris": reach.to is required: at least one front'],
-      ['    reach:\n      to: [Grokbot]\n', 'seat "iris": reach.to "Grokbot" must be one of: grokbot'],
-      ['    reach:\n      to: [other-front]\n', 'seat "iris": reach.to "other-front" must be one of: grokbot'],
-      ['    reach:\n      to: [grokbot]\n      alias: "-iris"\n', 'seat "iris": reach.alias "-iris" takes letters, digits, ".", "_" and "-" (a letter or digit first, 64 at most)'],
-      ['    reach:\n      to: [grokbot]\n      route: "floor 20"\n', 'seat "iris": reach.route "floor 20" takes letters, digits, ".", "_" and "-" (a letter or digit first, 64 at most)'],
-      ['    reach:\n      to: [grokbot]\n      key_id: "seat iris"\n', 'seat "iris": reach.key_id "seat iris" takes letters, digits, ".", "_" and "-" (a letter or digit first, 64 at most)'],
-      ['    reach:\n      to: [grokbot]\n      alias: iris-x\n      guard_dir: lobby/guard\n', 'seat "iris": reach.guard_dir must be an absolute path'],
+      ['    reach: 5\n', 'seat "alpha": reach must be a map of fields'],
+      ['    reach:\n', 'seat "alpha": reach.to is required: at least one front'],
+      ['    reach:\n      from: [grokbot]\n', 'unknown field "from" in seat "alpha": reach'],
+      ['    reach:\n      to: []\n', 'seat "alpha": reach.to is required: at least one front'],
+      ['    reach:\n      to: [Grokbot]\n', 'seat "alpha": reach.to "Grokbot" must be one of: grokbot'],
+      ['    reach:\n      to: [other-front]\n', 'seat "alpha": reach.to "other-front" must be one of: grokbot'],
+      ['    reach:\n      to: [grokbot]\n      alias: "-alpha"\n', 'seat "alpha": reach.alias "-alpha" takes letters, digits, ".", "_" and "-" (a letter or digit first, 64 at most)'],
+      ['    reach:\n      to: [grokbot]\n      route: "floor 20"\n', 'seat "alpha": reach.route "floor 20" takes letters, digits, ".", "_" and "-" (a letter or digit first, 64 at most)'],
+      ['    reach:\n      to: [grokbot]\n      key_id: "seat alpha"\n', 'seat "alpha": reach.key_id "seat alpha" takes letters, digits, ".", "_" and "-" (a letter or digit first, 64 at most)'],
+      ['    reach:\n      to: [grokbot]\n      alias: alpha-x\n      guard_dir: lobby/guard\n', 'seat "alpha": reach.guard_dir must be an absolute path'],
     ];
     for (const [reach, message] of cases) {
       expect(messages(teamText(reach))).toContain(message);
@@ -83,23 +83,23 @@ describe('a seat\'s reach grant', () => {
 
   test('the defaults\' own rules: a name too long for the alias or for seat-<alias>-1 is refused here', () => {
     // 57 characters is the longest name whose default key_id `seat-<alias>-1` still fits 64.
-    expect(() => team(teamText(REACH).replace('    name: iris\n', `    name: ${'i'.repeat(57)}\n`))).not.toThrow();
-    expect(messages(teamText(REACH).replace('    name: iris\n', `    name: ${'i'.repeat(58)}\n`)))
+    expect(() => team(teamText(REACH).replace('    name: alpha\n', `    name: ${'i'.repeat(57)}\n`))).not.toThrow();
+    expect(messages(teamText(REACH).replace('    name: alpha\n', `    name: ${'i'.repeat(58)}\n`)))
       .toContainEqual(expect.stringContaining('the default reach key_id "seat-'));
-    expect(messages(teamText(REACH).replace('    name: iris\n', `    name: ${'i'.repeat(65)}\n`)))
+    expect(messages(teamText(REACH).replace('    name: alpha\n', `    name: ${'i'.repeat(65)}\n`)))
       .toContainEqual(expect.stringContaining('the reach alias'));
   });
 
   test('count expands the grant like every field, and two seats must not land on one alias', () => {
-    const counted = team(teamText(REACH).replace('    name: iris\n', '    name: iris\n    count: 2\n'));
-    expect(counted.seats.filter((seat) => seat.declared === 'iris').map((seat) => seat.name)).toEqual(['iris', 'iris-2']);
-    const explicit = teamText('    reach:\n      to: [grokbot]\n      alias: shared\n').replace('    name: iris\n', '    name: iris\n    count: 2\n');
+    const counted = team(teamText(REACH).replace('    name: alpha\n', '    name: alpha\n    count: 2\n'));
+    expect(counted.seats.filter((seat) => seat.declared === 'alpha').map((seat) => seat.name)).toEqual(['alpha', 'alpha-2']);
+    const explicit = teamText('    reach:\n      to: [grokbot]\n      alias: shared\n').replace('    name: alpha\n', '    name: alpha\n    count: 2\n');
     expect(messages(explicit)).toContainEqual(expect.stringContaining('two seats reach the same alias "shared"'));
     // A name only differing in case collides too: the readers canonicalize to lowercase.
     const twin = teamText(REACH)
-      .replace('    name: iris\n', '    name: IRIS\n')
-      .replace(LAUNCH, `${LAUNCH}    reach:\n      to: [grokbot]\n      alias: iris\n`);
-    expect(messages(twin)).toContainEqual(expect.stringContaining('two seats reach the same alias "iris"'));
+      .replace('    name: alpha\n', '    name: ALPHA\n')
+      .replace(LAUNCH, `${LAUNCH}    reach:\n      to: [grokbot]\n      alias: alpha\n`);
+    expect(messages(twin)).toContainEqual(expect.stringContaining('two seats reach the same alias "alpha"'));
   });
 
   test('the projection holds at most 32 seats, and the 33rd is refused with its line', () => {
@@ -114,8 +114,8 @@ describe('a seat\'s reach grant', () => {
   test('a reach grant is part of the seat digest: writing one needs a new approval', () => {
     const before = fingerprints(team(teamText()));
     const after = fingerprints(team(teamText(REACH)));
-    expect(after.seats['iris']).not.toBe(before.seats['iris']);
+    expect(after.seats['alpha']).not.toBe(before.seats['alpha']);
     expect(after.seats['lead']).toBe(before.seats['lead']);
-    expect(compare(before, after)).toContainEqual({ kind: 'seat-changed', name: 'iris' });
+    expect(compare(before, after)).toContainEqual({ kind: 'seat-changed', name: 'alpha' });
   });
 });

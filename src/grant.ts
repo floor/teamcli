@@ -12,14 +12,9 @@ import { logLine } from './log.ts';
 import { approvalStanding, type Standing } from './store/store.ts';
 import { parseYaml, toValue } from './yaml.ts';
 
-/** Known entity roots when a create-grant record names an entity and omits `paths`. */
-export const ENTITY_PATHS: Readonly<Record<string, readonly string[]>> = {
-  radiooooo: ['~/Code/radiooooo', '~/Documents/radio'],
-};
-
 /**
  * A standing create-grant outside any team file (`~/.config/team/grants/`), naming the agent
- * it is for, the path(s)/entity it covers, and its expiry timestamp.
+ * it is for, the path(s) it covers, and its expiry timestamp.
  */
 export type EntityCreateGrant = {
   entity: string | null;
@@ -39,12 +34,13 @@ export function grantsDir(home: string = homedir()): string {
 }
 
 /**
- * Every record file in the owner's grants folder, with its stem: the read the create-grants and
- * the send-grants share. The folder and every parent up to `home` must be real directories, and
- * each file a plain one — a symbolic link anywhere is skipped rather than followed — and the
- * file must parse to a mapping. What each reader makes of the record's own fields is its own.
+ * Every record file in the owner's grants folder, with its stem and its file name: the read the
+ * create-grants and the send-grants share. The folder and every parent up to `home` must be real
+ * directories, and each file a plain one — a symbolic link anywhere is skipped rather than
+ * followed — and the file must parse to a mapping. What each reader makes of the record's own
+ * fields is its own.
  */
-export function readGrantRecords(home: string = homedir()): { stem: string; record: Record<string, unknown> }[] {
+export function readGrantRecords(home: string = homedir()): { stem: string; file: string; record: Record<string, unknown> }[] {
   const homeResolved = resolve(home);
   for (const dir of [homeResolved, join(homeResolved, '.config'), join(homeResolved, '.config', 'team'), grantsDir(homeResolved)]) {
     try {
@@ -61,7 +57,7 @@ export function readGrantRecords(home: string = homedir()): { stem: string; reco
   } catch {
     return [];
   }
-  const out: { stem: string; record: Record<string, unknown> }[] = [];
+  const out: { stem: string; file: string; record: Record<string, unknown> }[] = [];
   for (const entry of entries) {
     if (entry.startsWith('.') || !/\.(?:yaml|yml|json)$/.test(entry)) continue;
     const full = join(folder, entry);
@@ -71,7 +67,7 @@ export function readGrantRecords(home: string = homedir()): { stem: string; reco
       const text = readFileSync(full, 'utf8');
       const parsed = entry.endsWith('.json') ? JSON.parse(text) : toValue(parseYaml(text));
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-      out.push({ stem: entry.replace(/\.(?:yaml|yml|json)$/, ''), record: parsed as Record<string, unknown> });
+      out.push({ stem: entry.replace(/\.(?:yaml|yml|json)$/, ''), file: entry, record: parsed as Record<string, unknown> });
     } catch {
       continue;
     }
@@ -82,16 +78,26 @@ export function readGrantRecords(home: string = homedir()): { stem: string; reco
 /**
  * Reads valid entity create-grant records from `~/.config/team/grants/`. Symbolic links and
  * malformed records are skipped; expiry and path containment are checked when a command asks.
+ * A record that names no `paths` covers nothing, so it is skipped too — `pathlessGrantFiles`
+ * reports those, and the refusal a caller gets names the file to fix.
  */
 export function readEntityCreateGrants(home: string = homedir()): EntityCreateGrant[] {
+  return readCreateGrantRecords(home).grants;
+}
+
+/** The file names of the records skipped for naming no `paths`. */
+export function pathlessGrantFiles(home: string = homedir()): string[] {
+  return readCreateGrantRecords(home).pathless;
+}
+
+function readCreateGrantRecords(home: string = homedir()): { grants: EntityCreateGrant[]; pathless: string[] } {
   const out: EntityCreateGrant[] = [];
-  for (const { stem, record } of readGrantRecords(home)) {
+  const pathless: string[] = [];
+  for (const { file, record } of readGrantRecords(home)) {
     const entity =
       typeof record.entity === 'string' && record.entity.trim() !== ''
         ? record.entity.trim()
-        : ENTITY_PATHS[stem] !== undefined
-          ? stem
-          : null;
+        : null;
     const rawAgent =
       typeof record.agent === 'string'
         ? record.agent.trim()
@@ -115,17 +121,18 @@ export function readEntityCreateGrants(home: string = homedir()): EntityCreateGr
       paths = (record.paths as string[]).map((item) => item.trim());
     } else if (typeof record.path === 'string' && record.path.trim() !== '') {
       paths = [record.path.trim()];
-    } else if (entity !== null && ENTITY_PATHS[entity] !== undefined) {
-      paths = [...ENTITY_PATHS[entity]!];
     }
-    if (paths.length === 0) continue;
+    if (paths.length === 0) {
+      pathless.push(file);
+      continue;
+    }
     const rawExpires = record.expires ?? record.expiry ?? record.expires_at ?? record.expiresAt;
     if (typeof rawExpires !== 'string' || rawExpires.trim() === '') continue;
     const expires = rawExpires.trim();
     if (!Number.isFinite(Date.parse(expires))) continue;
     out.push({ entity, agent, session, paths, expires, runners: runnersOf(record) });
   }
-  return out;
+  return { grants: out, pathless };
 }
 
 /** The record's `runner` (one name) or `runners` (a list of names); anything else names none. */

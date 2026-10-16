@@ -181,7 +181,7 @@ describe('the seat the nudge is typed into', () => {
     // herdr calls both idle; the screen says a key would answer a dialog, or land in a shell.
     const atQuestion = live({ 'deepseek-acme': { status: 'idle', screen: question } });
     expect(nudgeOf(teamOf(example), atQuestion, newMemory(), 0)).toBeNull();
-    const atShell = live({ 'deepseek-acme': { status: 'idle', screen: 'jvial@mac acme % ' } });
+    const atShell = live({ 'deepseek-acme': { status: 'idle', screen: 'dev@mac acme % ' } });
     expect(nudgeOf(teamOf(example), atShell, newMemory(), 0)).toBeNull();
   });
 

@@ -389,7 +389,7 @@ describe('team send history log & team feed', () => {
 
     const briefsDir = join(root, 'briefs');
     mkdirSync(briefsDir, { recursive: true });
-    const briefFile = join(briefsDir, 'iris-to-atlas.md');
+    const briefFile = join(briefsDir, 'alpha-to-beta.md');
     writeFileSync(briefFile, 'handoff note\n');
     const briefTime = new Date('2026-10-14T15:00:02.000Z');
     utimesSync(briefFile, briefTime, briefTime);
@@ -405,7 +405,7 @@ describe('team send history log & team feed', () => {
     expect(allIo.out).toBe(
       [
         '15:00:01  lead -> helper  [delivered]  first task',
-        '15:00:02  iris -> atlas  [brief]  handoff note',
+        '15:00:02  alpha -> beta  [brief]  handoff note',
         '15:00:03  lead -> native  [delivered]  second task',
         '          line two',
         '15:00:04  desk -> lead  [verified]  status check',
@@ -431,19 +431,19 @@ describe('team send history log & team feed', () => {
     const briefsDir = join(root, 'briefs');
     mkdirSync(briefsDir, { recursive: true });
     writeFileSync(
-      join(briefsDir, 'iris-to-atlas.md'),
+      join(briefsDir, 'alpha-to-beta.md'),
       [
-        '# Iris -> Atlas',
+        '# Alpha -> Beta',
         '',
-        '## 2026-10-14T15:00:01Z — From Iris: Round 1',
+        '## 2026-10-14T15:00:01Z — From Alpha: Round 1',
         '',
-        'First brief section from Iris.',
+        'First brief section from Alpha.',
         '',
         '---',
         '',
-        '## 2026-10-14T15:00:05Z — From Atlas: Round 1 Reply',
+        '## 2026-10-14T15:00:05Z — From Beta: Round 1 Reply',
         '',
-        'Reply section from Atlas in the same file.',
+        'Reply section from Beta in the same file.',
         '',
       ].join('\n'),
     );
@@ -452,8 +452,8 @@ describe('team send history log & team feed', () => {
     expect(await runFeed([], io, { home })).toBe(0);
     expect(io.out).toBe(
       [
-        '15:00:01  iris -> atlas  [brief]  Round 1: First brief section from Iris.',
-        '15:00:05  atlas -> iris  [brief]  Round 1 Reply: Reply section from Atlas in the same file.',
+        '15:00:01  alpha -> beta  [brief]  Round 1: First brief section from Alpha.',
+        '15:00:05  beta -> alpha  [brief]  Round 1 Reply: Reply section from Beta in the same file.',
         '',
       ].join('\n'),
     );
