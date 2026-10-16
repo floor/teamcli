@@ -16,6 +16,11 @@ dialog, a CLI that has exited, another CLI in front, or a reading this version d
 is not a seat to record. Nothing is typed into the pane, and no workspace is created, closed or
 renamed.
 
+`--pane <id>` is for a pane herdr never named — a seat started before this team managed the
+session. The pane is held to the same reading, named as the seat herdr would have named it at
+launch (the rename a launch runs, through herdr), and the record is written for it. Without the
+flag, the seat's name finds the pane herdr already answers to.
+
 What it does not write is what only a launch knows: the state's `model`, `version`, `effort` and
 `launch_line` are what a launch declared, and a pane started by hand declares nothing this run can
 read. The file's seat is the authority for the CLI, and herdr for the pane, the workspace and the
@@ -23,13 +28,14 @@ agent session.
 
 ## Synopsis
 
-    team register <seat> [--session <name>] [--dry-run]
+    team register <seat> [--session <name>] [--pane <id>] [--dry-run]
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session the pane is verified in, instead of `team.session`; the owner's alone |
+| `--pane` | `<id>` | a pane herdr never named: it is named as the seat through herdr and recorded; a pane herdr already answers to needs no flag |
 | `--dry-run` | — | verify the seat and print the line the real run would print, writing nothing |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -46,15 +52,16 @@ directory, and the registry's agent and roster for the seat, the address a cross
 reaches it at included: the pane's live session socket, read and recorded the way a launch records
 it. A record that names another pane, or
 no pane at all, is never overwritten from here: stopping the team and starting it again is the
-owner's own act.
+owner's own act. On a seat the pane already holds ready, the run is the repair: the registry
+record — the signing, the roster, the address and the team's project pointers — is written again
+from the file, and the session's own record is left exactly as it is.
 
-A run that finds the seat already recorded on that pane writes nothing — save one line: where the
-registry holds a record of the team and its roster does not list the seat, the roster line is
-written, exactly as a launch writes it. The roster is the seat's identity for the permission bridge
+A team the registry holds no record of is left alone — the bridge reads the file's own declaration
+then — and the run says nothing was written. Where the registry holds a record of the team and its
+roster does not list the seat, the roster line is written, exactly as a launch writes it, and the
+run says so. The roster is the seat's identity for the permission bridge
 (`src/permissions/who.ts`): a seat the roster does not list has no record there whatever the file
-declares, and every gate wired to the bridge refuses it what the file says it holds. A roster that
-already lists the seat, and a team the registry holds no record of — the bridge reads the file's own
-declaration then — are both left alone.
+declares, and every gate wired to the bridge refuses it what the file says it holds.
 
 ## Who may run it
 
@@ -71,10 +78,11 @@ declaration then — are both left alone.
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | the seat's record was written | `<seat>: registered — pane <pane>; nothing was launched` | 0 |
-| the seat was already recorded on that pane | `<seat>: already registered — pane <pane>; nothing was written` | 0 |
+| the seat was already recorded on that pane | `<seat>: already registered — pane <pane>; the record was refreshed from the file, nothing relaunched` | 0 |
 | the seat was already recorded, and the team registry's roster does not list it | `<seat>: already registered — pane <pane>; the team registry's roster did not list it, and was written` | 0 |
 | the seat was already recorded and the roster does not list it, under `--dry-run` | `<seat>: already registered — pane <pane>; the team registry's roster would be written` | 0 |
-| `--dry-run` succeeded | `<seat>: would register — pane <pane>; nothing would be launched` | 0 |
+| `--pane` named the pane as the seat and wrote the record | `<seat>: registered — pane <pane>; the pane was named <seat>, nothing was launched` — `herdr did not take the name, nothing was launched` when the rename did not land; the record is written either way | 0 |
+| `--dry-run` succeeded | `<seat>: would register — pane <pane>; nothing would be launched`; with `--pane`, `the pane would be named <seat> and recorded` stands before `, nothing would be launched` | 0 |
 | the run was refused | `team register: <reason>` | 1 |
 | the invocation or the team file can't be read | `team register: <problem>`, with the usage for the invocation | 2 |
 
@@ -102,6 +110,8 @@ declaration then — are both left alone.
 | `team register: <name>: pane <pane> holds no process in front of its shell; nothing was registered` | 1 |
 | `team register: <name>: pane <pane> holds no \`<cli>\` process; nothing was registered` | 1 |
 | `team register: <name>: its pane is not the seat at its prompt (<reading>); nothing was registered` | 1 |
+| `team register: pane <pane> is <other seat>'s in session "<session>"; nothing was registered` — `--pane` named a pane another seat's record holds | 1 |
+| `team register: no pane <pane> in session "<session>"; nothing was registered` — `--pane` named a pane this run can read no process for | 1 |
 
 ## Example
 
@@ -155,11 +165,12 @@ claude-beacon: registered — pane w1:p1; nothing was launched
 exit 0
 ```
 
-The record names the pane herdr showed, so a second run has nothing left to write:
+The record names the pane herdr showed, so a second run has nothing to launch; it writes the
+registry record again from the file — the repair a drifted signing calls for:
 
 ```console
 $ team register claude-beacon ; echo "exit $?"
-claude-beacon: already registered — pane w1:p1; nothing was written
+claude-beacon: already registered — pane w1:p1; the record was refreshed from the file, nothing relaunched
 exit 0
 ```
 
