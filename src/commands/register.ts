@@ -5,7 +5,9 @@
 // agents this file's state does not record. This command verifies such a pane and writes the
 // record without touching it: the same gate as `up` (the owner, or what the file names for
 // `up`), the same reading of herdr and the pane's screen, and the state and registry writes a
-// launch of it would have made.
+// launch of it would have made. `--pane <id>` names the pane outright — for one herdr never
+// named, a seat started before this team managed the session: the pane is verified the same way,
+// named as the seat through herdr (the rename a launch runs), and recorded the same way.
 //
 // What it does not write is what only a launch can know: the state's `model`, `version`,
 // `effort` and `launch_line` are "what this launch declared", and a pane started by hand
@@ -22,7 +24,7 @@ import { loadTeamFile } from '../file/load.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
-import { agentList, paneForeground, paneProcesses, paneRead, reportDisplayAgent, sessionState, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
+import { agentList, agentRename, paneForeground, paneProcesses, paneRead, reportDisplayAgent, sessionState, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { launchedIdentity } from '../launch/identity.ts';
@@ -36,7 +38,7 @@ import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
-export const USAGE = `Usage: team register <seat> [--session <name>] [--dry-run]\n`;
+export const USAGE = `Usage: team register <seat> [--session <name>] [--pane <id>] [--dry-run]\n`;
 
 /**
  * The reads a test replaces. Each one left out is the real read: herdr's state for a session,
@@ -69,8 +71,14 @@ export type RegisterSources = {
   /** Line 2, re-applied the same way: `displayAgent(seat)`, through the `pane report-metadata`
    *  call `add` reports it with. Left out, the real write runs over herdr. */
   reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
+  /** Names the pane as the seat — the herdr rename a launch runs at its `rename` step. Left out,
+   *  the real `herdr agent rename` runs. Read by `--pane` only. */
+  renameAgent?: (session: string, pane: string, name: string) => boolean;
   now: () => Date;
 };
+
+/** The host's rename, in the shape a launch's own host takes it (`do: rename`). */
+const realRename = (session: string, pane: string, name: string): boolean => agentRename(pane, name, session);
 
 const realSources: RegisterSources = {
   home: homedir(),
@@ -79,6 +87,7 @@ const realSources: RegisterSources = {
   processInfo: (session, pane) => paneProcesses(pane, session),
   foreground: (session, pane) => paneForeground(pane, session),
   paneText: (session, pane) => paneRead(pane, 200, session),
+  renameAgent: realRename,
   now: () => new Date(),
 };
 
@@ -214,6 +223,20 @@ function recordedRefused(out: Io, name: string, pane: string, recordedPane: stri
   return 1;
 }
 
+function noPaneRefused(out: Io, pane: string, session: string): number {
+  out.stderr(`team register: no pane ${plainLine(pane)} in session "${plainLine(session)}"; nothing was registered\n`);
+  // exit: register.no-pane
+  return 1;
+}
+
+function paneTakenRefused(out: Io, pane: string, other: string, session: string): number {
+  out.stderr(
+    `team register: pane ${plainLine(pane)} is ${plainLine(other)}'s in session "${plainLine(session)}"; nothing was registered\n`,
+  );
+  // exit: register.pane-taken
+  return 1;
+}
+
 function noCliRefused(out: Io, name: string, pane: string): number {
   out.stderr(
     `team register: ${plainLine(name)}: pane ${plainLine(pane)} holds no process in front of its shell; nothing was registered\n`,
@@ -252,7 +275,7 @@ function sameFile(a: string, b: string): boolean {
 
 export async function runRegister(argv: string[], io: Io, sources: RegisterSources = realSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session'], ['dry-run']);
+  const args = readArgs(argv, ['session', 'pane'], ['dry-run']);
   if (args.error) return usage(out, args.error);
   if (args.rest.length !== 1) {
     return usage(out, args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : 'a seat name is required');
@@ -378,10 +401,28 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const agents = sources.agents(session);
   if (agents === null) return herdrRefused(out);
 
-  const found = agents.find((agent) => agent.name === name);
-  const namedCount = agents.filter((agent) => agent.name === name).length;
-  if (found === undefined) return noAgentRefused(out, name, session);
-  if (namedCount > 1) return ambiguousRefused(out, name, session, namedCount);
+  // The pane the run records, and what herdr lists on it: the agent herdr answers to the seat's
+  // name, or the pane `--pane` names outright — one herdr never named, a seat started before
+  // this team managed the session. What herdr lists on that pane stands in for the found agent.
+  const paneArg = args.values.pane;
+  let pane: string;
+  let listed: HerdrAgent | undefined;
+  if (paneArg !== undefined) {
+    pane = paneArg;
+    listed = agents.find((agent) => agent.pane === paneArg);
+  } else {
+    listed = agents.find((agent) => agent.name === name);
+    const namedCount = agents.filter((agent) => agent.name === name).length;
+    if (listed === undefined) return noAgentRefused(out, name, session);
+    if (namedCount > 1) return ambiguousRefused(out, name, session, namedCount);
+    pane = listed.pane;
+  }
+  // A pane is one seat's: the pane `--pane` names must not be one another seat of this session's
+  // record already holds. The seat's own record is judged below, as a named run's is.
+  if (paneArg !== undefined) {
+    const other = Object.entries(recorded.seats).find(([seat, state]) => seat !== name && state.pane === paneArg);
+    if (other !== undefined) return paneTakenRefused(out, paneArg, other[0], session);
+  }
 
   // Already recorded on this pane, and ready: the seat is not relaunched and the pane is not
   // read for a screen. The record a launch writes is written again from the file as it now
@@ -391,7 +432,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // exactly as it is. A record that names another pane — or no pane at all, a launch this
   // command did not finish — is not overwritten from here: that is the owner's `team down`,
   // then `team up`.
-  if (held !== undefined && held.pane === found.pane && held.stage === 'ready') {
+  if (held !== undefined && held.pane === pane && held.stage === 'ready') {
     // One more repair from the same run, and a dry run paints nothing for it either: the seat's
     // two sidebar lines are re-applied from the file, so a label or display that drifted is put
     // back where the seat stands.
@@ -408,23 +449,23 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     let refreshed = false;
     let wroteRoster = false;
     if (!dry) {
-      relabel(out, sources, session, seat, found, name);
+      relabel(out, sources, session, seat, pane, listed?.workspace, name);
       if (roster !== null) {
         const refreshedAt = sources.now();
-        const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev }, seat, found.pane, held.id);
+        const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev }, seat, pane, held.id);
         if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
         else {
           refreshed = true;
           wroteRoster = unlisted;
           // The address, re-read the way a launch reads it, on the id the write above returned.
-          const address = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, found.pane, session);
+          const address = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, pane, session);
           if (address.note) logLine(dir, 'register', callerLabel(walked), address.note, refreshedAt);
-          logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${held.id ?? wrote.id} — pane ${found.pane}`, refreshedAt);
-          if (wroteRoster) logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${found.pane}`, refreshedAt);
+          logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${held.id ?? wrote.id} — pane ${pane}`, refreshedAt);
+          if (wroteRoster) logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${pane}`, refreshedAt);
         }
       }
     }
-    const ended = `already registered — pane ${plainLine(found.pane)}`;
+    const ended = `already registered — pane ${plainLine(pane)}`;
     if (wroteRoster) out.stdout(`${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written\n`);
     else if (unlisted && dry) out.stdout(`${plainLine(name)}: ${ended}; the team registry's roster would be written\n`);
     else if (roster === null) out.stdout(`${plainLine(name)}: ${ended}; nothing was written\n`);
@@ -433,8 +474,8 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // exit: register.already
     return 0;
   }
-  if (held !== undefined && held.pane !== found.pane) {
-    return recordedRefused(out, name, found.pane, held.pane);
+  if (held !== undefined && held.pane !== pane) {
+    return recordedRefused(out, name, pane, held.pane);
   }
 
   // What the pane is: a process in front of the pane's own shell that the seat's CLI profile
@@ -442,28 +483,46 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // seat's profile reads as the seat at its prompt. A dialog, a CLI that has exited, another
   // CLI in front, or a reading this version does not recognise is not a seat to record;
   // neither is a shell behind a name herdr still lists for it.
-  const identity = launchedIdentity(sources.processInfo(session, found.pane));
-  if (identity === null) return noCliRefused(out, name, found.pane);
+  const procs = sources.processInfo(session, pane);
+  // `--pane` names a pane another session's window holds just as well: herdr knowing nothing of
+  // it in this one is the reading that says so, and is its own refusal.
+  if (procs === null && paneArg !== undefined) return noPaneRefused(out, pane, session);
+  const identity = launchedIdentity(procs);
+  if (identity === null) return noCliRefused(out, name, pane);
   // The pane's own CLI, in the seat's profile's terms: the foreground argv0s where the caller
   // reads them, else the agent name herdr reports for that pane. A pane standing in front of
   // another agent is not this seat, and is not recorded.
-  const live = sources.foreground ? sources.foreground(session, found.pane) : found.agent === null ? null : [found.agent];
+  const live = sources.foreground
+    ? sources.foreground(session, pane)
+    : listed === undefined || listed.agent === null ? null : [listed.agent];
   if (!reportedLiveAgent(live, profile.processNames)) {
-    return cliRefused(out, name, found.pane, seat.cli);
+    return cliRefused(out, name, pane, seat.cli);
   }
-  const text = sources.paneText(session, found.pane) ?? undefined;
+  const text = sources.paneText(session, pane) ?? undefined;
   const screen = sources.screen ? sources.screen(seat.cli, text) : readScreen(seat.cli, text);
   if (screen.kind !== 'idle' && screen.kind !== 'working') {
     return screenRefused(out, name, screen.kind);
   }
 
   if (dry) {
-    out.stdout(`${plainLine(name)}: would register — pane ${plainLine(found.pane)}; nothing would be launched\n`);
+    out.stdout(
+      paneArg === undefined
+        ? `${plainLine(name)}: would register — pane ${plainLine(pane)}; nothing would be launched\n`
+        : `${plainLine(name)}: would register — pane ${plainLine(pane)}; the pane would be named ${plainLine(name)} and recorded, nothing would be launched\n`,
+    );
     // exit: register.dry-run
     return 0;
   }
 
   const now = sources.now();
+  // The pane `--pane` named carries no name of the seat's yet: herdr is told it — the rename a
+  // launch runs after its idle wait — before anything is recorded. A rename herdr did not take
+  // is a note, never a refusal: the record is what this command exists to write, and the next
+  // `--pane` run names the pane again.
+  const renamed = paneArg === undefined || (sources.renameAgent ?? realRename)(session, pane, name);
+  if (!renamed) {
+    logLine(dir, 'register', callerLabel(walked), `the pane was not named ${name}: herdr did not take the rename`, now);
+  }
   // The id the seat keeps: the one a launch recorded for it — a record short of ready is
   // completed, never replaced — the one a stopped session retained, or a fresh one.
   const id = held?.id ?? recorded.retained_seats?.[name]?.id ?? mintSeatId();
@@ -479,63 +538,74 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       id,
       stage: 'ready',
       cli: seat.cli,
-      pane: found.pane,
-      workspace: found.workspace,
+      pane,
+      ...(listed?.workspace !== undefined ? { workspace: listed.workspace } : {}),
       last_active: now.toISOString(),
       launched: identity,
-      ...(found.session ? { agent_session: found.session } : {}),
+      ...(listed?.session ? { agent_session: listed.session } : {}),
     };
     // The pointer `up` and `add` write for the panes they launch, so the seat's own `team send`
     // resolves this team file from the pane it stands in. Kept when the session already names it.
     current.launched_file = path;
   });
 
-  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev }, seat, found.pane, id);
+  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev }, seat, pane, id);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);
   else {
     // The address: the live session socket this seat answers at, recorded on the agent the way a
     // launch records it — the pane above is the one herdr showed, read again as `add` reads it.
     // The record it names is the registry's agent, the id the write above returned.
-    const refreshed = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, found.pane, session);
+    const refreshed = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, pane, session);
     if (refreshed.note) logLine(dir, 'register', callerLabel(walked), refreshed.note, now);
   }
   // The seat's sidebar, painted from the file the way `up` and `add` paint it: the record above
   // makes the seat reachable; these two writes make its own lines say what the file says.
-  relabel(out, sources, session, seat, found, name);
-  noteLaunchedPane(sources.home, path, found.pane, session);
+  relabel(out, sources, session, seat, pane, listed?.workspace, name);
+  noteLaunchedPane(sources.home, path, pane, session);
   // The audit line a delegated act writes, naming the authority (`up`) it was run under; a
   // granted seat writes the grant's own line.
   if (delegated !== null) logDelegated(dir, delegated, 'up', now, 'register');
   if (grantedSeat !== null) logGranted(dir, grantedSeat, 'up', now, 'register');
-  logLine(dir, 'register', callerLabel(walked), `${name}: registered ${id} — pane ${found.pane}`, now);
-  out.stdout(`${plainLine(name)}: registered — pane ${plainLine(found.pane)}; nothing was launched\n`);
+  logLine(dir, 'register', callerLabel(walked), `${name}: registered ${id} — pane ${pane}`, now);
+  out.stdout(
+    paneArg === undefined
+      ? `${plainLine(name)}: registered — pane ${plainLine(pane)}; nothing was launched\n`
+      : `${plainLine(name)}: registered — pane ${plainLine(pane)}; ${
+        renamed ? `the pane was named ${plainLine(name)}` : 'herdr did not take the name'
+      }, nothing was launched\n`,
+  );
   // exit: register.ready
   return 0;
 }
 
 /** The two sidebar writes `up` and `add` make after a launch, re-applied to the seat this run
  *  adopts — line 1, the file's own `workspaceLabel`, line 2 its `displayAgent` — with no
- *  relaunch and nothing typed. A herdr that refuses one is one line for that seat, the relabel
- *  contract `up`, `add` and the watch keep; the record stands either way. */
+ *  relaunch and nothing typed. A pane herdr names no workspace for (an adopted pane herdr never
+ *  recorded) has no title to re-apply, and only the display is reported. A herdr that refuses
+ *  one is one line for that seat, the relabel contract `up`, `add` and the watch keep; the
+ *  record stands either way. */
 function relabel(
   out: Io,
   sources: RegisterSources,
   session: string,
   seat: Seat,
-  found: HerdrAgent,
+  pane: string,
+  workspace: string | undefined,
   name: string,
 ): void {
-  const title = workspaceLabel(seat);
-  const renamed = (sources.renameWorkspace ?? ((s, workspace, label) => workspaceRename(workspace, label, s)))(
-    session,
-    found.workspace,
-    title,
-  );
-  if (!renamed) out.stdout(`${plainLine(name)}: its title was not reported\n`);
+  if (workspace !== undefined) {
+    const title = workspaceLabel(seat);
+    const renamed = (sources.renameWorkspace ?? ((s, ws, label) => workspaceRename(ws, label, s)))(
+      session,
+      workspace,
+      title,
+    );
+    if (!renamed) out.stdout(`${plainLine(name)}: its title was not reported\n`);
+  }
   const display = displayAgent(seat);
   const reported = (sources.reportDisplayAgent ?? ((s, pane, text) => reportDisplayAgent(pane, text, s)))(
     session,
-    found.pane,
+    pane,
     display,
   );
   if (!reported) out.stdout(`${plainLine(name)}: its display was not reported\n`);

@@ -292,10 +292,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `register.many-agents` | `register` | 1 | the session has more than one agent with that name | `team register worker` |
 | `register.no-agent` | `register` | 1 | no agent of that name is running in the session | `team register worker` |
 | `register.no-cli` | `register` | 1 | the pane holds no CLI in front of its shell | `team register worker` |
+| `register.no-pane` | `register` | 1 | no pane of that id runs in the session | `team register worker --pane w9:p9` |
 | `register.no-profile` | `register` | 1 | the seat has no launch profile | `team register worker` |
 | `register.no-seat` | `register` | 1 | the file has no such seat | `team register missing` |
 | `register.no-session` | `register` | 1 | the herdr session is not running | `team register worker` |
 | `register.not-owner` | `register` | 1 | the caller is not the owner, a delegate this file names for up, or the seat its grant names | `team register worker` |
+| `register.pane-taken` | `register` | 1 | another seat of the session holds that pane | `team register worker --pane w2:p2` |
 | `register.recorded` | `register` | 1 | the state records another pane for that seat | `team register worker` |
 | `register.screen` | `register` | 1 | the pane is not the seat at its prompt | `team register worker` |
 | `register.session-file` | `register` | 1 | the session was launched from another team file | `team register worker --session other` |

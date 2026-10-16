@@ -3824,6 +3824,17 @@ scene('register.already', async (place) => {
   });
   return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'already registered — pane w1:p1');
 });
+scene('register.no-pane', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead', '--pane', 'w9:p9'], owner, { processInfo: () => null }), 'no pane w9:p9 in session');
+});
+scene('register.pane-taken', async (place) => {
+  write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'w2:p2' };
+  });
+  return show(await registered(place, ['lead', '--pane', 'w2:p2'], owner, { agents: () => [] }), "pane w2:p2 is worker's in session");
+});
 scene('register.ready', async (place) => {
   write(place, TEAM);
   return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'registered — pane w1:p1; nothing was launched');
