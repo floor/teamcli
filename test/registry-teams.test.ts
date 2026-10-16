@@ -18,6 +18,7 @@ import {
   TeamsError,
   upsertTeam,
 } from '../src/registry/teams.ts';
+import { get as getProject, list as listProjects, projectsFile } from '../src/registry/projects.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T12:00:00Z');
@@ -368,6 +369,68 @@ describe('noteTeam', () => {
     writeFileSync(teamsFile(home), 'teams: [1]\n');
     const said = noteTeam(home, base, { project: 'p', entity: null, session: 's', lobby: null }, 'defined', 'owner');
     expect(said).toMatch(/^the team registry was not updated: .*"teams" must be a map/);
+  });
+});
+
+describe('noteTeam and the project level', () => {
+  const cli = () => join(base, 'cli');
+  const site = () => join(base, 'site');
+  const seedOf = (inProject?: string | null) => ({ project: 'acme', entity: 'Acme', session: 'acme', lobby: null, inProject });
+
+  beforeEach(() => {
+    mkdirSync(cli(), { recursive: true });
+    mkdirSync(site(), { recursive: true });
+  });
+
+  test('a file that names a project joins it, and the record is made with the name written and the team', () => {
+    expect(noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner')).toBeNull();
+    const teamId = teamIdOf(cli());
+    expect(getTeam(home, teamId)?.projectId).toBe('teamcli');
+    expect(getProject(home, 'teamcli')).toMatchObject({ name: 'TeamCLI', entity: 'Acme', lead: null, teams: [teamId] });
+  });
+
+  test('the second team joins the first project, not a second record', () => {
+    noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
+    noteTeam(home, site(), seedOf('TeamCLI'), 'defined', 'owner');
+    expect(listProjects(home)).toHaveLength(1);
+    expect(getProject(home, 'teamcli')?.teams).toEqual([teamIdOf(cli()), teamIdOf(site())]);
+  });
+
+  test('a team moved to another project leaves the one that named it', () => {
+    noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
+    noteTeam(home, cli(), seedOf('Site'), 'defined', 'owner');
+    expect(getProject(home, 'teamcli')?.teams).toEqual([]);
+    expect(getProject(home, 'site')?.teams).toEqual([teamIdOf(cli())]);
+    expect(getTeam(home, teamIdOf(cli()))?.projectId).toBe('site');
+  });
+
+  test('a file that stops naming a project leaves it, and reads as its own project', () => {
+    noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
+    noteTeam(home, cli(), seedOf(null), 'defined', 'owner');
+    expect(getTeam(home, teamIdOf(cli()))?.projectId).toBeNull();
+    expect(getProject(home, 'teamcli')?.teams).toEqual([]);
+  });
+
+  test('a seed that names no project at all leaves the pointer as it is', () => {
+    noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
+    noteTeam(home, cli(), seedOf(), 'defined', 'owner');
+    expect(getTeam(home, teamIdOf(cli()))?.projectId).toBe('teamcli');
+    expect(getProject(home, 'teamcli')?.teams).toEqual([teamIdOf(cli())]);
+  });
+
+  test('a project registry that cannot be written is its own line, and the team record is still written', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(projectsFile(home), 'projects: [1]\n');
+    const said = noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
+    expect(said).toMatch(/^the project registry was not updated: .*"projects" must be a map/);
+    expect(getTeam(home, teamIdOf(cli()))?.projectId).toBe('teamcli');
+  });
+
+  test('a project name with nothing to keep is a line, and nothing is written at all', () => {
+    const said = noteTeam(home, cli(), seedOf('***'), 'defined', 'owner');
+    expect(said).toMatch(/^the project registry was not updated: "\*\*\*" is not a project name/);
+    expect(getTeam(home, teamIdOf(cli()))).toBeNull();
+    expect(existsSync(projectsFile(home))).toBe(false);
   });
 });
 
