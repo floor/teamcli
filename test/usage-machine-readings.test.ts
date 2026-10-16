@@ -127,3 +127,54 @@ test('an approved team account overrides a machine subscription of the same name
   const entries = report.labs.flatMap((lab: { accounts: { account: string; kind: string }[] }) => lab.accounts);
   expect(entries.filter((one: { account: string }) => one.account === 'xai').map((one: { kind: string }) => one.kind)).toEqual(['spend']);
 });
+
+test("a machine subscription in another team's lab prints under its own name, never that team's vendor", () => {
+  // A custom account's lab is the vendor of the seat drawing on it in the team that declares it —
+  // here a path, the rawest metadata a team's file can put in a lab. The account is in the
+  // machine's own list, so a caller outside every project reads its machine subscription. That row
+  // is the caller's to read; the other team's lab name is not, and the printed lab is the
+  // account's own, the machine-owned name a subscription prints under with no team at all.
+  const text = `format: 1
+project: fixture
+session: fixture
+operator: lead
+trust:
+  - ~/.config/team/lobby
+  - ${root}
+workspace:
+  mode: shared
+budgets:
+  accounts:
+    shared:
+      kind: subscription
+      reserve: 20%
+seats:
+  - role: orchestrator
+    name: lead
+    label: lead
+    leads: true
+    cli: gemini
+    account: shared
+    vendor: /synthetic/private-project
+    model: Gemini
+    version: "3.1"
+    launch: gemini --yolo
+`;
+  writeFileSync(join(root, '.agents', 'team.yaml'), text);
+  const loaded = validateTeamFile(text, { home, root });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  writeApproval(storePath('fixture', root, home), { approval: approvalOf(loaded.team, root, new Date(NOW)), file: text }, [], home);
+  writeFileSync(join(home, '.config', 'team', 'accounts.yaml'), 'accounts:\n  - shared\n');
+
+  const view = { full: false, mine: null };
+  const machine = machineUsage(home, NOW, view);
+  const report = reportOf(machine, view, NOW, []);
+  expect(report.mine).toBeNull();
+  expect(report.labs.map((lab) => lab.lab)).toEqual(['shared']);
+  expect(report.labs.flatMap((lab) => lab.accounts.map((one) => one.account))).toEqual(['shared']);
+  expect(JSON.stringify(report)).not.toContain('/synthetic/private-project');
+  expect(reportText(report)).not.toContain('/synthetic/private-project');
+  // The full view is not this rule's business: the owner reads the lab the team's own file gives.
+  const full = { full: true, mine: null };
+  expect(reportOf(machineUsage(home, NOW, full), full, NOW, []).labs.map((lab) => lab.lab)).toEqual(['/synthetic/private-project']);
+});

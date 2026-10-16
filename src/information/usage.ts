@@ -1018,8 +1018,15 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
    *  whose own pattern cannot read it. */
   const withFigure = new Set<string>();
   for (const lab of machine.labs) {
-    if (!view.full && (mineEntry === null || !lab.carried.includes(mineEntry))
-      && !lab.accounts.some((entry) => machine.machineAccounts.includes(entry.account))) continue;
+    const mineCarries = mineEntry !== null && lab.carried.includes(mineEntry);
+    // A lab the caller's own team does not carry prints for the machine subscriptions in it alone,
+    // and under a machine-owned name: the account's own name, the one a subscription prints under
+    // when no team declares it. A custom account's lab is the vendor of the seat that draws on it
+    // in the team that declares it first — that team's own metadata, which this view never carries.
+    const name: string | undefined = view.full || mineCarries ? lab.lab
+      : lab.accounts.filter((entry) => machine.machineAccounts.includes(entry.account))
+          .map((entry) => entry.account).sort()[0];
+    if (name === undefined) continue;
     const accounts: ReportAccount[] = [];
     let others = 0;
     for (const account of lab.accounts) {
@@ -1040,7 +1047,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
       }
     }
     accounts.sort(byLine);
-    labs.push({ lab: lab.lab, accounts, ...(others > 0 ? { others } : {}) });
+    labs.push({ lab: name, accounts, ...(others > 0 ? { others } : {}) });
   }
 
   // Screen observations are informational at first sight, separate from budget confirmation.
