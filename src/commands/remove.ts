@@ -68,8 +68,6 @@ export const USAGE = 'Usage: team remove <name> [--keep] [--abandon] [--session 
 function delegateRefused(io: { stderr(text: string): void }, verdict: { text: string }): number {
   io.stderr(`team remove: ${verdict.text}\n`);
   // exit: remove.delegate-approval
-  // exit: remove.delegate-approved-copy
-  // exit: remove.delegate-drift
   // exit: remove.delegate-evidence
   // exit: remove.delegate-placement
   // exit: remove.delegate
@@ -331,7 +329,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const listed = agents.filter((item) => item.name === name);
-  // A name the approved copy does not carry, and the live file does not declare. The owner
+  // A name the live file does not declare. The owner
   // keeps today's refusal, and so does a record with no single live agent, a temporary record,
   // and a name the live file still declares. A caller who is not the owner, meeting one live
   // agent herdr reports idle or done whose screen — read with the cli the record carries — is
@@ -355,7 +353,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       }
     }
     if (!leave && busy === undefined) {
-      io.stderr(`team remove: ${name}: its record is not an approved seat; left as it is (the owner cleans it: team remove ${name} --abandon)\n`);
+      io.stderr(`team remove: ${name}: its record is not a declared seat; left as it is (the owner cleans it: team remove ${name} --abandon)\n`);
       // exit: remove.unverified
       return 1;
     }

@@ -422,7 +422,6 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
         io.stderr(`team approve: ${grantRefusal}\n`);
         // exit: approve.grant-another-pane
         // exit: approve.grant-approval
-        // exit: approve.grant-approved-copy
         // exit: approve.grant-caller
         // exit: approve.grant-no-pane
         // exit: approve.grant-not-ordinary
@@ -433,7 +432,6 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
         io.stderr(`team approve: ${verdict.text}\n`);
         // exit: approve.delegate
         // exit: approve.delegate-approval
-        // exit: approve.delegate-approved-copy
         // exit: approve.delegate-command
         // exit: approve.delegate-evidence
         // exit: approve.delegate-flag
@@ -488,7 +486,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
     } else {
       const waiting = sources.waiting();
       if (waiting === 'waiting') {
-        io.stderr('team approve: input was waiting on the terminal: run `team approve` on its own line\n');
+        io.stderr('team approve: input was waiting on the terminal: this command needs the terminal to itself\n');
         // exit: approve.input-waiting
         return 1;
       }

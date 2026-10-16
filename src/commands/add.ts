@@ -15,7 +15,7 @@ import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeabl
 import { rulesOf } from '../launch/rules.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
-import { clearStopped, hasSeat, restoreSeat, seatIsStopped } from '../file/lines.ts';
+import { clearStopped, seatIsStopped } from '../file/lines.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
@@ -45,7 +45,7 @@ import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
-import { approvalStanding, approvedCopy, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
+import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
@@ -128,8 +128,6 @@ export const USAGE = `Usage: team add <name> [--model <model>] [--effort <effort
 function delegateRefused(out: { stderr(text: string): void }, verdict: { text: string }): number {
   out.stderr(`team add: ${plainText(verdict.text)}\n`);
   // exit: add.delegate-approval
-  // exit: add.delegate-approved-copy
-  // exit: add.delegate-drift
   // exit: add.delegate-evidence
   // exit: add.delegate-placement
   // exit: add.delegate
@@ -287,9 +285,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.default-session
     return 1;
   }
-  // A missing record is the live file, and so is a verified one: the edit starts from
-  // the live text. A seat the live file no longer names is put back from the stored
-  // copy's stanza alone. A legacy or refused record is still not in force.
+  // A missing record is the live file, and so is a verified one: the edit starts from the live
+  // text, and a seat is read from the file as it stands. A legacy or refused record is still not
+  // in force.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
     out.stderr(`team add: ${plainText(notInForce(standing))}\n`);
@@ -297,8 +295,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.ceilings
     return 1;
   }
-  const approvedText = readFileSync(path, 'utf8');
-  const approvedTeam = team;
   const ceilings = ceilingsOf(team);
 
   const live = sources.sessionState(session);
@@ -325,18 +321,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
   const original = readFileSync(path, 'utf8');
   const asked = args.rest[0] ?? '';
-  const stored = seatSource(standing, root, sources.home);
-  const fromStore = stored !== null && !team.seats.some((seat) => seat.name === asked);
   const built = temporary
-    ? temporarySeat(args.values, original, approvedTeam, recorded, agents, root, team.workspace.base)
-    : declaredSeat(
-      asked,
-      original,
-      fromStore ? stored.text : approvedText,
-      fromStore ? stored.team : approvedTeam,
-      sources.home,
-      sources.fs,
-    );
+    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base)
+    : declaredSeat(asked, original, team, sources.home, sources.fs);
   if ('error' in built) {
     out.stderr(`team add: ${plainText(built.error)}\n`);
     // exit: add.no-seat
@@ -536,7 +523,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const doctorTeam = built.temporary
     ? { ...prepared.team, seats: prepared.team.seats.map((item) => item.name === built.temporary?.like ? { ...item, stopped: false } : item) }
     : { ...prepared.team, seats: prepared.team.seats.map((item) => item.name === built.name ? built.seat : item) };
-  // `team` is the file on disk, already the approved one. `doctorTeam` is the
+  // `team` is the file on disk, the one every read trusts. `doctorTeam` is the
   // seat about to run, so a stopped seat's CLI is still checked. The digest is
   // recorded with the write, after a refusal has left the file alone. The seat's own launch
   // line is the last finding: a miss refuses this `add` like any other doctor finding. A dry
@@ -784,26 +771,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 }
 
-/** The stored copy, when this standing has one that still parses. Used only to put back a
- *  seat the live file no longer names. The edit itself stays on the live text. */
-function seatSource(standing: Standing, root: string, home: string | undefined): { text: string; team: TeamFile } | null {
-  if (standing.kind !== 'verified') return null;
-  const text = approvedCopy(root, home);
-  if (text === null) return null;
-  const parsed = validateTeamFile(text, { home });
-  return parsed.ok ? { text, team: parsed.team } : null;
-}
-
 function declaredSeat(
-  name: string, current: string, approvedText: string, approved: TeamFile, home: string, fs?: FsReader,
+  name: string, current: string, team: TeamFile, home: string, fs?: FsReader,
 ): { name: string; seat: Seat; edited: string; temporary?: undefined } | { error: string } {
-  const seat = approved.seats.find((item) => item.name === name);
-  if (!seat) return { error: `the approved file has no seat ${JSON.stringify(name)}` };
-  let edited = hasSeat(current, name) ? current : restoreSeat(current, approvedText, name);
+  const seat = team.seats.find((item) => item.name === name);
+  if (!seat) return { error: `the file has no seat ${JSON.stringify(name)}` };
+  let edited = current;
   if (seat.stopped || seatIsStopped(edited, name)) edited = clearStopped(edited, name);
   const again = validateTeamFile(edited, { home, fs });
   const restored = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
-  if (!restored) return { error: `couldn't put ${name} back from the approved copy` };
+  if (!restored) return { error: `couldn't put ${name} back into the file` };
   return { name, seat: { ...restored, stopped: false }, edited, temporary: undefined };
 }
 
@@ -812,7 +789,7 @@ function temporarySeat(
   root: string, base: string | null,
 ): { name: string; seat: Seat; edited: string; temporary: NonNullable<SeatState['temporary']> } | { error: string } {
   const like = approved.seats.find((item) => item.name === values.like);
-  if (!like) return { error: `the approved file has no seat ${JSON.stringify(values.like)}` };
+  if (!like) return { error: `the file has no seat ${JSON.stringify(values.like)}` };
   const until = parseUntil(values.until ?? '');
   if (!until) return { error: '--until is result:<path> or merged:<branch>' };
   let own: boolean | undefined;
@@ -929,14 +906,14 @@ function runningOf(agents: readonly HerdrAgent[], team: TeamFile, state: Session
 
 function ceilingProblem(ceilings: Ceilings, running: readonly Running[], seat: Seat, temporary: boolean): string | null {
   if (running.some((item) => item.name === seat.name)) return null;
-  if (running.length + 1 > ceilings.seats) return `the approval allows ${ceilings.seats} seats; ${running.length + 1} would be running`;
+  if (running.length + 1 > ceilings.seats) return `the file allows ${ceilings.seats} seats; ${running.length + 1} would be running`;
   if (temporary && running.filter((item) => item.temporary).length + 1 > ceilings.temporary) {
-    return `the approval allows ${ceilings.temporary} temporary seats; ${running.filter((item) => item.temporary).length + 1} would be running`;
+    return `the file allows ${ceilings.temporary} temporary seats; ${running.filter((item) => item.temporary).length + 1} would be running`;
   }
   const cap = ceilings.vendors[seat.vendor];
   if (cap !== undefined) {
     const vendors = running.filter((item) => item.vendor === seat.vendor || item.vendor === 'unknown').length + 1;
-    if (vendors > cap) return `the approval allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
+    if (vendors > cap) return `the file allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
   }
   return null;
 }
