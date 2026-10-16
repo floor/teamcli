@@ -573,7 +573,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // agent for good (retired, out of the roster), so a seat added in its name is a new agent.
     if (sources.home) {
       const ended = registerEnd(
-        { home: sources.home, team, root, by: describeCaller(caller) },
+        { home: sources.home, team, root, by: describeCaller(caller), session },
         name,
         args.flags.has('keep') ? 'stopped' : 'retired',
       );

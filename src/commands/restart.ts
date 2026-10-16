@@ -351,7 +351,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       });
       if (priorPane) forgetLaunchedPane(sources.home, priorPane, session);
       // The old pane is closed: the seat's agent is stopped until the relaunch below re-points it.
-      const ended = registerEnd({ home: sources.home, team, root, by: who }, name, 'stopped');
+      const ended = registerEnd({ home: sources.home, team, root, by: who, session }, name, 'stopped');
       if (ended) logLine(dir, 'restart', who, ended.note, sources.now());
     }
 
@@ -696,7 +696,7 @@ function hostOf(input: {
         // The registry: a relaunch keeps the seat's agent and re-points it to the new pane.
         if (name === seat.name) {
           const made = registerLaunch(
-            { home: input.home, team: input.team, root: input.root, by: input.caller },
+            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[name]?.id,
@@ -727,7 +727,7 @@ function hostOf(input: {
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
       if (name === seat.name) {
-        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller }, name, 'stopped');
+        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, 'stopped');
         if (ended) logLine(dir, 'restart', input.caller, ended.note, input.now());
       }
     },

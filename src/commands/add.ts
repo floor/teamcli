@@ -1101,7 +1101,7 @@ function hostOf(input: {
         // The registry: the seat's agent is registered at its first launch, re-pointed after.
         if (name === seat.name) {
           const made = registerLaunch(
-            { home: input.home, team: input.team, root: input.root, by: input.caller },
+            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[name]?.id,
@@ -1134,7 +1134,7 @@ function hostOf(input: {
       if (pane) forgetLaunchedPane(input.home, pane, session);
       // The registry: a temporary seat's agent ends with it; a declared seat's comes back as itself.
       if (name === seat.name) {
-        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller }, name, temporary ? 'retired' : 'stopped');
+        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, temporary ? 'retired' : 'stopped');
         if (ended) logLine(dir, 'add', input.caller, ended.note, input.now());
       }
     },

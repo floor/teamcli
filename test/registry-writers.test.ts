@@ -259,6 +259,33 @@ describe('team restart: the agent keeps its id and its address re-points', () =>
   });
 });
 
+describe('the session the command launched in is the session the registry addresses', () => {
+  test('a run under another session registers its agents and its team there', () => {
+    const fixture = makeFixture();
+    const input = { ...registryOf(fixture), session: 'alternate' };
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const notes = registerRun(input, [{ seat: lead, pane: 'pane-lead' }]);
+    expect(notes).toEqual([]);
+    const agent = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'lead' })!;
+    expect(agent.reach.session).toBe('alternate');
+    expect(getTeam(fixture.home, teamIdOf(fixture.root))?.session).toBe('alternate');
+  });
+
+  test('team restart --session names that session on the agent, not the file\'s', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.alternate ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--session', 'alternate'], io, sources)).toBe(0);
+    const agent = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })!;
+    expect(agent.reach).toMatchObject({ session: 'alternate', pane: 'pane-new' });
+    expect(getTeam(fixture.home, teamIdOf(fixture.root))?.session).toBe('alternate');
+  });
+});
+
 /** The fake host: one running worker in `pane-old`, a new pane made on relaunch. */
 function makeHarness(fixture: Fixture): { sources: RestartSources } {
   let workerAlive = true;

@@ -1530,7 +1530,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // The registry follows the state this run left: a ready seat is registered, or re-pointed to
     // its pane when it was relaunched; a seat the file stops, or one not ready, is stopped.
     for (const note of registerRun(
-      { home: sources.home, team, root, by: callerLabel(caller) },
+      { home: sources.home, team, root, by: callerLabel(caller), session },
       team.seats.map((seat) => ({
         seat,
         pane: afterwards[seat.name]?.stage === 'ready' ? (afterwards[seat.name]?.pane ?? null) : null,

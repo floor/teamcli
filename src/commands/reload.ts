@@ -259,7 +259,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         });
         // The registry: a reload whose seat was dropped leaves its agent stopped.
         if (next === seat.name && sources.home) {
-          const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller) }, next, 'stopped');
+          const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, next, 'stopped');
           if (ended) logLine(dir, 'reload', describeCaller(caller), ended.note, now());
         }
       },
@@ -279,7 +279,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         // model and effort the file now declares.
         if (patch.pane && next === seat.name && sources.home) {
           const made = registerLaunch(
-            { home: sources.home, team, root, by: describeCaller(caller) },
+            { home: sources.home, team, root, by: describeCaller(caller), session },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[next]?.id,

@@ -5,12 +5,20 @@
 //
 // A registry that cannot be written is a note for the command's log, never a refusal: the launch
 // or the stop is done, and the next launch writes the record again. Every function here catches.
-import { findAgent, registerAgent, updateAgent } from '../registry/agents.ts';
+import { findAgent, readAgents, registerAgent, updateAgent } from '../registry/agents.ts';
 import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf } from '../registry/teams.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 
 /** What every writer here is told about the team it writes for. */
-export type RegistryTeam = { home: string; team: TeamFile; root: string; by: string };
+export type RegistryTeam = {
+  home: string;
+  team: TeamFile;
+  root: string;
+  by: string;
+  /** The herdr session the command launched in or stopped. Absent: the file's. `up --session x`
+   *  launches under `x`, and the registry must address the panes where they are. */
+  session?: string;
+};
 
 /** How a seat's agent ends: `stopped` comes back to the same agent, `retired` never does. */
 export type Ending = 'stopped' | 'retired';
@@ -25,7 +33,7 @@ function noteOf(error: unknown): string {
  *  `noteTeam` never throws; the line it returns is why the record was not written. */
 function ensureTeam(input: RegistryTeam): string | null {
   const { team, root, home, by } = input;
-  const seed = { project: team.project, entity: team.entity, session: team.session, lobby: team.lobby };
+  const seed = { project: team.project, entity: team.entity, session: input.session ?? team.session, lobby: team.lobby };
   return noteTeam(home, root, seed, 'running', by);
 }
 
@@ -57,7 +65,7 @@ export function registerLaunch(
     // The seat's stable handle, kept on the agent for continuity: set when the agent has none, and
     // never changed after, so a handle the state minted later does not rewrite the record.
     const seatHandle = SEAT_HANDLE.test(handle ?? '') && !known?.seat_handle ? { seat_handle: handle as string } : {};
-    const reach = { team: teamId, seat: seat.name, session: team.session, pane, address: known?.reach.address ?? null };
+    const reach = { team: teamId, seat: seat.name, session: input.session ?? team.session, pane, address: known?.reach.address ?? null };
     const signing = { model: seat.model, version: seat.version, role: seat.role };
     const agent = known
       ? updateAgent(home, known.id, {
@@ -87,6 +95,25 @@ export function registerEnd(input: RegistryTeam, seat: string, ending: Ending): 
     if (!known) return null;
     updateAgent(input.home, known.id, { lifecycle: ending, reach: { ...known.reach, pane: null } });
     if (ending === 'retired') writeRoster(input, teamId, seat, null);
+    return null;
+  } catch (error) {
+    return { note: noteOf(error) };
+  }
+}
+
+/**
+ * A session that is not running: every agent of the team that was launched in it is stopped and
+ * its pane cleared, whether or not the state still knew its seat. Used by `down` for a session
+ * found already dead. Agents of the team in another session are left as they are.
+ */
+export function registerSessionEnd(input: RegistryTeam): { note: string } | null {
+  try {
+    const teamId = teamIdOf(input.root);
+    const session = input.session ?? input.team.session;
+    for (const agent of readAgents(input.home)) {
+      if (agent.reach.team !== teamId || agent.reach.session !== session || agent.lifecycle !== 'running') continue;
+      updateAgent(input.home, agent.id, { lifecycle: 'stopped', reach: { pane: null } });
+    }
     return null;
   } catch (error) {
     return { note: noteOf(error) };
