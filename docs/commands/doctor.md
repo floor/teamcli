@@ -34,6 +34,10 @@ them are done; the last line counts those.
 | at least one `MISS` | the same report, then the count — `team doctor: <n> missing, <w> warning(s)` — and `: <n> of them block \`up\` and \`add\`` when any missing one blocks | 1 |
 | the invocation or the team file can't be read | `team doctor: <problem>`, with the usage for the invocation | 2 |
 
+Every line it prints is cleaned first: escape sequences, control characters and invisible format
+characters carried by the team file, a pane or a CLI's own output are removed, so a value can
+never move the cursor, paint the terminal or open a second line.
+
 ## Example
 
 ```yaml file=.agents/team.yaml

@@ -5,6 +5,7 @@ import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { TEAM_FILE, findRoot } from '../file/load.ts';
 import { validateTeamFile } from '../file/validate.ts';
+import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
@@ -144,7 +145,7 @@ export async function runInit(
   io: Io,
   home?: string,
   readStanding?: (root: string) => Standing,
-  sources: Pick<DoctorSources, 'loggedIn'> = doctorSources,
+  sources: Pick<DoctorSources, 'loggedIn'> & { now?: () => Date } = doctorSources,
 ): Promise<number> {
   const args = readArgs(argv, [], ['restore']);
   if (args.error || args.rest.length) {
@@ -159,12 +160,22 @@ export async function runInit(
     // exit: init.detached
     return 1;
   }
-  if (!isOwner(caller)) {
+  let foundRoot: string | null | undefined;
+  const rootOf = () => (foundRoot === undefined ? (foundRoot = findRoot(io.cwd)) : foundRoot);
+  const createGranted =
+    !isOwner(caller) &&
+    !args.flags.has('restore') &&
+    readEntityCreateGrants(home).length > 0 &&
+    (() => {
+      const candidateRoot = rootOf();
+      return candidateRoot !== null && entityGrantAdmits(candidateRoot, io, { home, now: sources.now?.(), cwd: io.cwd });
+    })();
+  if (!isOwner(caller) && !createGranted) {
     io.stderr(`team init: only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
     // exit: init.not-owner
     return 1;
   }
-  const root = findRoot(io.cwd);
+  const root = rootOf();
   if (!root) {
     io.stderr('team init: not inside a git repository\n');
     // exit: init.not-a-repo

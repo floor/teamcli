@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { runAdd } from '../../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
 import { runAskShow } from '../../src/commands/ask-show.ts';
-import { runApprove, type Waiting } from '../../src/commands/approve.ts';
+import { runApprove, type Waiting } from '../../src/approve/command.ts';
 import { runBroker } from '../../src/commands/broker.ts';
 import { check, loadConfig } from '../../src/commands/check.ts';
 import { commits } from '../../src/commands/commits.ts';
@@ -21,6 +21,7 @@ import { runFeed } from '../../src/commands/feed.ts';
 import { runInit } from '../../src/commands/init.ts';
 import { runMcp } from '../../src/commands/mcp.ts';
 import { runRemove } from '../../src/commands/remove.ts';
+import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
 import { runList } from '../../src/commands/list.ts';
@@ -231,6 +232,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runMcp(rest, io, world.mcpSources());
     case 'remove':
       return runRemove(rest, io, world.removeSources());
+    case 'restart':
+      return runRestart(rest, io, world.restartSources());
     case 'send': {
       // Every seat of the page's file is a live agent, so a native-CLI example resolves.
       // `reply="…"` on the fence is the fake seat's answer: with it, a `--wait` example has a
