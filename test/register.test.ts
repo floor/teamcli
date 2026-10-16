@@ -4,9 +4,11 @@
 // (a) a running seat is registered: the state, the registry record and the pane pointer are
 //     written, the pane both now name is herdr's own reading of the live pane, and the process
 //     identity, agent session and live session socket are exactly that reading;
-// (b) the run only reads: the sources this file injects are reads alone — the interface has no
-//     channel to create, close or rename a workspace or to type into a pane, so "nothing was
-//     launched" is what the scene is built on, and every call taken is on the pane herdr named;
+// (b) the run only reads beyond the two sidebar writes: every source this file injects is a
+//     read, and the interface's write channels — the seat's herdr title and display
+//     (`test/register-label.test.ts` holds their scenes) — are injected here as noops that
+//     record nothing, so "nothing was launched" is what the scene is built on, and every call
+//     taken is on the pane herdr named;
 // (c) registers herdr does not place as that seat are refused, and nothing at all is written:
 //     no agent of the name in the session, two agents of the name, a pane holding a shell, a
 //     pane whose foreground process is not the one the file's `cli` names, and a screen the
@@ -123,6 +125,10 @@ function sources(w: World, led: Ledger = [], over: Partial<RegisterSources> = {}
       led.push(`text ${session} ${pane}`);
       return CLAUDE_IDLE;
     },
+    // The two sidebar writes (`test/register-label.test.ts` holds their scenes): noops that
+    // record nothing, so a scene's ledger stays reads alone.
+    renameWorkspace: () => true,
+    reportDisplayAgent: () => true,
     now: () => NOW,
     ...over,
   };
