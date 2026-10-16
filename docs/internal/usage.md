@@ -36,21 +36,19 @@ is one team, and the first store in name order stands for it.
 It writes **nothing at all**: unlike `status`, it keeps no `last_valid` copy of the files it read,
 and unlike `up`, `add` and `watch` it opens no lock, writes no state and logs no line.
 
-Which file's figures are in force is the approval's rule, the one `status` states: a file the owner
-approved whose `budgets` section is the approved one is read as it stands; a file whose `budgets`
-section differs is answered from the copy the approval stored, and one why-line says the file
-differs; a file never approved on this machine has no budgets in force at all, and says so:
+Which file's figures are in force is the live file's rule, the one `status` states: a file the owner
+approved on this machine is read as it stands, its `budgets` section with it, whether or not the
+section changed since that record was written; a file never approved here has no budgets in force at
+all, and says so:
 
     the file was never approved on this machine
-    the file differs from the approved one: `budgets` changed
 
 A file that does not load, or cannot be read, cannot be resolved as the caller's own project — a
 caller who is not the owner reads no block of their own for it, the machine's counts and one fixed
 sentence per distinct line (`note: .agents/team.yaml does not load (line 4): the owner reads the
-reason`) in their place — while the owner reads the loader's own messages and the figures the
-approval stored. When the caller's own project is resolved but no copy in force can be read, the
-block carries no name and no row: `note: no figures (the file could not be read)` and
-`note: the approved copy of the team file cannot be read: nothing is shown by name` stand for them.
+reason`) in their place — while the owner reads the loader's own messages. When the caller's own
+project is resolved but its file does not load, the block carries no name and no row:
+`note: no figures (the file could not be read)` stands for them.
 
 ## Who may run it, and which view they read
 
@@ -146,16 +144,16 @@ the caller's own block:
     note: a stored reading names an account this team's file does not: not shown
     note: a stored reading carries a window or source this tool does not write: not shown
 
-The team in force is the approved copy once a verified approval is in force, never the live file: a
-name only the live file writes — a `vendor:` edited after approval, a seat it added — binds no
-stored reading, and the standing's own why-line already says the file differs. A copy that cannot
-be read binds nothing at all: no block of the caller's own carries a row, the figures of its budgets
-included, and the one line
+The team in force is the live file once a verified approval is in force — its `budgets` section, its
+seats and its project name, for the owner and for a caller who is not the owner alike: a name the
+file's own seat or account writes — a `vendor:` edited after approval, a seat added since — binds
+its stored reading. A live file that cannot be read binds nothing at all: no block of the caller's
+own carries a row, the figures of its budgets included, and the one line
 
-    note: the approved copy of the team file cannot be read: nothing is shown by name
+    note: no figures (the file could not be read)
 
 stands for them — `mine` is null in `--json`, and the watch clause names `it` rather than any
-project, since the name too is that copy's.
+project, since the name too is that file's.
 
 An account nothing can read carries the tool's own why-line under its rows — `doctor`'s and the
 gate's own words, never a message a read produced:
@@ -172,9 +170,8 @@ names.
 A file that names no account gets the tool's own sentence in the same place — `not known: this
 team's file declares no account, so nothing is counted` — and a file whose budgets are not the ones
 in force gets the why-line `status` prints for that standing: the one above for a file never
-approved, the legacy record's repair line, or the one that says the file differs from the approved
-copy and names the section — `budgets`. Those are why-lines, not refusals: the exit is 0 either
-way.
+approved, or the legacy record's repair line. Those are why-lines, not refusals: the exit is 0
+either way.
 
 A lab whose accounts the caller's own file does not name is counted, never named or given a figure:
 
@@ -221,7 +218,7 @@ own test:
   from, and rounding it would take a decision away from the reader.
 
 What else the restricted view prints of the caller's own team is its own: the project name from the
-copy in force (a live `project:` edit after approval is not shown), the loader's problems as fixed
+live file, a `project:` edit after approval included, the loader's problems as fixed
 sentences, the state's own reason with this project's own path relative to its root, and the
 `note:` lines above. A file that does not load reads, one note per distinct line,
 

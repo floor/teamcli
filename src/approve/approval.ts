@@ -205,20 +205,6 @@ export function budgetsInForceOf(standing: Standing, team: TeamFile): TeamFile['
   return team.budgets;
 }
 
-/**
- * The team file the worktree subcommands read, and whether it has drifted from the last
- * approval. The live file is the record, so the team handed back is the file itself and the
- * subcommands act on it as written. `differs` is the informational half: the file's
- * fingerprints against the record's own, so a section or a seat that was added, removed or
- * changed since the last approval prints the note. A standing that isn't verified hands the
- * live file back with `differs: false`.
- */
-export function worktreeTeamInForceOf(standing: Standing, team: TeamFile): { team: TeamFile; differs: boolean } {
-  if (standing.kind !== 'verified') return { team, differs: false };
-  const differences = compare(approvedFingerprints(standing.record), fingerprints(team));
-  return { team, differs: differences.length > 0 };
-}
-
 /** The wrappers a standalone caller uses: each does its own one read, then derives. */
 export function watchInForce(team: TeamFile, root: string, home: string = homedir()): TeamFile['watch'] {
   return watchInForceOf(approvalStanding(root, home), team);
