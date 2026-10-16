@@ -5,7 +5,7 @@ import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { TEAM_FILE, findRoot } from '../file/load.ts';
 import { validateTeamFile } from '../file/validate.ts';
-import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
+import { entityGrantAdmits, pathlessGrantFiles, readEntityCreateGrants } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
@@ -167,13 +167,23 @@ export async function runInit(
   // A detached run is refused unless a create-grant admits it: the grant holder's own runner
   // outside herdr is the one detached caller the grant may name.
   const detached = detachedRefusal(caller);
+  // A record that names no `paths` covers nothing and admits nobody. Naming it is the one thing
+  // that makes the refusal below actionable, and it is the likely reason the caller expected to be
+  // admitted, since a record that used to infer its roots no longer does.
+  const pathlessNote = (): void => {
+    for (const file of pathlessGrantFiles(home)) {
+      io.stderr(`team init: the create-grant record ${file} names no \`paths\`, so it covers nothing; add \`paths:\` to it\n`);
+    }
+  };
   if (detached !== undefined && !createGranted) {
     io.stderr(`team init: ${detached}\n`);
+    pathlessNote();
     // exit: init.detached
     return 1;
   }
   if (!isOwner(caller) && !createGranted) {
     io.stderr(`team init: only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
+    pathlessNote();
     // exit: init.not-owner
     return 1;
   }

@@ -44,10 +44,10 @@ const SEAT = (role: string, name: string, leads = false) => `  - role: ${role}
 `;
 
 function fiveSeatTeam(project: string, root: string, home: string): string {
-  const lobby = join(home, '.config', 'team', 'lobbies', 'radiooooo');
+  const lobby = join(home, '.config', 'team', 'lobbies', 'acme');
   return `format: 1
 project: ${project}
-entity: radiooooo
+entity: acme
 operator: orchestrator
 trust:
   - ${lobby}
@@ -86,11 +86,11 @@ function makeSandbox() {
   const base = realpathSync(mkdtempSync('/tmp/eg-'));
   const home = join(base, 'home');
   mkdirSync(grantsDir(home), { recursive: true });
-  const radioCode = join(home, 'Code', 'radiooooo');
-  const radioDocs = join(home, 'Documents', 'radio');
-  mkdirSync(radioCode, { recursive: true });
-  mkdirSync(radioDocs, { recursive: true });
-  return { base, home, radioCode, radioDocs };
+  const acmeCode = join(home, 'Code', 'acme');
+  const acmeDocs = join(home, 'Documents', 'acme');
+  mkdirSync(acmeCode, { recursive: true });
+  mkdirSync(acmeDocs, { recursive: true });
+  return { base, home, acmeCode, acmeDocs };
 }
 
 function writeGrant(home: string, name: string, body: string): void {
@@ -162,35 +162,35 @@ function upSources(home: string, launch: Launch, term: Terminal, now: Date = NOW
 }
 
 describe('entity create-grant in ~/.config/team/grants/', () => {
-  test('radiooooo grant covers ~/Code/radiooooo and ~/Documents/radio for init and up with no team-file grant', async () => {
+  test('acme grant covers ~/Code/acme and ~/Documents/acme for init and up with no team-file grant', async () => {
     const sb = makeSandbox();
     try {
       writeGrant(
         sb.home,
-        'radiooooo.yaml',
-        `entity: radiooooo\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/radiooooo\n  - ~/Documents/radio\nexpires: "${FUTURE}"\n`,
+        'acme.yaml',
+        `entity: acme\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme\n  - ~/Documents/acme\nexpires: "${FUTURE}"\n`,
       );
       expect(readEntityCreateGrants(sb.home)).toEqual([
         {
-          entity: 'radiooooo',
+          entity: 'acme',
           session: 'dispatch',
           agent: 'orchestrator',
-          paths: ['~/Code/radiooooo', '~/Documents/radio'],
+          paths: ['~/Code/acme', '~/Documents/acme'],
           expires: FUTURE,
           runners: [],
         },
       ]);
 
-      // 1. Under ~/Code/radiooooo/v4: init and up succeed for the granted agent, and the five seats
+      // 1. Under ~/Code/acme/v4: init and up succeed for the granted agent, and the five seats
       // launch concurrently with no prompt and receive their first brief.
-      const v4 = join(sb.radioCode, 'v4');
+      const v4 = join(sb.acmeCode, 'v4');
       initGitRepo(v4);
       const initIo = testIo(v4, grantedAgent);
       expect(await runInit([], initIo, sb.home, undefined, noLogin)).toBe(0);
       expect(existsSync(join(v4, '.agents', 'team.yaml'))).toBe(true);
 
       // Write the 5-seat team file (1 orchestrator, 2 builders, 2 testers) with no grant or delegates.
-      writeFileSync(join(v4, '.agents', 'team.yaml'), fiveSeatTeam('radiooooo-v4', v4, sb.home));
+      writeFileSync(join(v4, '.agents', 'team.yaml'), fiveSeatTeam('acme-v4', v4, sb.home));
 
       let launches = 0;
       let idleAt: number | null = null;
@@ -220,14 +220,14 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       expect(idleAt!).toBeGreaterThanOrEqual(5);
       expect(keys.reads).toBe(0);
       expect(host.closed).toBe(0);
-      expect(existsSync(join(storePath('radiooooo-v4', v4, sb.home), 'approval.json'))).toBe(false);
+      expect(existsSync(join(storePath('acme-v4', v4, sb.home), 'approval.json'))).toBe(false);
 
-      const seats = readState(join(v4, '.agents')).sessions['radiooooo-v4']?.seats ?? {};
+      const seats = readState(join(v4, '.agents')).sessions['acme-v4']?.seats ?? {};
       for (const name of ['orchestrator', 'builder-1', 'builder-2', 'tester-1', 'tester-2']) {
         expect(seats[name]?.stage, name).toBe('ready');
       }
 
-      const leadCaller = { kind: 'seat', name: 'orchestrator', pane: seats.orchestrator?.pane ?? 'seat-pane-1', session: 'radiooooo-v4' } as const;
+      const leadCaller = { kind: 'seat', name: 'orchestrator', pane: seats.orchestrator?.pane ?? 'seat-pane-1', session: 'acme-v4' } as const;
       const sendIo = testIo(v4, leadCaller);
       const sendHost: SendHost = {
         agents: () => [{ name: 'builder-1', pane: seats['builder-1']?.pane ?? 'seat-pane-2' }],
@@ -248,8 +248,8 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       expect(await runSend(['builder-1', 'first brief'], sendIo, sendHost)).toBe(0);
       expect(sendIo.out).toContain('builder-1: delivered\n');
 
-      // 2. Under ~/Documents/radio/archive: also admitted by the same radiooooo grant.
-      const archive = join(sb.radioDocs, 'archive');
+      // 2. Under ~/Documents/acme/archive: also admitted by the same acme grant.
+      const archive = join(sb.acmeDocs, 'archive');
       initGitRepo(archive);
       const docsInitIo = testIo(archive, grantedAgent);
       expect(await runInit([], docsInitIo, sb.home, undefined, noLogin)).toBe(0);
@@ -267,10 +267,10 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
     try {
       writeGrant(
         sb.home,
-        'radiooooo.yaml',
-        `entity: radiooooo\nsession: dispatch\nagent: orchestrator\nexpires: "${FUTURE}"\n`,
+        'acme.yaml',
+        `entity: acme\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme\n  - ~/Documents/acme\nexpires: "${FUTURE}"\n`,
       );
-      const v4 = join(sb.radioCode, 'v4');
+      const v4 = join(sb.acmeCode, 'v4');
       initGitRepo(v4);
 
       for (const stranger of [otherAgent, wrongSessionAgent, { kind: 'unplaced', reason: 'it runs in a herdr pane without an agent' } as const]) {
@@ -281,7 +281,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       }
 
       mkdirSync(join(v4, '.agents'), { recursive: true });
-      writeFileSync(join(v4, '.agents', 'team.yaml'), fiveSeatTeam('radiooooo-v4', v4, sb.home));
+      writeFileSync(join(v4, '.agents', 'team.yaml'), fiveSeatTeam('acme-v4', v4, sb.home));
 
       for (const stranger of [otherAgent, wrongSessionAgent]) {
         const upIo = testIo(v4, stranger);
@@ -297,14 +297,14 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
   test('refuses an expired grant on both init and up', async () => {
     const sb = makeSandbox();
     try {
-      const v4 = join(sb.radioCode, 'v4');
+      const v4 = join(sb.acmeCode, 'v4');
       initGitRepo(v4);
 
       for (const expires of [PAST, EXACT_NOW]) {
         writeGrant(
           sb.home,
-          'radiooooo.yaml',
-          `entity: radiooooo\nsession: dispatch\nagent: orchestrator\nexpires: "${expires}"\n`,
+          'acme.yaml',
+          `entity: acme\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme\n  - ~/Documents/acme\nexpires: "${expires}"\n`,
         );
         const initIo = testIo(v4, grantedAgent);
         expect(await runInit([], initIo, sb.home, undefined, noLogin)).toBe(1);
@@ -313,13 +313,13 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       }
 
       mkdirSync(join(v4, '.agents'), { recursive: true });
-      writeFileSync(join(v4, '.agents', 'team.yaml'), fiveSeatTeam('radiooooo-v4', v4, sb.home));
+      writeFileSync(join(v4, '.agents', 'team.yaml'), fiveSeatTeam('acme-v4', v4, sb.home));
 
       for (const expires of [PAST, EXACT_NOW]) {
         writeGrant(
           sb.home,
-          'radiooooo.yaml',
-          `entity: radiooooo\nsession: dispatch\nagent: orchestrator\nexpires: "${expires}"\n`,
+          'acme.yaml',
+          `entity: acme\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme\n  - ~/Documents/acme\nexpires: "${expires}"\n`,
         );
         const upIo = testIo(v4, grantedAgent);
         expect(await runUp([], upIo, upSources(sb.home, launching(() => {}), terminal()))).toBe(1);
@@ -335,16 +335,16 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
     try {
       writeGrant(
         sb.home,
-        'radiooooo.yaml',
-        `entity: radiooooo\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/radiooooo\n  - ~/Documents/radio\nexpires: "${FUTURE}"\n`,
+        'acme.yaml',
+        `entity: acme\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme\n  - ~/Documents/acme\nexpires: "${FUTURE}"\n`,
       );
 
       // An outside repository not covered by the grant.
       const outside = join(sb.home, 'Code', 'other-repo');
       initGitRepo(outside);
 
-      // 1. Symlink inside ~/Code/radiooooo pointing out to ~/Code/other-repo.
-      const symlinkedRepo = join(sb.radioCode, 'escaped-link');
+      // 1. Symlink inside ~/Code/acme pointing out to ~/Code/other-repo.
+      const symlinkedRepo = join(sb.acmeCode, 'escaped-link');
       symlinkSync(outside, symlinkedRepo);
 
       const symInitIo = testIo(symlinkedRepo, grantedAgent);
@@ -352,16 +352,16 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       expect(symInitIo.err).toContain('only the owner runs init');
       expect(existsSync(join(outside, '.agents', 'team.yaml'))).toBe(false);
 
-      // 2. `..` traversal in cwd (`~/Code/radiooooo/v4/../../other-repo`).
-      const v4 = join(sb.radioCode, 'v4');
+      // 2. `..` traversal in cwd (`~/Code/acme/v4/../../other-repo`).
+      const v4 = join(sb.acmeCode, 'v4');
       initGitRepo(v4);
       const dotDotCwd = `${v4}/../../other-repo`;
       const dotInitIo = testIo(dotDotCwd, grantedAgent);
       expect(await runInit([], dotInitIo, sb.home, undefined, noLogin)).toBe(1);
       expect(dotInitIo.err).toContain('only the owner runs init');
 
-      // 3. Prefix sibling (`~/Code/radiooooo-evil`) is not under `~/Code/radiooooo`.
-      const sibling = join(sb.home, 'Code', 'radiooooo-evil');
+      // 3. Prefix sibling (`~/Code/acme-evil`) is not under `~/Code/acme`.
+      const sibling = join(sb.home, 'Code', 'acme-evil');
       initGitRepo(sibling);
       const sibInitIo = testIo(sibling, grantedAgent);
       expect(await runInit([], sibInitIo, sb.home, undefined, noLogin)).toBe(1);
@@ -371,7 +371,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       mkdirSync(join(outside, '.agents'), { recursive: true });
       writeFileSync(join(outside, '.agents', 'team.yaml'), fiveSeatTeam('other-repo', outside, sb.home));
       mkdirSync(join(sibling, '.agents'), { recursive: true });
-      writeFileSync(join(sibling, '.agents', 'team.yaml'), fiveSeatTeam('radiooooo-evil', sibling, sb.home));
+      writeFileSync(join(sibling, '.agents', 'team.yaml'), fiveSeatTeam('acme-evil', sibling, sb.home));
 
       for (const badCwd of [symlinkedRepo, dotDotCwd, sibling]) {
         const upIo = testIo(badCwd, grantedAgent);
@@ -379,11 +379,11 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
         expect(upIo.err).toBe('deny\n');
       }
 
-      // 4. A grant file that itself writes `..` in `paths` (`~/Code/radiooooo/../other-repo`) is refused.
+      // 4. A grant file that itself writes `..` in `paths` (`~/Code/acme/../other-repo`) is refused.
       writeGrant(
         sb.home,
         'escaped.yaml',
-        `entity: escaped\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/radiooooo/../other-repo\nexpires: "${FUTURE}"\n`,
+        `entity: escaped\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme/../other-repo\nexpires: "${FUTURE}"\n`,
       );
       const escapedUpIo = testIo(outside, grantedAgent);
       expect(await runUp([], escapedUpIo, upSources(sb.home, launching(() => {}), terminal()))).toBe(1);
@@ -391,12 +391,38 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
 
       // 5. A symlinked `.agents/team.yaml` inside an otherwise covered repo is refused.
       const outsideTeamYaml = join(outside, 'v4-team.yaml');
-      writeFileSync(outsideTeamYaml, fiveSeatTeam('radiooooo-v4', v4, sb.home));
+      writeFileSync(outsideTeamYaml, fiveSeatTeam('acme-v4', v4, sb.home));
       mkdirSync(join(v4, '.agents'), { recursive: true });
       symlinkSync(outsideTeamYaml, join(v4, '.agents', 'team.yaml'));
       const linkedFileUpIo = testIo(v4, grantedAgent);
       expect(await runUp([], linkedFileUpIo, upSources(sb.home, launching(() => {}), terminal()))).toBe(1);
       expect(linkedFileUpIo.err).toBe('deny\n');
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('a record that names no paths covers nothing, and init and up name the file', async () => {
+    const sb = makeSandbox();
+    try {
+      // Records once inferred their roots from the entity they named; nothing infers them now,
+      // so a record with no `paths` admits nobody and the refusal says which file to fix.
+      writeGrant(sb.home, 'acme.yaml', `entity: acme\nsession: dispatch\nagent: orchestrator\nexpires: "${FUTURE}"\n`);
+      const v4 = join(sb.acmeCode, 'v4');
+      initGitRepo(v4);
+
+      // `init`, as the agent the record names: refused, and the file to fix is named.
+      const initIo = testIo(v4, grantedAgent);
+      expect(await runInit([], initIo, sb.home, undefined, noLogin)).toBe(1);
+      expect(initIo.err).toContain('acme.yaml names no `paths`');
+      expect(existsSync(join(v4, '.agents', 'team.yaml'))).toBe(false);
+
+      // `up`, as the holder's own runner outside herdr: the same file is named in the refusal.
+      mkdirSync(join(v4, '.agents'), { recursive: true });
+      writeFileSync(join(v4, '.agents', 'team.yaml'), fiveSeatTeam('acme-v4', v4, sb.home));
+      const runnerIo = testIo(v4, { kind: 'owner-no-tty' });
+      expect(await runUp([], runnerIo, upSources(sb.home, launching(() => {}), terminal()))).toBe(1);
+      expect(runnerIo.err).toContain('acme.yaml names no `paths`');
     } finally {
       rmSync(sb.base, { recursive: true, force: true });
     }
