@@ -1,0 +1,22 @@
+
+Tips for getting started:
+1. Create GEMINI.md files to customize your
+interactions
+2. /help for more information
+3. Ask coding questions, edit code or run commands
+4. Be specific for the best results
+
+
+
+─────────────────────────────────────────────────────
+ YOLO Ctrl+Y
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ * Read
+   /home/owner/.config/team/demo-3f9c2a8e1d7b/rule
+   s/lead.md (`5e1d0a9c4b2f`); those are your
+   standing rules for this session. Reply ready
+   and wait for your brief.
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ workspace (/directory)    sandbox            /model
+ <workspace>               no sandbox   gemini-3-pro

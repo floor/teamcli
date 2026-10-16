@@ -1085,7 +1085,8 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     ['.codex/config.toml', 'codex'],
     ['.cursorrules', 'cursor'],
     ['.cursor/rules/plant.mdc', 'cursor'],
-    ['GEMINI.md', 'antigravity'],
+    ['GEMINI.md', 'antigravity and gemini'],
+    ['.gemini/settings.json', 'gemini'],
   ];
 
   async function refusesPlant(rel: string, by: string): Promise<void> {
@@ -1121,7 +1122,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
   test('a symbolic link at each startup-read path is refused', () => {
     const links = [
       'CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md', '.claude/rules', '.claude/settings.json',
-      'AGENTS.md', '.codex/config.toml', '.cursorrules', '.cursor/rules', 'GEMINI.md',
+      'AGENTS.md', '.codex/config.toml', '.cursorrules', '.cursor/rules', 'GEMINI.md', '.gemini/settings.json',
     ];
     for (const rel of links) {
       rmSync(lobby, { recursive: true, force: true });

@@ -484,8 +484,9 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
 
 // The repair that relaunches one seat `up` leaves as it is: `up` never restarts a ready seat,
 // so a line that names `up` alone names a command that skips the seat. For an orchestrator or
-// an operator, `team remove <seat> --keep` is refused (the file can't have a stopped lead),
-// so only the whole-team sequence is offered. For every other seat — stop it, keep it in the
+// an operator, `team remove <seat> --keep` is a swap: it never marks the lead stopped
+// in the file, and it is the owner's or an authorised swapper's; the line still offers the
+// whole-team sequence, which every caller of these lines may follow. For every other seat — stop it, keep it in the
 // file, add it again: the add launches it fresh, which is what records the process, writes the
 // rules file and starts the seat in the machine lobby — or the whole team at once.
 export const relaunch = (team: Pick<TeamFile, 'orchestrator' | 'operator'>, name: string): string =>
@@ -506,6 +507,20 @@ function identityFindings(team: TeamFile, dir: string, session: string): Finding
       level: 'note',
       text: `${seat.name}: launched before team recorded its process; run ${relaunch(team, seat.name)} to launch it again`,
     });
+  }
+  return findings;
+}
+
+// A lead `team remove <lead> --keep` stopped for a swap and nothing started again: the file still
+// names it the lead, the state no longer records it running. Said as the swap it is, with the one
+// command that ends it, so the gap never reads as a lost orchestrator. A record whose seat runs
+// again (an `up` relaunched it) is stale and says nothing.
+export function swapFindings(team: TeamFile, dir: string, session: string): Finding[] {
+  const current = readState(dir).sessions[session];
+  const findings: Finding[] = [];
+  for (const [name, swap] of Object.entries(current?.swapping ?? {})) {
+    if (current?.seats[name] || !team.seats.some((seat) => seat.name === name)) continue;
+    findings.push({ level: 'warn', text: `${name}: stopped for a swap by ${swap.by} at ${swap.at}; run \`team add ${name}\` to start its new agent` });
   }
   return findings;
 }
@@ -622,6 +637,7 @@ export function doctorFindings(
   findings.push(...launchLines);
 
   findings.push(...identityFindings(team, dir, session));
+  findings.push(...swapFindings(team, dir, session));
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
 
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
