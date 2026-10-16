@@ -302,7 +302,7 @@ claude-beacon-tmp-1: ready
 exit 0
 ```
 
-The seat's name must be one the approved file has, so a name that is not is refused before herdr is
+The seat's name must be one the live file has, so a name that is not is refused before herdr is
 asked anything:
 
 ```console

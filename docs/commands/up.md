@@ -29,7 +29,7 @@ into — and its sidebar is rewritten from the file either way.
 | a caller the run admits | run `--dry-run`, which reaches nothing and changes nothing |
 | a caller the run does not admit | a real run and a `--dry-run` are answered alike, with the one word `deny` on stderr and nothing on stdout — no reason, and no plan — and exit 1 |
 | the orchestrator's seat, when the approved `grant` lists `up` | run it on this folder's own team file. The run does not relaunch or close that seat. `--session` and `--file` are refused before either is read |
-| a seat, or a pane of another session | run `--dry-run` only; a real run is refused, unless the approved `grant` admits the orchestrator's seat or the approved file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
+| a seat, or a pane of another session | run `--dry-run` only; a real run is refused, unless the live `grant` admits the orchestrator's seat or the live file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
 
 ## Output and exit codes
 
