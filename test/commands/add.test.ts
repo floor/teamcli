@@ -15,13 +15,13 @@ import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
 import { rulesFilePath } from '../../src/launch/rules-file.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
-import { gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const PERMISSION = 'Do you want to proceed?\n1. Yes\n';
 
 let base: string;
@@ -1615,7 +1615,7 @@ describe('team add --model and --effort', () => {
       typed.push(command);
       return baseRun(session, pane, command);
     };
-    made.launch.paneText = () => IDLE.replace('Opus 5.5', 'Sonnet 5.5');
+    made.launch.paneText = () => IDLE.replaceAll('Opus 5.5', 'Sonnet 5.5');
 
     const io = testIo(project, owner);
     expect(await runAdd(['worker', '--model', 'claude-sonnet-5-5', '--effort', 'high'], io, sources(made))).toBe(0);
@@ -1641,7 +1641,7 @@ describe('team add --model and --effort', () => {
       typed.push(command);
       return baseRun(session, pane, command);
     };
-    made.launch.paneText = () => IDLE.replace('Opus 5.5', 'Sonnet 5.5');
+    made.launch.paneText = () => IDLE.replaceAll('Opus 5.5', 'Sonnet 5.5');
 
     const io = testIo(project, owner);
     const code = await runAdd(

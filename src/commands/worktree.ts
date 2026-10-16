@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { notInForce, worktreeTeamInForceOf } from '../approve/approval.ts';
+import { notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { insideTrust } from '../file/paths.ts';
@@ -128,8 +128,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   }
   const { team, root } = loaded;
   const standing = sources.standing?.(loaded.root) ?? approvalStanding(loaded.root, sources.home);
-  // The live file is the record the subcommands act on; `differs` only carries the note.
-  const inForce = worktreeTeamInForceOf(standing, loaded.team);
+  // The live file is the record the subcommands act on: an edit to it is not a difference to say.
   const reading = team;
   const dir = dirname(loaded.path);
   // The gate judges the caller placed in the session this command asks about — the proof its pane
@@ -168,12 +167,6 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     // exit: worktree.never-approved
     return 1;
   }
-  // One note, before the folder or anything else the command prints: the run goes on with the
-  // file's own settings, and the owner is told the file changed since the last approval.
-  if (inForce.differs) {
-    io.stderr('team worktree: the file has changed since the last approval\n');
-  }
-
   const who = describeCaller(caller);
   if (sub === 'list') return listWorktrees(io, reading, root, dir);
   // `list` is the only subcommand that arrives without a task; the gate above already returned.

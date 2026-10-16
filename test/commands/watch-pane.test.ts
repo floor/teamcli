@@ -15,7 +15,7 @@ import { emptySession, readState, updateState } from '../../src/state.ts';
 import { writeApproval, storePath } from '../../src/store/store.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { claudeBox, testIo } from '../helpers.ts';
+import { capturedPaneEntry, capturedProcessInfo, capturedWorkspaceEntry, claudeBox, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8');
 const NOW = new Date('2026-10-03T14:02:00Z');
@@ -114,22 +114,22 @@ describe('the watch and its pane', () => {
   test('own pane is the one whose shell is this process\'s parent', () => {
     setHerdrRun((args) => {
       if (args[0] === 'workspace' && args[1] === 'list') {
-        return { workspaces: [{ workspace_id: 'w9', label: 'watchdog' }, { workspace_id: 'w1', label: 'seat' }] };
+        return { workspaces: [capturedWorkspaceEntry('w9', 'watchdog'), capturedWorkspaceEntry('w1', 'seat')] };
       }
       if (args[0] === 'pane' && args[1] === 'list' && args[3] === 'w9') {
-        return { panes: [{ pane_id: 'w9:p1', workspace_id: 'w9' }] };
+        return { panes: [capturedPaneEntry('w9:p1', 'w9')] };
       }
-      if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'w1:p1', workspace_id: 'w1' }] };
+      if (args[0] === 'pane' && args[1] === 'list') return { panes: [capturedPaneEntry('w1:p1', 'w1')] };
       if (args[0] === 'pane' && args[1] === 'process-info' && args[3] === 'w9:p1') {
-        return { process_info: { shell_pid: process.ppid, foreground_processes: [{ pid: process.pid }] } };
+        return { process_info: capturedProcessInfo('w9:p1', process.ppid, process.pid) };
       }
-      return { process_info: { shell_pid: 1, foreground_processes: [{ pid: 1 }] } };
+      return { process_info: capturedProcessInfo('w1:p1', 1) };
     });
     expect(ownWatchPane('acme-web', process.pid)).toEqual({ pane: 'w9:p1', workspace: 'w9' });
     setHerdrRun((args) => {
-      if (args[0] === 'workspace') return { workspaces: [{ workspace_id: 'w1', label: 'seat' }] };
-      if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'w1:p1', workspace_id: 'w1' }] };
-      return { process_info: { shell_pid: 1, foreground_processes: [{ pid: 1 }] } };
+      if (args[0] === 'workspace') return { workspaces: [capturedWorkspaceEntry('w1', 'seat')] };
+      if (args[0] === 'pane' && args[1] === 'list') return { panes: [capturedPaneEntry('w1:p1', 'w1')] };
+      return { process_info: capturedProcessInfo('w1:p1', 1) };
     });
     expect(ownWatchPane('acme-web', process.pid)).toBe('gone');
   });

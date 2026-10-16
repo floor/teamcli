@@ -14,7 +14,7 @@ import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
 const PAGE = '../docs/commands/up.md';
 const UP_SRC = '../src/commands/up.ts';
@@ -33,7 +33,7 @@ function raw(path: string): string {
 // owner's `team approve` leaves, a state that records the seats, and the real placement walk.
 // The deny answer is decided by that walk, never by a caller built by hand.
 const NOW = new Date('2026-10-14T09:00:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 type Pane = { pane: string; name: string; root: number };
 const LEAD = { pane: 'lead-pane', name: 'lead', root: 100 };

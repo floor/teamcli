@@ -176,6 +176,16 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `grant.refused` | `grant` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team grant lead --scope up,down` |
 | `grant.invalid` | `grant` | 2 | the team file or proposed authority record is invalid or cannot be read | `team grant lead --scope up,down` |
 | `grant.invocation` | `grant` | 2 | the command arguments are invalid | `team grant lead --scope up,down` |
+| `hold.placed` | `hold` | 0 | the hold was placed | `team hold "freeze deploys"` |
+| `hold.released` | `hold` | 0 | the hold was released | `team hold --release` |
+| `hold.caller` | `hold` | 1 | not the owner, the orchestrator or the operator | `team hold "freeze deploys"` |
+| `hold.detached` | `hold` | 1 | a run with no terminal | `team hold "freeze deploys"` |
+| `hold.held` | `hold` | 1 | a hold already stands | `team hold "freeze deploys"` |
+| `hold.io` | `hold` | 1 | the state can't be read or written | `team hold "freeze deploys"` |
+| `hold.not-held` | `hold` | 1 | no hold stands | `team hold --release` |
+| `hold.until` | `hold` | 1 | --until is not a clock or an instant | `team hold "freeze deploys" --until tomorrow` |
+| `hold.file` | `hold` | 2 | the team file can't be read | `team hold "freeze deploys"` |
+| `hold.invocation` | `hold` | 2 | the invocation can't be read | `team hold` |
 | `init.restored` | `init` | 0 | the approved copy was restored | `team init --restore` |
 | `init.wrote` | `init` | 0 | a skeleton was written | `team init` |
 | `init.detached` | `init` | 1 | a run with no terminal | `team init` |
@@ -370,6 +380,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
+| `send.not-submitted` | `send` | 1 | the trigger was typed and the seat never took it | `team send worker hello` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
 | `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |

@@ -31,6 +31,7 @@ import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
 import { runUnlock } from '../src/commands/unlock.ts';
 import { runTempo } from '../src/commands/tempo.ts';
+import { runHold } from '../src/commands/hold.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
@@ -69,7 +70,7 @@ import { analyze, loadContract, problems, render, type ExitRow } from '../script
 import { runRelease } from '../src/commands/release.ts';
 import type { KeyReader } from '../src/release/keychain.ts';
 import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/world.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const owner = { kind: 'owner' } as const;
@@ -79,7 +80,7 @@ const leadSeat = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' } 
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 const hot: Machine = { ...fine, loadPerCore: 9 };
 const quiet: Live = { running: false, agents: [], workspaces: [], screens: {} };
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 const LEAD = `  - role: coordinator
     name: lead
@@ -2755,6 +2756,52 @@ scene('tempo.word', async (place) => show(await tempo(place, ['faster']), 'must 
 scene('tempo.not-a-repo', async (place) => show(await tempo(place, ['urgent']), 'not inside a git repository'), false);
 scene('tempo.file', async (place) => show(await tempo(place, ['urgent']), 'no team file'));
 
+async function held(place: Place, argv: string[], caller: Caller = owner, now: Date = NOW): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runHold(argv, io, { home: place.home, now: () => now }), out: io.out, err: io.err };
+}
+
+scene('hold.placed', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys']), 'hold: freeze deploys');
+});
+scene('hold.released', async (place) => {
+  write(place, TEAM);
+  await held(place, ['freeze deploys']);
+  return show(await held(place, ['--release']), 'hold: released');
+});
+scene('hold.held', async (place) => {
+  write(place, TEAM);
+  await held(place, ['freeze deploys']);
+  return show(await held(place, ['something else']), 'already held: freeze deploys');
+});
+scene('hold.not-held', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['--release']), 'not held');
+});
+scene('hold.until', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys', '--until', 'tomorrow']), '--until is a local <HH:MM>');
+});
+scene('hold.detached', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys'], detachedCaller), 'only the owner runs this, from a terminal outside herdr');
+});
+scene('hold.caller', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys'], other), 'only the owner, the orchestrator or the operator holds the team');
+});
+scene('hold.io', async (place) => {
+  write(place, TEAM);
+  writeFileSync(join(place.root, '.agents', 'team.state.json'), '{ not json\n');
+  return show(await held(place, ['freeze deploys']), 'is not valid JSON');
+});
+scene('hold.file', async (place) => show(await held(place, ['freeze deploys']), 'no team file'));
+scene('hold.invocation', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, []), 'a <reason> is required');
+});
+
 async function nexted(place: Place, argv: string[] = [], caller: Caller = leadSeat): Promise<Ran> {
   const io = testIo(place.root, caller);
   return { code: await runNext(argv, io, { home: place.home }), out: io.out, err: io.err };
@@ -2988,6 +3035,8 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
   const sockets = join(place.base, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
   if (over.socket !== false) writeFileSync(join(sockets, '400.sock'), '');
+  // The seat's own evidence for this line: idle until the Enter, working after it.
+  let working = false;
   const host: SendHost & { frames: string[] } = {
     frames: [],
     agents: () => (over.agents === false ? null : [{ name: 'lead', pane: 'w1:p1' }]),
@@ -3004,8 +3053,11 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
     },
     native: {
       typeText: () => true,
-      pressEnter: () => true,
-      status: () => 'working',
+      pressEnter: () => {
+        working = true;
+        return true;
+      },
+      status: () => (working ? 'working' : 'idle'),
       wait: async () => {},
     },
     now: () => NOW,
@@ -3076,6 +3128,12 @@ scene('send.held', async (place) => {
 scene('send.unreachable', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { agents: false })), 'unreachable');
+});
+scene('send.not-submitted', async (place) => {
+  write(place, TEAM);
+  const host = sendHost(place);
+  host.native.status = () => 'idle';
+  return show(await sent(place, ['lead', 'hello'], owner, host), 'not-submitted');
 });
 scene('send.delivered', async (place) => {
   write(place, TEAM);

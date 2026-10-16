@@ -321,15 +321,15 @@ export function removeRulesFile(
   }
 }
 
-/** What `status` and `doctor` say of one seat's rules file, against the approved rules text.
- *  `what` is the finding without the seat's name; `ok` asks for nothing. A file that differs is
- *  never rewritten by a check. */
+/** What `status` and `doctor` say of one seat's rules file, against the rules text the live file
+ *  gives it. `what` is the finding without the seat's name; `ok` asks for nothing. A file that
+ *  differs is never rewritten by a check. */
 export type RulesFileCheck = { ok: true } | { ok: false; what: string };
 
 /** Checks one seat's rules file with the writer's own reading of a path (`heldAt`, then the
- *  no-follow open): a regular file, mode `0600`, owned by this user, holding exactly the
- *  approved rules text for that seat. */
-export function checkRulesFile(path: string, approvedText: string): RulesFileCheck {
+ *  no-follow open): a regular file, mode `0600`, owned by this user, holding exactly the rules
+ *  text the file gives that seat. */
+export function checkRulesFile(path: string, wanted: string): RulesFileCheck {
   const held = heldAt(path);
   if (held.kind === 'missing') return { ok: false, what: 'its rules file is missing' };
   if (held.kind === 'link') return { ok: false, what: 'its rules file is a symbolic link' };
@@ -342,7 +342,7 @@ export function checkRulesFile(path: string, approvedText: string): RulesFileChe
   }
   const text = readHeld(path);
   if (text === null) return { ok: false, what: 'its rules file cannot be read' };
-  return text === approvedText ? { ok: true } : { ok: false, what: 'its rules file differs from the approved rules' };
+  return text === wanted ? { ok: true } : { ok: false, what: "its rules file differs from the team file's rules" };
 }
 
 /** One message-rules seat's delivery: the file its rules are written to, the text that goes in

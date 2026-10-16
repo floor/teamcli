@@ -35,7 +35,7 @@ describe('muse launch and captured screens', () => {
     );
     expect(launchCommand(muse, 'muse --yolo', 'Rules.')).toBe('AGENT_UNATTENDED=1 muse --yolo');
     expect(muse.rulesOption).toBeNull();
-    expect(muse.loginCheck).toEqual(['auth', 'status']);
+    expect(muse.loginCheck).toBeNull();
     expect(muse.loginHint).toBe('muse login');
     expect(muse.exit).toBe('/exit');
     expect(muse.exitClear).toBe('ctrl+u');

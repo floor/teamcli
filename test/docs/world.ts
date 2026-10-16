@@ -123,6 +123,12 @@ const RELEASE_ANSWERS: Record<string, Attempt> = {
     status: 200,
     body: JSON.stringify({ attestations: [{ predicateType: 'https://slsa.dev/provenance/v1' }] }),
   },
+  // The page's material example warns: its `next` tag is a patch behind `latest`.
+  'https://registry.npmjs.org/-/package/material/dist-tags': {
+    kind: 'http',
+    status: 200,
+    body: JSON.stringify({ latest: '3.0.2', next: '3.0.1' }),
+  },
   'https://api.github.com/repos/floor/material': { kind: 'http', status: 200, body: JSON.stringify({ full_name: 'floor/material', default_branch: 'main' }) },
   'https://api.github.com/repos/floor/material/git/ref/tags/v3.0.2': {
     kind: 'http',

@@ -15,7 +15,7 @@ import { approvalOf } from '../../src/approve/approval.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 function sink(isTTY: boolean): { out: string[]; err: string[]; sink: ProgressSink } {
   const out: string[] = [];
@@ -531,7 +531,7 @@ describe('parallel launch window boundaries', () => {
 // own tests use; only the machine reading and the interleaving it allows differ.
 const NOW = new Date('2026-10-03T14:02:00Z');
 const SESSION = 'acme-web';
-const IDLE_SCREEN = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE_SCREEN = CLAUDE_IDLE;
 const AMPLE: Machine = {
   loadPerCore: 0.2,
   memoryFree: 60,

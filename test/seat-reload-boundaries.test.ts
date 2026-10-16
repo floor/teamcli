@@ -15,10 +15,10 @@ import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { readScreen } from '../src/watch/screen.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const WORKING = `${'─'.repeat(40)}\n❯ \nesc to interrupt\n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
 const OWNER = { kind: 'owner' as const };
 const LEAD = { kind: 'seat' as const, name: 'lead', pane: 'lead-pane', session: 'alpha' };
