@@ -303,12 +303,13 @@ test('home with a registry file: the record and its team file are read from disk
     });
     expect(run.code).toBe(0);
     const rows = JSON.parse(run.out) as Array<Omit<RegistryRow, 'roster'>>;
+    // SEATS is the file's count — one seat declared — not the record's longer roster.
     expect(rows).toEqual([{
       entity: 'acme',
       team: 'acme',
       project: 'acme',
       lobby: '/home/.config/team/lobbies/acme',
-      seats: 2,
+      seats: 1,
       defined: true,
       approved: true,
       running: true,
@@ -363,4 +364,47 @@ test('a record the writer wrote lists with its roster and its file state', async
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+// The watch's promise is a refresh every two seconds: the registry is read again at each redraw,
+// not once at the start, so a team renamed between two redraws is drawn as it now is.
+test('--watch reads the registry again on every pass', async () => {
+  const io = testIo('/anywhere');
+  const renamed: RegistryTeam = { ...ACME, entity: 'acme-renamed' };
+  let pass = 0;
+  let first = '';
+  const code = await runList(['--watch'], io, {
+    ...sources([ACME], { sessions: () => [{ name: 'acme', running: true }] }),
+    registry: () => (pass === 0 ? [ACME] : [renamed]),
+    wait: async () => {
+      if (pass === 0) first = io.out;
+      pass++;
+      return pass < 2;
+    },
+  });
+  expect(code).toBe(0);
+  expect(first).not.toContain('acme-renamed');
+  expect(io.out).toContain('acme-renamed');
+  expect((io.out.match(/^ENTITY/gm) ?? []).length).toBe(2);
+});
+
+// SEATS keeps the contract's meaning — the count the team file validates — and the roster is only
+// the fallback, so a team whose declared seats have not all launched reports its declared count.
+test('SEATS is the validated file count, the roster count only when there is no file', () => {
+  const one: RegistryTeam = {
+    ...ACME,
+    roster: [{ seat: 'lead', agent: 'agt_0123456789ab', role: 'coordinator' }],
+  };
+  const declared = registryRowsOf(
+    [one],
+    [{ name: 'acme', running: true }],
+    sources([one], { file: () => ({ valid: true, seats: 3 }) }),
+    false,
+  );
+  expect(declared[0]?.seats).toBe(3);
+  expect(declared[0]?.roster).toEqual([{ seat: 'lead', agent: 'agt_0123456789ab', role: 'coordinator' }]);
+
+  const withoutFile = registryRowsOf([one], [], sources([one], { file: () => null }), false);
+  expect(withoutFile[0]?.seats).toBe(1);
+  expect(withoutFile[0]?.roster).toHaveLength(1);
 });

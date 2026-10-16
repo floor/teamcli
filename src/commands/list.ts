@@ -345,7 +345,9 @@ export function registryRowsOf(
       team: plainLine(name),
       project: record.project ? plainLine(record.project) : null,
       lobby: record.lobby ? plainLine(record.lobby) : null,
-      seats: roster.length > 0 ? roster.length : (file?.seats ?? null),
+      // SEATS is the count the contract defines: what the team file validates. The registry's
+      // roster is what has launched, so it is the count only when the file cannot be read.
+      seats: file?.seats ?? (roster.length > 0 ? roster.length : null),
       defined: true,
       approved: file?.valid ?? false,
       running: sessions === null ? null : (session?.running ?? false),
@@ -645,7 +647,11 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
   const contradictory = args.flags.has('watch') && args.flags.has('json');
   // An argument this command cannot use stops it before anything outside it is read.
   const early = args.error !== undefined || contradictory;
-  const registry = early || sources.registry === undefined ? null : ask(() => sources.registry!(), null);
+  const readRegistry = (): RegistryTeam[] | null =>
+    (early || sources.registry === undefined ? null : ask(() => sources.registry!(), null));
+  // The opening read settles the argument rule; every watch pass reads the registry again, so a
+  // team added, renamed or ended between redraws is drawn as it is at that redraw.
+  const registry = readRegistry();
   // The one word a registry lists is the entity to filter rows by. With no registry to read, this
   // command has no word, and a word is not its own.
   const words = registry === null ? 0 : 1;
@@ -672,9 +678,10 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
     const wait = sources.wait ?? waitOrStop;
     const now = sources.now ?? (() => new Date());
     for (;;) {
+      const current = readRegistry();
       let body: string;
-      if (registry !== null) {
-        body = registryText(registry).text;
+      if (current !== null) {
+        body = registryText(current).text;
       } else {
         const listed = ask(() => sources.sessions(), null);
         if (listed === null) {
