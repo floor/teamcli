@@ -165,8 +165,8 @@ test('an unapproved file refuses, and the same file mounts when TEAMCLI_DEV_MODE
   expect(mountedCode).toBe(0);
   expect(mountedIo.err).toContain('team up: warning:');
   expect(mountedIo.err).toContain('only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr)');
-  expect(mountedIo.err).toContain('the file was never approved on this machine: run `team approve`');
-  expect(mountedIo.err).toContain('run `team approve`: this file was never approved on this machine');
+  expect(mountedIo.err).toContain('the file was never approved on this machine');
+  expect(mountedIo.err).not.toContain('team approve');
   expect(mountedIo.err).not.toContain('team up: only the owner runs `up`');
   expect(mountedIo.err).not.toContain('team up: the file was never approved');
   expect(mountedIo.err).not.toContain('team up: run `team approve`');
@@ -260,10 +260,9 @@ test('an approved file that has since changed refuses, and the same file mounts 
   const mountedCode = await runUp([], mountedIo, sources(mounted.home, mountedWorld.launch));
   expect(mountedCode).toBe(0);
   expect(mountedIo.err).toContain('team up: warning:');
-  expect(mountedIo.err).toContain('the file is not the approved one (seat lead changed): run `team approve`');
-  expect(mountedIo.err).toContain('run `team approve`: seat lead changed');
-  expect(mountedIo.err).not.toContain('team up: the file is not the approved one');
-  expect(mountedIo.err).not.toContain('team up: run `team approve`');
+  expect(mountedIo.err).toContain('only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr)');
+  expect(mountedIo.err).not.toContain('not the approved one');
+  expect(mountedIo.err).not.toContain('team approve');
   expect(mountedWorld.runs.map((run) => run.command).join('\n')).toContain('--live-mount');
   expect(readState(join(mounted.root, '.agents')).sessions.acme?.seats.lead?.stage).toBe('ready');
   expect(durableBytes(mounted.home)).toBe(mountedBefore);

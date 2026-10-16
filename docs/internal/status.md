@@ -152,7 +152,7 @@ here.
 | `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched` | the same restart. Said when the launch line starts a program other than the CLI's own binary, or the file says the launcher chooses the model, and the process is not the one `team` launched — including when the stored agent session is still the live one, in which case the row stays the running seat |
 | `<seat> runs <model> <version>; the file says <declared>; its launch line starts a launcher; the process in its pane is not the one team launched` | the same restart, when the screen's model is not the file's and the launch line names a launcher |
 | `<seat>: the agent in <pane> is named "x"` | `herdr --session <s> agent rename <pane> <seat>` |
-| `<seat> runs <model> <version>; the file says <declared>` (`<declared>` is the seat's `display` spelling) | restart it (`team remove <seat> --keep`, then `team add <seat>`), or correct the file and `team approve`. A lead (the orchestrator or the operator) is not removed: `team down`, then `team up` (to restart the whole team), or correct the file and `team approve` |
+| `<seat> runs <model> <version>; the file says <declared>` (`<declared>` is the seat's `display` spelling) | `restart the seat on the file's model (<command>), or correct the file`. `<command>` is `team remove <seat> --keep, then team add <seat>`, or, for a lead, `team down, then team up` (to restart the whole team) |
 | `<seat> is marked stopped in the file and is running` | `team remove <seat> --keep`, or take `stopped: true` off the seat |
 | `<seat>: waiting for owner (<classification>)` | `the owner runs team up` (it offers to open the pane, skip the seat or stop cleanly), or `team answer <seat> trust` when the classification is `trust` and the policy is `dialogs.trust: orchestrator` |
 | `<seat>: trust sent; recovery required` | `the owner runs team up` |
@@ -165,12 +165,12 @@ here.
 | `<name>: a temporary seat is recorded and is not running` | `team remove <name>` |
 | `no watch has run for this session` | `team watch --session <s>` |
 | `the watch's last pass was <n> minute(s) ago` | `team watch --session <s>` |
-| `an unnamed <cli> (w1:p2) is running and is not in the file` | add the seat to the file and `team approve`, or close it |
+| `an unnamed <cli> (w1:p2) is running and is not in the file` | add the seat to the file, or close it |
 | `worktree <task>: its setup failed` | `team worktree remove <task>` |
 | `the protected checkout "." is on "x", not on "main"` | `the owner switches it back: git -C . switch main` |
-| `the file was never approved on this machine` | the owner runs `team approve` |
-| `approved before records were signed: run `team approve` once`, or the case a refused record names | the owner runs `team approve` |
-| `the file differs from the approved one: <line>` | the owner runs `team approve` |
+| `the file was never approved on this machine` | `the live file is what the commands read` |
+| `approved before records were signed`, or the case a refused record names | `the live file is what the commands read` |
+| `the file differs from the approved one: <line>` | `the live file is what the commands read` |
 
 The one precondition `status` knows and orders is the real one: the file is not the approved one.
 That difference is printed first, and a repair that names a command that refuses on an unapproved
@@ -453,7 +453,7 @@ budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
-note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep, then run `team approve`
+note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
 note: approval #1 (2026-10-04), key fe21ef6293de
 0 difference(s)
 exit 0
