@@ -235,10 +235,13 @@ describe('team init', () => {
     writeFileSync(join(project, '.agents', 'team.lock'), '1');
     writeFileSync(join(project, '.agents', 'broker.sock'), '');
     writeFileSync(join(project, '.agents', 'broker.sock.lock'), '');
-    // The takeover claim beside the lock, and the private temp an atomic create keeps only
-    // while it runs — the patterns the start protocol names in its write inventory.
+    // The takeover claim beside the lock, and the private temps an atomic write keeps only
+    // while it runs — the patterns the start protocol names in its write inventory — including
+    // the team file's and the state's own temps, which a killed process can leave behind.
     writeFileSync(join(project, '.agents', 'broker.sock.lock.takeover'), '');
     writeFileSync(join(project, '.agents', 'broker.sock.lock.1234.new'), '');
+    writeFileSync(join(project, '.agents', 'team.yaml.1234.tmp'), '');
+    writeFileSync(join(project, '.agents', 'team.state.json.1234.tmp'), '');
     expect(git(project, 'status', '--porcelain')).toBe('');
     expect(existsSync(join(project, '.gitignore'))).toBe(false);
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/team.yaml\n');
@@ -248,6 +251,8 @@ describe('team init', () => {
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/broker.sock.lock\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/broker.sock.lock.takeover\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/broker.sock.lock.*.new\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/team.yaml.*.tmp\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/team.state.json.*.tmp\n');
   });
 
   test('a linked worktree shares the exclusion', async () => {
