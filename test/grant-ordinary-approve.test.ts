@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalDifferencesOf, approvalOf } from '../src/approve/approval.ts';
 import type { Caller } from '../src/caller.ts';
-import { runApprove, type ApproveSources } from '../src/commands/approve.ts';
+import { runApprove, type ApproveSources } from '../src/approve/command.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { emptySession, updateState } from '../src/state.ts';

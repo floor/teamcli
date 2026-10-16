@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { runDown, type DownLaunch, type DownSources } from '../../src/commands/down.ts';
 import { launchedTeamFile, noteLaunchedPane } from '../../src/file/launched-file.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
