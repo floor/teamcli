@@ -46,8 +46,8 @@ by which one agent types into another seat's pane: agents do not send keys throu
     team send <target> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send --list [--json]
 
-`<target>` names whom to reach: a seat of the team file — the same resolution `team status` uses —
-or one of the registry forms under `Addressing` below. The message
+`<target>` names whom to reach: a seat of the caller's own team, or one of the registry forms
+under `Addressing` below. The message
 is every remaining word, joined with single spaces; `--file` reads the whole body from a file
 instead (and then takes no message words). A seat that has both a message and `--file` is a
 usage error. `--timeout` is a whole number of seconds, 1 to 86,400, and is only meaningful with
@@ -64,12 +64,15 @@ nothing; it appends one line to `.agents/team.log`.
 | --- | --- |
 | `agt_<12 hex>` | one agent by its id, from the agent registry |
 | `<seat>@<team>` | a seat in a named team; `<team>` is a team id, a project or a session |
-| `<seat>` | a seat of the caller's own team, as the team file declares it |
+| `<seat>` | a seat of the caller's own team: its registry record when one holds it, the team file's declaration otherwise |
 
-Resolution reads the registries — `~/.config/team/agents/<id>.yaml` and
-`~/.config/team/teams.yaml` — and falls back to the live herdr read for a name the registry does
-not carry. An agent's id is assigned once and never reused; its name is display only
-([the registries](../concepts/registry.md)).
+The registries — `~/.config/team/agents/<id>.yaml` and `~/.config/team/teams.yaml` — are the
+address. The live herdr read is the fallback for a record that carries no pane yet, by the seat's
+name in the record's session. A plain seat the registry cannot answer keeps the declared-seat
+path: the caller's team file and its placement rules. A spec that names nobody is refused, and
+the refusal names what was not found. A target in another team is reached directly, and its drop
+lands under that team's own `.agents`. An agent's id is assigned once and never reused; its name
+is display only ([the registries](../concepts/registry.md)).
 
 ## What it reads and writes
 
