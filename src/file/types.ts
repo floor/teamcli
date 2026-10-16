@@ -102,6 +102,11 @@ export type Seat = {
 export type TeamFile = {
   format: 1;
   project: string;
+  /**
+   * The project this team sits in, by the name the file wrote, or null when it names none — a
+   * team with no project is its own. `project:` above is still the team's own name.
+   */
+  inProject: string | null;
   /** The entity the team belongs to, or null. Sets the team's lobby to
    *  `~/.config/team/lobbies/<slug>` unless `lobby` names one outright. */
   entity: string | null;

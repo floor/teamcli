@@ -22,6 +22,12 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
+    "in_project": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "$comment": "the project this team belongs to, by name; absent, the team is its own project"
+    },
     "entity": {
       "type": "string",
       "minLength": 1,

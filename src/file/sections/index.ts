@@ -1,5 +1,6 @@
 import { format } from './format.ts';
 import { project } from './project.ts';
+import { inProject } from './in_project.ts';
 import { entity } from './entity.ts';
 import { lobby } from './lobby.ts';
 import { trust } from './trust.ts';
@@ -35,6 +36,9 @@ import type { Section } from './section.ts';
 export const SECTIONS: readonly Section[] = [
   format,
   project,
+  // The project the team makes its own above; the project it sits in here. Non-owner and
+  // additive, like `entity` and `lobby` below: absent in every file written before Phase 0b.
+  inProject,
   // Where this team's lobby lives. Both non-owner and additive: a file that sets neither keeps the
   // machine-global lobby, so they change no approval digest and sit outside the owner-section list.
   entity,
