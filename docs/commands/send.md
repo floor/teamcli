@@ -4,13 +4,13 @@ Writes one message to one seat. A plain send writes the body whole to a drop fil
 by renaming a temporary file into place, and types one short trigger line that names that file.
 That is the path for every seat. The body is never typed, and it is never split across several
 writes. `delivered` means herdr reported the seat `working` — or `done` or `blocked`, and not
-the status read before Enter — after that one line and Enter, and the pane was not a dialog
-this command already classifies: question, permission, trust, vendor notice, provider error, or
+the status read before Enter — after that one line and Enter, the line had left the seat's input
+box, and the pane was not a dialog this command already classifies: question, permission, trust, vendor notice, provider error, or
 rate limit. A screen that is one of those is not reached. The report names the kind and the
 drop path, and nothing further is pressed. The exit code of the typing commands is not the
 evidence. On herdr 0.7.1 the working status is the pane hint `ctrl+c to stop` for cursor, a
 spinner in the terminal title for codex, and the `esc to cancel` footer for agy. A cursor pane
-narrow enough to wrap the hint can submit while herdr stays idle; that run is `unreachable`,
+narrow enough to wrap the hint can submit while herdr stays idle; that run is `not-submitted`,
 not a silent success.
 
 `team send --wait` to a Claude Code seat writes one frame on the cross-session socket, because
@@ -30,12 +30,12 @@ run of it names the drop channel instead. This build does not carry that seat's 
 The socket frame is a measured observation of Claude Code 2.1.295, not a stable API: JSON
 lines, one frame per line, a first-line deadline of 30,000 ms, and a buffer limit of 1,048,576
 characters. A frame over that limit is refused, never truncated. The message's body is written
-down: a run that ends `delivered`, `answered`, `held`, `timeout` or `unreachable` appends one line
+down: a run that ends `delivered`, `answered`, `held`, `not-submitted`, `timeout` or `unreachable` appends one line
 to the project's message history, which [team feed](feed.md) reads. A reply's text is not written
 down — it reaches this terminal and no file. The daily log keeps the seat and the sizes.
 
-The outcome is always confirmed — one of `delivered`, `answered`, `held`, `timeout`, `unreachable`
-or `refused` — printed and matched by the exit code, or written as one machine-readable document
+The outcome is always confirmed — one of `delivered`, `answered`, `held`, `not-submitted`, `timeout`,
+`unreachable` or `refused` — printed and matched by the exit code, or written as one machine-readable document
 with `--json`. `--list` sends nothing: it prints the file's addressable seats. Broadcast is not
 in this build. Any seat's shell can run it — agy, grok, codex or claude — and it is the only path
 by which one agent types into another seat's pane: agents do not send keys through herdr.
@@ -128,6 +128,7 @@ was let through; the drop record carries the sender's id from day one.
 | delivered | 0 | `<seat>: delivered` on stdout |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr |
+| not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
 | listed | 0 | one `<name>  <cli>  <role>` line per seat on stdout |
 | timeout | 1 | `team send: <seat>: timeout: sent, no reply within <s>s; a seat which does not accept messages from other sessions holds the frame until a person lets it through` on stderr |
 | unreachable | 1 | `team send: <seat>: unreachable: <reason>` on stderr |
@@ -139,14 +140,25 @@ was let through; the drop record carries the sender's id from day one.
 says what held it. A pane whose composer already holds unsent text is left alone before the run
 types anything (`the composer already holds unsent text`). The trigger line is what the composer
 is read back for: before Enter the run checks the composer holds it, and a composer that does not
-takes no Enter (`the composer read-back did not match the trigger`); a trigger the composer still
-holds when herdr's status did not show the submission ends the run the same way (`the trigger
-stayed unsent in the composer`), the line left in the composer.
+takes no Enter (`the composer read-back did not match the trigger`); the trigger line is the
+only text a second Enter is ever pressed for.
+
+`not-submitted` is a line typed and never taken: the message is on disk, the run exits 1, and the reason names the Enters
+pressed and what the input box holds (`the box holds "…"`, `the box is empty`, or `the box could
+not be read`); `--json` carries the same text as `box`, `null` when the box could not be read. The
+box is read with its styling (`herdr pane read --format ansi`), and faint text — a suggestion or a
+placeholder — counts as an empty box: it is never waited on, never cleared and never a reason for
+an Enter. After Enter the run verifies two things: the trigger has left the box, and herdr reports
+the seat working (or a `done` or `blocked` that is new). A try that shows neither is followed by a
+re-read, and another Enter goes only to a box that still holds exactly the trigger line — never
+to an empty one, to one that holds something else, or to a dialog — at most three Enters in all,
+waiting 1, 3 and then 9 seconds for the seat to show it. A box that cannot be read at all is
+judged by herdr's status alone and gets one repeat Enter. An unverified send writes one line to
+`team.log` for the orchestrator.
 
 `unreachable` is the seat not reached: no live agent of that name, a screen that is one of the
 dialogs listed above, no socket file for a waited Claude Code seat, a connection that would not
-take that frame, or a seat whose herdr status did not show the trigger was submitted and whose
-composer no longer holds the trigger line. `timeout`
+take that frame, or a pane that would not take the trigger. `timeout`
 is a waited frame written on the socket and no reply inside the window. `refused` is nothing
 being sent on purpose: an unknown seat (the file's seats are named), `--wait` to a seat that is
 not Claude Code, a frame over the socket limit, a trigger longer than the measured line, a

@@ -16,6 +16,9 @@ import { POLL_MS, SETTLE_MS, sawSubmission, type NativePane } from './native.ts'
 /** The most Enters one delivery presses. */
 export const MAX_TRIES = 3;
 
+/** The most Enters pressed when the box cannot be read at all. */
+export const BLIND_TRIES = 2;
+
 /** How long each try waits for the seat to show the submission: 1s, 3s, then 9s. */
 export const BACKOFF_MS: readonly number[] = [1000, 3000, 9000];
 
@@ -45,6 +48,8 @@ export type DeliverResult = {
   reason?: string;
   /** herdr's status when the submission showed, with `delivered`. */
   status?: string;
+  /** The dialog kind the screen showed, when that is why the seat was not reached. */
+  dialog?: string;
 };
 
 /** Binds a session to the pane operations a send already has. */
@@ -93,6 +98,10 @@ function boxText(profile: string, screen: string): string {
   return [box.first, ...box.rows.map((row) => (row.startsWith(pad) ? row.slice(pad.length) : row))].join('\n').trimEnd();
 }
 
+function dialogStop(kind: string, tries: number): DeliverResult {
+  return { outcome: 'unreachable', tries, reason: `not reached; the screen reads ${kind}`, dialog: kind };
+}
+
 function boxOf(seen: Look, line: string): string | undefined {
   if (seen.state === 'empty') return '';
   if (seen.state === 'trigger') return line;
@@ -109,14 +118,14 @@ function boxOf(seen: Look, line: string): string | undefined {
  * by a re-read: another Enter goes only to a box that still holds exactly the trigger line, never
  * to an empty one, to one that holds something else, or to a dialog; at most `MAX_TRIES` Enters,
  * each waiting longer than the last (`BACKOFF_MS`). When the box cannot be read at all the status
- * alone decides, and an unverified Enter is repeated as the run before this one did.
+ * alone decides, and an unverified Enter is repeated once, as the run before this one did.
  */
 export async function deliverTrigger(host: DeliverHost, pane: string, line: string, profile: string): Promise<DeliverResult> {
   const before = host.status(pane);
   if (before === null) return { outcome: 'unreachable', tries: 0, reason: "the seat's status could not be read" };
 
   const start = look(host, pane, line, profile);
-  if (start.state === 'dialog') return { outcome: 'unreachable', tries: 0, reason: `not reached; the screen reads ${start.kind}` };
+  if (start.state === 'dialog') return dialogStop(start.kind, 0);
   if (start.state === 'trigger' || start.state === 'other') {
     const text = start.state === 'other' ? start.text : line;
     return { outcome: 'held', box: text, tries: 0, reason: 'the composer already holds unsent text' };
@@ -126,7 +135,7 @@ export async function deliverTrigger(host: DeliverHost, pane: string, line: stri
   await host.wait(SETTLE_MS);
 
   const typed = look(host, pane, line, profile);
-  if (typed.state === 'dialog') return { outcome: 'unreachable', tries: 0, reason: `not reached; the screen reads ${typed.kind}` };
+  if (typed.state === 'dialog') return dialogStop(typed.kind, 0);
   if (typed.state === 'other') {
     return { outcome: 'held', box: typed.text, tries: 0, reason: 'the composer read-back did not match the trigger' };
   }
@@ -138,14 +147,24 @@ export async function deliverTrigger(host: DeliverHost, pane: string, line: stri
     // with the box unreadable, where nothing says otherwise); an empty box waits another window.
     const enter = round === 0 || seen.state === 'trigger' || seen.state === 'unread';
     if (enter) {
-      if (!host.pressEnter(pane)) return { outcome: 'unreachable', tries, reason: 'the Enter was not taken' };
+      if (!host.pressEnter(pane)) {
+        // An Enter herdr did not take, with the line still sitting in the box, is a line typed and
+        // never submitted: the box says so. Anything else is a pane that cannot be keyed.
+        const stuck = look(host, pane, line, profile);
+        if (stuck.state === 'trigger') {
+          return { outcome: 'not-submitted', box: line, tries, reason: 'the Enter was not taken and the trigger stayed in the composer' };
+        }
+        return { outcome: 'unreachable', tries, reason: 'the Enter was not taken' };
+      }
       tries += 1;
     }
     const verified = await verify(host, pane, line, profile, before, BACKOFF_MS[round] ?? 9000);
     if (verified !== null) return { outcome: 'delivered', tries, status: verified };
     seen = look(host, pane, line, profile);
-    if (seen.state === 'dialog') return { outcome: 'unreachable', tries, reason: `not reached; the screen reads ${seen.kind}` };
+    if (seen.state === 'dialog') return dialogStop(seen.kind, tries);
     if (seen.state === 'other') break;
+    // With the box unreadable an Enter is a guess: the one repeat the run before this had, no more.
+    if (seen.state === 'unread' && tries >= BLIND_TRIES) break;
   }
   const box = boxOf(seen, line);
   return {

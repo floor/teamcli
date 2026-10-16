@@ -2377,6 +2377,13 @@
     {
       "code": 1,
       "command": "send",
+      "id": "send.not-submitted",
+      "meaning": "the trigger was typed and the seat never took it",
+      "trigger": "team send worker hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
       "id": "send.refused",
       "meaning": "nothing was sent, on purpose",
       "trigger": "team send missing hello"

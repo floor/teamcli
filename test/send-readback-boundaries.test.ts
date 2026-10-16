@@ -147,7 +147,7 @@ function outcomes(world: ReturnType<typeof setupWorld>): string[] {
 }
 
 describe('the composer read-back at its boundaries', () => {
-  test('an Enter that is not taken, with the trigger still in the composer, holds instead of reaching', async () => {
+  test('an Enter that is not taken, with the trigger still in the composer, is not-submitted with the box text', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     // The Enter is refused by the pane and the box keeps holding the trigger.
@@ -162,9 +162,10 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'the pane refused the Enter'], io, host)).toBe(1);
-    expect(io.err).toContain('held: the trigger stayed unsent in the composer');
+    expect(io.err).toContain('not-submitted: the seat did not take the trigger after 0 Enters; the box holds');
+    expect(io.err).toContain('Read ');
     expect(host.enters.length).toBe(1);
-    expect(outcomes(world)).toEqual(['held']);
+    expect(outcomes(world)).toEqual(['not-submitted']);
 
     // The body waits in the drop file, whole, for the seat to pick up.
     const drops = join(world.dir, 'send-drops', 'acme', 'lead');
@@ -194,12 +195,12 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'never submitted'], io, host)).toBe(1);
-    expect(io.err).toContain('unreachable: herdr did not report the seat working');
+    expect(io.err).toContain('not-submitted: the seat did not take the trigger after 1 Enter; the box holds "a draft that is not the trigger"');
     expect(host.enters.length).toBe(1);
-    expect(outcomes(world)).toEqual(['unreachable']);
+    expect(outcomes(world)).toEqual(['not-submitted']);
   });
 
-  test('the same box through the daemon: one Enter, and the same unreachable word', async () => {
+  test('the same box through the daemon: one Enter, and the same not-submitted word', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     host.native.pressEnter = (_session, pane) => {
@@ -222,9 +223,9 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'never submitted through the daemon'], io, host)).toBe(1);
-    expect(io.err).toContain('unreachable: herdr did not report the seat working');
+    expect(io.err).toContain('not-submitted: the seat did not take the trigger after 1 Enter; the box holds "a draft that is not the trigger"');
     expect(host.enters.length).toBe(1);
-    expect(outcomes(world)).toEqual(['unreachable']);
+    expect(outcomes(world)).toEqual(['not-submitted']);
   });
 
   test('a dialog between typing and the first Enter is never a read-back mismatch', async () => {
@@ -240,7 +241,8 @@ describe('the composer read-back at its boundaries', () => {
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'into a dialog'], io, host)).toBe(1);
     expect(io.err).toContain('unreachable: not reached; the screen reads question');
-    expect(host.enters.length).toBe(1);
+    // The pane is a dialog by the time the line has settled: no Enter goes to it.
+    expect(host.enters.length).toBe(0);
     expect(outcomes(world)).toEqual(['unreachable']);
   });
 

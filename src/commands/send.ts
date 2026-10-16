@@ -8,7 +8,6 @@ import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
@@ -16,11 +15,11 @@ import { readTeams } from '../registry/teams.ts';
 import { admitSend, RULE_SUMMARY, senderHeader, type AdmitTeam, type AdmitTeams, type SendSide } from '../send/admit.ts';
 import { appendHistory } from '../send/history.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
-import { dropMessage, submitTrigger, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { bindPane, deliverTrigger, type DeliverResult } from '../send/deliver.ts';
+import { dropMessage, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { classify, readScreen } from '../watch/screen.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -30,7 +29,8 @@ Writes one message to one seat. A plain send writes the body whole to a drop fil
 (mode 0600, atomic rename) and types one short trigger line, for every seat. The body
 is never typed and never split across several writes. delivered means herdr reported
 the seat working — or done or blocked, changed from the status read before Enter —
-after that line and Enter, and the pane is not a dialog this command already classifies
+after that line and Enter and the line has left the seat's input box, and the pane is
+not a dialog this command already classifies
 (question, permission, trust, vendor notice, provider error, rate limit). A screen that
 is one of those is not reached: the kind and the drop path are named, and nothing
 further is pressed. Who may call it is the registry's decision, default deny: the
@@ -42,23 +42,26 @@ the file's seats and needs no caller check. --dry-run resolves the seat and the
 channel, writes no drop file, and types nothing. It appends one line to the team
 log.
 
-The outcome is one of six, and none of them is silent:
+The outcome is one of seven, and none of them is silent:
   delivered    the drop path (exit 0): herdr reported the seat working — or done or
-               blocked, changed from the status read before Enter — and the pane was
-               not one of the dialogs listed above
+               blocked, changed from the status read before Enter — the line had left
+               the input box, and the pane was not one of the dialogs listed above
   answered     --wait to a Claude Code seat: the reply came back; the reply follows
                on stdout (exit 0)
   held         the message is safely on disk, and the pane was left untouched because
                the seat remained busy, locked, in a dialog, or holding an unsent draft
                (exit 1)
+  not-submitted the line was typed and the seat never took it (exit 1): Enter was
+               pressed up to three times, and only to a box still holding exactly the
+               trigger; the message names what the box holds, faint suggestions not
+               counted, and the drop path
   timeout      --wait to a Claude Code seat: the frame was sent on the socket, and no
                reply came within the window (exit 1). A seat which does not accept
                messages from other sessions holds the frame until a person lets it
                through
   unreachable  the channel did not confirm (exit 1): the session is not running, no
                live agent carries the seat's name, the pane is one of those dialogs,
-               no socket took a waited frame, or the seat did not move to working
-               after the trigger
+               no socket took a waited frame, or the pane would not take the trigger
   refused      nothing was sent (exit 1): not a declared seat, --wait to a seat that
                is not Claude Code, a socket frame over the measured limit, a trigger
                that would exceed the measured line length, a reply listener that
@@ -315,6 +318,10 @@ function finishDaemonSend(
   if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
   if (res.outcome === 'held') return held(io, dir, who, seatName, res.detail, host, report);
   if (res.outcome === 'unreachable') return unreachable(io, dir, who, seatName, res.detail, host, report);
+  if (res.outcome === 'not-submitted') {
+    const result: DeliverResult = { outcome: 'not-submitted', tries: res.tries, ...(res.box === null ? {} : { box: res.box }) };
+    return notSubmitted(io, dir, who, seatName, result, `the drop file is at ${res.drop_path}`, host, report);
+  }
   return refuse(io, dir, who, res.detail, host, report);
 }
 
@@ -436,20 +443,11 @@ function findAgent(host: SendHost, session: string, seatName: string): Found {
   return { ok: true, pane: (named[0] as { pane: string }).pane };
 }
 
-/** Dialogs the classifier already names. A screen of one of these was not reached, and nothing further is pressed. */
-const DIALOG = new Set(['question', 'permission', 'trust', 'vendor notice', 'provider error', 'rate limit']);
-
-/** The dialog kind on this screen, or null. A missing read is not a dialog. One classification, of the last lines the classifier keeps. */
-function dialogKind(cli: string, screen: string | null): string | null {
-  if (screen === null) return null;
-  const kind = classify(cli, screen.split('\n')).kind;
-  return DIALOG.has(kind) ? kind : null;
-}
-
 /**
  * Writes the drop file under the seat lock, types the one trigger, and reports delivered only
- * when herdr's status says the seat took it and the pane is not a dialog this command already
- * classifies. The lock is held across the typing so a second send cannot append into the same
+ * when the seat is verified to have taken it: the trigger left the box and herdr reports the seat
+ * working (`deliverTrigger`). A line that was typed but not taken is `not-submitted`, never a
+ * success. The lock is held across the typing so a second send cannot append into the same
  * composer.
  */
 async function deliverNative(
@@ -482,61 +480,25 @@ async function deliverNative(
     } catch {
       return refuse(io, dir, who, `${seatName}: the drop file could not be written; nothing was typed`, host, report);
     }
-    const initialScreen = host.native.paneText?.(session, pane) ?? null;
-    if (initialScreen !== null && dialogKind(cli, initialScreen) === null && readScreen(cli, initialScreen).kind === 'unsent') {
-      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'held' });
-      return held(io, dir, who, seatName, `the composer already holds unsent text; the drop file is at ${path}`, host, report);
-    }
-    let readBackFailed = false;
-    const checkBeforeEnter = (): boolean => {
-      const preEnterScreen = host.native.paneText?.(session, pane) ?? null;
-      if (preEnterScreen === null || dialogKind(cli, preEnterScreen) !== null) return false;
-      if (readScreen(cli, preEnterScreen).kind === 'unsent' && !boxHoldsText(cli, trigger, preEnterScreen)) {
-        readBackFailed = true;
-        return true;
-      }
-      return false;
+    const result = await deliverTrigger(bindPane(host.native, session), pane, trigger, cli);
+    const where = `the drop file is at ${path}`;
+    const record = (outcome: string): void => {
+      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome });
     };
-    // One read of the pane. It is asked before a second Enter, and again only when that
-    // second Enter was never reached, so a dialog is never given another key.
-    let looked = false;
-    let kind: string | null = null;
-    let midScreen: string | null = null;
-    const look = (): string | null => {
-      if (looked) return kind;
-      looked = true;
-      midScreen = host.native.paneText?.(session, pane) ?? null;
-      kind = dialogKind(cli, midScreen);
-      return kind;
-    };
-    const outcome = await submitTrigger(
-      host.native,
-      session,
-      pane,
-      trigger,
-      () => look() !== null || (midScreen !== null && !boxHoldsText(cli, trigger, midScreen)),
-      checkBeforeEnter,
-    );
-    if (readBackFailed) {
-      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'held' });
-      return held(io, dir, who, seatName, `the composer read-back did not match the trigger; the drop file is at ${path}`, host, report);
+    if (result.outcome === 'held') {
+      record('held');
+      return held(io, dir, who, seatName, `${result.reason ?? 'the composer holds text'}; ${where}`, host, report);
     }
-    const shown = look();
-    if (shown !== null) {
-      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
-      return unreachable(io, dir, who, seatName, `not reached; the screen reads ${shown}; the drop file is at ${path}`, host, report);
+    if (result.outcome === 'unreachable') {
+      record('unreachable');
+      return unreachable(io, dir, who, seatName, `${result.reason ?? 'the seat was not reached'}; ${where}`, host, report);
     }
-    if (!outcome.ok) {
-      const endScreen = host.native.paneText?.(session, pane) ?? null;
-      if (endScreen !== null && boxHoldsText(cli, trigger, endScreen)) {
-        appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'held' });
-        return held(io, dir, who, seatName, `the trigger stayed unsent in the composer; the drop file is at ${path}`, host, report);
-      }
-      appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'unreachable' });
-      return unreachable(io, dir, who, seatName, `${outcome.reason}; the drop file is at ${path}`, host, report);
+    if (result.outcome === 'not-submitted') {
+      record('not-submitted');
+      return notSubmitted(io, dir, who, seatName, result, where, host, report);
     }
-    logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, herdr status ${outcome.status})`, host.now());
-    appendHistory(project, root, host.home, { ts: host.now().toISOString(), from, to: seatName, body, id: msgId, outcome: 'delivered' });
+    logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, herdr status ${result.status ?? 'working'})`, host.now());
+    record('delivered');
     return delivered(io, seatName, report);
   } finally {
     lock.release();
@@ -735,6 +697,20 @@ function held(io: Io, dir: string, who: string, seat: string, reason: string, ho
   return 1; // exit: send.held
 }
 
+/** The trigger was typed and never taken: the seat did not begin processing it. The message is on
+ *  disk, and the one team.log line is the orchestrator's notice. Exit 1, always. */
+function notSubmitted(io: Io, dir: string, who: string, seat: string, result: DeliverResult, where: string, host: SendHost, report: Report): number {
+  const box = result.box === undefined ? 'the box could not be read' : result.box === '' ? 'the box is empty' : `the box holds ${JSON.stringify(result.box)}`;
+  const reason = `the seat did not take the trigger after ${String(result.tries)} Enter${result.tries === 1 ? '' : 's'}; ${box}; ${where}`;
+  logLine(dir, 'send', who, `${seat}: not-submitted: ${reason}`, host.now());
+  if (report.json) {
+    io.stdout(document({ seat, status: 'not-submitted', exit: 1, error: reason, box: result.box ?? null, ids: { sent: report.sent, reply: null } }));
+  } else {
+    io.stderr(`team send: ${seat}: not-submitted: ${reason}\n`);
+  }
+  return 1; // exit: send.not-submitted
+}
+
 /** A refusal: the message was not written, and the reason says why. Exit 1, always. */
 function refuse(io: Io, dir: string, who: string, reason: string, host: SendHost, report: Report): number {
   logLine(dir, 'send', who, `refused: ${reason}`, host.now());
@@ -779,12 +755,15 @@ function document(fields: {
   exit: number;
   reply?: string;
   error?: string;
+  /** What a `not-submitted` seat's box held, not counting faint text; null when it could not be read. */
+  box?: string | null;
   ids: { sent: string | null; reply: string | null };
   seats?: SeatLine[];
 }): string {
   const out: Record<string, unknown> = { seat: fields.seat, status: fields.status, exit: fields.exit };
   if (fields.reply !== undefined) out.reply = fields.reply;
   if (fields.error !== undefined) out.error = fields.error;
+  if (fields.box !== undefined) out.box = fields.box;
   out.ids = fields.ids;
   if (fields.seats !== undefined) out.seats = fields.seats;
   return `${JSON.stringify(out)}\n`;

@@ -211,9 +211,20 @@ describe('a box or a pane that is not for typing', () => {
     expect(cli.enters).toBe(0);
   });
 
-  test('an Enter herdr did not take is unreachable', async () => {
+  test('an Enter herdr did not take, with the line still in the box, is not-submitted with that line', async () => {
     const cli = fakeCli();
     cli.pressEnter = () => false;
+    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    expect(result).toMatchObject({ outcome: 'not-submitted', box: LINE, tries: 0 });
+  });
+
+  test('an Enter herdr did not take, with nothing in the box to show for it, is unreachable', async () => {
+    const cli = fakeCli({ empty: 'suggestion' });
+    // The typed text never reaches the box this fake draws, so the pane cannot be keyed.
+    const typeText = cli.typeText;
+    cli.typeText = (pane, text) => (typeText(pane, text), true);
+    cli.pressEnter = () => false;
+    cli.readAnsi = () => screenWith(`${PROMPT}${FAINT('Try "fix typecheck errors"')}`);
     const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
     expect(result).toMatchObject({ outcome: 'unreachable', tries: 0 });
   });

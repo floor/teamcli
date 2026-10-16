@@ -872,7 +872,7 @@ describe('team send: native drop', () => {
     expect(pane.typed.length).toBe(1);
   });
 
-  test('no working status is unreachable, and the drop file is kept whole', async () => {
+  test('no working status is not-submitted, and the drop file is kept whole', async () => {
     const { root, dir, sockets } = world();
     const { host, pane } = nativeHost(sockets, ['idle']);
     const io = owner(root);
@@ -880,8 +880,8 @@ describe('team send: native drop', () => {
     const code = await runSend(['native', 'hello'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('unreachable');
-    expect(io.err).toContain('herdr did not report the seat working');
+    expect(io.err).toContain('not-submitted');
+    expect(io.err).toContain('the seat did not take the trigger after 2 Enters; the box could not be read');
     expect(pane.enters).toBe(2);
     expect(pane.typed.length).toBe(1);
     const drops = join(dir, 'send-drops', 'acme', 'native');
@@ -993,7 +993,8 @@ describe('team send: native drop', () => {
     expect(io.err).toContain('the screen reads question');
     const leadDrops = join(dir, 'send-drops', 'acme', 'lead');
     expect(io.err).toContain(join(leadDrops, readdirSync(leadDrops)[0] as string));
-    expect(asked.enters).toBe(1);
+    expect(asked.enters).toBe(0);
+    expect(asked.typed).toEqual([]);
     expect(lead.frames).toEqual([]);
 
     const held = scripted(['idle']);
@@ -1006,7 +1007,8 @@ describe('team send: native drop', () => {
     expect(await runSend(['native', 'hello'], again, host)).toBe(1);
     expect(again.err).toContain('not reached');
     expect(again.err).toContain('the screen reads permission');
-    expect(held.enters).toBe(1);
+    expect(held.enters).toBe(0);
+    expect(held.typed).toEqual([]);
   });
 
   test('a screen that is not one of those dialogs still follows the status rule', async () => {
