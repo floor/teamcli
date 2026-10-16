@@ -8,7 +8,7 @@ import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
-import { grantGate, logGranted } from '../grant.ts';
+import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -790,14 +790,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     upFp !== undefined &&
     ownerAuthorized(io.env, upFp);
 
-  // The owner, or the seat the live file names for `up`. A missing approval record does not refuse.
+  const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
+  // The owner, the seat the live file names for `up`, or an agent with an active entity create-grant.
   const named =
     mayLaunchSeats(caller) ||
     ownerToken ||
     grantedSeat !== null ||
     delegated !== null ||
     grantAdmitsUp(team, io, dir) ||
-    delegateNamedFor(team, 'up', io);
+    delegateNamedFor(team, 'up', io) ||
+    createGranted;
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
@@ -845,7 +847,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // decision. Written only when this call is one that may run `up` — the refusals above
       // accumulate rather than return, so a caller the caller gate refused must leave every
       // file as it was — and not on a dry run, which decides nothing.
-      if (!dry && (mayLaunchSeats(caller) || delegated !== null || grantedSeat !== null || ownerToken)) {
+      if (!dry && (mayLaunchSeats(caller) || delegated !== null || grantedSeat !== null || createGranted || ownerToken)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
       refusals.push(problem);
@@ -965,7 +967,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // A passed delegation is not the owner, pane or seat. Every other caller keeps today's
       // reading: anyone but a seat.
       delegated === null && caller.kind !== 'seat',
-      dev,
+      dev || (createGranted && standing.kind === 'none'),
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
@@ -1272,7 +1274,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           file.text,
           rulesFileHash(file.text),
           undefined,
-          dev && standing.kind !== 'verified' ? team.project : undefined,
+          (dev || createGranted) && standing.kind !== 'verified' ? team.project : undefined,
         );
         if (!written.ok) return fileRefusalOf(written);
         // The plan already refused a path that can't be typed; this is the same check again, so a
