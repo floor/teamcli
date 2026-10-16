@@ -246,6 +246,19 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `pr.invocation` | `pr` | 2 | the invocation can't be read | `team pr check` |
 | `pr.ledger` | `pr` | 2 | the approval ledger can't be read | `team pr check body.md` |
 | `pr.not-a-repo` | `pr` | 2 | not inside a git repository | `team pr check body.md` |
+| `proc.added` | `proc` | 0 | the process was recorded | `team proc add build` |
+| `proc.done` | `proc` | 0 | the record was cleared | `team proc done build` |
+| `proc.listed` | `proc` | 0 | the live records were listed | `team proc list` |
+| `proc.caller` | `proc` | 1 | the caller is no seat of this team and not the owner | `team proc add build` |
+| `proc.detached` | `proc` | 1 | a run with no terminal | `team proc add build` |
+| `proc.other-seat` | `proc` | 1 | another seat's record, which the caller may not clear | `team proc done build` |
+| `proc.pid` | `proc` | 1 | the pid is not running | `team proc add build --pid 4243` |
+| `proc.taken` | `proc` | 1 | another seat holds the name, with its process live | `team proc add build` |
+| `proc.unknown` | `proc` | 1 | no record holds that name | `team proc done build` |
+| `proc.file` | `proc` | 2 | the team file can't be read | `team proc add build` |
+| `proc.file-invalid` | `proc` | 2 | the team file can't be parsed | `team proc add build` |
+| `proc.invocation` | `proc` | 2 | the invocation can't be read | `team proc` |
+| `proc.not-yours` | `proc` | 2 | the caller may not read this team | `team proc list` |
 | `release.passed` | `release` | 0 | every check passed | `team release check material@3.0.2` |
 | `release.missing` | `release` | 1 | a check is missing | `team release check material@3.0.2` |
 | `release.unknown` | `release` | 2 | a check is unknown | `team release check material@3.0.2` |
