@@ -13,7 +13,7 @@ import type { Problem, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { emptySession, readState, type SessionState } from '../state.ts';
+import { emptySession, liveProcs, pidAlive, readState, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -40,6 +40,9 @@ export type StatusSources = {
   /** This machine's own figures, read for the one check no machine can ever meet. Absent in a test
    *  that does not read them; absent is not "fine", it is nothing said. */
   machine?(root: string): Machine;
+  /** Whether a recorded process id names something still running, for the `team proc` note.
+   *  The real reading when absent; a test stands in for it so no fixture depends on a pid. */
+  alive?(pid: number): boolean;
   /** The approved pane's read gate's own reads; the real ones when absent. */
   gate?: DelegateSources;
 };
@@ -130,6 +133,14 @@ export interface StatusJson {
   notice: string | null;
   /** Present when the file names an account, or a reading is stored. */
   budgets?: BudgetRow[];
+  /** The live records of `team proc`, present only when the session's seats hold some. */
+  procs?: Array<{
+    name: string;
+    by: string;
+    at: string;
+    pid?: number;
+    note?: string;
+  }>;
 }
 
 export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n';
@@ -224,6 +235,21 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     if (problem !== null) comparison.notes.unshift(problem);
   }
   if (!live.running) comparison.notes.unshift(`the herdr session "${session}" is not running`);
+  // What the seats recorded with `team proc add`: one note per live process, read the same way
+  // `team proc list` reads it — a record whose pid is gone is skipped here and left for the next
+  // write to clear. The reading is the note and the document, one derivation for both.
+  // `--json` is the one text not cleaned: the document carries each string as it was read, so the
+  // rows here are raw, and the note below is cleaned where it is printed like every other note.
+  const procs = liveProcs(state, sources.alive ?? pidAlive).map(([name, held]) => ({
+    name,
+    by: held.by,
+    at: held.at,
+    ...(held.pid !== undefined ? { pid: held.pid } : {}),
+    ...(held.note !== undefined ? { note: held.note } : {}),
+  }));
+  for (const held of procs) {
+    comparison.notes.push(`proc ${held.name}: ${held.by} since ${held.at}${held.pid !== undefined ? `, pid ${held.pid}` : ''}`);
+  }
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),
@@ -258,6 +284,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       differences: comparison.differences.map(({ what, repair }) => ({ what, repair })),
       notice: current.notice ?? null,
       ...(budgets.length ? { budgets } : {}),
+      ...(procs.length ? { procs } : {}),
     };
     io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
   } else {

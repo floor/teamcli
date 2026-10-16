@@ -3,6 +3,7 @@ import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { bypassScopes, bypassTail, matchBypass } from '../bypass.ts';
+import { processNameMatches } from '../clis.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
@@ -171,7 +172,7 @@ export default down;
 // The seat has left when no foreground process is its CLI. An unreadable list keeps the wait.
 export function paneStillRunning(foreground: readonly string[] | null, processNames: readonly string[]): boolean {
   if (!foreground) return true;
-  return foreground.some((name) => processNames.includes(name));
+  return foreground.some((name) => processNameMatches(name, processNames));
 }
 
 /**
