@@ -3290,6 +3290,15 @@ scene('route.unrecorded', async (place) => {
 scene('route.configuration', async (place) => show(await routed(place, ['lead'], owner, sendHost(place)), 'no team file'));
 scene('route.usage', async (place) => show(await routed(place, [], owner, sendHost(place)), 'a seat, a seat@team or an agent id is required'));
 
+scene('send.recorded', async (place) => {
+  write(place, TEAM);
+  return show(await sent(place, ['--record', 'lead', '--channel', 'native', '--ms', '812'], owner, sendHost(place)), 'lead: recorded (native, 812 ms)');
+});
+scene('send.record-dry-run', async (place) => {
+  write(place, TEAM);
+  return show(await sent(place, ['--record', 'lead', '--channel', 'native', '--ms', '812', '--dry-run'], owner, sendHost(place)), 'lead: would record (native, 812 ms); nothing was written');
+});
+
 async function fed(place: Place, argv: string[]): Promise<Ran> {
   const io = testIo(place.root);
   const code = await runFeed(argv, io, { home: place.home, poll: async () => false });

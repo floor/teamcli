@@ -1618,6 +1618,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--channel",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -1645,6 +1651,18 @@
           "name": "--list",
           "repeatable": false,
           "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--ms",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--record",
+          "repeatable": false,
+          "takesValue": true
         },
         {
           "hidden": false,
@@ -1683,6 +1701,8 @@
       "usage": [
         "team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]",
         "team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]",
+        "team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]",
+        "team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]",
         "team send --list [--json]"
       ]
     },

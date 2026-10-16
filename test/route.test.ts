@@ -396,3 +396,111 @@ describe('route: the address the native channel answers', () => {
     expect(io.out).toBe('');
   });
 });
+
+describe('send --record: the delivery the sender made itself', () => {
+  test('a Claude sender records its own delivery: one history line, via native', async () => {
+    const { w, lead, helper, leadIo } = acme();
+    const run = host(w);
+
+    const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '812'], leadIo, run);
+
+    expect(code).toBe(0);
+    expect(leadIo.out).toBe('helper: recorded (native, 812 ms)\n');
+    expect(leadIo.err).toBe('');
+    const text = readFileSync(historyPath('acme', w.root, w.home), 'utf8');
+    const entry = parseHistoryLine(text);
+    expect(entry).toMatchObject({
+      ts: NOW.toISOString(),
+      from: 'lead',
+      to: 'helper',
+      body: NATIVE_BODY_MARKER,
+      outcome: 'delivered',
+      ms: 812,
+      via: 'native',
+    });
+    expect(entry?.id).toMatch(/^[0-9a-f-]{36}$/);
+    // Nothing was delivered, dialed or typed: this half writes down what the sender did.
+    expect(run.frames).toEqual([]);
+    expect(existsSync(join(w.root, '.agents', 'send-drops'))).toBe(false);
+    const log = readFileSync(join(w.root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain('send [orchestrator] helper: recorded (native, 812 ms)');
+    expect(lead.id).not.toBe(helper.id);
+  });
+
+  test('a body given is recorded verbatim', async () => {
+    const { w, leadIo } = acme();
+
+    const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '5', BODY], leadIo, host(w));
+
+    expect(code).toBe(0);
+    const entry = parseHistoryLine(readFileSync(historyPath('acme', w.root, w.home), 'utf8'));
+    expect(entry).toMatchObject({ from: 'lead', to: 'helper', body: BODY, outcome: 'delivered', ms: 5, via: 'native' });
+  });
+
+  test('a recorded delivery is judged by admission like any send', async () => {
+    const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
+    const bound = world('beta', 'beta', 'chief', [seatBlock('coordinator', 'chief', 'claude-code'), seatBlock('builder', 'builder', 'claude-code')], w);
+    const acmeId = teamIdOf(w.root);
+    const betaId = teamIdOf(bound.root);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: acmeId, seat: 'lead', session: 'acme', pane: 'w1:p1' });
+    const chief = agent(w.home, { name: 'chief', role: 'coordinator', cli: 'claude-code', team: betaId, seat: 'chief', session: 'beta', pane: 'w2:p1' });
+    const builder = agent(w.home, { name: 'builder', role: 'builder', cli: 'claude-code', team: betaId, seat: 'builder', session: 'beta', pane: 'w2:p2' });
+    team(w.home, acmeId, 'acme', 'acme', w.root, [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }]);
+    team(w.home, betaId, 'beta', 'beta', bound.root, [
+      { agent: chief.id, seat: 'chief', role: 'coordinator', leads: true },
+      { agent: builder.id, seat: 'builder', role: 'builder', leads: false },
+    ]);
+    place(w.root, 'acme', 'lead', 'w1:p1');
+    const io = testIo(w.root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+
+    const code = await runSend(['--record', `builder@${betaId}`, '--channel', 'native', '--ms', '9'], io, host(w));
+
+    expect(code).toBe(1);
+    expect(io.err).toBe(
+      `team send: refused: lead@${acmeId} may not send to builder@${betaId}: no rule admits it (${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY})\n`,
+    );
+    expect(existsSync(historyPath('acme', w.root, w.home))).toBe(false);
+    expect(existsSync(historyPath('beta', bound.root, w.home))).toBe(false);
+  });
+
+  test('the options are judged on their own, before anything is read', async () => {
+    const { w, leadIo } = acme();
+    const cases: { argv: string[]; message: string }[] = [
+      { argv: ['--record', 'helper', '--ms', '812'], message: '--record needs --channel native' },
+      { argv: ['--record', 'helper', '--channel', 'socket', '--ms', '812'], message: '--channel takes native (got "socket"): the other channels send themselves' },
+      { argv: ['--record', 'helper', '--channel', 'native'], message: '--record needs --ms <N>: the span the sender measured, in whole milliseconds' },
+      { argv: ['--record', 'helper', '--channel', 'native', '--ms', '812ms'], message: '--ms takes a whole number of milliseconds (got "812ms")' },
+      { argv: ['--record', 'helper', '--channel', 'native', '--ms', '812', '--wait'], message: '--wait and --timeout are not meaningful with --record: nothing is delivered here' },
+    ];
+    for (const one of cases) {
+      const io = testIo(w.root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+      const code = await runSend(one.argv, io, host(w));
+      expect(code).toBe(2);
+      expect(io.err).toContain(`team send: ${one.message}\n`);
+      expect(io.out).toBe('');
+    }
+    expect(existsSync(historyPath('acme', w.root, w.home))).toBe(false);
+  });
+
+  test('--dry-run records nothing', async () => {
+    const { w, leadIo } = acme();
+
+    const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '812', '--dry-run'], leadIo, host(w));
+
+    expect(code).toBe(0);
+    expect(leadIo.out).toBe('helper: would record (native, 812 ms); nothing was written\n');
+    expect(existsSync(historyPath('acme', w.root, w.home))).toBe(false);
+  });
+
+  test('--json prints the result document, id and all', async () => {
+    const { w, leadIo } = acme();
+
+    const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '812', '--json'], leadIo, host(w));
+
+    expect(code).toBe(0);
+    const doc = JSON.parse(leadIo.out) as { seat: string; status: string; exit: number; ids: { sent: string } };
+    expect(doc).toMatchObject({ seat: 'helper', status: 'recorded', exit: 0 });
+    const entry = parseHistoryLine(readFileSync(historyPath('acme', w.root, w.home), 'utf8'));
+    expect(entry?.id).toBe(doc.ids.sent);
+  });
+});
