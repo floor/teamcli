@@ -1988,7 +1988,7 @@ describe('the sidebar of a running seat', () => {
     grokScene.workspaces.push({ id: 'w8', label: 'old' });
     const grok = pass({ team: grokFile, watch: grokFile.watch, state: emptySession(), live: grokScene, machine: fine, now: 0, memory: newMemory() });
     const grokLine = line(grok, 'grok-acme');
-    expect(grokLine).toBe('Grok 4.7 xhigh');
+    expect(grokLine).toBe('Grok 4.6 xhigh');
     expect(grokLine?.startsWith('grok ')).toBe(false);
     expect(grok.labels.find((item) => item.name === 'grok-acme')?.title).toBe('grok-acme · reviewer');
   });
