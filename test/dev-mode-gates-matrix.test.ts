@@ -1,8 +1,7 @@
 // The dev-mode gates matrix. TEAMCLI_DEV_MODE=1 turns a command's caller gate into a warning
 // (a log line beside it where the command logs) and the run continues past it; unset, every gate
 // refuses as always. `grant`, `delegate`, `revoke` and `approve` are owner-only in every mode.
-// `register`'s row is a `test.todo` until its landing reaches this branch; every other row is a
-// scene. Every file, caller and pane below is synthetic.
+// Every file, caller and pane below is synthetic.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -15,6 +14,7 @@ import { runDelegate } from '../src/commands/delegate.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runInit } from '../src/commands/init.ts';
+import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
@@ -225,6 +225,18 @@ function restartSources(home: string, live: 'running' | 'stopped' | null): Resta
     workspaces: () => [],
     upLaunch: upWorld().launch,
     doctor: doctor(home),
+  };
+}
+
+/** `register` past its gate: the session runs and herdr places no agent of the seat's name. */
+function registerSources(home: string): RegisterSources {
+  return {
+    home,
+    sessionState: () => 'running',
+    agents: () => [],
+    processInfo: () => null,
+    paneText: () => null,
+    now: () => NOW,
   };
 }
 
@@ -466,6 +478,40 @@ test('init: unset, the caller gate refuses and nothing is written; set, it warns
     .toContain(`${NOW.toISOString()} init [unplaced (it runs under herdr)] warning: ${INIT_LINE}; dev mode continues\n`);
 });
 
+// --- register ---------------------------------------------------------------------------------
+// Past the gate under dev mode the run reads the file and herdr next: the session is running,
+// herdr places no agent of the name, and that refusal — which dev mode never lifts — is the line
+// that shows the run moved past the gate. The warning is stderr-only: `register` logs when a
+// registration completes, and none did.
+
+const REGISTER_LINE = 'only the owner, a delegate this file names for `up`, or the seat a grant names for it registers a running seat; this call is unplaced (it runs under herdr)';
+
+test('register: unset, the caller gate refuses; set, it warns and the run reads on', async () => {
+  const refused = repo();
+  const refusedIo = testIo(refused.root, UNPLACED);
+  expect(await runRegister(['lead'], refusedIo, registerSources(refused.home))).toBe(1);
+  expect(refusedIo.err).toBe(`team register: ${REGISTER_LINE}\n`);
+  expect(refusedIo.out).toBe('');
+  expect(existsSync(join(refused.root, '.agents', 'team.log'))).toBe(false);
+
+  const truthy = repo();
+  const truthyIo = testIo(truthy.root, UNPLACED);
+  truthyIo.env = { ...truthyIo.env, TEAMCLI_DEV_MODE: 'true' };
+  expect(await runRegister(['lead'], truthyIo, registerSources(truthy.home))).toBe(1);
+  expect(truthyIo.err).toBe(`team register: ${REGISTER_LINE}\n`);
+
+  const readOn = repo();
+  const readIo = testIo(readOn.root, UNPLACED);
+  readIo.env = { ...readIo.env, TEAMCLI_DEV_MODE: '1' };
+  expect(await runRegister(['lead'], readIo, registerSources(readOn.home))).toBe(1);
+  expect(readIo.err).toBe(
+    `team register: warning: ${REGISTER_LINE}\n`
+    + 'team register: no agent named lead is running in session "acme"; nothing was registered\n',
+  );
+  expect(readIo.out).toBe('');
+  expect(existsSync(join(readOn.root, '.agents', 'team.log'))).toBe(false);
+});
+
 // --- the owner-only edits ---------------------------------------------------------------------
 // Dev mode waives caller gates; it never widens `grant`, `delegate`, `revoke` or `approve`.
 
@@ -521,12 +567,4 @@ describe('the owner-only edits are not dev-mode gates', () => {
     expect(await runApprove([], on, sources())).toBe(1);
     expect(on.err).toBe(off.err);
   });
-});
-
-// --- the landing rows -------------------------------------------------------------------------
-// `register`'s dev-mode landing has not reached this branch yet: its row stays a `test.todo`
-// and becomes a scene the moment its sha lands, like `add`, `restart` and `init` did.
-
-describe('landing rows (todo until the commits land)', () => {
-  test.todo('register: unset the caller gate refuses; set it warns, logs the line, and the run continues', () => {});
 });
