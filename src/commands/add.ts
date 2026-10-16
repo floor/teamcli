@@ -42,7 +42,7 @@ import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
-import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
+import { resolveEffortOverride, resolveModelOverride, shellQuote, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -283,20 +283,31 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (verdict.kind === 'refused') return delegateRefused(out, verdict);
     delegatePane = verdict.pane;
   }
-  if (mayChange.kind === 'no-pane' && delegatePane === null) {
-    out.stderr(`team add: ${plainText(noPaneRefusal(mayChange.name))}\n`);
-    // exit: add.no-pane
-    return 1;
-  }
-  if (mayChange.kind === 'another-pane' && delegatePane === null) {
-    out.stderr(`team add: ${plainText(anotherPaneRefusal(mayChange.name, mayChange.recordedPane))}\n`);
-    // exit: add.another-pane
-    return 1;
-  }
-  if (mayChange.kind === 'refused' && delegatePane === null && !createGranted) {
-    out.stderr(`team add: only the owner, the orchestrator or the operator runs it; this call is ${plainLine(describeCaller(shown))}\n`);
-    // exit: add.caller
-    return 1;
+  // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
+  // `1`, dev mode says this gate once, as a warning, and the edit continues — exactly as `up`
+  // does. Every other refusal stays a refusal: the target placement, the CLI, the records,
+  // the approvals and trust. The warning is logged where this call runs; a dry run says it
+  // beside the dry answer and decides nothing.
+  const mayRun = mayChange.kind === 'no-pane' && delegatePane === null ? noPaneRefusal(mayChange.name)
+    : mayChange.kind === 'another-pane' && delegatePane === null ? anotherPaneRefusal(mayChange.name, mayChange.recordedPane)
+      : mayChange.kind === 'refused' && delegatePane === null && !createGranted ? `only the owner, the orchestrator or the operator runs it; this call is ${plainLine(describeCaller(shown))}`
+        : null;
+  if (mayRun !== null) {
+    if (io.env.TEAMCLI_DEV_MODE === '1') {
+      const said = `warning: ${mayRun}; dev mode continues`;
+      if (dry) out.stdout(`! ${said}\n`);
+      else {
+        out.stderr(`team add: ${plainText(said)}\n`);
+        logLine(dir, 'add', describeCaller(caller), said, sources.now());
+      }
+    } else {
+      if (dry) out.stdout(`! add would refuse: ${plainText(mayRun)}\n! to unblock: ${plainText(ownerAddRun(argv))}\n`);
+      else out.stderr(`team add: ${plainText(mayRun)}\n`);
+      // exit: add.no-pane
+      // exit: add.another-pane
+      // exit: add.caller
+      return 1;
+    }
   }
   if (session === 'default') {
     out.stderr('team add: session can\'t be "default", herdr\'s own session\n');
@@ -1201,6 +1212,14 @@ function hostOf(input: {
     },
     log: (who, what) => logLine(dir, 'add', input.caller, `${who}: ${what}`, input.now()),
   };
+}
+
+/** The one command that unblocks an `add` this caller cannot run: the owner's own, in this
+ *  folder, at a terminal outside herdr. The caller's words are kept, the dry run's own flag
+ *  dropped, so the printed line is a command that runs. */
+function ownerAddRun(argv: string[]): string {
+  const words = ['team', 'add', ...argv.filter((word) => word !== '--dry-run').map(shellQuote)];
+  return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
 }
 
 function refusePretrust(out: Io, name: string, line: string, dry: boolean): number {
