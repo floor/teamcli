@@ -86,9 +86,10 @@ function fromSeat(
   live: LiveRead,
 ): Target | { error: string } {
   const agent = seatAgent(home, [teamIdOf(team.root), team.project, team.session], seat);
-  // The one command that writes the record this spec needs: `up` records every seat it launches,
-  // so a seat that ran before this machine's store held it is judged by its own row afterwards.
-  if (!agent) return { error: `${spec}: no registered agent holds the seat "${seat}" in that team; \`team up\` records a seat it launches` };
+  // The commands that write the record this spec needs: `register` records a seat its file
+  // declares where it already runs, and `up` records every seat it launches, so a seat that ran
+  // before this machine's store held it is judged by its own row afterwards.
+  if (!agent) return { error: `${spec}: no registered agent holds the seat "${seat}" in that team; \`team up\` records a seat it launches, or \`team register ${seat}\` records one already running` };
   const pane = paneOf(agent, live);
   if ('error' in pane) return pane;
   return { team, agent, pane: pane.pane };

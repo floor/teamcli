@@ -167,7 +167,7 @@ describe('resolveTarget by seat@team', () => {
     seatOf(w, 'alpha', 'alpha', 'lead', 'coordinator', 'pane-alpha-lead');
 
     expect(resolveTarget(w.home, 'lead@ghost', { cwd: w.root })).toEqual({ error: 'lead@ghost: no team registry record matches "ghost" (by id, project or session)' });
-    expect(resolveTarget(w.home, 'ghost@alpha', { cwd: w.root })).toEqual({ error: 'ghost@alpha: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches' });
+    expect(resolveTarget(w.home, 'ghost@alpha', { cwd: w.root })).toEqual({ error: 'ghost@alpha: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running' });
     expect(resolveTarget(w.home, 'a@b@c', { cwd: w.root })).toEqual({ error: 'a@b@c: a spec is <seat>@<team>, or an agent id' });
     expect(resolveTarget(w.home, 'lead@', { cwd: w.root })).toEqual({ error: 'lead@: a spec is <seat>@<team>, or an agent id' });
     expect(resolveTarget(w.home, '@alpha', { cwd: w.root })).toEqual({ error: '@alpha: a spec is <seat>@<team>, or an agent id' });
@@ -191,7 +191,7 @@ describe('resolveTarget by plain seat', () => {
     expect(resolveTarget(w.home, 'lead', { cwd: w.root })).toEqual({ error: 'lead: this team has no registry record yet' });
 
     seatOf(w, 'alpha', 'alpha', 'lead', 'coordinator', 'pane-alpha-lead');
-    expect(resolveTarget(w.home, 'ghost', { cwd: w.root })).toEqual({ error: 'ghost: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches' });
+    expect(resolveTarget(w.home, 'ghost', { cwd: w.root })).toEqual({ error: 'ghost: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running' });
   });
 
   test('a folder that is no team at all refuses with the folder it could not read', () => {
@@ -396,7 +396,9 @@ describe('the whole command on a registry-resolved spec', () => {
 
     expect(code).toBe(1);
     expect(io.err).toContain('lead: no agent record on this machine, so no rule admits the send');
-    expect(io.err).toContain('`team up` registers a seat it leaves standing');
+    // The file declares this caller's seat, so the refusal names both commands that record it:
+    // `register` is the one that does it where the seat already runs, and it is named first.
+    expect(io.err).toContain('`team register lead` records the seat where it already runs, or `team up` registers a seat it leaves standing');
     expect(chiefPane.typed).toEqual([]);
     expect(AGENT_ID.test(chief.id)).toBe(true);
   });

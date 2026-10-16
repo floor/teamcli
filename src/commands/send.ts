@@ -716,7 +716,7 @@ type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'own
  * never been registered talks to itself before any record exists. That judgement reaches only
  * its own team — the declared seat has no id to carry across teams — and it is never granted:
  * a grant names a record's identity. A caller the file does not declare, and any send that
- * would leave the file's team, stays refused with the command that writes the record.
+ * would leave the file's team, stays refused with the commands that write the record.
  *
  * The last rule is read only once the registry's own rules have refused: the owner's send-grants
  * folder, and, only when it holds a record, the clock that decides expiry — the same order `up`
@@ -737,7 +737,7 @@ function admissionOf(
   const record = recordFor(home, team.session, caller.kind === 'seat' ? caller.name : '');
   const declared = record === null ? declaredSenderOf(caller, team, fileTeamId) : null;
   const sender = record ?? declared;
-  if (sender === null) return { ok: false, why: noAgentRecord(caller) };
+  if (sender === null) return { ok: false, why: noAgentRecord(caller, declared) };
   // The team the sender's own rules are read in: the record's own team, or, for a declared
   // sender, the live file's.
   const ownTeam = record === null ? fileTeamId : record.reach.team;
@@ -747,7 +747,7 @@ function admissionOf(
   const judged: SendSide = target === null ? { seat: seatName, team: ownTeam } : target.agent;
   // A declared sender's judgement stops at its own team: with no record there is no identity for
   // a rule that crosses teams to read, so a send that would leave stays refused.
-  if (record === null && teamOf(judged) !== fileTeamId) return { ok: false, why: noAgentRecord(caller) };
+  if (record === null && teamOf(judged) !== fileTeamId) return { ok: false, why: noAgentRecord(caller, declared) };
   const records = admitRecordsOf(home, team, ownTeam);
   const verdict = admitSend(sender, judged, records);
   if (verdict.ok) return { ok: true, rule: verdict.rule, sender };
@@ -766,10 +766,14 @@ function admissionOf(
   return { ok: false, why: verdict.why };
 }
 
-/** Why a caller with no registry record is refused, with the one command that writes the record:
- *  `up` registers every seat its run leaves standing, so the seat is judged by its own row. */
-function noAgentRecord(caller: Caller): string {
-  return `${describeCaller(caller)}: no agent record on this machine, so no rule admits the send (${RULE_SUMMARY}); \`team up\` registers a seat it leaves standing`;
+/** Why a caller with no registry record is refused, with the commands that write the record: a
+ *  seat the live file declares is recorded where it already runs by `register`, and `up` registers
+ *  every seat its run leaves standing, so the seat is judged by its own row afterwards either way.
+ *  A caller the file does not declare is named `up` alone: `register` reads the same file, and it
+ *  would refuse a name that file does not hold. */
+function noAgentRecord(caller: Caller, declared: DeclaredSender | null): string {
+  const register = declared === null ? '' : `\`team register ${declared.seat}\` records the seat where it already runs, or `;
+  return `${describeCaller(caller)}: no agent record on this machine, so no rule admits the send (${RULE_SUMMARY}); ${register}\`team up\` registers a seat it leaves standing`;
 }
 
 /** The seat the live file declares for a caller the store holds no record for: its own name, the
