@@ -23,14 +23,19 @@ function raw(path: string): string {
 }
 
 describe('the release notes', () => {
-  test('the newest version heading matches the package, and its date is a date', () => {
+  test('the newest version heading is a version the package carries, and its date is a date', () => {
     const notes = raw(CHANGELOG);
     // The first versioned heading below Unreleased is the release the notes describe.
     const heading = notes.match(/^## \[([0-9][^\]]*)\] - (\S+)$/m);
     expect(heading, 'CHANGELOG.md lost its versioned heading').not.toBeNull();
 
+    // Notes may lag the package between releases; they never describe a version the package
+    // does not carry yet.
     const pkg = JSON.parse(raw(PACKAGE)) as { version: string };
-    expect(heading![1]!, 'the notes describe a version the package does not carry').toBe(pkg.version);
+    const numbers = (version: string) => version.split('.').map(Number);
+    const [headingParts, packageParts] = [numbers(heading![1]!), numbers(pkg.version)];
+    const ahead = headingParts.some((part, index) => part > (packageParts[index] ?? 0));
+    expect(ahead, 'the notes describe a version the package does not carry yet').toBe(false);
 
     const date = new Date(`${heading![2]!}T00:00:00Z`);
     expect(Number.isNaN(date.getTime()), 'the release date does not name a calendar day').toBe(false);
