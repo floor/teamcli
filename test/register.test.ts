@@ -3,7 +3,7 @@
 //
 // (a) a running seat is registered: the state, the registry record and the pane pointer are
 //     written, the pane both now name is herdr's own reading of the live pane, and the process
-//     identity and agent session are exactly that reading;
+//     identity, agent session and live session socket are exactly that reading;
 // (b) the run only reads: the sources this file injects are reads alone — the interface has no
 //     channel to create, close or rename a workspace or to type into a pane, so "nothing was
 //     launched" is what the scene is built on, and every call taken is on the pane herdr named;
@@ -14,16 +14,17 @@
 // (d) the run is repeatable: the second run says `already registered` without reading the pane
 //     again, and `--dry-run` verifies the same way and writes nothing.
 // Fake herdr throughout, a temporary home and a pinned caller: no live session is read.
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
-import type { HerdrAgent } from '../src/herdr.ts';
+import { setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { AGENT_ID_PATTERN, findAgent, readAgents } from '../src/registry/agents.ts';
 import { readTeams, teamIdOf } from '../src/registry/teams.ts';
+import { defaultSocketsDir } from '../src/send/address.ts';
 import { LOG_FILE, readState, SEAT_ID_PATTERN, STATE_FILE } from '../src/state.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
@@ -34,7 +35,15 @@ const PANE = 'w1:p1';
 const WORKSPACE = 'ws-1';
 
 const made: string[] = [];
+// The address refresh reads herdr on its own; no pane of this machine's is behind it here, and
+// an unreadable pane is the reading that leaves a record alone.
+beforeEach(() => {
+  setHerdrRun(() => {
+    throw new Error('herdr is not there');
+  });
+});
 afterEach(() => {
+  setHerdrRun(null);
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -75,6 +84,16 @@ seats:
 /** The agent herdr reports for the seat: a pane running a program in front of its own shell. */
 function agent(name: string): HerdrAgent {
   return { name, agent: 'claude', pane: PANE, workspace: WORKSPACE, status: 'idle', cwd: null, session: 'claude-session-1' };
+}
+
+/** Herdr's `pane process-info`, faked: the pane's shell and the programs in front of it, with
+ *  the calls recorded so a scene can show what the address refresh read, and when. */
+function herdrPane(pids: { shell: number; foreground: number[] }, calls: string[] = []): string[] {
+  setHerdrRun((args, session) => {
+    calls.push(`${session ?? '-'} ${args.join(' ')}`);
+    return { process_info: { shell_pid: pids.shell, foreground_processes: pids.foreground.map((pid) => ({ pid })) } };
+  });
+  return calls;
 }
 
 type Ledger = string[];
@@ -189,6 +208,32 @@ describe('a running seat', () => {
     const panes = readdirSync(panesDir(w));
     expect(panes).toHaveLength(1);
     expect(readFileSync(join(panesDir(w), panes[0]!), 'utf8').trim()).toBe(join(w.root, '.agents', 'team.yaml'));
+  });
+
+  test('records the pane\'s live session socket, read again after the write', async () => {
+    const w = world();
+    // A pid no pane of this machine runs, and one file standing in for its socket. The folder is
+    // the runtime temp one the address rule names — never a live session's own, and the file is
+    // gone again either way.
+    const pid = 99991;
+    const dir = defaultSocketsDir();
+    const socket = join(dir, `${String(pid)}.sock`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(socket, '');
+    const calls = herdrPane({ shell: 400, foreground: [pid] });
+
+    try {
+      const r = await register(w, ['lead']);
+
+      expect(r.code).toBe(0);
+      // The record a launch would have written carries the socket the seat answers at.
+      const record = findAgent(w.home, { team: teamIdOf(w.root), seat: 'lead' });
+      expect(record?.reach.address).toBe(socket);
+      // The pane read the way a launch reads it, after the record itself was written.
+      expect(calls).toEqual(['acme pane process-info --pane w1:p1']);
+    } finally {
+      rmSync(socket, { force: true });
+    }
   });
 
   test('registered twice: the second run says so without reading the pane again', async () => {
