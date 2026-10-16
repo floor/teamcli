@@ -1306,6 +1306,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       paneText: (session, pane) => launch.paneText(session, pane),
       shellBack: (session, pane) => launch.shellBack?.(session, pane) ?? null,
       processInfo: (session, pane) => launch.processInfo?.(session, pane) ?? null,
+      foreground: (session, pane) => launch.foreground(session, pane),
       sleep: sharedSleep,
       now: () => now().getTime(),
       allow(name) {

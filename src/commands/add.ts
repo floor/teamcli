@@ -1027,6 +1027,7 @@ function hostOf(input: {
     paneText: (_name, pane) => launch.paneText(session, pane),
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,
     processInfo: (_name, pane) => launch.processInfo?.(session, pane) ?? null,
+    foreground: (_name, pane) => launch.foreground(session, pane),
     sleep: launch.sleep,
     now: () => input.now().getTime(),
     allow(name) {

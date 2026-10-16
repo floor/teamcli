@@ -361,7 +361,7 @@ describe('a three-seat launch', () => {
       {
         kind: 'run',
         argv: [],
-        do: { do: 'rename', seat: 'alpha', label: 'alpha', seconds: 5, rules: 'message', pane: 'alpha-pane' },
+        do: { do: 'rename', seat: 'alpha', label: 'alpha', seconds: 5, rules: 'message', cli: 'claude', pane: 'alpha-pane' },
       },
       {
         kind: 'run',

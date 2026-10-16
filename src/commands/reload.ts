@@ -10,6 +10,7 @@ import { grantGate, logGranted } from '../grant.ts';
 import {
   agentList,
   agentRename,
+  paneForeground,
   paneProcesses,
   paneRead,
   paneRun,
@@ -62,7 +63,7 @@ const realLaunch: Launch = {
   agents: (session) => agentList(aim(session)),
   workspacePanes: (session, workspace) => workspacePanes(workspace, aim(session)),
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
-  foreground: (session, pane) => null,
+  foreground: (session, pane) => paneForeground(pane, aim(session)),
   processInfo: (session, pane) => paneProcesses(pane, aim(session)),
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
   sleep: (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)),
@@ -229,6 +230,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       agentList: (current) => launch.agents(current),
       workspacePanes: (current, workspace) => launch.workspacePanes?.(current, workspace) ?? null,
       processInfo: (current, pane) => launch.processInfo?.(current, pane) ?? null,
+      foreground: (current, pane) => launch.foreground(current, pane),
       paneText: (current, pane) => launch.paneText(current, pane),
       classify(current, pane, cli) {
         return readScreen(cli, launch.paneText(current, pane) ?? undefined).kind;
