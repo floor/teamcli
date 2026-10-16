@@ -1,6 +1,7 @@
 import { format } from './format.ts';
 import { project } from './project.ts';
 import { inProject } from './in_project.ts';
+import { projectLead } from './project_lead.ts';
 import { entity } from './entity.ts';
 import { lobby } from './lobby.ts';
 import { trust } from './trust.ts';
@@ -39,6 +40,10 @@ export const SECTIONS: readonly Section[] = [
   // The project the team makes its own above; the project it sits in here. Non-owner and
   // additive, like `entity` and `lobby` below: absent in every file written before Phase 0b.
   inProject,
+  // The team-side `leads: true`: set by the one team that leads the project `in_project` names,
+  // and read by the registry's writers. Non-owner and additive too, and it reads `in_project`, so
+  // it runs after it.
+  projectLead,
   // Where this team's lobby lives. Both non-owner and additive: a file that sets neither keeps the
   // machine-global lobby, so they change no approval digest and sit outside the owner-section list.
   entity,
