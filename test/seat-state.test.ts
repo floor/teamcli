@@ -94,6 +94,17 @@ describe('the gatherer the readers share', () => {
     expect(reading).toEqual({ state: 'idle', source: 'cli', blind: false });
   });
 
+  test('a trace inside the window beats an idle word, and never a blocked screen', () => {
+    // The seat committed, acked or ran a command 30s ago: idle at its prompt, but working.
+    expect(observedSeatState({ cli: 'claude-code', screenText: CLAUDE_IDLE, trace: ago(30), now: NOW }))
+      .toEqual({ state: 'working', source: 'trace', blind: false });
+    expect(observedSeatState({ cli: 'claude-code', agent: { pane: 'w1:p1', status: 'idle' }, trace: ago(30), now: NOW }))
+      .toEqual({ state: 'working', source: 'trace', blind: false });
+    // A dialog or a question is someone's attention wanted: a fresh trace never hides it.
+    expect(seatState({ screen: { kind: 'permission' }, trace: ago(30) }, NOW))
+      .toEqual({ state: 'blocked', source: 'cli', blind: false });
+  });
+
   test('a stopped seat is done before its stale record is judged blind', () => {
     const reading = observedSeatState({
       cli: 'claude-code',

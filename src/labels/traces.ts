@@ -2,7 +2,8 @@
 // fact read from the source that keeps it — the commit at the seat's worktree's tip, the last
 // ack or message the send history holds for it, and the last tool row its pane shows. The
 // labels' line follows the file and the screen (`observe.ts`); these are the traces
-// `src/labels/state.ts`'s column reads beside it. Every reader answers null when its source
+// `src/labels/state.ts`'s column reads beside it, `newestTraceAt()` being the instants
+// comparison the tables weigh them with. Every reader answers null when its source
 // cannot say — absence is not a value, and an unreadable source is never guessed at — and
 // nothing here writes.
 import { spawnSync } from 'node:child_process';
@@ -28,7 +29,10 @@ export type TraceInput = {
   session: SessionState;
   project: string;
   root: string;
-  home: string;
+  /** The home whose store holds the send history. Absent where the caller stands in for no
+   *  store at all — as `status.ts`'s store-backed differences do — and the message trace is
+   *  skipped rather than read from somewhere else. */
+  home?: string;
   /** The seat's pane, the same read `observe.ts` takes. */
   screen?: string;
   at: Date;
@@ -41,11 +45,28 @@ export function seatTraces(input: TraceInput): SeatTrace[] {
   const worktree = seatWorktree(input.session, input.seat.name, input.root);
   const commit = worktree === null ? null : commitTrace(worktree);
   if (commit) out.push(commit);
-  const message = messageTrace(input.project, input.root, input.seat.name, input.home);
+  const message = input.home === undefined ? null : messageTrace(input.project, input.root, input.seat.name, input.home);
   if (message) out.push(message);
   const tool = toolTrace(input.seat.cli, input.screen, input.at);
   if (tool) out.push(tool);
   return out;
+}
+
+/** The newest instant among the traces and any carried-forward ISO strings beside them (a seat
+ *  record's `last_active`, say), as the original string: instants, not text — a commit's `%aI`
+ *  carries its own offset, so comparing the strings would misread one. An unparseable string is
+ *  ignored rather than guessed at, and nothing to compare answers null. */
+export function newestTraceAt(traces: SeatTrace[], ...carried: Array<string | null | undefined>): string | null {
+  let newest: string | null = null;
+  let newestMs = Number.NEGATIVE_INFINITY;
+  for (const at of [...traces.map((trace) => trace.at), ...carried]) {
+    if (at === undefined || at === null) continue;
+    const ms = Date.parse(at);
+    if (!Number.isFinite(ms) || ms <= newestMs) continue;
+    newest = at;
+    newestMs = ms;
+  }
+  return newest;
 }
 
 /**

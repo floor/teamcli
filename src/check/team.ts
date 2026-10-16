@@ -173,7 +173,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...rulesFileDifferences(standing, team, root, sources.home),
     // A blind seat — unknown past the blind threshold — counts as not working, and is
     // a must-fix here exactly as it is in `team status`.
-    ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null),
+    ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home }),
   ]);
   const differences = comparison.differences;
   for (const difference of differences) {

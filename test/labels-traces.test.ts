@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { commitTrace, messageTrace, seatTraces, seatWorktree, toolTrace } from '../src/labels/traces.ts';
+import { commitTrace, messageTrace, newestTraceAt, seatTraces, seatWorktree, toolTrace, type SeatTrace } from '../src/labels/traces.ts';
 import { appendHistory, historyPath } from '../src/send/history.ts';
 import { emptySession } from '../src/state.ts';
 import type { SessionState } from '../src/state.ts';
@@ -137,6 +137,17 @@ describe('the seat traces', () => {
     expect(messageTrace('acme-web', root, 'builder-1', home)).toBeNull();
   });
 
+  test('no home named: the send history is skipped rather than read from somewhere else', () => {
+    message('orchestrator', 'builder-2', 'delivered', '2026-10-17T08:00:00Z');
+    const session = sessionWith({});
+    const seat = { name: 'builder-2', cli: 'claude-code' };
+    // The entry above sits in the store; a caller that names no home reads none of it (the way
+    // status.ts's store-backed differences take an absent home as no store at all)...
+    expect(seatTraces({ seat, session, project: 'acme-web', root, at: AT })).toEqual([]);
+    // ...while the same call with the home reads it.
+    expect(seatTraces({ seat, session, project: 'acme-web', root, home, at: AT })).toHaveLength(1);
+  });
+
   test("a tool row is the pane's last one, read through its colours", () => {
     // The captured permission screen's own row: `⏺ Write(notes.txt)` under Claude Code 2.1.289,
     // wrapped in SGR sequences that the read strips.
@@ -190,5 +201,25 @@ describe('the seat traces', () => {
     ]);
     const empty = seatTraces({ seat: { name: 'tester-1', cli: 'codex' }, session, project: 'acme-web', root, home, at: AT });
     expect(empty).toEqual([]);
+  });
+});
+
+describe('the newest instant', () => {
+  const trace = (at: string): SeatTrace => ({ kind: 'commit', at, what: 'a commit' });
+
+  test('instants decide, never the text: an offset form is never misread as older or newer', () => {
+    // 11:30+02:00 and 09:31Z are instants a minute apart; as text the offset form sorts after
+    // the Z form and would read as newer, which it is not.
+    expect(newestTraceAt([trace('2026-10-16T11:30:00+02:00')], '2026-10-16T09:31:00Z')).toBe('2026-10-16T09:31:00Z');
+    expect(newestTraceAt([trace('2026-10-16T11:30:00+02:00')], '2026-10-16T09:29:00Z')).toBe('2026-10-16T11:30:00+02:00');
+    // Among the traces themselves, the newest instant wins whatever their order.
+    expect(newestTraceAt([trace('2026-10-16T09:29:00Z'), trace('2026-10-16T11:30:00+02:00')])).toBe('2026-10-16T11:30:00+02:00');
+  });
+
+  test('carried strings holding no instant are ignored, and nothing to compare answers null', () => {
+    expect(newestTraceAt([trace('2026-10-16T11:30:00+02:00')], null, undefined, 'not an instant', ''))
+      .toBe('2026-10-16T11:30:00+02:00');
+    expect(newestTraceAt([], null)).toBeNull();
+    expect(newestTraceAt([])).toBeNull();
   });
 });

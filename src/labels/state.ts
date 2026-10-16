@@ -5,7 +5,7 @@
 //      at its prompt, or a screen that is neither (a dialog, a question, an error): blocked;
 //   2. herdr's own screen status;
 //   3. TeamCLI's traces within a window — the seat's last ack, commit or command: a trace this
-//      fresh means working;
+//      fresh means working, and it outranks an idle word from the screen or from herdr;
 //   4. otherwise unknown. Unknown past the blind threshold counts as not working, and `status`
 //      and `check` flag the seat `blind` as a must-fix.
 //
@@ -50,9 +50,11 @@ export type SeatStateReading = {
 };
 
 /**
- * The reading itself. First answer wins, in the order above; an absent or unrecognised screen,
- * like a herdr word that is neither `working` nor `idle`, falls through to the next source.
- * `unknown` carries `blind`: no trace at all, or none younger than the blind threshold.
+ * The reading itself. First answer wins, in the order above — save one: a trace inside the
+ * window beats an idle word, from the screen or from herdr, because a seat that just committed,
+ * acked or ran a command is working even while its prompt shows. An absent or unrecognised
+ * screen, like a herdr word that is neither `working` nor `idle`, falls through to the next
+ * source. `unknown` carries `blind`: no trace at all, or none younger than the blind threshold.
  */
 export function seatState(
   observation: SeatStateObservation,
@@ -63,21 +65,30 @@ export function seatState(
   if (observation.reachable === false) return { state: 'unreachable', source: 'herdr', blind: false };
   if (observation.present === false) return { state: 'done', source: 'process', blind: false };
   const screen = observation.screen;
+  const traced = observation.trace ? Date.parse(observation.trace) : Number.NaN;
+  const age = Number.isFinite(traced) ? now.getTime() - traced : Number.POSITIVE_INFINITY;
+  // A trace inside the window is the freshest TeamCLI heard of the seat. It beats an idle word,
+  // never the certainties above nor a working screen: those need no help.
+  const withinWindow = age <= limits.trace_window_seconds * 1000;
   if (screen !== undefined) {
     if (screen.kind === 'working') return { state: 'working', source: 'cli', blind: false };
-    if (screen.kind === 'idle' || screen.kind === 'unsent') return { state: 'idle', source: 'cli', blind: false };
+    if (screen.kind === 'idle' || screen.kind === 'unsent') {
+      if (withinWindow) return { state: 'working', source: 'trace', blind: false };
+      return { state: 'idle', source: 'cli', blind: false };
+    }
     // Every other screen this version reads — a permission dialog, a question, a trust screen,
     // a rate limit, a provider error, a vendor notice — is the seat not working and waiting on
     // someone: blocked. Only a screen it cannot read at all falls through.
     if (screen.kind !== 'unknown') return { state: 'blocked', source: 'cli', blind: false };
   }
   if (observation.herdr === 'working') return { state: 'working', source: 'herdr', blind: false };
-  if (observation.herdr === 'idle') return { state: 'idle', source: 'herdr', blind: false };
+  if (observation.herdr === 'idle') {
+    if (withinWindow) return { state: 'working', source: 'trace', blind: false };
+    return { state: 'idle', source: 'herdr', blind: false };
+  }
   // herdr's own word for an agent that finished: the seat is done, not unheard of.
   if (observation.herdr === 'done') return { state: 'done', source: 'herdr', blind: false };
-  const traced = observation.trace ? Date.parse(observation.trace) : Number.NaN;
-  const age = Number.isFinite(traced) ? now.getTime() - traced : Number.POSITIVE_INFINITY;
-  if (age <= limits.trace_window_seconds * 1000) return { state: 'working', source: 'trace', blind: false };
+  if (withinWindow) return { state: 'working', source: 'trace', blind: false };
   return { state: 'unknown', source: 'none', blind: age > limits.blind_after_seconds * 1000 };
 }
 

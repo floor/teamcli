@@ -241,7 +241,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const budgets = budgetTable(budgetsInForceOf(standing, team), recall(whole.budgets), now.getTime());
   const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
   const all = args.flags.has('all');
-  const registryRows = all ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null) : undefined;
+  const registryRows = all ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, { project: team.project, root, home: sources.home }) : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
   // The one machine check this reading cannot pass — the same fact `doctor` reports as a finding,
   // as one note, in the reading's own words. `up`'s refusal on it is its own line, and nothing
@@ -280,7 +280,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ...rulesFileDifferences(standing, team, root, sources.home),
     // A seat whose reading is blind — unknown past the blind threshold — counts as
     // not working, and is a must-fix here exactly as it is in `team check`.
-    ...blindDifferences(team, state, live, comparison, now, hold !== null),
+    ...blindDifferences(team, state, live, comparison, now, hold !== null, { project: team.project, root, home: sources.home }),
   ]);
 
   if (args.flags.has('json')) {
