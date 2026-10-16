@@ -397,7 +397,8 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   else {
     // The address: the live session socket this seat answers at, recorded on the agent the way a
     // launch records it — the pane above is the one herdr showed, read again as `add` reads it.
-    const refreshed = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, id, found.pane, session);
+    // The record it names is the registry's agent, the id the write above returned.
+    const refreshed = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, found.pane, session);
     if (refreshed.note) logLine(dir, 'register', callerLabel(walked), refreshed.note, now);
   }
   noteLaunchedPane(sources.home, path, found.pane, session);
