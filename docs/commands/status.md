@@ -174,8 +174,8 @@ never reported — that one too comes from the status line, so its row marks it 
 $ team status ; echo "exit $?"
 team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 team beacon, session "beacon"
-  claude-keeper  missing  Claude Opus 5.5  -
-  claude-beacon  working  Claude Opus 5.5  w1:p1
+  claude-keeper  missing  Claude Opus 5.5  -     typed
+  claude-beacon  working  Claude Opus 5.5  w1:p1  typed
 budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
