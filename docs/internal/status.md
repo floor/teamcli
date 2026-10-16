@@ -29,8 +29,8 @@ The caller decides, not the flags. Three callers get the reading:
   caller: a script meets the fixed sentence below;
 - **a seat of the team** — placed in the file's session, on the pane the state records for it.
   A seat the state records no pane for, or records on another pane, fails closed;
-- **a pane outside the team that the approved file names** in its `delegates` entries. A pane
-  only the live file names does not pass.
+- **a pane outside the team that the live file names** in its `delegates` entries. A pane
+  newly named by the live file also passes.
 
 Anyone else gets one fixed sentence and nothing else, whatever failed underneath — no file, an
 invalid one, a file that was never approved, a refused approval:
@@ -66,6 +66,9 @@ launched by team` when its pane runs a process `team` did not launch — another
 or a CLI started by hand; or `stopped` when the file marks it stopped; or `wrong name`
 when an agent sits in the seat's workspace under another name. A `wrong name` row's model is
 the one that pane's screen names, or `(unread)` when the screen names none — never the file's.
+
+With `--all`, the table renders the expanded seat registry columns — `SEAT`, `ID`, `ROLE`, `CLI`,
+`MODEL`, `EFFORT`, `STATUS`, `LAST ACTIVE`, `PANE` — and every `--json` row carries those fields too.
 
 A pane is its seat only while the process `team` launched is still in it. The state records, for
 each seat `up` or `add` launched, the pane's own shell process and the processes the launch left in
@@ -170,7 +173,7 @@ here.
 | `the protected checkout "." is on "x", not on "main"` | `the owner switches it back: git -C . switch main` |
 | `the file was never approved on this machine` | `the live file is what the commands read` |
 | `approved before records were signed`, or the case a refused record names | `the live file is what the commands read` |
-| `the file differs from the approved one: <line>` | `the live file is what the commands read` |
+| `the file has changed since the last approval: <line>` | `the live file is what the commands read` |
 
 The one precondition `status` knows and orders is the real one: the file is not the approved one.
 That difference is printed first, and a repair that names a command that refuses on an unapproved
@@ -225,9 +228,10 @@ unchanged file. That is a true advisory about this machine, not drift.
 
 ## Examples, moved here whole
 
-The examples below are the page's own, moved here whole, in the order they stood in. The
-team file, the fixture and the first console are also on [the `team status` page](../commands/status.md);
-the rest stand only in this note and are not executed by any test — `test/docs.test.ts` reads
+The examples below stood on [the `team status` page](../commands/status.md) before its one-glance
+cut, in the order they stood in, and they stand there no longer: the page carries one shorter
+example now — the same team file without the `budgets:` account, the implementer up, and the one
+difference. None of the examples here is executed by any test — `test/docs.test.ts` reads
 `docs/commands/` alone.
 
 ```yaml file=.agents/team.yaml
