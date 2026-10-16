@@ -29,7 +29,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
-import { registerEnd, registerLaunch } from './registry-sync.ts';
+import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { readScreen } from '../watch/screen.ts';
 import type { Launch } from './up.ts';
 

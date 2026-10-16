@@ -43,7 +43,7 @@ import { logLine } from '../log.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
-import { registerEnd, registerLaunch } from './registry-sync.ts';
+import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, approvedCopy, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';

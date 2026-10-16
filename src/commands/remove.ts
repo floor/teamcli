@@ -24,7 +24,7 @@ import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { emptySession, readState, updateState, withLock } from '../state.ts';
-import { registerEnd } from './registry-sync.ts';
+import { registerEnd } from '../registry/sync.ts';
 import { paneStillRunning, realSources as downSources, stateOf, stateOfPane, typeExit, type DownSources } from './down.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { removeRulesFile } from '../launch/rules-file.ts';

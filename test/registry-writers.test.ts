@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { DownLaunch } from '../src/commands/down.ts';
-import { registerEnd, registerLaunch, registerRun, type RegistryTeam } from '../src/commands/registry-sync.ts';
+import { registerEnd, registerLaunch, registerRun, type RegistryTeam } from '../src/registry/sync.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import type { Launch } from '../src/commands/up.ts';
 import { validateTeamFile } from '../src/file/validate.ts';

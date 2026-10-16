@@ -1,4 +1,4 @@
-// The registry's writers for the launch commands (FLO-837 agents, FLO-838 teams). `up`, `add`,
+// The registry's writers for the launch commands. `up`, `add`,
 // `restart` and `reload` register a seat's agent at its first launch and re-point it on every
 // relaunch; `remove` and the stop of a seat end it. The agent's id is assigned once and never
 // re-derived from the seat's name: a relaunch finds the live agent of (team, seat) and keeps it.

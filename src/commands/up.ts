@@ -67,7 +67,7 @@ import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
-import { registerRun } from './registry-sync.ts';
+import { registerRun } from '../registry/sync.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';

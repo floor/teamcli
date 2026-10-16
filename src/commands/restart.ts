@@ -60,7 +60,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
-import { registerEnd, registerLaunch } from './registry-sync.ts';
+import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { readScreen } from '../watch/screen.ts';
