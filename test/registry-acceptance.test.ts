@@ -5,9 +5,13 @@
 // (b) an orchestrator reaches another team's orchestrator by `name@team`, no guessing: two
 //     teams hold a seat of the same name, and the message lands in the named team's seat;
 // (c) a relaunch keeps a seat's agent id and re-points reach.pane to the pane it starts on.
+// R4c, verified delivery, in the same fake-CLI frame (builder-1's src/send/deliver.ts):
+// (d) a CLI that swallows the first Enter is pressed again, and the receipt is delivered;
+// (e) a CLI that never submits earns not-submitted, with the box text, inside the try bound;
+// (f) a box drawn with a dim (SGR 2) suggestion counts as empty, and no Enter goes out on it.
 // Fake herdr throughout and a temporary home: no live session and no real CLI home is read.
 // The fixed modules are imported, not stubbed, so this file is red until src/registry/agents.ts,
-// src/registry/teams.ts, src/send/resolve.ts and src/send/admit.ts land.
+// src/registry/teams.ts, src/send/resolve.ts, src/send/admit.ts and src/send/deliver.ts land.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -24,6 +28,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { findAgent, readAgents, registerAgent, type Agent } from '../src/registry/agents.ts';
 import { findTeam, readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, senderHeader } from '../src/send/admit.ts';
+import { bindPane, deliverTrigger } from '../src/send/deliver.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { resolveTarget } from '../src/send/resolve.ts';
 import { readState } from '../src/state.ts';
@@ -189,6 +194,75 @@ function dropPathIn(typed: string): string {
 function dropOf(typed: string): { path: string; text: string } {
   const path = dropPathIn(typed);
   return { path, text: readFileSync(path, 'utf8') };
+}
+
+// ---- the R4c delivery scenes: one fake CLI's box, drawn from the captured frames ----
+
+const CLAUDE_CAPTURES = join(import.meta.dir, 'fixtures', 'claude-code', '2.1.289');
+
+/** A captured frame, its CRLF folded to LF as the capture's README says. */
+function captured(name: string): string {
+  return readFileSync(join(CLAUDE_CAPTURES, name), 'utf8').replaceAll('\r\n', '\n');
+}
+
+// The prompt the capture draws: U+276F, then a U+00A0 gap.
+const PROMPT = '❯ ';
+
+/** One captured frame with its input row replaced. The row carries no styling: the captures'
+ *  README records typed text as plain, and only a suggestion as faint. */
+function inputRow(frame: string, row: string): string {
+  const rows = frame.split('\n');
+  const at = rows.findIndex((line) => line.startsWith(PROMPT));
+  if (at < 0) throw new Error('the capture draws no input row');
+  rows[at] = row;
+  return rows.join('\n');
+}
+
+/** The trigger the delivery types. Short, so the captured narrow box draws it on one row. */
+const DROP_LINE = 'Read /tmp/r5-drop.md and do that.';
+const DELIVER_SESSION = 'alpha';
+const DELIVER_PANE = 'w1:p1';
+const DELIVER_PROFILE = 'claude-code';
+
+const IDLE_SUGGESTION = captured('idle-suggestion-other-ansi.txt'); // faint `Resume briefly.`
+const BOX_HOLDS_LINE = inputRow(captured('unsent-typed-ansi.txt'), PROMPT + DROP_LINE);
+const BOX_EMPTY = inputRow(captured('unsent-typed-ansi.txt'), PROMPT); // after a turn: empty
+
+type BoxCli = NativePane & { typed: Typed[]; enters: number; entersOnLine: boolean[] };
+
+/** One fake CLI's pane: a box, a herdr status, and every key recorded. `swallow` counts the
+ *  Enters the CLI takes without submitting (`Infinity` never submits); `after` is the frame it
+ *  draws once it has taken a line — an empty box, or a fresh greyed suggestion. Each Enter is
+ *  recorded with whether the box held team's own line when it went out. */
+function boxCli(swallow: number, after: 'empty' | 'suggestion' = 'empty'): BoxCli {
+  let status = 'idle';
+  let held = false; // team's line sits in the box
+  let taken = 0; // Enters the CLI swallowed
+  const cli: BoxCli = {
+    typed: [],
+    enters: 0,
+    entersOnLine: [],
+    typeText: (session, pane, text) => {
+      cli.typed.push({ session, pane, text });
+      held = true;
+      return true;
+    },
+    pressEnter: (session, pane) => {
+      cli.enters += 1;
+      cli.entersOnLine.push(held);
+      if (held && taken < swallow) {
+        taken += 1; // swallowed: the line stays in the box, the seat stays idle
+        return true;
+      }
+      held = false;
+      status = 'working';
+      return true;
+    },
+    status: () => status,
+    wait: async () => {},
+    paneText: () => (held ? BOX_HOLDS_LINE : status === 'working' && after === 'empty' ? BOX_EMPTY : IDLE_SUGGESTION),
+  };
+  return cli;
 }
 
 describe('an agy seat sends to the main coordinator', () => {
@@ -475,5 +549,49 @@ seats:
     expect(after?.id).toBe(before.id);
     expect(after?.reach.pane).toBe(secondPane);
     expect(readAgents(home).filter((agent) => agent.reach.seat === 'worker').length).toBe(1);
+  });
+});
+
+describe('a CLI that swallows the first Enter', () => {
+  test('is pressed again, and the delivery is verified', async () => {
+    const cli = boxCli(1);
+    const receipt = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
+    expect(receipt).toMatchObject({ outcome: 'delivered', tries: 2, status: 'working' });
+    expect(cli.typed).toEqual([{ session: DELIVER_SESSION, pane: DELIVER_PANE, text: DROP_LINE }]);
+    expect(cli.enters).toBe(2);
+    // Both Enters went to the box while it still held team's own line: the second is the retry,
+    // never an Enter into a dialog, an empty box, or text someone else left there.
+    expect(cli.entersOnLine).toEqual([true, true]);
+  });
+});
+
+describe('a CLI that never submits', () => {
+  test('is not-submitted, with the box text, inside the try bound', async () => {
+    const cli = boxCli(Infinity);
+    const receipt = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
+    // Never a silent success: the receipt carries what the box holds.
+    expect(receipt.outcome).toBe('not-submitted');
+    expect(receipt.box).toBe(DROP_LINE);
+    expect(receipt.tries).toBe(3); // the doc's bound
+    expect(cli.enters).toBe(3); // and the loop stops there
+    expect(cli.entersOnLine).toEqual([true, true, true]);
+  });
+});
+
+describe('a box that shows a dim suggestion', () => {
+  test('counts as empty, and no Enter goes out on it', async () => {
+    // The captured frame greys `Resume briefly.` — a suggestion the profile's placeholder list
+    // does not name, so only the faint styling (SGR 2) can make it read as empty (the capture's
+    // README records exactly that pair: its plain read stays unsent). The same frame is drawn
+    // again once the CLI has taken the line, so the scene has it both before the type and after.
+    expect(IDLE_SUGGESTION).toContain('\u001b[2m');
+    const cli = boxCli(0, 'suggestion');
+    const receipt = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
+    expect(receipt).toMatchObject({ outcome: 'delivered', tries: 1 });
+    // The suggestion was never text to hold on or submit: team typed its own line, and the one
+    // Enter went to that line.
+    expect(cli.typed.map((call) => call.text)).toEqual([DROP_LINE]);
+    expect(cli.enters).toBe(1);
+    expect(cli.entersOnLine).toEqual([true]);
   });
 });
