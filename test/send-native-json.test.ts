@@ -3,7 +3,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { dropDir, nativeHost, owner, world } from './send-native-fixtures.ts';
+import { dropDir, filed, nativeHost, owner, world } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
 
@@ -31,7 +31,7 @@ test('--json delivered names the seat, exit 0, and the drop id', async () => {
   expect('error' in doc).toBe(false);
   const drops = dropDir(made.dir);
   expect(readdirSync(drops)).toEqual([doc.ids.sent]);
-  expect(readFileSync(join(drops, doc.ids.sent), 'utf8')).toBe('hello');
+  expect(readFileSync(join(drops, doc.ids.sent), 'utf8')).toBe(filed('hello'));
   expect(pane.typed.length).toBe(1);
   expect(host.frames).toEqual([]);
 });
@@ -54,7 +54,7 @@ test('--json unreachable reports exit 1 and keeps the drop id', async () => {
   expect(doc.ids.reply).toBeNull();
   const path = join(dropDir(made.dir), doc.ids.sent);
   expect(doc.error).toContain(path);
-  expect(readFileSync(path, 'utf8')).toBe('hello');
+  expect(readFileSync(path, 'utf8')).toBe(filed('hello'));
   expect('reply' in doc).toBe(false);
 });
 

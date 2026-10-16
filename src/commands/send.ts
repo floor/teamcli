@@ -11,6 +11,8 @@ import type { Command, Io } from '../io.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
+import { readAgents, type Agent } from '../registry/agents.ts';
+import { admitSend, RULE_SUMMARY, senderHeader, type AdmitTeam, type AdmitTeams } from '../send/admit.ts';
 import { appendHistory } from '../send/history.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { dropMessage, submitTrigger, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
@@ -29,9 +31,13 @@ the seat working — or done or blocked, changed from the status read before Ent
 after that line and Enter, and the pane is not a dialog this command already classifies
 (question, permission, trust, vendor notice, provider error, rate limit). A screen that
 is one of those is not reached: the kind and the drop path are named, and nothing
-further is pressed. Only the owner, or the orchestrator from its own seat, may call
-it; a worker seat may not. --list sends nothing: it prints the file's seats and needs
-no caller check. --dry-run resolves the seat and the channel, writes no drop file, and
+further is pressed. Who may call it is the registry's decision, default deny: the
+owner; an orchestrator to any seat of its own team or to an orchestrator in any
+teams; an assistant seat to its entity's coordinator; any seat to its own team's
+orchestrator; or an owner-signed grant naming send. The drop file's first line
+names the sender and the rule that admitted it. --list sends nothing: it prints
+the file's seats and needs no
+caller check. --dry-run resolves the seat and the channel, writes no drop file, and
 types nothing. It appends one line to the team log.
 
 The outcome is one of six, and none of them is silent:
@@ -160,15 +166,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const { team, root } = loaded;
   const dir = dirname(loaded.path);
 
-  // The caller check mirrors `answer`'s: the owner, or the orchestrator from its own seat on
-  // the pane the state records — never an arbitrary seat. It runs before the message is read
-  // and before any seat is probed.
+  // The caller check: placement first — the owner, or a seat on the pane the state records for
+  // it, the same verdict `answer` asks, with the two repairable refusals it can name — and then
+  // the authority rule, `admitSend` over the registry's records, default deny. Both run before
+  // the message is read and before any seat is probed.
   const judged = judgeCallerIn(io, dir, team);
   const { caller } = judged;
   const who = logWho(caller, team);
   const from = caller.kind === 'seat' ? caller.name : 'owner';
-  const callerProblem = callerProblemOf(caller, team, standingOf(dir, judged.session, caller));
-  if (callerProblem) return refuse(io, dir, who, callerProblem, host, report);
+  const placement = placementProblemOf(caller, standingOf(dir, judged.session, caller));
+  if (placement) return refuse(io, dir, who, placement, host, report);
+  const admission = admissionOf(caller, team, seatName, host.home);
+  if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
 
   const configured = team.seats.find((seat) => seat.name === seatName);
   if (!configured) {
@@ -185,6 +194,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     body = words.join(' ');
   }
   if (body.trim() === '') return usage(io, 'the message is empty', report);
+  // The receiver sees the sender before the message: the drop file, the frame and the daemon's
+  // own write all carry the same first lines.
+  body = `${senderHeader(admission.sender, admission.rule)}\n${body}`;
 
   const dry = args.flags.has('dry-run');
   // --wait needs the socket frame, and only a Claude Code seat has that listener. Any other
@@ -543,20 +555,70 @@ function logWho(caller: Caller, team: TeamFile): string {
 }
 
 /**
- * Why the caller may not send, or null. The owner; the orchestrator's seat, in the session
- * judged and on its recorded pane — the same verdict `answer` asks before it acts, with
- * `answer`'s refusal texts for the two placements it can name, and the authority rule named
- * in the rest.
+ * Why the caller is not placed to send, or null — placement alone, never authority. The owner
+ * always is; an unplaced caller is refused with its own reason; a seat must be the seat it names
+ * in the session judged, on the pane the state records for it, exactly as `answer` judges, and
+ * the two refusals it can name carry the repair.
  */
-function callerProblemOf(caller: Caller, team: TeamFile, at?: SeatStanding): string | null {
-  if (caller.kind === 'owner') return null;
-  const verdict = callerVerdict(caller, team.orchestrator, at);
-  if (verdict.kind === 'ok') return null;
+function placementProblemOf(caller: Caller, at?: SeatStanding): string | null {
+  if (caller.kind === 'unplaced') return caller.reason;
+  if (caller.kind !== 'seat') return null;
+  const verdict = callerVerdict(caller, caller.name, at);
   if (verdict.kind === 'no-pane') return noPaneRefusal(verdict.name);
   if (verdict.kind === 'another-pane') return anotherPaneRefusal(verdict.name, verdict.recordedPane);
-  if (caller.kind === 'unplaced') return caller.reason;
-  if (caller.kind === 'pane') return `${describeCaller(caller)}: only the owner, or the orchestrator from its own seat, can send`;
-  return `a seat may not send (${describeCaller(caller)}): only the owner, or the orchestrator from its own seat, can send`;
+  return null;
+}
+
+/** Why the send is admitted, and the rule that admitted it — or why it is not. */
+type Admission = { ok: true; rule: string; sender: Agent | 'owner' } | { ok: false; why: string };
+
+/**
+ * The authority rule for this send: `admitSend`, over the registry's own records, default deny.
+ * The sender's record is its identity — the agent id the drop file's header names — and the
+ * target's record is the seat this command resolved. A side the store holds no record for has no
+ * identity to admit by and is refused; `up` and `add` register a seat the first time they launch
+ * it. The team's record comes from the live file this run judged, which is the seed the registry
+ * projects; a registered team's own record joins it when addressing crosses teams.
+ */
+function admissionOf(caller: Caller, team: TeamFile, seatName: string, home: string): Admission {
+  if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
+  const sender = recordFor(home, team.session, caller.kind === 'seat' ? caller.name : '');
+  if (sender === null) {
+    return {
+      ok: false,
+      why: `${describeCaller(caller)}: no agent record on this machine, so no rule admits the send (${RULE_SUMMARY})`,
+    };
+  }
+  const verdict = admitSend(sender, { seat: seatName, team: sender.reach.team }, admitRecordsOf(home, team, sender.reach.team));
+  if (!verdict.ok) return { ok: false, why: verdict.why };
+  return { ok: true, rule: verdict.rule, sender };
+}
+
+/** The registry's record for a seat of this session: the most recently updated one, retired
+ *  records left out. Null when the store holds none. */
+function recordFor(home: string, session: string, seat: string): Agent | null {
+  if (seat === '') return null;
+  let found: Agent | null = null;
+  for (const agent of readAgents(home)) {
+    if (agent.lifecycle === 'retired') continue;
+    if (agent.reach.session !== session || agent.reach.seat !== seat) continue;
+    if (!found || agent.provenance.updated_at >= found.provenance.updated_at) found = agent;
+  }
+  return found;
+}
+
+/** One team's admission record: the live file's project, entity and lead, with the roster the
+ *  store holds for that team and the file's own seats behind it. */
+function admitRecordsOf(home: string, team: TeamFile, teamId: string): AdmitTeams {
+  const roster: AdmitTeam['roster'] = [];
+  for (const agent of readAgents(home)) {
+    if (agent.lifecycle === 'retired' || agent.reach.team !== teamId) continue;
+    roster.push({ agent: agent.id, seat: agent.reach.seat, role: agent.signing.role });
+  }
+  for (const seat of team.seats) {
+    if (!roster.some((entry) => entry.seat === seat.name)) roster.push({ agent: '', seat: seat.name, role: seat.role });
+  }
+  return { [teamId]: { project: team.project, entity: team.entity, orchestrator: team.orchestrator, roster } };
 }
 
 function seatList(team: TeamFile): string {

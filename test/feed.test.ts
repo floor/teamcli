@@ -121,10 +121,52 @@ function recordSeat(dir: string, seat: string, pane: string): void {
   });
 }
 
+/** The agent record `up` writes for a launched seat: the identity admission reads, and the id
+ *  the drop file's header names. */
+function registerSeat(home: string, seat: string, role: string): void {
+  const id = `agt_${Buffer.from(seat).toString('hex').slice(0, 12).padEnd(12, '0')}`;
+  const file = join(home, '.config', 'team', 'agents', `${id}.yaml`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    [
+      `id: "${id}"`,
+      `name: "${seat}"`,
+      'signing:',
+      '  model: "Test"',
+      '  version: "1"',
+      `  role: "${role}"`,
+      'lab: "test"',
+      'cli: "claude-code"',
+      'launcher: null',
+      'launch: "claude"',
+      'reach:',
+      '  team: "acme"',
+      `  seat: "${seat}"`,
+      '  session: "acme"',
+      '  pane: "pane-lead"',
+      '  address: null',
+      'mcp: []',
+      'skills: []',
+      'lifecycle: "running"',
+      'provenance:',
+      '  registered_by: "team up"',
+      '  registered_at: "2026-10-05T04:00:00.000Z"',
+      '  updated_at: "2026-10-05T04:00:00.000Z"',
+      '',
+    ].join('\n'),
+  );
+}
+
+/** What the owner's send opens the filed body with: `senderHeader`'s owner line, then the empty
+ *  line under it. The wording itself is pinned in send.test.ts and send-admit.test.ts. */
+const OWNER_HEADER = 'from the owner — admitted by: the owner\n\n';
+
 describe('team send history log & team feed', () => {
   test('writes 0600 JSONL under the state folder, never in a lobby or the repo, and an A->B send appears once', async () => {
     const { root, dir, home, sockets } = world();
     recordSeat(dir, 'lead', 'pane-lead');
+    registerSeat(home, 'lead', 'coordinator');
     const host = hostFor(home, sockets);
     const callerIo = testIo(root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
 
@@ -145,11 +187,13 @@ describe('team send history log & team feed', () => {
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
     expect(Object.keys(parsed).sort()).toEqual(['body', 'from', 'id', 'outcome', 'to', 'ts']);
+    // The seat's send files the body under its header: the id admission admitted, and the rule.
+    const seatHeader = 'from agt_6c6561640000 (lead, lead@acme) — admitted by: an orchestrator to a seat of its own team\n\n';
     expect(parsed).toEqual({
       ts: NOW.toISOString(),
       from: 'lead',
       to: 'helper',
-      body: secret,
+      body: `${seatHeader}${secret}`,
       id: sentDoc.ids.sent,
       outcome: 'delivered',
     });
@@ -162,7 +206,9 @@ describe('team send history log & team feed', () => {
 
     const feedIo = testIo(root);
     expect(await runFeed([], feedIo, { home })).toBe(0);
-    expect(feedIo.out).toBe(`15:30:00  lead -> helper  [delivered]  ${secret}\n`);
+    expect(feedIo.out).toBe(
+      `15:30:00  lead -> helper  [delivered]  ${seatHeader.split('\n')[0]}\n          \n          ${secret}\n`,
+    );
   });
 
   test('records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
@@ -213,10 +259,10 @@ describe('team send history log & team feed', () => {
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.entries.map((e) => ({ from: e.from, to: e.to, body: e.body, outcome: e.outcome }))).toEqual([
-      { from: 'owner', to: 'native', body: 'msg-delivered', outcome: 'delivered' },
-      { from: 'owner', to: 'native', body: 'msg-unreachable', outcome: 'unreachable' },
-      { from: 'owner', to: 'lead', body: 'msg-answered', outcome: 'answered' },
-      { from: 'owner', to: 'lead', body: 'msg-timeout', outcome: 'timeout' },
+      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-delivered`, outcome: 'delivered' },
+      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-unreachable`, outcome: 'unreachable' },
+      { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-answered`, outcome: 'answered' },
+      { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-timeout`, outcome: 'timeout' },
     ]);
   });
 

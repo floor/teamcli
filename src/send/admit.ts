@@ -11,7 +11,8 @@ import type { Agent } from '../registry/agents.ts';
  *  is wider, and satisfies this shape as it stands. */
 export type AdmitTeam = {
   project: string;
-  entity: string;
+  /** The entity a team belongs to; null when its file names none. */
+  entity: string | null;
   /** The lead seat, when the record carries it; the roster is read when it does not. */
   orchestrator?: string | null;
   roster: { agent: string; seat: string; role: string }[];
@@ -25,9 +26,22 @@ export type SendVerdict = { ok: true; rule: string } | { ok: false; why: string 
 /** An owner-signed grant naming `send`, already verified by the caller's grant machinery. */
 export type SendGrant = { name: string };
 
-/** The rules, in the order they are asked. Named once, so a refusal and the docs read alike. */
-const RULES = [
+/**
+ * A side of a send that admission can judge without the registry: the seat a command has already
+ * resolved, and the team it sits in, with the role when the file names one. A sender is judged
+ * from its `Agent` record — that is where the id the receiver sees comes from — while a target is
+ * the seat the command resolved, which is the same pair either way.
+ */
+export type SendSeat = { seat: string; team: string; role?: string };
+
+/** Either side of a send: the registry's own record, or a resolved seat. */
+export type SendSide = Agent | SendSeat;
+
+/** The rules, in the order they are asked. Named once, so a refusal, a caller that has no
+ *  identity to judge by, and the docs all read alike. */
+export const RULE_SUMMARY = [
   'the owner',
+  'an orchestrator to a seat of its own team',
   'an orchestrator to another orchestrator',
   "an assistant seat to its entity's coordinator",
   "a seat to its own team's orchestrator",
@@ -36,20 +50,25 @@ const RULES = [
 
 /**
  * The verdict for one send. `caller` is the sender's registry record, or the literal `owner`;
- * `target` is the receiver's record; `teams` is the team registry. `grant` is given only after
- * the caller has verified an owner-signed grant naming `send`: admission never reads the grant
- * store itself, it names the grant in the rule it returns.
+ * `target` is the receiver's record, or the seat it resolved to; `teams` is the team registry.
+ * `grant` is given only after the caller has verified an owner-signed grant naming `send`:
+ * admission never reads the grant store itself, it names the grant in the rule it returns.
  */
-export function admitSend(caller: Agent | 'owner', target: Agent, teams: AdmitTeams, grant?: SendGrant): SendVerdict {
+export function admitSend(caller: SendSide | 'owner', target: SendSide, teams: AdmitTeams, grant?: SendGrant): SendVerdict {
   if (caller === 'owner') return { ok: true, rule: 'the owner' };
 
-  const callerTeam = teams[caller.reach.team];
-  const targetTeam = teams[target.reach.team];
-  const callerSeat = caller.reach.seat;
+  const callerTeam = teams[teamOf(caller)];
+  const targetTeamId = teamOf(target);
+  const targetTeam = teams[targetTeamId];
   const targetOrchestrator = orchestratorSeat(targetTeam);
 
-  // An orchestrator writes to an orchestrator: the pair that carries work between teams.
-  if (callerSeat === orchestratorSeat(callerTeam) && target.reach.seat === targetOrchestrator) {
+  // An orchestrator writes to any seat of its own team: the briefs that carry the work down.
+  if (callerTeam !== undefined && targetTeam === callerTeam && seatOf(caller) === orchestratorSeat(callerTeam)) {
+    return { ok: true, rule: 'an orchestrator to a seat of its own team' };
+  }
+  // An orchestrator writes to an orchestrator of another team: the pair that carries work
+  // between teams. An orchestrator of a team this caller leads was admitted just above.
+  if (seatOf(caller) === orchestratorSeat(callerTeam) && seatOf(target) === targetOrchestrator) {
     return { ok: true, rule: 'an orchestrator to another orchestrator' };
   }
   // An assistant writes to the coordinator of its own entity: the seat above the entity's teams.
@@ -57,14 +76,14 @@ export function admitSend(caller: Agent | 'owner', target: Agent, teams: AdmitTe
     return { ok: true, rule: "an assistant seat to its entity's coordinator" };
   }
   // Any seat writes to its own team's orchestrator.
-  if (callerTeam !== undefined && targetTeam === callerTeam && target.reach.seat === targetOrchestrator) {
+  if (callerTeam !== undefined && targetTeam === callerTeam && seatOf(target) === targetOrchestrator) {
     return { ok: true, rule: "a seat to its own team's orchestrator" };
   }
   if (grant !== undefined) return { ok: true, rule: `an owner-signed grant naming send (${grant.name})` };
 
   return {
     ok: false,
-    why: `${seatAt(caller)} may not send to ${seatAt(target)}: no rule admits it (${RULES})`,
+    why: `${seatAt(caller)} may not send to ${seatAt(target)}: no rule admits it (${RULE_SUMMARY})`,
   };
 }
 
@@ -72,17 +91,40 @@ export function admitSend(caller: Agent | 'owner', target: Agent, teams: AdmitTe
  * The drop file's first line: who wrote it, and the rule or grant that admitted the write. The
  * body follows one empty line under it, so a reader sees the sender before the message.
  */
-export function senderHeader(caller: Agent | 'owner', rule: string): string {
-  const from = caller === 'owner' ? 'the owner' : `${caller.id} (${caller.name}, ${seatAt(caller)})`;
-  return `from ${from} — admitted by: ${rule}\n`;
+export function senderHeader(caller: SendSide | 'owner', rule: string): string {
+  if (caller === 'owner') return `from the owner — admitted by: ${rule}\n`;
+  const id = 'reach' in caller ? caller.id : '';
+  const name = 'reach' in caller ? caller.name : caller.seat;
+  const who = id === '' ? `${name}, ${seatAt(caller)}` : `${id} (${name}, ${seatAt(caller)})`;
+  return `from ${who} — admitted by: ${rule}\n`;
 }
 
-/** The caller's role in its own team's roster: by agent id first, then by the seat it sits in. */
-function roleOf(agent: Agent, team: AdmitTeam | undefined): string | null {
-  if (!team) return null;
-  const byAgent = team.roster.find((entry) => entry.agent === agent.id);
-  if (byAgent) return byAgent.role;
-  return team.roster.find((entry) => entry.seat === agent.reach.seat)?.role ?? null;
+/** The seat a side sits in. */
+function seatOf(side: SendSide): string {
+  return 'reach' in side ? side.reach.seat : side.seat;
+}
+
+/** The team a side sits in. */
+function teamOf(side: SendSide): string {
+  return 'reach' in side ? side.reach.team : side.team;
+}
+
+/** The agent id a side carries, when it has one. */
+function idOf(side: SendSide): string {
+  return 'reach' in side ? side.id : '';
+}
+
+/** The sender's role in its own team's roster: the roster first, by agent id and then by the
+ *  seat it sits in, and the side's own role when the roster does not name it. */
+function roleOf(caller: SendSide, team: AdmitTeam | undefined): string | null {
+  if (team) {
+    const byAgent = team.roster.find((entry) => entry.agent !== '' && entry.agent === idOf(caller));
+    if (byAgent) return byAgent.role;
+    const bySeat = team.roster.find((entry) => entry.seat === seatOf(caller));
+    if (bySeat) return bySeat.role;
+  }
+  if ('reach' in caller) return caller.signing.role === '' ? null : caller.signing.role;
+  return caller.role ?? null;
 }
 
 /** The lead seat of a team: the record's own field, else the roster, else the seat named for it. */
@@ -96,17 +138,17 @@ function orchestratorSeat(team: AdmitTeam | undefined): string | null {
 
 /** True when the target is the coordinator of `entity`: the lead seat of the entity's own team,
  *  the one whose project is the entity itself. */
-function onMainCoordinator(target: Agent, entity: string | undefined, teams: AdmitTeams): boolean {
-  if (entity === undefined) return false;
+function onMainCoordinator(target: SendSide, entity: string | null | undefined, teams: AdmitTeams): boolean {
+  if (!entity) return false;
   for (const id of Object.keys(teams).sort()) {
     const team = teams[id];
     if (!team || team.entity !== entity || team.project !== entity) continue;
-    if (target.reach.team === id && target.reach.seat === orchestratorSeat(team)) return true;
+    if (teamOf(target) === id && seatOf(target) === orchestratorSeat(team)) return true;
   }
   return false;
 }
 
-/** How a refusal and the header name an agent: its seat in its team. */
-function seatAt(agent: Agent): string {
-  return `${agent.reach.seat}@${agent.reach.team}`;
+/** How a refusal and the header name a side: its seat in its team. */
+function seatAt(side: SendSide): string {
+  return `${seatOf(side)}@${teamOf(side)}`;
 }

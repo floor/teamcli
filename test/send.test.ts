@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
@@ -125,6 +125,43 @@ function quietNative(): NativePane {
   };
 }
 
+/** The agent record `up` writes for a launched seat: the id admission names in the drop file's
+ *  header, and the reach its rules read. */
+function registerSeat(seat: string, role: string, pane = 'w1:p1'): void {
+  const id = `agt_${Buffer.from(seat).toString('hex').slice(0, 12).padEnd(12, '0')}`;
+  const file = join(base, 'home', '.config', 'team', 'agents', `${id}.yaml`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    [
+      `id: "${id}"`,
+      `name: "${seat}"`,
+      'signing:',
+      '  model: "Test"',
+      '  version: "1"',
+      `  role: "${role}"`,
+      'lab: "test"',
+      'cli: "claude-code"',
+      'launcher: null',
+      'launch: "claude"',
+      'reach:',
+      '  team: "acme"',
+      `  seat: "${seat}"`,
+      '  session: "acme"',
+      `  pane: "${pane}"`,
+      '  address: null',
+      'mcp: []',
+      'skills: []',
+      'lifecycle: "running"',
+      'provenance:',
+      '  registered_by: "team up"',
+      '  registered_at: "2026-10-05T04:00:00.000Z"',
+      '  updated_at: "2026-10-05T04:00:00.000Z"',
+      '',
+    ].join('\n'),
+  );
+}
+
 function record(dir: string, seat: string, pane: string): void {
   updateState(dir, (state) => {
     state.sessions.acme = { seats: { [seat]: { stage: 'launched', pane, workspace: 'w1' } }, worktrees: {} };
@@ -150,7 +187,7 @@ describe('team send: delivered', () => {
     expect(pane.typed[0]).not.toContain('hello world');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = join(drops, readdirSync(drops)[0] as string);
-    expect(readFileSync(path, 'utf8')).toBe('hello world');
+    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello world');
     expect(pane.typed[0]).toContain(path);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
     expect(log).toContain('send [owner] lead: delivered');
@@ -169,12 +206,13 @@ describe('team send: delivered', () => {
     expect(code).toBe(0);
     expect(host.frames).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
-    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe('line one\nline two\n');
+    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe('from the owner — admitted by: the owner\n\nline one\nline two\n');
     expect(pane.typed[0]).not.toContain('line one');
   });
 
-  test('the orchestrator from its recorded pane may send', async () => {
+  test('the orchestrator from its recorded pane may send, and its id rides the drop file', async () => {
     const { root, dir, sockets } = world();
+    registerSeat('lead', 'coordinator', 'w1:p1');
     record(dir, 'lead', 'w1:p1');
     const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
 
@@ -182,6 +220,27 @@ describe('team send: delivered', () => {
 
     expect(code).toBe(0);
     expect(io.out).toBe('lead: delivered\n');
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
+      `from agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')} (lead, lead@acme) — admitted by: an orchestrator to a seat of its own team\n\na note`,
+    );
+  });
+
+  test('a seat of the team reaches its own orchestrator, and the header names it', async () => {
+    const { root, dir, sockets } = world();
+    registerSeat('helper', 'implementer', 'w2:p1');
+    record(dir, 'helper', 'w2:p1');
+    const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+
+    const code = await runSend(['lead', 'a note'], io, fake(sockets, { native: scripted(['idle', 'working']) }));
+
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toBe('lead: delivered\n');
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
+      `from agt_${Buffer.from('helper').toString('hex').padEnd(12, '0')} (helper, helper@acme) — admitted by: a seat to its own team's orchestrator\n\na note`,
+    );
   });
 });
 
@@ -200,7 +259,22 @@ describe('team send: refused', () => {
     expect(host.frames).toEqual([]);
   });
 
-  test('a worker seat may not send', async () => {
+  test('a worker seat may not send to another worker, and the refusal names the rules', async () => {
+    const { root, dir, sockets } = world();
+    registerSeat('helper', 'implementer', 'w2:p1');
+    record(dir, 'helper', 'w2:p1');
+    const host = fake(sockets);
+    const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+
+    const code = await runSend(['native', 'hello'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.err).toContain('helper@acme may not send to native@acme: no rule admits it');
+    expect(io.err).toContain("a seat to its own team's orchestrator");
+    expect(host.frames).toEqual([]);
+  });
+
+  test('a seat of the team with no agent record may not send: there is no identity to admit by', async () => {
     const { root, dir, sockets } = world();
     record(dir, 'helper', 'w2:p1');
     const host = fake(sockets);
@@ -209,7 +283,7 @@ describe('team send: refused', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('only the owner, or the orchestrator from its own seat, can send');
+    expect(io.err).toContain('helper: no agent record on this machine, so no rule admits the send');
     expect(host.frames).toEqual([]);
   });
 
@@ -424,7 +498,7 @@ describe('team send: --wait', () => {
     expect((frame.match(/\n/g) ?? []).length).toBe(1);
     const parsed = JSON.parse(frame) as { type: string; message: { role: string; content: string }; msg_id: string };
     expect(parsed.type).toBe('user');
-    expect(parsed.message).toEqual({ role: 'user', content: 'hello world' });
+    expect(parsed.message).toEqual({ role: 'user', content: 'from the owner — admitted by: the owner\n\nhello world' });
     expect(parsed.msg_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
     expect(log).toContain('lead: sent on the socket (');
@@ -761,7 +835,7 @@ describe('team send: native drop', () => {
     expect(statSync(dropsRoot).mode & 0o777).toBe(0o700);
     expect(statSync(sessionDir).mode & 0o777).toBe(0o700);
     expect(statSync(drops).mode & 0o777).toBe(0o700);
-    expect(readFileSync(path, 'utf8')).toBe(body);
+    expect(readFileSync(path, 'utf8')).toBe(`from the owner — admitted by: the owner\n\n${body}`);
     expect(trigger).toContain(path);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
     expect(log).toContain('herdr status working');
@@ -813,7 +887,7 @@ describe('team send: native drop', () => {
     const drops = join(dir, 'send-drops', 'acme', 'native');
     const name = readdirSync(drops)[0] as string;
     expect(io.err).toContain(join(drops, name));
-    expect(readFileSync(join(drops, name), 'utf8')).toBe('hello');
+    expect(readFileSync(join(drops, name), 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
   test('a codex seat already at done is not delivered until the status changes', async () => {
@@ -899,7 +973,7 @@ describe('team send: native drop', () => {
     expect(code).toBe(1);
     expect(io.err).toContain('the pane did not take the trigger');
     const drops = join(dir, 'send-drops', 'acme', 'native');
-    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe('hello');
+    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
   test('a dialog the classifier already knows is not reached, and nothing further is pressed', async () => {

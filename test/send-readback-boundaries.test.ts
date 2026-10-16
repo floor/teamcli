@@ -12,6 +12,7 @@ import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { readHistory } from '../src/send/history.ts';
+import { filed } from './send-native-fixtures.ts';
 import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T16:00:00.000Z');
@@ -169,7 +170,7 @@ describe('the composer read-back at its boundaries', () => {
     const drops = join(world.dir, 'send-drops', 'acme', 'lead');
     const files = readdirSync(drops);
     expect(files.length).toBe(1);
-    expect(readFileSync(join(drops, files[0]!), 'utf8')).toBe('the pane refused the Enter');
+    expect(readFileSync(join(drops, files[0]!), 'utf8')).toBe(filed('the pane refused the Enter'));
   });
 
   test('a box that stops holding the trigger after the first Enter gets no second Enter', async () => {

@@ -82,7 +82,8 @@ describe('send admission: the rules that admit', () => {
   test('an orchestrator reaches an orchestrator of another team, and its own', () => {
     expect(admitSend(orchCli, orchRadio, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
     expect(admitSend(orchCli, orchLabs, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
-    expect(admitSend(orchCli, orchCli, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
+    // Its own team's lead is admitted as a seat of that team; only another team's is the pair.
+    expect(admitSend(orchCli, orchCli, teams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
   });
 
   test('an assistant reaches the coordinator of its entity, in the main team', () => {
@@ -95,6 +96,16 @@ describe('send admission: the rules that admit', () => {
     expect(admitSend(assistantLabs, orchCli, withAssistant)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
     // The same rule in the entity's own team: the coordinator is its own team's lead.
     expect(admitSend(assistantCli, orchCli, teams)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
+  });
+
+  test('an orchestrator reaches any seat of its own team, and no other team\'s', () => {
+    expect(admitSend(orchCli, builder1, teams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
+    expect(admitSend(orchCli, tester1, teams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
+    expect(admitSend(orchCli, assistantCli, teams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
+    expect(admitSend(orchRadio, builderRadio, teams)).toEqual({ ok: true, rule: 'an orchestrator to a seat of its own team' });
+    // Another team's seats are reached through that team's orchestrator, not directly.
+    expect(admitSend(orchCli, builderLabs, teams).ok).toBe(false);
+    expect(admitSend(orchCli, builderRadio, teams).ok).toBe(false);
   });
 
   test('any seat reaches its own team\'s orchestrator', () => {
@@ -132,12 +143,17 @@ describe('send admission: default deny', () => {
     'orchestrator@teamcli -> orchestrator@labs',
     'orchestrator@teamcli -> orchestrator@radio',
     'orchestrator@teamcli -> orchestrator@teamcli',
+    'orchestrator@teamcli -> builder-1@teamcli',
+    'orchestrator@teamcli -> tester-1@teamcli',
+    'orchestrator@teamcli -> assistant@teamcli',
     'orchestrator@labs -> orchestrator@teamcli',
     'orchestrator@labs -> orchestrator@radio',
     'orchestrator@labs -> orchestrator@labs',
+    'orchestrator@labs -> builder-1@labs',
     'orchestrator@radio -> orchestrator@teamcli',
     'orchestrator@radio -> orchestrator@labs',
     'orchestrator@radio -> orchestrator@radio',
+    'orchestrator@radio -> builder-1@radio',
     "assistant@teamcli -> orchestrator@teamcli",
     'builder-1@teamcli -> orchestrator@teamcli',
     'tester-1@teamcli -> orchestrator@teamcli',
@@ -158,7 +174,8 @@ describe('send admission: default deny', () => {
             pair,
             ok: false,
             why: `${from.name} may not send to ${to.name}: no rule admits it (` +
-              'the owner; an orchestrator to another orchestrator; an assistant seat to its entity\'s coordinator; ' +
+              'the owner; an orchestrator to a seat of its own team; an orchestrator to another orchestrator; ' +
+              'an assistant seat to its entity\'s coordinator; ' +
               "a seat to its own team's orchestrator; an owner-signed grant naming send)",
           });
         }
@@ -178,8 +195,8 @@ describe('send admission: default deny', () => {
     expect(admitSend(builderLabs, orchCli, teams).ok).toBe(false);
   });
 
-  test('an orchestrator reaches no worker seat', () => {
-    expect(admitSend(orchCli, builder1, teams).ok).toBe(false);
+  test('an orchestrator reaches no worker seat of another team', () => {
+    expect(admitSend(orchCli, builderLabs, teams).ok).toBe(false);
     expect(admitSend(orchRadio, builderLabs, teams).ok).toBe(false);
   });
 
@@ -196,7 +213,8 @@ describe('send admission: default deny', () => {
     // The refusal text carries the five rules, so a reader sees what would have admitted it.
     expect(admitSend(builderRadio, builder1, teams)).toEqual({
       ok: false,
-      why: 'builder-1@radio may not send to builder-1@teamcli: no rule admits it (the owner; an orchestrator to another orchestrator; ' +
+      why: 'builder-1@radio may not send to builder-1@teamcli: no rule admits it (the owner; an orchestrator to a seat of its own team; ' +
+        'an orchestrator to another orchestrator; ' +
         "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     });
   });
