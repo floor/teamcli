@@ -174,7 +174,7 @@ empty again. Nothing writes a lab's config or an `AGENTS.md`. `/exit` is sent on
 seat. Update and workspace-trust screens are reported and closed without input; the owner
 handles them before relaunching. Other unrecognised layouts stay unknown.
 
-The Antigravity profile is tested with CLI 1.2.16 (`agy`). It adds `--dangerously-skip-permissions`
+The Antigravity profile is tested with CLI 1.2.16 to 1.3.5 (`agy`). It adds `--dangerously-skip-permissions`
 for unattended execution, and checks authentication with `agy models`. Rules go as a first message
 only at an empty idle prompt; delivery is recorded after the CLI starts working with the composer
 empty again. Nothing writes a lab's config or an `AGENTS.md`. `/exit` is sent only to a free
@@ -245,7 +245,8 @@ twice. A secondary figure that cannot be written is left off. When the primary
 figure cannot be written, nothing is printed. Five hours (`300` minutes) is
 `session`, a day (`1440`) is `daily`, and a week (`10080`) is `weekly`. Any other
 length, a figure over 100%, or no such rollout prints nothing, so the account
-reads unknown. Bun has to be on `PATH` when the check runs.
+reads unknown. The file names the command the check runs. Bun has to be on
+`PATH` when the check runs.
 
 More fields exist — `dialogs`, `tools`, `trust`, `machine`, `limits`, `watch`, `visibility` and
 `releases` — and the comments `team init` writes name them; validation refuses what it cannot
@@ -293,14 +294,17 @@ repository is read from `.agents/team.yaml` in that folder only, not from a pare
 that reads the file also takes `--file <path>` for a file other than `.agents/team.yaml`.
 
 A pane outside the team's session can be an approved **delegate**: the file's `delegates` section
-names panes — `<herdr session>/<pane id>` — and, per pane, which of `up`, `down`, `add` and
-`remove` it may run. The caller is matched on the session and pane id, never on a seat, a
-role or an agent name. `up`, `down`, `add` and `remove` run only while the live file is exactly
-the approved one — drift is refused — and a command the entry does not list, or a prohibited
+names panes — `<herdr session>/<pane id>` — and, per pane, which of `up`, `down`, `add`, `remove`
+and `approve` it may run. The caller is matched on the session and pane id, never on a seat, a
+role or an agent name. `up`, `down`, `add` and `remove` read the live file, and a command the entry does not list, or a prohibited
 flag, is refused with the gate's own words and exit id; `--file` and `--session` are refused
 outright. Every delegated run writes one line to the file's log naming the pane and the command.
-`approve` is still a word a `delegates` entry or a `grant` scope may carry — a file that names it
-is read like any other — and no command in this build consults it.
+A delegated `approve` is for ordinary changes — the roster, a launch line, a rule — and never
+for any other owner section: the guard is an allowlist, and `rules` is all it admits, so
+`delegates` first, and `budgets`, `limits`, identity, `trust`, the workspace, the operator and
+orchestrator sections, and any section a later version adds are refused with `this change
+needs the owner`, judged against the approved copy before anything else is read, so a delegate
+can never approve a widening of its own grant.
 
 `team status --json` prints the facts `status` prints as one JSON document (`format: 1`) on stdout:
 `project`, `session`, `rows` (`name`, `state`, `model`, `pane`), `notes`, `differences` (`what`, `repair`), and `notice`.
@@ -313,26 +317,13 @@ It never answers prompts and performs no sign-in action.
 run live. `team worktree list` prints the recorded worktrees and writes nothing. `up`, `down` and `add` take `--dry-run` to print every command they would run, and every
 refusal, and change nothing.
 
-## The approval record
+## The live file is the record
 
-`team approve` is not part of this build: nothing records an approval, and `up`, `add`, `remove`
-and `down` run with no record at all, reading `.agents/team.yaml` as it is on disk. A record an
-earlier build wrote is still verified where a command reads one: `up` refuses to start from a file
-that has drifted from a record in force, and the delegate gate is consulted only when one is in
-force. The record's shape is unchanged — the approval, the stored copy of the file, the project
-root and a per-project number, covered by one signature whose key lives outside the store, in
-`~/.config/team-key`. A record changed after it was signed, signed for another root, or replayed
-from an older number is not an approval, and the command says which case it found.
-
-Approvals guard against mistakes, not against a hostile process running as the owner. The
-signature refuses a record changed by something that does not use the key; a process that can
-read the key can re-sign any record at the number it already had, and nothing `team` shows will
-differ. What a replaced key does change is the fingerprint: an owner who noted it sees the swap.
-That is evidence, not prevention — `team` computes the fingerprint, and a seat can replace `team`
-itself.
-
-A record written by an earlier `team`, before records were signed, is not an approval in force:
-`up`, `add`, `remove` and `down` refuse it.
+The commands read the file in the clone. Edit it, then run the seats. A record an earlier `team`
+left on this machine is still checked where a command needs one that verifies. A legacy record is
+refused with `approved before records were signed`. A record that does not verify is refused with
+the case. A missing record is not a refusal. Approvals guard against mistakes, not against a hostile
+process running as the owner. The watch keeps watching, and `status` keeps reporting.
 
 ## Your first team in five minutes
 
@@ -346,10 +337,9 @@ team up                    # the owner: starts the session and its seats
 ```
 
 `team init` writes a skeleton, one seat and lots of comments; it prints how the file stays private,
-and leaves your first commit as a commented `#   since:` line. Nothing is recorded between the edit
-and the run: `up` reads the file as it is. `doctor` says what is missing on this machine,
-`up --dry-run` shows every command the launch would run — and `up` starts the team, from the
-owner's terminal outside herdr.
+and leaves your first commit as a commented `#   since:` line. Edit the file, then
+`doctor` says what is missing on this machine, `up --dry-run` shows every command the launch would
+run — and `up` starts the team, from the owner's terminal outside herdr.
 
 ## Development
 
