@@ -8,7 +8,7 @@ import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { acquireSeatLock } from '../launch/seat-lock.ts';
+import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
@@ -88,6 +88,10 @@ export type SendHost = {
   processInfo(session: string, pane: string): PaneProcesses | null;
   /** The folder the session sockets live in; the real one is the runtime temp folder's. */
   socketsDir: string;
+  /** Where else a session's own sockets have been found: this Mac's Claude Code wrote them
+   *  at /tmp/cc-socks while `tmpdir()` answered the per-user runtime folder, so discovery
+   *  tries this one after socketsDir. The real host only; tests fake one folder. */
+  socketsDirAlt?: string;
   deliver(socketPath: string, frame: string): Promise<SendOutcome>;
   /** Types a native seat's trigger and reads herdr's status. Tests pass a fake. */
   native: NativePane;
@@ -104,6 +108,7 @@ export const realHost: SendHost = {
   // (observed on this Mac as /tmp/cc-socks; a version-specific observation, not a public
   // API contract).
   socketsDir: join(tmpdir(), 'cc-socks'),
+  socketsDirAlt: '/tmp/cc-socks',
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
   native: {
     typeText: (session, pane, text) => typeText(pane, text, session),
@@ -137,6 +142,8 @@ type Aim = {
   cli: string;
   /** The pane the target resolved to; null when the pane is read live, by name. */
   pane: string | null;
+  /** The cross-session address the registry recorded for the target; null when none. */
+  address: string | null;
   /** The team file's folder this send belongs to: the receiving team's, across teams. */
   dir: string;
   project: string;
@@ -226,7 +233,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (!configured) {
       return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
     }
-    to = { seat: seatName, session: team.session, cli: configured.cli, pane: null, dir, project: team.project, root, cross: false };
+    to = { seat: seatName, session: team.session, cli: configured.cli, pane: null, address: null, dir, project: team.project, root, cross: false };
   } else {
     admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now());
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
@@ -239,6 +246,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       session: hit.agent.reach.session,
       cli: hit.agent.cli,
       pane: hit.pane,
+      address: hit.agent.reach.address,
       dir: cross ? join(hit.team.root, '.agents') : dir,
       project: hit.team.project,
       root: hit.team.root,
@@ -282,7 +290,22 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
   }
   if (dry) {
-    return dryRun(io, dir, who, to.seat, `${to.cli} via a 0600 drop file and one trigger line; nothing was written`, host, report);
+    const how = to.cli === 'claude-code'
+      ? 'its cross-session socket, falling back to a 0600 drop file and one trigger line'
+      : 'a 0600 drop file and one trigger line';
+    return dryRun(io, dir, who, to.seat, `${to.cli} via ${how}; nothing was written`, host, report);
+  }
+
+  // Phase 1: a Claude Code seat takes the frame on its cross-session socket by default —
+  // nothing is typed. The registry's recorded address when it has one, else the pane's own
+  // processes; a socket that is missing or refuses falls back to the typed trigger below,
+  // and the outcome line keeps the reason it fell (delivered (typed, socket <reason>)).
+  let socketNote: string | null = null;
+  if (to.cli === 'claude-code') {
+    const attempt = await deliverSocketFrame(dir, who, from, to, body, msgId, host, report);
+    if (attempt.kind === 'done') return delivered(io, to.seat, report, 'socket');
+    socketNote = `typed, socket ${attempt.reason}`;
+    logLine(dir, 'send', who, `${to.seat}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
   }
 
   // The daemon serves seats of the caller's own team; a seat in another team's record is
@@ -290,7 +313,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const daemonSock = host.daemonSocket ?? daemonSocketPath(to.project, to.root, host.home);
   const viaDaemon = to.cross ? null : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, body });
   if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
-    return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon);
+    return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon, socketNote ?? undefined);
   }
 
   // A resolved record carries the pane the send goes to; the plain path reads the pane live,
@@ -306,7 +329,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return unreachable(io, dir, who, to.seat, 'the seat is back at its shell; nothing was typed', host, report);
   }
   report.sent = msgId;
-  return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, msgId, body, trigger, host, report);
+  return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, msgId, body, trigger, host, report, socketNote ?? undefined);
 }
 
 function finishDaemonSend(
@@ -318,9 +341,11 @@ function finishDaemonSend(
   host: SendHost,
   report: Report,
   res: DaemonSendResponse,
+  /** How the send reached the seat, for the outcome line (the fallback's own reason). */
+  note?: string,
 ): number {
   report.sent = res.id;
-  if (res.outcome === 'delivered') return delivered(io, seatName, report);
+  if (res.outcome === 'delivered') return delivered(io, seatName, report, note);
   if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
   if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
   if (res.outcome === 'held') return held(io, dir, who, seatName, res.detail, host, report);
@@ -357,7 +382,7 @@ async function deliverSocket(
   // newlines and control characters, so multi-line text stays one frame; the frame is never
   // truncated.
   const msgId = randomUUID();
-  const frame = `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;
+  const frame = frameFor(body, msgId);
   report.sent = msgId;
   if (frame.length > FRAME_LIMIT) {
     return refuse(io, dir, who, `${to.seat}: the message is too large for this channel: the frame is ${String(frame.length)} characters and the socket's measured limit is ${String(FRAME_LIMIT)}; nothing was sent`, host, report);
@@ -390,10 +415,10 @@ async function deliverSocket(
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable' });
     return unreachable(io, dir, who, to.seat, "the pane's processes could not be read", host, report);
   }
-  const socketPath = socketOf(host, processes);
+  const socketPath = to.address ?? socketOf(host, processes);
   if (socketPath === null) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable' });
-    return unreachable(io, dir, who, to.seat, `no cross-session socket was found for its pane's processes (looked in ${host.socketsDir})`, host, report);
+    return unreachable(io, dir, who, to.seat, `no cross-session socket was found for its pane's processes (looked in ${socketDirs(host)})`, host, report);
   }
 
   // One send per seat at a time, the same lock `answer` and the launch that resumes a seat
@@ -406,7 +431,9 @@ async function deliverSocket(
   try {
     // The reply listener is opened before the frame is written: a seat that answers at once
     // must find it standing. A listener that cannot be opened is a refusal — nothing sent.
-    const opened = await openReplyListener(host.socketsDir, process.pid);
+    // The listener stands next to the socket the frame goes to: the answering session looks for
+    // the sender's pid at the sockets folder of the channel, and this is that one.
+    const opened = await openReplyListener(dirname(socketPath), process.pid);
     if (!opened.ok) {
       return refuse(io, dir, who, `${to.seat}: ${opened.reason}`, host, report);
     }
@@ -474,6 +501,8 @@ async function deliverNative(
   trigger: string,
   host: SendHost,
   report: Report,
+  /** How the send reached the seat, for the outcome line (the fallback's own reason). */
+  note?: string,
 ): Promise<number> {
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
@@ -504,7 +533,7 @@ async function deliverNative(
     }
     logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
     appendHistory(project, root, host.home, { ...entry, outcome: 'delivered' });
-    return delivered(io, seatName, report);
+    return delivered(io, seatName, report, note);
   } finally {
     lock.release();
   }
@@ -556,18 +585,96 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
 }
 
 /**
- * The first of the pane's processes with a socket in the sockets folder: the foreground
- * processes first (the running CLI is one of them), then the shell. The probe's socket is
- * derived from one process — the session — so more than one match is not resolved here:
+ * The first of the pane's processes with a socket in the sockets folders: the foreground
+ * processes first (the running CLI is one of them), then the shell; each pid's folders in
+ * order — `socketsDir`, then the alt folder when the real host has one. The probe's socket
+ * is derived from one process — the session — so more than one match is not resolved here:
  * the first is used, in that order.
  */
 function socketOf(host: SendHost, processes: PaneProcesses): string | null {
+  const dirs = host.socketsDirAlt === undefined ? [host.socketsDir] : [host.socketsDir, host.socketsDirAlt];
   const pids = [...processes.foreground, processes.shell].filter((pid, index, all) => all.indexOf(pid) === index);
   for (const pid of pids) {
-    const path = join(host.socketsDir, `${String(pid)}.sock`);
-    if (existsSync(path)) return path;
+    for (const dir of dirs) {
+      const path = join(dir, `${String(pid)}.sock`);
+      if (existsSync(path)) return path;
+    }
   }
   return null;
+}
+
+/** The folders discovery looked in, as one phrase for a refusal's text. */
+function socketDirs(host: SendHost): string {
+  return host.socketsDirAlt === undefined ? host.socketsDir : `${host.socketsDir}, ${host.socketsDirAlt}`;
+}
+
+/** The one frame this channel carries: `type:"user"`, the whole body, the id. `JSON.stringify`
+ *  keeps multi-line text one line. */
+function frameFor(body: string, msgId: string): string {
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;
+}
+
+type SocketAttempt = { kind: 'done' } | { kind: 'fallback'; reason: string };
+
+/**
+ * The default path's first leg: one frame on the target's cross-session socket, nothing typed.
+ * The address is resolved first — the registry's recorded one when it has one, else the pane's
+ * own processes — and a write the socket takes is the send: this channel has no
+ * acknowledgement, so a taken frame is all this run can know. Every other ending comes back as
+ * a reason for the caller to fall back to the typed trigger: no pane, no socket, a socket gone
+ * or refusing, a frame past the measured limit. A recorded address whose write refuses gets one
+ * live re-resolution first: a pid the registry has not caught up with must not cost the fast
+ * path, while the record itself remains the registry's to refresh.
+ */
+async function deliverSocketFrame(
+  dir: string,
+  who: string,
+  from: string,
+  to: Aim,
+  body: string,
+  msgId: string,
+  host: SendHost,
+  report: Report,
+): Promise<SocketAttempt> {
+  report.sent = msgId;
+  const frame = frameFor(body, msgId);
+  if (frame.length > FRAME_LIMIT) {
+    return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
+  }
+  const found: Found = to.pane !== null ? { ok: true, pane: to.pane } : findAgent(host, to.session, to.seat);
+  if (!found.ok) return { kind: 'fallback', reason: found.reason };
+  // The seat lock stays the gate: a command that holds it — a send typing a trigger, an `up`,
+  // an outstanding --wait — keeps this fast path out, and the typed path below answers the
+  // refusal exactly as it always has. The lock file is read here, never taken: the fallback's
+  // own delivery takes it for real.
+  if (existsSync(seatLockPath(to.dir, to.session, to.seat))) {
+    return { kind: 'fallback', reason: 'another command holds the seat' };
+  }
+  const first = socketPathFor(host, to, found.pane);
+  if (first === null) {
+    return { kind: 'fallback', reason: `no socket was found for its pane's processes (looked in ${socketDirs(host)})` };
+  }
+  let taken = await host.deliver(first.path, frame);
+  if (!taken.ok && first.recorded) {
+    const processes = host.processInfo(to.session, found.pane);
+    const live = processes === null ? null : socketOf(host, processes);
+    if (live !== null && live !== first.path) taken = await host.deliver(live, frame);
+  }
+  if (!taken.ok) return { kind: 'fallback', reason: taken.reason };
+  logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
+  appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'delivered' });
+  return { kind: 'done' };
+}
+
+/** The address a send tries: the registry's recorded one when there is one, else the pane's own
+ *  processes (`socketOf`). `recorded` marks the difference — only a recorded address gets the
+ *  live re-resolution after its write refuses. */
+function socketPathFor(host: SendHost, to: Aim, pane: string): { path: string; recorded: boolean } | null {
+  if (to.address !== null) return { path: to.address, recorded: true };
+  const processes = host.processInfo(to.session, pane);
+  if (processes === null) return null;
+  const path = socketOf(host, processes);
+  return path === null ? null : { path, recorded: false };
 }
 
 /** The caller class the caller check returned, as the log's bracket: `answer`'s own. */
@@ -712,12 +819,14 @@ function seatList(team: TeamFile): string {
   return names.length === 0 ? '(none)' : names.join(', ');
 }
 
-/** Herdr reported the seat took the trigger, and the pane was not a known dialog. Exit 0, always. */
-function delivered(io: Io, seat: string, report: Report): number {
+/** Herdr reported the seat took the trigger, and the pane was not a known dialog. Exit 0, always.
+ *  The note names the path the send went by — `socket`, or `typed, socket <reason>` after the
+ *  frame was not taken — and is left off where the seat has one channel only. */
+function delivered(io: Io, seat: string, report: Report, note?: string): number {
   if (report.json) {
     io.stdout(document({ seat, status: 'delivered', exit: 0, ids: { sent: report.sent, reply: null } }));
   } else {
-    io.stdout(`${seat}: delivered\n`);
+    io.stdout(`${seat}: delivered${note === undefined ? '' : ` (${note})`}\n`);
   }
   return 0; // exit: send.delivered
 }
