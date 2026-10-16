@@ -715,7 +715,8 @@ describe('a pass of the watch', () => {
     expect(pass({
       team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: MIN, memory, approval: ['`rules` changed'],
     }).reports).toEqual([]);
-    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(), approval: null }).reports[0]?.text).toBe('the file was never approved on this machine');
+    // Neither spelling of "no difference is recorded" is a report of its own.
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(), approval: null }).reports).toEqual([]);
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(), approval: [] }).reports).toEqual([]);
   });
 
