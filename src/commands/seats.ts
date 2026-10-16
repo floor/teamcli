@@ -6,8 +6,10 @@ import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { mayReadTeam } from '../read-gate.ts';
-import { emptySession, isSeatId, readState, type SessionState } from '../state.ts';
-import { compare, type Comparison, type Live } from '../status/compare.ts';
+import { observedSeatState, sayThreshold, type SeatStateWord, type StateSource } from '../labels/state.ts';
+import { DEFAULT_STATE_THRESHOLDS } from '../settings/inherit.ts';
+import { emptySession, isSeatId, liveHold, readState, type SessionState } from '../state.ts';
+import { compare, type Comparison, type Difference, type Live } from '../status/compare.ts';
 import { waitOrStop } from '../wait.ts';
 import { realSources as realStatusSources, type StatusSources } from './status.ts';
 
@@ -35,6 +37,11 @@ export type SeatRegistryRow = {
   model: string;
   effort: string | null;
   status: string;
+  /** The seat's own reading (src/labels/state.ts): what it is doing, and from which
+   *  source — beside `status`, which is the comparison's phrase about the record. */
+  state: SeatStateWord;
+  state_source: StateSource;
+  blind: boolean;
   stored?: string;
   last_active: string | null;
   last_active_display: string;
@@ -84,6 +91,7 @@ export function seatRegistryRows(
   comparison: Comparison,
   now: Date,
   all: boolean,
+  held = false,
 ): SeatRegistryRow[] {
   const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
   const seenIds = new Set<string>();
@@ -100,7 +108,29 @@ export function seatRegistryRows(
     const role = declared?.role ?? likeSeat?.role ?? 'temporary';
     const cli = recorded?.cli ?? declared?.cli ?? likeSeat?.cli ?? '-';
     const effort = recorded?.effort ?? declared?.effort ?? likeSeat?.effort ?? null;
-    const agent = live.agents.find((candidate) => candidate.name === row.name);
+    // The seat's agent: the one herdr names for it, or — an agent renamed or left unnamed, which
+    // the comparison flags on its own — the one standing in the pane the state records for the
+    // seat. Its screen is the seat's screen either way, and it is not read as blind.
+    const recordedPane = recorded?.pane;
+    const agent = live.agents.find((candidate) => candidate.name === row.name)
+      ?? (recordedPane !== undefined ? live.agents.find((candidate) => candidate.pane === recordedPane) : undefined);
+    // The seat-state reading: the CLI's own screen first, then herdr, then the traces — and the
+    // certainties the comparison already judged: a seat the file stops, or one its own process
+    // has left, is done and not judged blind.
+    const reading = observedSeatState({
+      cli,
+      ...(agent ? { agent: { pane: agent.pane, status: agent.status } } : {}),
+      ...(agent && live.screens[agent.pane] !== undefined ? { screenText: live.screens[agent.pane] } : {}),
+      trace: recorded?.last_active ?? retained?.last_active ?? null,
+      // Gone on purpose — stopped by the file, kept only as a retained record, or the
+      // comparison's own 'missing'/'stopped' — is done, not judged blind.
+      ...(declared?.stopped === true || retained !== undefined || row.state === 'missing' || row.state === 'stopped'
+        ? { stopped: true }
+        : {}),
+      ...(held ? { held: true } : {}),
+      reachable: live.running,
+      now,
+    });
     const workingNow = Boolean(agent && (agent.status === 'working' || row.state.startsWith('working')));
     const lastActive = workingNow ? now.toISOString() : (recorded?.last_active ?? retained?.last_active ?? null);
     const lastActiveDisplay = workingNow ? 'now' : formatRelativeTime(lastActive, now);
@@ -114,6 +144,9 @@ export function seatRegistryRows(
       model: row.model,
       effort,
       status: row.state,
+      state: reading.state,
+      state_source: reading.source,
+      blind: reading.blind,
       ...(row.stored ? { stored: row.stored } : {}),
       last_active: lastActive,
       last_active_display: lastActiveDisplay,
@@ -125,8 +158,29 @@ export function seatRegistryRows(
   return rows;
 }
 
+/** The must-fix rows `status` and `check` print for blind seats: a reading of unknown
+ *  past the blind threshold counts as not working. One row per seat, the same reading the table
+ *  above shows. */
+export function blindDifferences(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  comparison: Comparison,
+  now: Date,
+  held = false,
+): Difference[] {
+  const said = sayThreshold(DEFAULT_STATE_THRESHOLDS.blind_after_seconds);
+  return seatRegistryRows(team, state, live, comparison, now, true, held)
+    .filter((row) => row.blind)
+    .map((row): Difference => ({
+      what: `${row.name}: unknown for over ${said} — blind, and it counts as not working`,
+      repair: 'the owner looks at the pane',
+      owner: true,
+    }));
+}
+
 export function renderSeatsTable(rows: SeatRegistryRow[], indent = ''): string {
-  const head = ['SEAT', 'ID', 'ROLE', 'CLI', 'MODEL', 'EFFORT', 'STATUS', 'LAST ACTIVE', 'PANE'];
+  const head = ['SEAT', 'ID', 'ROLE', 'CLI', 'MODEL', 'EFFORT', 'STATUS', 'STATE', 'SOURCE', 'LAST ACTIVE', 'PANE'];
   const body = rows.map((row) => [
     plainLine(row.name),
     plainLine(row.id ?? '-'),
@@ -135,6 +189,10 @@ export function renderSeatsTable(rows: SeatRegistryRow[], indent = ''): string {
     plainLine(row.model),
     plainLine(row.effort ?? '-'),
     plainLine(row.status),
+    // The seat-state reading: the word, and the flag when it is blind — unknown past the
+    // threshold, which counts as not working.
+    plainLine(row.blind ? `${row.state} (blind)` : row.state),
+    plainLine(row.state_source),
     plainLine(row.last_active_display),
     plainLine(row.pane ?? '-'),
   ]);
@@ -210,7 +268,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       return 2;
     }
     const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
-    const rows = seatRegistryRows(team, state, live, comparison, now, all);
+    const rows = seatRegistryRows(team, state, live, comparison, now, all, liveHold(whole, now) !== null);
 
     if (json) {
       const doc: SeatsJson = {

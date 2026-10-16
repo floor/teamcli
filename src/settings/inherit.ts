@@ -149,7 +149,7 @@ export function numberDeclarationsOf(declared: Partial<Record<SettingLevel, numb
 }
 
 /**
- * The two thresholds the seat-state reading runs by (FLO-995): how fresh a TeamCLI trace must
+ * The two thresholds the seat-state reading runs by: how fresh a TeamCLI trace must
  * be for the seat to read as working, and how long a seat may read unknown before it counts as
  * not working — the reading `status` and `check` flag `blind`. A longer window tolerates more,
  * so the permissive side is 'higher'; the project may open either, and every level inside may

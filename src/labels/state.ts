@@ -1,4 +1,4 @@
-// The state half of a seat's own reading (FLO-995), beside observe.ts's label half: what the
+// The state half of a seat's own reading, beside observe.ts's label half: what the
 // seat is doing, best source first —
 //
 //   1. the CLI's own signal: the pane's screen, read against the seat's CLI — working, or idle

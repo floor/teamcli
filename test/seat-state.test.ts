@@ -1,10 +1,11 @@
-// FLO-995 part 2: TeamCLI's own seat state (src/labels/state.ts). The reading is best source
+// TeamCLI's own seat state (src/labels/state.ts). The reading is best source
 // first — the CLI's own screen, herdr's status, TeamCLI's traces within a window, otherwise
 // unknown — with the certainties (held, unreachable, done) answered before any screen is read.
 // `unknown` past the blind threshold counts as not working. The thresholds are settings
 // (src/settings/inherit.ts). Every screen text below is synthetic.
 import { describe, expect, test } from 'bun:test';
 import { observedSeatState, sayThreshold, seatState } from '../src/labels/state.ts';
+import { renderSeatsTable, type SeatRegistryRow } from '../src/commands/seats.ts';
 import { DEFAULT_STATE_THRESHOLDS, resolveNumberSetting, stateThresholds, STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import { CLAUDE_IDLE } from './helpers.ts';
 
@@ -160,5 +161,38 @@ describe('the words a report says', () => {
     expect(sayThreshold(45)).toBe('45s');
     expect(sayThreshold(1800)).toBe('30m');
     expect(sayThreshold(7200)).toBe('2h');
+  });
+});
+
+describe('the table shows the state and its source', () => {
+  const row = (over: Partial<SeatRegistryRow>): SeatRegistryRow => ({
+    name: 'builder-1',
+    id: null,
+    role: 'builder',
+    cli: 'claude-code',
+    model: 'Claude Opus',
+    effort: null,
+    status: 'ready',
+    state: 'idle',
+    state_source: 'cli',
+    blind: false,
+    last_active: null,
+    last_active_display: '-',
+    pane: 'w1:p1',
+    launch_line: null,
+    ...over,
+  });
+
+  test('a blind seat is flagged where its word stands', () => {
+    const rendered = renderSeatsTable([
+      row({ name: 'builder-1', state: 'working', state_source: 'cli' }),
+      row({ name: 'builder-2', state: 'unknown', state_source: 'none', blind: true }),
+    ]);
+    const lines = rendered.trimEnd().split('\n');
+    expect(lines[0]).toContain('STATE');
+    expect(lines[0]).toContain('SOURCE');
+    expect(lines[1]).toContain('working');
+    expect(lines[2]).toContain('unknown (blind)');
+    expect(lines[2]).toContain('none');
   });
 });
