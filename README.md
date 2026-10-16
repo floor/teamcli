@@ -118,7 +118,8 @@ budgets:                      # the owner's: reserve or floor per account, marks
       sources: [status_line]  # the figure comes off Codex's status line
 ```
 
-- `session` names the herdr session and defaults to `project`; `--session` overrides it.
+- `session` names the herdr session: the key, or `<entity>-<project>` when the file names an entity
+  (the project name alone when it names none); `--session` overrides it.
 - `coordinator` and `operator` name seats: the coordinator dispatches work, the operator receives
   the watch's reports and nudges.
 - `identity.signature` is the rule `check` enforces: a template, where it must stand, and which

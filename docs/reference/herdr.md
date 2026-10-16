@@ -37,9 +37,9 @@ and one server answers it. It runs headless:
 the connection's own refusal (`Error: Os { code: 61, kind: ConnectionRefused, … }`), which is what
 `team doctor` reports as herdr not answering.
 
-The team file names the session (`session:`, defaulting to the project's name), and it is never
-herdr's own `default` session; that one is the only session a call of `team`'s aims at with no
-flag. The session's own calls name it in their arguments instead: `server`, `list`, `stop` and
+The team file names the session (`session:`, defaulting to `<entity>-<project>` when the file names
+an entity and to the project's name when it does not), and it is never herdr's own `default`
+session; that one is the only session a call of `team`'s aims at with no flag. The session's own calls name it in their arguments instead: `server`, `list`, `stop` and
 `delete`. `team` starts a server only when the session is absent — a second server for one that is
 already running has been seen to drop it (`src/herdr.ts`) — and `add` refuses a session that is
 stopped, naming the clear: `` clear it with `herdr session delete <name>` ``. `up` clears a stopped
