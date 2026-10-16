@@ -212,3 +212,13 @@ tempo: urgent
   neither are the quota marks or the check switches.
 - `relaxed` and `urgent` take effect when the file is approved. A file that omits the key,
   and one that sets `normal`, stay the file that was approved.
+
+## watch.queue_dir
+
+Optional directory containing one Markdown queue per seat, named `<seat>.md`. Set it to
+the team's notes/queue directory. A relative path starts at the project root; absolute
+paths and `~/` paths are also accepted. Omitting it disables queue reads.
+
+`team status` shows each queue's depth; `team watch` reports idle workers with empty queues
+to the orchestrator after `watch.team_idle`. See [queue reports](commands/watch.md#queue-reports)
+for the task format, unknown readings and delivery behavior.

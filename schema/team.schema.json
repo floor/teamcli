@@ -413,6 +413,11 @@
           "minLength": 1,
           "description": "text sent to each idle worker after idle_first; the report line when omitted"
         },
+        "queue_dir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "directory containing <seat>.md queues; relative to the project root, absolute, or ~/…"
+        },
         "quota_marks": {
           "type": "array",
           "items": {

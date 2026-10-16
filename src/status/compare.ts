@@ -216,7 +216,9 @@ export function compare(
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
       const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : '';
-      const stateText = `${agent.status}${mark}${seat.parked ? ', parked' : ''}`;
+      const limited = screen.kind === 'rate limit' && agent.status !== 'working';
+      const stateText = `${limited ? 'rate limit' : agent.status}${mark}${seat.parked ? ', parked' : ''}`;
+      if (limited) notes.push(`${seat.name}: quota or limit reached${screen.reset ? `, resets at ${screen.reset}` : '; reset time unknown'}`);
       rows.push({
         name: seat.name,
         ...idField,
@@ -403,10 +405,12 @@ export function compare(
       const quiet = agent.status === 'idle' || agent.status === 'done';
       const tempScreen = readScreen(likeCli, live.screens[agent.pane]);
       const unread = quiet && tempScreen.kind === 'unknown';
+      const limited = tempScreen.kind === 'rate limit' && agent.status !== 'working';
+      if (limited) notes.push(`${name}: quota or limit reached${tempScreen.reset ? `, resets at ${tempScreen.reset}` : '; reset time unknown'}`);
       rows.push({
         name,
         ...idField,
-        state: `${agent.status}${unread ? ' (screen not recognised)' : ''}, temporary`,
+        state: `${limited ? 'rate limit' : agent.status}${unread ? ' (screen not recognised)' : ''}, temporary`,
         model: tempModel,
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),

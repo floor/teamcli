@@ -24,6 +24,7 @@ import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status
 import type { Comparison, Difference, Live } from '../status/compare.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
+import { readQueueDepths, type QueueDepths } from '../queues.ts';
 
 // What `status` reads from outside the file and the state, so tests can stand in for it.
 export type StatusSources = {
@@ -120,6 +121,7 @@ export interface StatusJson {
     pane: string;
     launch_line?: string | null;
     start_cwd?: string;
+    queue_depth?: number | null;
   }>;
   notes: string[];
   differences: Array<{
@@ -197,6 +199,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const now = sources.now();
   const budgets = budgetTable(budgetsInForceOf(standing, team), recall(whole.budgets), now.getTime());
   const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
+  const queues = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
   const all = args.flags.has('all');
   const registryRows = all ? seatRegistryRows(team, state, live, comparison, now, true) : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
@@ -240,6 +243,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
           pane: row.pane,
           ...(extra ? { launch_line: extra.launch_line } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
+          ...(queues ? { queue_depth: queues[row.name] ?? null } : {}),
         };
       }),
       notes: comparison.notes,
@@ -251,7 +255,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     };
     io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
   } else {
-    out.stdout(render(team, session, comparison, budgets, registryRows));
+    out.stdout(render(team, session, comparison, budgets, registryRows, queues));
   }
   // exit: status.agrees
   // exit: status.difference
@@ -334,6 +338,7 @@ function render(
   comparison: Comparison,
   budgets: BudgetRow[],
   registryRows?: SeatRegistryRow[],
+  queues?: QueueDepths | null,
 ): string {
   const lines = [`team ${plainLine(team.project)}, session "${plainLine(session)}"`];
   if (registryRows) {
@@ -354,6 +359,10 @@ function render(
     for (const row of rows) {
       lines.push(`  ${row.name.padEnd(widths[0] as number)}  ${row.state.padEnd(widths[1] as number)}  ${row.model.padEnd(widths[2] as number)}  ${row.pane}`.trimEnd());
     }
+  }
+  if (queues) {
+    lines.push('queues:');
+    for (const row of comparison.rows) lines.push(`  ${plainLine(row.name)}: ${queues[row.name] ?? 'unknown'}`);
   }
   if (budgets.length) {
     lines.push('budgets:');
