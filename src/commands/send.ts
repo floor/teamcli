@@ -154,10 +154,6 @@ type Aim = {
 };
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  // Send to outcome is measured from here: this command's own handling, the same span the
-  // daemon measures from its handler. The host's clock, not the wall clock: a fixed clock in
-  // a test or the docs runner then reads a fixed millisecond count.
-  const startedAt = host.now().getTime();
   const args = readArgs(argv, ['file', 'timeout'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
   const report: Report = { json: args.flags.has('json'), seat: seatName ?? null, sent: null };
@@ -169,6 +165,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return 1;
   }
   if (args.flags.has('list')) return listSeats(io, host, report);
+  // Send to outcome is measured from here, past the refusals that read nothing (a refused run
+  // reads no clock): this command's own handling, the same span the daemon measures from its
+  // handler. The host's clock, not the wall clock: a fixed clock in a test or the docs runner
+  // then reads a fixed millisecond count.
+  const startedAt = host.now().getTime();
 
   const words = args.rest.slice(1);
   const file = args.values.file;
