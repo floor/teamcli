@@ -3,12 +3,12 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { approvalDifferencesOf, budgetsInForceOf, notInForce } from '../approve/approval.ts';
+import { budgetsInForceOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
-import { grantGate, logGranted } from '../grant.ts';
+import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -32,6 +32,7 @@ import {
   sessionStop,
   typeText,
   pressEnter,
+  sendKey,
   sessionRunning,
   sessionState,
   startServer,
@@ -137,6 +138,8 @@ export type Launch = {
   paneText(session: string, pane: string): string | null;
   typeText?(session: string, pane: string, text: string): boolean;
   pressEnter?(session: string, pane: string): boolean;
+  /** The profile's one clearing key. Absent: a failed rules read-back leaves the line. */
+  sendKey?(session: string, pane: string, key: string): boolean;
   agentStatus?(session: string, pane: string): string | null;
   /** Foreground argv0 names, or null when the pane can't be read. */
   foreground(session: string, pane: string): string[] | null;
@@ -216,6 +219,7 @@ const realLaunch: Launch = {
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
   pressEnter: (session, pane) => pressEnter(pane, aim(session)),
+  sendKey: (session, pane, key) => sendKey(pane, key, aim(session)),
   agentStatus: (session, pane) => agentStatus(pane, aim(session)),
   foreground: (session, pane) => paneForeground(pane, aim(session)),
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
@@ -399,8 +403,8 @@ function seatPlan(
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
     stopped: seat.stopped,
-    // An option seat's rules keep coming from the live file, as main's launch line does; a
-    // message seat's file and line are the approved copy's, whatever the live file says now.
+    // An option seat's launch line and a message seat's rules file both come from the live
+    // file. A stored copy is not the text a seat is told to obey.
     rules: rulesOf(team, seat, root),
     ...seatDeliveryOf(standing, team, seat, root, home, liveRules),
   };
@@ -786,14 +790,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     upFp !== undefined &&
     ownerAuthorized(io.env, upFp);
 
-  // The owner, or the seat the live file names for `up`. A missing approval record does not refuse.
+  const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
+  // The owner, the seat the live file names for `up`, or an agent with an active entity create-grant.
   const named =
     mayLaunchSeats(caller) ||
     ownerToken ||
     grantedSeat !== null ||
     delegated !== null ||
     grantAdmitsUp(team, io, dir) ||
-    delegateNamedFor(team, 'up', io);
+    delegateNamedFor(team, 'up', io) ||
+    createGranted;
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
@@ -804,15 +810,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     if (!dev) return denyUp(out);
     refusals.push(`only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
   }
+  // The live file is the record. A verified copy that no longer matches is not a refusal.
+  // A legacy or refused record still is: its text is the case, and dev mode warns instead.
   if (standing.kind === 'none') {
     if (dev) refusals.push(notInForce(standing));
   } else if (standing.kind !== 'verified') refusals.push(notInForce(standing));
-  else if (standing.kind === 'verified') {
-    const differences = approvalDifferencesOf(standing, team);
-    if (differences.length) {
-      refusals.push(`the file is not the approved one (${differences.join('; ')}): run \`team approve\``);
-    }
-  }
   // The budget readings the gate refuses on are the approved ones: an unapproved lower reserve
   // unblocks nothing, not even the seat a dry run would plan.
   const budgets = budgetsInForceOf(standing, team);
@@ -841,7 +843,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // decision. Written only when this call is one that may run `up` — the refusals above
       // accumulate rather than return, so a caller the caller gate refused must leave every
       // file as it was — and not on a dry run, which decides nothing.
-      if (!dry && (mayLaunchSeats(caller) || delegated !== null || grantedSeat !== null || ownerToken)) {
+      if (!dry && (mayLaunchSeats(caller) || delegated !== null || grantedSeat !== null || createGranted || ownerToken)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
       refusals.push(problem);
@@ -961,7 +963,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // A passed delegation is not the owner, pane or seat. Every other caller keeps today's
       // reading: anyone but a seat.
       delegated === null && caller.kind !== 'seat',
-      dev,
+      true,
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
@@ -1130,7 +1132,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       for (const refusal of [...new Set(refusals)]) out.stderr(`team up: ${plainText(refusal)}\n`);
     }
     // exit: up.never-approved
-    // exit: up.differs
     // exit: up.doctor
     // exit: up.machine
     // exit: up.herdr
@@ -1259,7 +1260,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       typeLine: () => false,
       deliverRules: async (session, pane, cli, file, seconds) => {
         // The rules go to the file first; nothing is typed until it holds them. The writer
-        // builds the path itself, from the approval in force and the seat's name.
+        // builds the path itself, from the live project and the seat's name — the same folder
+        // the typed line names.
         const written = writeRulesFile(
           standing,
           file.seat,
@@ -1268,7 +1270,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           file.text,
           rulesFileHash(file.text),
           undefined,
-          dev && standing.kind !== 'verified' ? team.project : undefined,
+          team.project,
         );
         if (!written.ok) return fileRefusalOf(written);
         // The plan already refused a path that can't be typed; this is the same check again, so a
@@ -1284,6 +1286,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           status: () => launch.agentStatus?.(session, pane) ?? null,
           type: (value) => launch.typeText?.(session, pane, value) ?? false,
           enter: () => launch.pressEnter?.(session, pane) ?? false,
+          ...(launch.sendKey
+            ? { key: (name: string) => launch.sendKey!(session, pane, name) }
+            : {}),
           // The last look before Enter: the file, read without following a link, must still hold
           // the text whose hash the line names.
           file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),

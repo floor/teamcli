@@ -26,7 +26,7 @@ export type Row = { name: string; id?: string; state: string; model: string; pan
 
 /** The repair of the one precondition `status` knows: the file is not the approved one. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
-export const APPROVAL_REPAIR = 'the owner runs team approve';
+export const APPROVAL_REPAIR = 'the live file is what the commands read';
 
 /**
  * One disagreement, with the two facts about its repair that the renderer needs and must not
@@ -428,7 +428,7 @@ export function compare(
     if (claimed.has(agent.pane) || labels.get(agent.workspace) === WATCH_LABEL) continue;
     differences.push({
       what: `${agent.name ?? `an unnamed ${agent.agent ?? 'agent'}`} (${agent.pane}) is running and is not in the file`,
-      repair: 'add the seat to the file and run team approve, or close it',
+      repair: 'add the seat to the file, or close it',
     });
   }
 
@@ -596,7 +596,7 @@ function modelMismatchRepair(team: TeamFile, name: string): string {
   const command = isLeadSeat(team, name)
     ? relaunchRepair(team, name, 'plain')
     : `team remove ${name} --keep, then team add ${name}`;
-  return `restart the seat on the file's model (${command}), or correct the file and run team approve`;
+  return `restart the seat on the file's model (${command}), or correct the file`;
 }
 
 /** A pane that holds only a shell, on a record that never stored the process team launched.
