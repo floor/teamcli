@@ -210,6 +210,7 @@ export function compare(
       // watch's unsent check covers both (`pass.ts`). The report reads them the same way.
       const quiet = agent.status === 'idle' || agent.status === 'done';
       const isUnsent = quiet && screen.kind === 'unsent';
+      const isPermission = screen.kind === 'permission' || screen.kind === 'trust';
       // A quiet seat on a screen no profile reads: herdr's word alone would show a bare done (the
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
@@ -256,6 +257,13 @@ export function compare(
             owner: true,
           });
         }
+      }
+      if (isPermission) {
+        differences.push({
+          what: `${seat.name} waits at a permission prompt: its owner's to answer`,
+          repair: 'the owner answers it in the pane',
+          owner: true,
+        });
       }
       if (recorded?.rules === 'undelivered') {
         differences.push({
@@ -393,7 +401,8 @@ export function compare(
       // nothing, and the suffix is true then too.
       const likeCli = likeSeat?.cli ?? '';
       const quiet = agent.status === 'idle' || agent.status === 'done';
-      const unread = quiet && readScreen(likeCli, live.screens[agent.pane]).kind === 'unknown';
+      const tempScreen = readScreen(likeCli, live.screens[agent.pane]);
+      const unread = quiet && tempScreen.kind === 'unknown';
       rows.push({
         name,
         ...idField,
@@ -402,6 +411,13 @@ export function compare(
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
       });
+      if (tempScreen.kind === 'permission' || tempScreen.kind === 'trust') {
+        differences.push({
+          what: `${name} waits at a permission prompt: its owner's to answer`,
+          repair: 'the owner answers it in the pane',
+          owner: true,
+        });
+      }
       notes.push(`${name} is temporary, until ${recorded.temporary.until}`);
     } else {
       differences.push({ what: `${name}: a temporary seat is recorded and is not running`, repair: `team remove ${name}` });

@@ -771,6 +771,34 @@ describe('team status', () => {
     expect(readable.out).toMatch(/codex-acme-tmp-1\s+done, temporary/);
   });
 
+  test('a seat waiting at a permission or trust prompt is a difference for the owner', async () => {
+    const codexPane = built().agents.find((one) => one.name === 'codex-acme')?.pane ?? '';
+    const permScreen = codexScreen('permission');
+    live = {
+      ...built(),
+      screens: { ...built().screens, [codexPane]: permScreen },
+    };
+    const permRes = await status();
+    expect(permRes.code).toBe(1);
+    expect(permRes.out).toContain(
+      "difference: codex-acme waits at a permission prompt: its owner's to answer\n" +
+        '  repair: the owner answers it in the pane\n',
+    );
+    expect(permRes.out).toContain('1 difference(s), 1 for the owner\n');
+
+    const trustScreen = codexScreen('trust-folder');
+    live = {
+      ...built(),
+      screens: { ...built().screens, [codexPane]: trustScreen },
+    };
+    const trustRes = await status();
+    expect(trustRes.code).toBe(1);
+    expect(trustRes.out).toContain(
+      "difference: codex-acme waits at a permission prompt: its owner's to answer\n" +
+        '  repair: the owner answers it in the pane\n',
+    );
+  });
+
   test('D: summary line: with and without an owner repair', async () => {
     // 1. Without an owner repair: only a missing seat (repair: team add <seat>)
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };

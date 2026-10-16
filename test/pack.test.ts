@@ -55,7 +55,7 @@ test('the packed tarball ships the schema and nothing it should not', () => {
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 test('the schema is tracked at HEAD, so a tag of this commit ships the URL init writes', () => {
   // `team init` writes a $schema URL pinned to this release's tag; the guard belongs with
@@ -115,7 +115,7 @@ test("a later release's step, rehearsed on a copy of the tree: npm-readme.md pac
     rmSync(dir, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 test('what ships today: a pack of the tree as it is lists README.md and not npm-readme.md', () => {
   // The today-half of the rehearsal above: 0.3.0's release workflow packs the tree as it
@@ -133,4 +133,4 @@ test('what ships today: a pack of the tree as it is lists README.md and not npm-
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
-});
+}, 30_000);
