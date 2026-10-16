@@ -18,7 +18,7 @@ const MACHINE_SRC = '../../src/watch/machine.ts';
 const POINTER =
   'Rationale, behaviour, the budgets, refusals and known limits: [docs/internal/status.md](../internal/status.md).';
 const MOVED_SENTENCE =
-  'The `budgets:` table the file\'s accounts would add, the `--json` document, the swap note and the readings that follow the repair stand on the internal page:';
+  'The `budgets:` table, the `--json` document, the swap note and the readings that follow stand on the internal page:';
 const INTERNAL_MOVED =
   'What moved off [the `team status` page](../commands/status.md): what the run reads and writes, who may read the team and what every other caller gets, the rows and what each state says, the budgets table, the differences and their repairs, the JSON behind `--json`, the refusals in their own words, and the known limits.';
 const INTERNAL_STAYED = 'The synopsis, the flags, the caller table and the exit codes stay on the page.';
@@ -40,8 +40,15 @@ const HEADINGS = [
 // The row paragraphs stayed on the page, gathered under a heading of their own between the
 // caller table and the output table.
 const ROWS_HEADING = '## What a row says';
+// The cut's second pass gathered the row paragraphs into a two-column table: the reading each
+// row names, then what it means.
+const ROW_LABELS = [
+  '| the ordinary row |',
+  '| `missing`, or `restored, not launched by team` |',
+  '| the launcher difference, and the repairs |',
+];
 const ROW_PARAGRAPH_ONE =
-  'Otherwise a pane with no CLI left reads `missing` (the CLI ended, or a restore left the shell in front) and a pane fronted by any other program reads `restored, not launched by team`; both carry a difference, and the second\'s model is `-`, never the file\'s.';
+  'Otherwise, a pane with no CLI left reads `missing` (the CLI ended, or a restore left the shell in front) and a pane fronted by any other program reads `restored, not launched by team`; both carry a difference, and the second\'s model is `-`, never the file\'s.';
 const ROW_PARAGRAPH_TWO = 'Nothing either report says starts a seat.';
 const BEFORE_HEADING = '## Who may run it';
 const AFTER_HEADING = '## Output and exit codes';
@@ -109,6 +116,9 @@ describe('the one-glance cut of the status page', () => {
     expect(page.includes(ROWS_HEADING), 'the page lost its row heading').toBe(true);
     expect(page.includes(ROW_PARAGRAPH_ONE), 'the page lost the missing/restored row paragraph').toBe(true);
     expect(page.includes(ROW_PARAGRAPH_TWO), 'the page lost the nothing-starts-a-seat sentence').toBe(true);
+    for (const label of ROW_LABELS) {
+      expect(page.includes(label), `the row table lost its "${label}" reading`).toBe(true);
+    }
     expect(
       page.indexOf(BEFORE_HEADING) < page.indexOf(ROWS_HEADING) && page.indexOf(ROWS_HEADING) < page.indexOf(AFTER_HEADING),
       'the row heading no longer stands between the caller table and the output table',
