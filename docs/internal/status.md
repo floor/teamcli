@@ -29,8 +29,8 @@ The caller decides, not the flags. Three callers get the reading:
   caller: a script meets the fixed sentence below;
 - **a seat of the team** — placed in the file's session, on the pane the state records for it.
   A seat the state records no pane for, or records on another pane, fails closed;
-- **a pane outside the team that the approved file names** in its `delegates` entries. A pane
-  only the live file names does not pass.
+- **a pane outside the team that the live file names** in its `delegates` entries. A pane
+  newly named by the live file also passes.
 
 Anyone else gets one fixed sentence and nothing else, whatever failed underneath — no file, an
 invalid one, a file that was never approved, a refused approval:
@@ -173,7 +173,7 @@ here.
 | `the protected checkout "." is on "x", not on "main"` | `the owner switches it back: git -C . switch main` |
 | `the file was never approved on this machine` | `the live file is what the commands read` |
 | `approved before records were signed`, or the case a refused record names | `the live file is what the commands read` |
-| `the file differs from the approved one: <line>` | `the live file is what the commands read` |
+| `the file has changed since the last approval: <line>` | `the live file is what the commands read` |
 
 The one precondition `status` knows and orders is the real one: the file is not the approved one.
 That difference is printed first, and a repair that names a command that refuses on an unapproved
