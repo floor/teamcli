@@ -727,7 +727,7 @@ Hidden: no
 
 Usage:
 
-    team register <seat> [--session <name>] [--dry-run]
+    team register <seat> [--session <name>] [--pane <id>] [--dry-run]
 
 ### Flags
 
@@ -735,6 +735,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
+| `--pane` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

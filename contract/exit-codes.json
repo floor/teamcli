@@ -2006,6 +2006,13 @@
     {
       "code": 1,
       "command": "register",
+      "id": "register.no-pane",
+      "meaning": "no pane of that id runs in the session",
+      "trigger": "team register worker --pane w9:p9"
+    },
+    {
+      "code": 1,
+      "command": "register",
       "id": "register.no-profile",
       "meaning": "the seat has no launch profile",
       "trigger": "team register worker"
@@ -2030,6 +2037,13 @@
       "id": "register.not-owner",
       "meaning": "the caller is not the owner, a delegate this file names for up, or the seat its grant names",
       "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.pane-taken",
+      "meaning": "another seat of the session holds that pane",
+      "trigger": "team register worker --pane w2:p2"
     },
     {
       "code": 1,
