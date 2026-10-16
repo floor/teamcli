@@ -167,7 +167,7 @@ describe('resolveTarget by seat@team', () => {
     seatOf(w, 'alpha', 'alpha', 'lead', 'coordinator', 'pane-alpha-lead');
 
     expect(resolveTarget(w.home, 'lead@ghost', { cwd: w.root })).toEqual({ error: 'lead@ghost: no team registry record matches "ghost" (by id, project or session)' });
-    expect(resolveTarget(w.home, 'ghost@alpha', { cwd: w.root })).toEqual({ error: 'ghost@alpha: no registered agent holds the seat "ghost" in that team' });
+    expect(resolveTarget(w.home, 'ghost@alpha', { cwd: w.root })).toEqual({ error: 'ghost@alpha: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches' });
     expect(resolveTarget(w.home, 'a@b@c', { cwd: w.root })).toEqual({ error: 'a@b@c: a spec is <seat>@<team>, or an agent id' });
     expect(resolveTarget(w.home, 'lead@', { cwd: w.root })).toEqual({ error: 'lead@: a spec is <seat>@<team>, or an agent id' });
     expect(resolveTarget(w.home, '@alpha', { cwd: w.root })).toEqual({ error: '@alpha: a spec is <seat>@<team>, or an agent id' });
@@ -191,7 +191,7 @@ describe('resolveTarget by plain seat', () => {
     expect(resolveTarget(w.home, 'lead', { cwd: w.root })).toEqual({ error: 'lead: this team has no registry record yet' });
 
     seatOf(w, 'alpha', 'alpha', 'lead', 'coordinator', 'pane-alpha-lead');
-    expect(resolveTarget(w.home, 'ghost', { cwd: w.root })).toEqual({ error: 'ghost: no registered agent holds the seat "ghost" in that team' });
+    expect(resolveTarget(w.home, 'ghost', { cwd: w.root })).toEqual({ error: 'ghost: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches' });
   });
 
   test('a folder that is no team at all refuses with the folder it could not read', () => {
