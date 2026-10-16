@@ -184,7 +184,7 @@ function registerTarget(root: string, seat: string, role: string, pane = 'w1:p1'
     session: 'acme',
     root,
     lobby: lobbyDir(home),
-    roster: [{ agent, seat, role }],
+    roster: [{ agent, seat, role, leads: false }],
     lifecycle: 'running',
     by: 'test',
   });

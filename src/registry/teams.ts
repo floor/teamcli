@@ -18,8 +18,11 @@ export type TeamLifecycle = 'defined' | 'running' | 'stopped' | 'archived';
 
 export const TEAM_LIFECYCLES: readonly TeamLifecycle[] = ['defined', 'running', 'stopped', 'archived'];
 
-/** One roster line: the agent's immutable ID, and the seat and role it holds in this team. */
-export type RosterEntry = { agent: string; seat: string; role: string };
+/** One roster line: the agent's immutable ID, the seat and role it holds in this team, and
+ *  whether that seat is the one the team file marks as its lead — the capability `leads: true`
+ *  grants, readable without knowing any role name. A line written before the field existed reads
+ *  as not leading. */
+export type RosterEntry = { agent: string; seat: string; role: string; leads: boolean };
 
 export type TeamProvenance = { registered_by: string; registered_at: string; updated_at: string };
 
@@ -316,7 +319,10 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
     for (const key of ['agent', 'seat', 'role']) {
       if (typeof entry[key] !== 'string') bad(`roster line ${i + 1}: "${key}" must be text`);
     }
-    return { agent: entry.agent as string, seat: entry.seat as string, role: entry.role as string };
+    // A line written before the lead capability existed reads as not leading: absence is not a claim.
+    const leads = entry.leads ?? false;
+    if (typeof leads !== 'boolean') bad(`roster line ${i + 1}: "leads" must be true or false`);
+    return { agent: entry.agent as string, seat: entry.seat as string, role: entry.role as string, leads: leads as boolean };
   });
   const prov = raw.provenance;
   if (!isMap(prov)) return bad('"provenance" must be a map');
@@ -370,7 +376,7 @@ function emit(teams: Record<string, TeamRecord>): string {
     if (team.roster.length) {
       lines.push('    roster:');
       for (const entry of team.roster) {
-        lines.push(`      - { agent: ${scalar(entry.agent)}, seat: ${scalar(entry.seat)}, role: ${scalar(entry.role)} }`);
+        lines.push(`      - { agent: ${scalar(entry.agent)}, seat: ${scalar(entry.seat)}, role: ${scalar(entry.role)}, leads: ${entry.leads ? 'true' : 'false'} }`);
       }
     } else {
       lines.push('    roster: []');

@@ -89,7 +89,7 @@ function agent(home: string, init: { name: string; role: string; cli: string; te
   });
 }
 
-function team(home: string, id: string, project: string, session: string, root: string, roster: { agent: string; seat: string; role: string }[]): void {
+function team(home: string, id: string, project: string, session: string, root: string, roster: { agent: string; seat: string; role: string; leads: boolean }[]): void {
   upsertTeam(home, id, { project, entity: project, session, root, lobby: join(home, 'lobby'), roster, lifecycle: 'running' });
 }
 
@@ -112,7 +112,7 @@ function admitRuleFor(home: string, target: Agent): string {
 function seatOf(w: World, project: string, session: string, seat: string, role: string, pane: string | null, cli = 'claude-code'): Agent {
   const id = teamIdOf(w.root);
   const made = agent(w.home, { name: seat, role, cli, team: id, seat, session, pane });
-  team(w.home, id, project, session, w.root, [{ agent: made.id, seat, role }]);
+  team(w.home, id, project, session, w.root, [{ agent: made.id, seat, role, leads: false }]);
   return made;
 }
 
@@ -307,7 +307,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
     const beta = world('beta', 'beta', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')], alpha);
     const betaAgent = agent(beta.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(beta.root), seat: 'lead', session: 'beta', pane: 'pane-beta-lead' });
-    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: betaAgent.id, seat: 'lead', role: 'coordinator' }]);
+    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: betaAgent.id, seat: 'lead', role: 'coordinator', leads: true }]);
     const betaPane = scripted(['idle', 'working']);
     const alphaPane = scripted(['idle']);
     const host = sendHost(beta, 'beta', { lead: { pane: 'pane-beta-lead', paneStatus: betaPane } });
@@ -334,7 +334,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
     const beta = world('beta', 'beta', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')], alpha);
     const betaAgent = agent(beta.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(beta.root), seat: 'lead', session: 'beta', pane: 'pane-beta-lead' });
-    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: betaAgent.id, seat: 'lead', role: 'coordinator' }]);
+    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: betaAgent.id, seat: 'lead', role: 'coordinator', leads: true }]);
     const betaPane = scripted(['idle', 'working']);
     const host = sendHost(beta, 'beta', { lead: { pane: 'pane-beta-lead', paneStatus: betaPane } });
     const io = testIo(alpha.root, OWNER);
@@ -372,7 +372,7 @@ describe('the whole command on a registry-resolved spec', () => {
     // The team record and the target exist; the caller's own seat has no record of its own — the
     // live file declares it, and that declared seat is the identity the own-team rule judges.
     const target = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
-    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: target.id, seat: 'builder-1', role: 'builder' }]);
+    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: target.id, seat: 'builder-1', role: 'builder', leads: false }]);
     const builderPane = scripted(['idle', 'working']);
     const host = sendHost(alpha, 'alpha', { lead: { pane: 'pane-alpha-lead', paneStatus: scripted(['idle']) }, 'builder-1': { pane: 'pane-builder', paneStatus: builderPane } });
     // The state records the caller on the orchestrator's pane — the placement the declared
@@ -396,7 +396,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
     const beta = world('beta', 'beta', 'chief', [seatBlock('coordinator', 'chief', 'claude-code', 'anthropic')], alpha);
     const chief = agent(beta.home, { name: 'chief', role: 'coordinator', cli: 'claude-code', team: teamIdOf(beta.root), seat: 'chief', session: 'beta', pane: 'pane-beta-chief' });
-    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: chief.id, seat: 'chief', role: 'coordinator' }]);
+    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: chief.id, seat: 'chief', role: 'coordinator', leads: true }]);
     const chiefPane = scripted(['idle', 'working']);
     const host = sendHost(beta, 'beta', { chief: { pane: 'pane-beta-chief', paneStatus: chiefPane } });
     // A record-less caller is judged as the file's seat for its own team's rules only: another
