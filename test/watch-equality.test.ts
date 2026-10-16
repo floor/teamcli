@@ -4,9 +4,7 @@
 // `team.coordinator` to `team.orchestrator`, the same value under the section's canonical name,
 // the unrecognised-screen fail-safe's quiet-unknown line, added to both sides below,
 // the model-drift line's restart, which the check now names,
-// the nudge, which now types into the idle seat rather than the operator,
-// and the approval check, which no longer reports a difference against the record — the live
-// file is the record, so only a file with no record at all is said —
+// and the nudge, which now types into the idle seat rather than the operator —
 // and used by this file alone. Every scenario runs both
 // implementations over the same fixtures, step for step, and demands equal PassResults and equal
 // pending state — for a team file without `watch.checks`, which is every fixture here.
@@ -180,7 +178,9 @@ function oldPass(
     memory.teamIdleTold = false;
   }
 
-  if (approval === null) once('approval', 'the file was never approved on this machine', 'owner');
+  // A file with no approval record (`null`) is not a report of its own, here as in the core:
+  // the never-approved line was a leftover, and only a difference is the owner's to answer.
+  if (approval?.length) once('approval', `the file has changed since the last approval: ${approval.join('; ')}`, 'owner');
 
   const limits = team.machine;
   if (machine.loadPerCore !== null && machine.loadPerCore > limits.loadMax) {
@@ -518,7 +518,7 @@ describe('the modular core against the pass it replaced', () => {
     ]);
   });
 
-  test('a record that differs says nothing, no record is said once, and a clean one is silent', () => {
+  test('a file that differs from the approved one, never approved, and clean', () => {
     both('approval', team(), [
       { live: live(), at: 0, approval: ['`rules` changed'] },
       { live: live(), at: MIN, approval: ['`rules` changed'] },

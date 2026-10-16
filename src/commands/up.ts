@@ -11,7 +11,7 @@ import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
-import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
+import { insideTrust, isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { declaredModel } from '../file/model.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -50,7 +50,7 @@ import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
-import { lobbyPretrustLine } from '../launch/pretrust.ts';
+import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -1090,6 +1090,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     }
   };
 
+  // A run an entity create-grant admitted trusts the folders its own seats start in — the project,
+  // for a lead — in each seat CLI's record: no one is at a terminal to answer that CLI's folder
+  // dialog. A folder is written only when the grant's paths cover it and the file's `trust:` lists
+  // it. The owner at a terminal, and every caller the grant does not admit, write nothing here.
+  const stampGrantedTrust = () => {
+    if (!createGranted || mayLaunchSeats(caller)) return;
+    const now = sources.now?.() ?? new Date();
+    const grant = {
+      covers: (folder: string) => entityGrantAdmits(root, io, { home: sources.home, now, cwd: folder }),
+      listed: (folder: string) => insideTrust(folder, team.trust ?? [], root, sources.home),
+    };
+    for (const seat of seats) grantedFolderPretrust(seat, sources.home, { now, grant });
+  };
+
   // Dev mode says the no-approval lines and the caller-placement line once, as a warning,
   // and mounts. Every other refusal stays a refusal. Unset, the list is unchanged.
   const warning = dev ? devWarningLine(refusals, standing, caller) : '';
@@ -1186,6 +1200,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // The trust record is written for that path, before the workspace, and a seat whose
     // record cannot be written is left out of the launch.
     stampLobbyTrust(true);
+    stampGrantedTrust();
     const plan = buildPlan();
 
     // Every launch uses the limits declared in the live file, with or without a stored approval.

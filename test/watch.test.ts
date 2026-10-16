@@ -708,19 +708,16 @@ describe('a pass of the watch', () => {
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: { ...fine, swapUsed: 2.4e9 }, now: 60 * MIN, memory: slow }).reports).toEqual([]);
   });
 
-  test('a difference says nothing; a file with no record is the owner\'s, reported once', () => {
+  test('a file that differs from the approved one is the owner\'s, reported once', () => {
     const memory = newMemory();
-    // The live file is the record: a difference against it is not a report.
-    const drifted = (at: number) =>
-      pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: at, memory, approval: ['`rules` changed'] });
-    expect(drifted(0).reports).toEqual([]);
-    expect(drifted(MIN).reports).toEqual([]);
-    // A file with no record at all is said once, and only once.
-    const none = (at: number) =>
-      pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: at, memory, approval: null });
-    expect(none(2 * MIN).reports).toEqual([{ key: 'approval', text: 'the file was never approved on this machine', to: 'owner' }]);
-    expect(none(3 * MIN).reports).toEqual([]);
-    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 4 * MIN, memory, approval: [] }).reports).toEqual([]);
+    const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory, approval: ['`rules` changed'] });
+    expect(first.reports).toEqual([{ key: 'approval', text: 'the file has changed since the last approval: `rules` changed', to: 'owner' }]);
+    expect(pass({
+      team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: MIN, memory, approval: ['`rules` changed'],
+    }).reports).toEqual([]);
+    // Neither spelling of "no difference is recorded" is a report of its own.
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(), approval: null }).reports).toEqual([]);
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(), approval: [] }).reports).toEqual([]);
   });
 
   test('a figure that can\'t be read is never reported', () => {

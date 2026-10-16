@@ -169,13 +169,14 @@ describe('a pass with checks turned off', () => {
     const reported = (approval: string[] | null) => texts(pass({
       team: off, watch: off.watch, state: emptySession(), live: live(), machine: tight, now: 0, memory: newMemory(), approval,
     }));
-    // The caller passed this file's own list. A difference in `watch.checks` is handed in and
-    // nothing is said of it: the list in force stays off.
+    // The caller passed this file's own list. Naming the checks as a difference does not turn
+    // that list back on: disk stays off, and the difference is still the owner's to answer.
     expect(reported([WATCH_CHECKS_CHANGED])).not.toContain('free disk is 5.0 GB, below 10.0 GB');
-    expect(reported([WATCH_CHECKS_CHANGED])).not.toContain('changed since the last approval');
-    // A file that was never approved turns nothing off.
+    expect(reported([WATCH_CHECKS_CHANGED])).toContain('the file has changed since the last approval: `watch.checks` changed');
+    // A file that was never approved turns nothing off, and is no report of its own — the
+    // difference above is the reading's, not the watch's.
     expect(reported(null)).toContain('free disk is 5.0 GB, below 10.0 GB');
-    expect(reported(null)).toContain('the file was never approved on this machine');
+    expect(reported(null)).not.toContain('the file was never approved on this machine');
     // Approved: the check is off. A difference in another section leaves the list in force off.
     expect(reported(APPROVED)).not.toContain('free disk is 5.0 GB, below 10.0 GB');
     expect(reported(['`rules` changed'])).not.toContain('free disk is 5.0 GB, below 10.0 GB');
@@ -237,7 +238,7 @@ describe('a pass with checks turned off', () => {
     expect(reported).toContain('deepseek-acme-2 is in the file and is not running');
     expect(reported).toContain('claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)');
     expect(reported).toContain("deepseek-acme waits at a permission prompt: its owner's to answer");
-    expect(reported).not.toContain('changed since the last approval');
+    expect(reported).toContain('the file has changed since the last approval: `rules` changed');
   });
 });
 
@@ -321,7 +322,7 @@ describe('team approve and watch.checks', () => {
       team: edited, state: emptySession(), live: quiet, machine: fine, now: minute * 60_000, memory,
       approval: approvalDifferences(edited, root, home), watch: inForce,
     }));
-    expect(at(0)).not.toContain('changed since the last approval');
+    expect(at(0)).toContain('the file has changed since the last approval: `watch.checks` changed');
     expect(at(10)).not.toContain('deepseek-acme has been idle since the watch started');
   });
 
@@ -335,7 +336,7 @@ describe('team approve and watch.checks', () => {
       team: edited, state: emptySession(), live: live(), machine: tight, now: 0, memory: newMemory(),
       approval: approvalDifferences(edited, root, home), watch: inForce,
     }));
-    expect(reported).not.toContain('changed since the last approval');
+    expect(reported).toContain('the file has changed since the last approval: `watch.checks` changed');
     expect(reported).not.toContain('free disk is 5.0 GB, below 10.0 GB');
   });
 
