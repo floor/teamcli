@@ -228,9 +228,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   const abandon = args.flags.has('abandon');
   if (abandon && caller.kind !== 'owner') {
-    io.stderr('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
-    // exit: remove.abandon
-    return 1;
+    // Set to exactly `1`. Dev mode says the owner-only line once, as a warning, and the abandon continues.
+    if (io.env.TEAMCLI_DEV_MODE !== '1') {
+      io.stderr('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
+      // exit: remove.abandon
+      return 1;
+    }
+    io.stderr('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
   }
   if ((name === team.orchestrator || name === team.operator) && caller.kind !== 'owner') {
     io.stderr(`team remove: only the owner removes the orchestrator's or the operator's seat; this call is ${describeCaller(caller)}\n`);
