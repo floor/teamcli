@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
+import { bypassScopes, bypassTail, matchBypass } from '../bypass.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { grantGate, logGranted } from '../grant.ts';
@@ -642,15 +643,19 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
   const branchRun = branching();
 
-  // Dev mode says the caller-placement line once, as a warning, and the stop continues.
-  // Every other refusal stays a refusal. Unset, the list is unchanged. Nothing here writes
-  // an approval, a key, or a grant.
+  // Dev mode and the scoped bypass say the caller-placement line once, as a warning, and the
+  // stop continues. Every other refusal stays a refusal, and the bypass's warning names the
+  // scope that waived it. Unset, the list is unchanged. Nothing here writes an approval, a key,
+  // or a grant. Dev mode is the general form and keeps its own words, so with it set no scoped
+  // entry is read at all.
+  const bypass = dev ? null : matchBypass(bypassScopes(io.env), { project: team.project });
   const placement = `only the owner, the orchestrator or the operator stops the team; this call is ${describeCaller(caller)}`;
   let warning = '';
-  if (dev) {
+  if (dev || bypass !== null) {
+    const tail = bypass === null ? '' : bypassTail(bypass);
     const kept: string[] = [];
     for (const line of refusals) {
-      if (line === placement) warning = line;
+      if (line === placement) warning = `${line}${tail}`;
       else kept.push(line);
     }
     if (warning) refusals.splice(0, refusals.length, ...kept);

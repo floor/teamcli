@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { budgetsInForceOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
+import { bypassScopes, bypassTail, matchBypass } from '../bypass.ts';
 import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
@@ -606,8 +607,8 @@ function denyUp(out: { stderr(text: string): void }): number {
 /** Doctor's never-approved line. The other two non-verified cases share `notInForce`'s text. */
 const NEVER_APPROVED_DOCTOR = 'run `team approve`: this file was never approved on this machine';
 
-/** Pulls the dev-mode warnings out of `refusals` and joins them into the one line. */
-function devWarningLine(refusals: string[], standing: Standing, caller: Caller): string {
+/** Pulls the dev-mode and scoped-bypass warnings out of `refusals` and joins them into the one line. */
+function waivedWarningLine(refusals: string[], standing: Standing, caller: Caller): string {
   const placement = `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
   const mismatches = new Set(
     refusals.map(approvedCopyMismatch).filter((inner): inner is string => inner !== null),
@@ -655,6 +656,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const dry = args.flags.has('dry-run');
   // Set to exactly `1`. Anything else, including unset, leaves every refusal where it is.
   const dev = io.env.TEAMCLI_DEV_MODE === '1';
+  // The scoped form of the same waivers, read once: an entry covers only the act it names.
+  const scopes = bypassScopes(io.env);
   // §RFC0007: a caller the ordinary rule refuses is judged by the delegate gate against the
   // DEFAULT live file of this cwd, read with no flag — before any `--file` or `--session` is
   // honoured. Both are the owner's alone: the gate refuses them for a delegated run, and a
@@ -722,8 +725,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.grant-flag
     return 1;
   }
-  // Dev mode does not return here: the file is mounted, and the same sentence is a warning below.
-  if (!mayLaunchSeats(walked) && aimed && verdict === null && grantRefusal === null && !dev) {
+  // Dev mode does not return here, and neither does the general bypass — `all`, the one entry
+  // that can cover a file whose project is not read yet. The file is mounted, and the same
+  // sentence is a warning below.
+  if (!mayLaunchSeats(walked) && aimed && verdict === null && grantRefusal === null && !dev && matchBypass(scopes, {}) === null) {
     out.stderr('deny\n');
     // exit: up.not-owner
     return 1;
@@ -755,6 +760,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     return 2;
   }
   const { team, root } = loaded;
+  // The bypass this run is under, now that the file's project is known: a `project:` entry must
+  // name it, and `all` covers it. Null leaves every refusal below where it is. Dev mode is the
+  // general form and keeps its own words, so with it set no scoped entry is read at all.
+  const bypass = dev ? null : matchBypass(scopes, { project: team.project });
   // The lobby this team operates on: its own when it sets `entity` or `lobby`, else the
   // machine-global one. Every lobby read and make below runs against it, so a second team on the
   // machine no longer waits behind the first team's lobby.
@@ -808,14 +817,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   if (detached !== undefined && !createGranted) {
     refusals.push(detached);
   } else if (!named) {
-    // Dev mode mounts and says the placement as a warning. Anyone else is denied.
-    if (!dev) return denyUp(out);
+    // Dev mode and the scoped bypass mount and say the placement as a warning. Anyone else is denied.
+    if (!dev && bypass === null) return denyUp(out);
     refusals.push(`only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
   }
   // The live file is the record. A verified copy that no longer matches is not a refusal.
-  // A legacy or refused record still is: its text is the case, and dev mode warns instead.
+  // A legacy or refused record still is: its text is the case, and dev mode — or the scoped
+  // bypass — warns instead.
   if (standing.kind === 'none') {
-    if (dev) refusals.push(notInForce(standing));
+    if (dev || bypass !== null) refusals.push(notInForce(standing));
   } else if (standing.kind !== 'verified') refusals.push(notInForce(standing));
   // The budget readings the gate refuses on are the approved ones: an unapproved lower reserve
   // unblocks nothing, not even the seat a dry run would plan.
@@ -828,7 +838,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const findings = doctorFindings(team, root, dir, session, sources.doctor, loaded.warnings, standing);
     for (const finding of findings) {
       if (!blocksLaunch(finding)) continue;
-      if (!dev && (finding.text.includes('team approve') || finding.text.includes('never approved'))) continue;
+      if (!dev && bypass === null && (finding.text.includes('team approve') || finding.text.includes('never approved'))) continue;
       if (finding.text.includes(' is read at start by ')) startupReadRefusals.push(finding.text);
       else refusals.push(finding.text);
     }
@@ -1115,9 +1125,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     }
   };
 
-  // Dev mode says the no-approval lines and the caller-placement line once, as a warning,
-  // and mounts. Every other refusal stays a refusal. Unset, the list is unchanged.
-  const warning = dev ? devWarningLine(refusals, standing, caller) : '';
+  // Dev mode and the scoped bypass say the no-approval lines and the caller-placement line once,
+  // as a warning, and mount; the bypass's warning names the scope that waived them. Every other
+  // refusal stays a refusal. Unset, the list is unchanged.
+  let warning = '';
+  if (dev || bypass !== null) {
+    warning = waivedWarningLine(refusals, standing, caller);
+    if (warning !== '' && bypass !== null) warning = `${warning}${bypassTail(bypass)}`;
+  }
 
   if (dry) {
     stampLobbyTrust(false);

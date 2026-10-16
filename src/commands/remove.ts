@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { recordSeatDigestOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
+import { bypassScopes, bypassTail, matchBypass } from '../bypass.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
@@ -243,13 +244,17 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   const abandon = args.flags.has('abandon');
   if (abandon && caller.kind !== 'owner') {
-    // Set to exactly `1`. Dev mode says the owner-only line once, as a warning, and the abandon continues.
-    if (io.env.TEAMCLI_DEV_MODE !== '1') {
+    // Set to exactly `1`. Dev mode says the owner-only line once, as a warning, and the abandon
+    // continues. The scoped bypass says the same for the seat it names, or for this project.
+    const dev = io.env.TEAMCLI_DEV_MODE === '1';
+    const bypass = dev ? null : matchBypass(bypassScopes(io.env), { project: team.project, seat: name });
+    if (!dev && bypass === null) {
       io.stderr('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
       // exit: remove.abandon
       return 1;
     }
-    io.stderr('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
+    const tail = bypass === null ? '; dev mode continues' : bypassTail(bypass);
+    io.stderr(`team remove: warning: only the owner abandons a seat, from a terminal outside herdr${tail}\n`);
   }
   // A lead is taken out of the file by the owner alone. Its swap — `--keep` — is the owner's,
   // the granted seat's when the grant lists `swap`, or an approved delegate's whose entry lists
