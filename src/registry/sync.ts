@@ -86,13 +86,17 @@ export function registerLaunch(
  * A seat's agent ended. `stopped` keeps the seat in the roster (the file still names it, and it
  * comes back as the same agent); `retired` ends the agent and takes the seat out of the roster.
  * Its pane is cleared either way: the pane is gone, and a later `send` must not type into whatever
- * the host reuses its id for. Nothing is written for a seat the registry never knew.
+ * the host reuses its id for. Nothing is written for a seat the registry never knew, nor for one
+ * whose agent lives in another session than the one the command acted on.
  */
 export function registerEnd(input: RegistryTeam, seat: string, ending: Ending): { note: string } | null {
   try {
     const teamId = teamIdOf(input.root);
     const known = findAgent(input.home, { team: teamId, seat });
     if (!known) return null;
+    // A stop in one session never ends the agent that now lives in another: the (team, seat) is
+    // one agent, and its `reach.session` says where it is. Absent, the command acted on the file's.
+    if (known.reach.session !== (input.session ?? input.team.session)) return null;
     updateAgent(input.home, known.id, { lifecycle: ending, reach: { ...known.reach, pane: null } });
     if (ending === 'retired') writeRoster(input, teamId, seat, null);
     return null;

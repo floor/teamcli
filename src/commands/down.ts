@@ -9,7 +9,7 @@ import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { findRoot, loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
-import { noteTeam } from '../registry/teams.ts';
+import { getTeam, noteTeam, teamIdOf } from '../registry/teams.ts';
 import { registerEnd, registerSessionEnd } from '../registry/sync.ts';
 import {
   agentList,
@@ -615,11 +615,20 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (mayRemember && current.path !== undefined) rememberCurrent(current.dir, current.path, sources.now());
   };
   // The registry says the team is stopped once its session is, in the run an allowed caller made:
-  // never a dry run, never a refused caller, never another session than the team file's own.
-  // The registry is the user-level home the run was given; a run given none leaves it alone.
+  // never a dry run, never a refused caller, and never a session other than the one the registry
+  // addresses the team in. That is the session the last launch recorded (`up --session x` records
+  // `x`), the file's own while the team has no record. The record keeps the session the run
+  // acted on. The registry is the user-level home the run was given; a run given none leaves it alone.
   const noteStopped = (): void => {
-    if (dry || callerRefused || abandonRefused || session !== team.session || sources.home === undefined) return;
-    const unrecorded = noteTeam(sources.home, root, team, 'stopped', describeCaller(caller));
+    if (dry || callerRefused || abandonRefused || sources.home === undefined) return;
+    let addressed = team.session;
+    try {
+      addressed = getTeam(sources.home, teamIdOf(root))?.session ?? team.session;
+    } catch {
+      // A registry that cannot be read is said by the write below, which reads it again.
+    }
+    if (session !== addressed) return;
+    const unrecorded = noteTeam(sources.home, root, { ...team, session }, 'stopped', describeCaller(caller));
     if (unrecorded) io.stderr(`team down: ${unrecorded}\n`);
   };
   // A session found already stopped has no agent left in it: the registry's agents that were
