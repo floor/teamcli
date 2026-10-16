@@ -179,7 +179,7 @@ function oldPass(
   }
 
   if (approval === null) once('approval', 'the file was never approved on this machine', 'owner');
-  else if (approval?.length) once('approval', `the file differs from the approved one: ${approval.join('; ')}`, 'owner');
+  else if (approval?.length) once('approval', `the file has changed since the last approval: ${approval.join('; ')}`, 'owner');
 
   const limits = team.machine;
   if (machine.loadPerCore !== null && machine.loadPerCore > limits.loadMax) {

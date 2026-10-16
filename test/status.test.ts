@@ -340,7 +340,7 @@ describe('team status', () => {
     if (!approvedFile.ok) throw new Error('the approved variant does not validate');
     standing = verifiedOf(approvedFile.team, approvedText, dir, NOW);
     const changed = await status();
-    expect(changed.out).toContain('difference: the file differs from the approved one: `rules` changed\n  repair: the live file is what the commands read');
+    expect(changed.out).toContain('difference: the file has changed since the last approval: `rules` changed\n  repair: the live file is what the commands read');
     expect(changed.out).toContain('2 difference(s)');
     standing = { kind: 'none' };
     expect((await status()).out).toContain('difference: the file was never approved on this machine');

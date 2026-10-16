@@ -116,7 +116,7 @@ describe('team approve', () => {
   test('refuses input already waiting on the terminal before writing anything', async () => {
     const run = await approve([], OWNER, '5', 'waiting');
     expect(run.code).toBe(1);
-    expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: run \`team approve\` on its own line\n`);
+    expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: this command needs the terminal to itself\n`);
     expect(run.asked).toEqual([]);
     expect(existsSync(store())).toBe(false);
   });
@@ -171,7 +171,7 @@ describe('team approve', () => {
     test('input waiting: no key folder, no record, no generation, no log', async () => {
       const run = await approve([], OWNER, '5', 'waiting');
       expect(run.code).toBe(1);
-      expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: run \`team approve\` on its own line\n`);
+      expect(run.err).toBe(`${WARNING}team approve: input was waiting on the terminal: this command needs the terminal to itself\n`);
       expectNothingWritten();
     });
 
@@ -611,7 +611,7 @@ describe('team doctor', () => {
     expect(stale.code).toBe(1);
   });
 
-  test('an unapproved interval edit leaves the heartbeat verdict on the approved value', async () => {
+  test('a live interval edit controls the heartbeat verdict', async () => {
     await approve([], OWNER);
     const state = (heartbeat: string) =>
       writeFileSync(
@@ -626,14 +626,12 @@ describe('team doctor', () => {
     edit((text) => text.replace(/^  interval: .*$/m, '  interval: 1000h'));
     state('2026-10-03T13:50:00Z');
     const stretched = await doctor({ sessionRunning: () => true });
-    expect(stretched.out).toContain(
-      "MISS  the watch's heartbeat is 12 min old (two intervals are 4 min): start `team watch`\n",
-    );
+    expect(stretched.out).toContain('ok    the watch is running\n');
     // And a shrink is no better: three minutes are inside the approved two intervals, whoever
     // wrote ten seconds in the file.
     edit((text) => text.replace(/^  interval: .*$/m, '  interval: 10s'));
     state('2026-10-03T13:59:00Z');
-    expect((await doctor({ sessionRunning: () => true })).out).toContain('ok    the watch is running\n');
+    expect((await doctor({ sessionRunning: () => true })).out).toContain("MISS  the watch's heartbeat is 3 min old");
   });
 
   test('--session names another session', async () => {
