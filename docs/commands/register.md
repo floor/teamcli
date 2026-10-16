@@ -48,8 +48,8 @@ owner's own act.
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--session` is the owner's own |
 | a run with no terminal | nothing, unless an active create-grant covers this project: `team register: only the owner runs this, from a terminal outside herdr` |
-| a caller the file's `delegates` section approves for `up` | run it: a delegate gate that passes admits the record write, exactly as it admits the launch that would have written it |
-| anyone else | nothing: `team register: only the owner, or a delegate this file approves for \`up\`, registers a running seat; this call is <caller>` |
+| a caller the file's `delegates` section names for `up` | run it: a delegate gate that passes admits the record write, exactly as it admits the launch that would have written it |
+| anyone else | nothing: `team register: only the owner, or a delegate this file names for \`up\`, registers a running seat; this call is <caller>` |
 
 ## Output and exit codes
 
@@ -69,7 +69,7 @@ owner's own act.
 | `team register: line <n>: <message>` / `team register: <message>` — the team file can't be read or parsed, or the folder is not inside a git repository | 2 |
 | `team register: only the owner runs this, from a terminal outside herdr` | 1 |
 | `team register: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
-| `team register: only the owner, or a delegate this file approves for \`up\`, registers a running seat; this call is <caller>` | 1 |
+| `team register: only the owner, or a delegate this file names for \`up\`, registers a running seat; this call is <caller>` | 1 |
 | ``team register: only the owner or the approved delegate runs `up`; this call is <caller>`` — the file's `delegates` section decided, and refused | 1 |
 | `team register: the file has no seat "<name>"` | 1 |
 | `team register: <name> is stopped in this file; the owner clears \`stopped\` and starts the team` | 1 |
@@ -154,7 +154,7 @@ exit 1
 
 ```console caller=claude-beacon
 $ team register claude-keeper ; echo "exit $?"
-team register: only the owner, or a delegate this file approves for `up`, registers a running seat; this call is claude-beacon
+team register: only the owner, or a delegate this file names for `up`, registers a running seat; this call is claude-beacon
 exit 1
 ```
 

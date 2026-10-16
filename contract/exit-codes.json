@@ -1993,7 +1993,7 @@
       "code": 1,
       "command": "register",
       "id": "register.not-owner",
-      "meaning": "the caller is not the owner or a delegate this file approves for up",
+      "meaning": "the caller is not the owner or a delegate this file names for up",
       "trigger": "team register worker"
     },
     {

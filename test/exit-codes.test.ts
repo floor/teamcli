@@ -3597,7 +3597,7 @@ scene('register.caller', async (place) => {
 });
 scene('register.not-owner', async (place) => {
   write(place, TEAM);
-  return show(await registered(place, ['lead'], other), 'only the owner, or a delegate this file approves for `up`');
+  return show(await registered(place, ['lead'], other), 'only the owner, or a delegate this file names for `up`');
 });
 scene('register.delegate', async (place) => {
   approve(place, `${TEAM}${DELEGATES}`);

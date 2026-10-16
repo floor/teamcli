@@ -95,7 +95,7 @@ function delegateRefused(out: Io, message: string): number {
 
 function notOwnerRefused(out: Io, caller: Caller): number {
   out.stderr(
-    `team register: only the owner, or a delegate this file approves for \`up\`, registers a running seat; this call is ${plainLine(describeCaller(caller))}\n`,
+    `team register: only the owner, or a delegate this file names for \`up\`, registers a running seat; this call is ${plainLine(describeCaller(caller))}\n`,
   );
   // exit: register.not-owner
   return 1;
@@ -226,7 +226,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     return callerRefused(out, sessionOwnerRefusal(walked));
   }
 
-  // The gate, `up`'s own: the owner, a delegate this file approves for `up` — the act that
+  // The gate, `up`'s own: the owner, a delegate this file names for `up` — the act that
   // would have written this record in the first place — or the create-granted runner. The run
   // launches nothing, so no launch is granted; but the record is what lets `team send` type
   // into the pane, so it is the owner's authority, judged by the same gate and in the same
