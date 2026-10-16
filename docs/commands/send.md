@@ -99,8 +99,11 @@ message.
 ## Who may send to whom
 
 Send is denied by default: a caller reaches exactly the targets below, and anything else is
-refused before the seat is looked up. A seat the registry holds no record for has no identity to
-admit by, and is refused; `up` and `add` register a seat when they first launch it. A run with no
+refused before the seat is looked up. A seat the registry holds no record for is judged as the
+seat the live file declares for it, so the rules above reach it by that seat's name and role — the
+bootstrap a seat herdr placed, before `up` or `add` first recorded it, still needs — and nothing
+else does: a target in another team, and an owner-signed grant, both wait for its record. `up` and
+`add` register a seat when they first launch it. A run with no
 terminal is refused before `--list` as well: `team send: only the owner runs this, from a terminal
 outside herdr`. For every other caller, `--list` prints the file's roster and sends nothing, so it
 needs no caller check.
@@ -136,7 +139,10 @@ those, or a symbolic link, is not a grant: the send is refused as if the folder 
 
 Every drop file opens with a header, written before the body: the sender's agent id, and the reach
 above or the grant that admitted the send. A seat's header names it — its agent id, its name and
-its seat; the owner's reads `from the owner`. A waited send's frame opens the same way, and so
+its seat; the owner's reads `from the owner`. A sender the registry holds no record for is spelled
+as the file's seat instead of an id — `from the file's seat <seat> (no registry record yet) —
+admitted by: <rule>` — so a receiver reads why the id is absent. A waited send's frame opens the
+same way, and so
 does the body the message history keeps. The receiver reads who sent a message and why that sender
 was let through; the drop record carries the sender's id from day one.
 

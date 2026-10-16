@@ -242,6 +242,24 @@ describe('team send: delivered', () => {
       `from agt_${Buffer.from('helper').toString('hex').padEnd(12, '0')} (helper, helper@acme) — admitted by: a seat to its own team's orchestrator\n\na note`,
     );
   });
+
+  test('a seat the file declares, with no agent record yet, is judged as that seat — and the header says so', async () => {
+    // The bootstrap: herdr placed this caller on the pane the live file declares for the seat, so
+    // the own-team rules judge it as that seat before any record exists for it.
+    const { root, dir, sockets } = world();
+    record(dir, 'helper', 'w2:p1');
+    const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+
+    const code = await runSend(['lead', 'a note'], io, fake(sockets, { native: scripted(['idle', 'working']) }));
+
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toBe('lead: delivered\n');
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
+      "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\na note",
+    );
+  });
 });
 
 describe('team send: refused', () => {
@@ -274,16 +292,16 @@ describe('team send: refused', () => {
     expect(host.frames).toEqual([]);
   });
 
-  test('a seat of the team with no agent record may not send: there is no identity to admit by', async () => {
+  test('a caller with neither an agent record nor a seat in the file is refused, and the refusal names the command that records it', async () => {
     const { root, dir, sockets } = world();
-    record(dir, 'helper', 'w2:p1');
+    record(dir, 'drifter', 'w9:p9');
     const host = fake(sockets);
-    const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+    const io = testIo(root, { kind: 'seat', name: 'drifter', pane: 'w9:p9', session: 'acme' });
 
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('helper: no agent record on this machine, so no rule admits the send');
+    expect(io.err).toContain('drifter: no agent record on this machine, so no rule admits the send');
     expect(host.frames).toEqual([]);
   });
 
