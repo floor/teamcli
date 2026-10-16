@@ -111,9 +111,11 @@ function logText(): string {
 function harness(options: { status?: string; text?: string; create?: boolean; present?: boolean } = {}): {
   sources: ReloadSources;
   closed: string[];
+  commands: string[];
 } {
   const panes = new Map<string, string>();
   const closed: string[] = [];
+  const commands: string[] = [];
   let clock = NOW.getTime();
   let n = 0;
   const text = options.text ?? IDLE;
@@ -128,8 +130,10 @@ function harness(options: { status?: string; text?: string; create?: boolean; pr
       panes.set(pane, IDLE);
       return { pane, workspace: `ws-${n}` };
     },
-    paneRun(_session, pane) {
-      panes.set(pane, IDLE);
+    paneRun(_session, pane, command) {
+      commands.push(command);
+      // The relaunched CLI draws its own model on the status row.
+      panes.set(pane, command.includes('sonnet') ? IDLE.replace('Opus 5.5', 'Sonnet 5.5') : IDLE);
       return true;
     },
     renameAgent: () => true,
@@ -157,7 +161,7 @@ function harness(options: { status?: string; text?: string; create?: boolean; pr
     },
     now: () => new Date(clock),
   };
-  return { sources: { launch, home, now: () => new Date(clock) }, closed };
+  return { sources: { launch, home, now: () => new Date(clock) }, closed, commands };
 }
 
 beforeEach(() => {
@@ -312,17 +316,23 @@ describe('team reload', () => {
     expect(logText()).toBe('');
   });
 
-  test('a granted reload against a file that is not the approved copy closes nothing', async () => {
+  test('a granted reload runs the live file\'s edited launch line with no approval of the edit', async () => {
+    remember('lead', 'low');
     remember('worker', 'low');
-    const text = readFileSync(join(dir, 'team.yaml'), 'utf8').replace('label: worker', 'label: renamed');
+    const line = 'claude --model claude-sonnet-5-5';
+    const text = readFileSync(join(dir, 'team.yaml'), 'utf8')
+      .replaceAll('model: Claude Opus', 'model: Claude Sonnet')
+      .replaceAll('launch: claude --model claude-opus-5-5', `launch: ${line}`);
     writeFileSync(join(dir, 'team.yaml'), text);
-    const { sources, closed } = harness();
+    const { sources, closed, commands } = harness();
     const io = testIo(root, LEAD);
     const code = await runReload(['worker'], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toContain('not the approved one');
-    expect(closed).toEqual([]);
-    expect(logText()).toBe('');
+    expect(code, io.out + io.err).toBe(0);
+    expect(closed).toEqual(['worker-ws']);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toContain(line);
+    expect(readState(dir).sessions.alpha?.seats.worker?.launch_line).toContain(line);
+    expect(logText()).toContain('grant [grant] lead reload: worker model');
   });
 
   test('a granted reload of another seat logs the grant and the difference', async () => {
@@ -335,4 +345,5 @@ describe('team reload', () => {
     expect(logText()).toContain('grant [grant] lead reload: worker effort');
     expect(logText()).not.toContain('reload [owner]');
   });
+
 });

@@ -97,6 +97,8 @@ export type WorktreeState = {
   setup: 'ok' | 'failed';
 };
 
+export type SwapRecord = { by: string; at: string };
+
 export type SessionState = {
   started?: { at: string; by: string };
   seats: Record<string, SeatState>;
@@ -105,6 +107,13 @@ export type SessionState = {
    * its `id` and `last_active` when relaunched, while `seats` holds only active runtime records.
    */
   retained_seats?: Record<string, RetainedSeat>;
+  /**
+   * A lead seat (the orchestrator's or the operator's) stopped for a replacement by `team remove
+   * <lead> --keep`: who stopped it and when. The file is not edited — a lead is never `stopped:` —
+   * so this record is what tells `doctor`, `status` and the next `add` that the gap is a swap in
+   * progress and not a crash. `team add <lead>` (or `up`) clears it once the seat runs again.
+   */
+  swapping?: Record<string, SwapRecord>;
   worktrees: Record<string, WorktreeState>;
   watch?: { pid: number; heartbeat: string; pane?: string; workspace?: string };
   /**
@@ -193,6 +202,15 @@ export function readState(dir: string): State {
       }
     } else if (session.retained_seats !== undefined) {
       delete session.retained_seats;
+    }
+    if (session.swapping && typeof session.swapping === 'object') {
+      for (const [name, swap] of Object.entries(session.swapping)) {
+        if (!swap || typeof swap !== 'object' || typeof swap.by !== 'string' || typeof swap.at !== 'string') {
+          delete session.swapping[name];
+        }
+      }
+    } else if (session.swapping !== undefined) {
+      delete session.swapping;
     }
     // Read old, write new: readings used to be held under a session. They are the project's
     // (§ 4.4), so every session's records are merged to the top level here — no reader loses one,

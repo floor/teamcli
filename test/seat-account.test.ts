@@ -316,11 +316,9 @@ describe('a seat the approval lists as changed', () => {
     };
   }
 
-  test('its figure is not folded, under either account, until the owner approves', async () => {
+  test('its figure is folded under the live file\'s account, with no drift line', async () => {
     write(TEAM);
     expect(await approve()).toBe(0);
-    // The seat's account is edited to openai-home, an account the budgets hold too. Unapproved,
-    // the seat is drift; before the guard its figure landed in openai-home's bucket.
     const edited = TEAM.replace('    account: openai-work\n', '    account: openai-home\n');
     write(edited);
     expect(approvalDifferences(team(edited), root, home)).toEqual(['seat codex-work changed']);
@@ -328,24 +326,15 @@ describe('a seat the approval lists as changed', () => {
     const scene = { 'codex-work': CODEX(39), 'codex-home': CODEX(20) };
     const io = testIo(root, { kind: 'owner' });
     expect(await runWatch(['--file', '.agents/team.yaml'], io, watchSources(scene))).toBe(0);
-    expect(io.out).toContain('seat codex-work changed');
-    // codex-home still folds onto its own approved account; codex-work's figure is stored under
-    // neither openai-work nor openai-home. The other seat's fold shows the pass read figures.
-    expect(loadReadings(join(root, '.agents')).map(({ account, seat, left }) => ({ account, seat, left })))
-      .toEqual([{ account: 'openai-home', seat: 'codex-home', left: 20 }]);
-
-    // Approved, the seat's figures fold again — into the account the file now names.
-    expect(await approve()).toBe(0);
-    const after = testIo(root, { kind: 'owner' });
-    expect(await runWatch(['--file', '.agents/team.yaml'], after, watchSources(scene))).toBe(0);
+    expect(io.out).not.toContain('seat codex-work changed');
     expect(loadReadings(join(root, '.agents')).map(({ account, seat, left }) => ({ account, seat, left })))
       .toEqual([
-        { account: 'openai-home', seat: 'codex-home', left: 20 },
         { account: 'openai-home', seat: 'codex-work', left: 39 },
+        { account: 'openai-home', seat: 'codex-home', left: 20 },
       ]);
   });
 
-  test('a temporary seat like a changed seat folds no figures until the owner approves', async () => {
+  test('a temporary seat like a changed seat folds under the live file\'s account', async () => {
     write(TEAM);
     expect(await approve()).toBe(0);
 
@@ -364,14 +353,6 @@ describe('a seat the approval lists as changed', () => {
     const scene = { 'codex-temp': CODEX(12) };
     const io = testIo(root, { kind: 'owner' });
     expect(await runWatch(['--file', '.agents/team.yaml'], io, watchSources(scene))).toBe(0);
-
-    // codex-temp's figure is not stored under either openai-work or openai-home
-    expect(loadReadings(join(root, '.agents'))).toEqual([]);
-
-    // Approved, the temporary seat's figure folds into the approved account
-    expect(await approve()).toBe(0);
-    const after = testIo(root, { kind: 'owner' });
-    expect(await runWatch(['--file', '.agents/team.yaml'], after, watchSources(scene))).toBe(0);
     expect(loadReadings(join(root, '.agents')).map(({ account, seat, left }) => ({ account, seat, left })))
       .toEqual([{ account: 'openai-home', seat: 'codex-temp', left: 12 }]);
   });
@@ -444,8 +425,10 @@ describe('a seat the approval lists as changed', () => {
 
     // The approval check reports the drifted like-seat, naming the file's seat
     expect(result.reports.find((r) => r.key === 'approval')?.text)
-      .toBe('the file differs from the approved one: seat codex-work changed');
-    // And no figure is folded for the temporary seat
-    expect(result.readings).toEqual([]);
+      .toBe('the file has changed since the last approval: seat codex-work changed');
+    // The live like-seat still supplies the temporary seat's account and profile.
+    expect(result.readings).toEqual([expect.objectContaining({
+      account: 'openai-work', seat: 'codex-temp', left: 12, used: 88, window: 'weekly',
+    })]);
   });
 });

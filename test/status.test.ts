@@ -340,7 +340,7 @@ describe('team status', () => {
     if (!approvedFile.ok) throw new Error('the approved variant does not validate');
     standing = verifiedOf(approvedFile.team, approvedText, dir, NOW);
     const changed = await status();
-    expect(changed.out).toContain('difference: the file differs from the approved one: `rules` changed\n  repair: the live file is what the commands read');
+    expect(changed.out).toContain('difference: the file has changed since the last approval: `rules` changed\n  repair: the live file is what the commands read');
     expect(changed.out).toContain('2 difference(s)');
     standing = { kind: 'none' };
     expect((await status()).out).toContain('difference: the file was never approved on this machine');
@@ -558,6 +558,24 @@ describe('team status', () => {
       { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w4:p1' },
       { name: 'grok-acme', state: 'stopped', model: 'Grok 4.7', pane: '-' },
     ]);
+  });
+
+  test("--json: a grok seat's model — the footer names it, a question widget falls back to the launch line's", async () => {
+    const grokScreen = (name: string) => readFileSync(new URL(`./fixtures/grok/1.0.52/${name}.txt`, import.meta.url), 'utf8');
+    live = {
+      ...built(),
+      agents: [...built().agents, agent('grok-acme', 'w10', 'idle', 'grok')],
+      workspaces: [...built().workspaces, { id: 'w10', label: 'grok 4.7' }],
+      screens: { ...built().screens, 'w10:p1': grokScreen('idle') },
+    };
+    const clean = JSON.parse((await status('--json')).out) as { rows: { name: string; model: string; pane: string }[]; notes: string[] };
+    expect(clean.rows.find((row) => row.name === 'grok-acme')).toMatchObject({ model: 'Grok 4.7', pane: 'w10:p1' });
+    expect(clean.notes).toEqual(clean.notes.filter((note) => !note.startsWith('grok-acme:')));
+
+    live = { ...live, screens: { ...live.screens, 'w10:p1': grokScreen('question') } };
+    const asked = JSON.parse((await status('--json')).out) as { rows: { name: string; model: string; pane: string }[]; notes: string[] };
+    expect(asked.rows.find((row) => row.name === 'grok-acme')).toMatchObject({ model: 'Grok 4.7 (from launch)', pane: 'w10:p1' });
+    expect(asked.notes).toContain("grok-acme: its screen shows no model; the launch line's Grok 4.7 stands");
   });
 
   test('--json: reports differences with exit 1 and the same structure', async () => {

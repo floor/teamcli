@@ -927,7 +927,7 @@ describe('team remove', () => {
     made.agents.push({ name: 'worker-tmp-1', agent: 'claude', pane: 'w2:p1', workspace: 'w2', status: 'idle', cwd: null });
     const left = testIo(dir, owner);
     expect(await runRemove(['worker-tmp-1', '--file', file], left, made.sources)).toBe(1);
-    expect(left.err).toContain('worker-tmp-1: its record is not an approved seat; left as it is (the owner cleans it: team remove worker-tmp-1 --abandon)');
+    expect(left.err).toContain('worker-tmp-1: its record is not a declared seat; left as it is (the owner cleans it: team remove worker-tmp-1 --abandon)');
     expect(made.typed).toEqual([]);
     expect(existsSync(rulesFile)).toBe(true);
     expect(readFileSync(file, 'utf8')).not.toContain('tmp');
@@ -1060,7 +1060,7 @@ describe('team remove', () => {
     const made = world();
     const io = testIo(dir, lead);
     expect(await runRemove(['stray'], io, made.sources)).toBe(1);
-    expect(io.err).toBe('team remove: stray: its record is not an approved seat; left as it is (the owner cleans it: team remove stray --abandon)\n');
+    expect(io.err).toBe('team remove: stray: its record is not a declared seat; left as it is (the owner cleans it: team remove stray --abandon)\n');
     expect(readState(join(dir, '.agents')).sessions.acme?.seats.stray).toBeDefined();
   });
 
@@ -1070,7 +1070,7 @@ describe('team remove', () => {
     made.agents.push({ name: 'stray', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null });
     const io = testIo(dir, owner);
     expect(await runRemove(['stray', '--file', file], io, made.sources)).toBe(1);
-    expect(io.err).toBe('team remove: stray: its record is not an approved seat; left as it is (the owner cleans it: team remove stray --abandon)\n');
+    expect(io.err).toBe('team remove: stray: its record is not a declared seat; left as it is (the owner cleans it: team remove stray --abandon)\n');
     expect(made.typed).toEqual([]);
     expect(made.closed).toEqual([]);
     expect(readState(join(dir, '.agents')).sessions.acme?.seats.stray).toBeDefined();
@@ -1292,6 +1292,21 @@ describe('team remove delegated', () => {
     expect(abandoning.err).toBe('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
     expect(made.closed).toEqual([]);
     expect(readFileSync(file, 'utf8')).toContain('name: worker');
+  });
+
+  test('with TEAMCLI_DEV_MODE=1, --abandon from a granted caller warns and closes the worker', async () => {
+    approveFile(FILE + DELEGATES);
+    const made = world();
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
+    const io = testIo(dir, pilot);
+    io.env = { ...io.env, TEAMCLI_DEV_MODE: '1' };
+    const code = await runRemove(['worker', '--abandon'], io, { ...made.sources, delegateGate: () => passed });
+    expect(io.err).toContain('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
+    expect(made.closed).toContain('w3');
+    expect(code).toBe(0);
+    const lead = testIo(dir, pilot);
+    lead.env = { ...lead.env, TEAMCLI_DEV_MODE: '1' };
+    expect(await runRemove(['lead', '--abandon'], lead, { ...made.sources, delegateGate: () => passed })).toBe(1);
   });
 
   test('even a gate that passed --keep finds no signing: the record is not the delegate\'s to write', async () => {
