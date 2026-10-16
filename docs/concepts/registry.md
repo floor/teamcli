@@ -18,6 +18,7 @@ the projection; the registries are the live truth that `up` and routing read.
 | `lab`, `cli` | the vendor and the CLI the seat runs |
 | `launch` | the raw launch line, recorded as it was started; `launcher` is a reference, later |
 | `reach` | the namespaces the agent answers to: team, seat, session, pane, and a cross-session address when it has one |
+| `seat_handle` | when it had one, the stable `seat_<12 hex>` handle `team seats` shows, kept for continuity |
 | `mcp`, `skills` | declared now, filled later |
 | `lifecycle` | `registered`, `running`, `stopped` or `retired` |
 | `provenance` | who registered it, and when it was registered and last updated |
