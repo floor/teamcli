@@ -412,3 +412,55 @@ test('team broker refuses an unplaced caller, and the same call reaches the sock
   expect(leadIo.err).toBe('team broker: only the owner runs `broker`, from a terminal outside herdr; this call is lead\n');
   expect(reads.n).toBe(1);
 });
+
+function separateOperator(root: string): string {
+  return file(root).replace('operator: lead', 'operator: operator') + `  - role: operator
+    name: operator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+}
+
+for (const name of ['lead', 'operator']) {
+  test(`dev mode keeps ${name}'s own tempo and broker placement guards`, async () => {
+    const made = repo(separateOperator);
+    const path = join(made.root, '.agents', 'team.yaml');
+    const before = readFileSync(path, 'utf8');
+    const caller = { kind: 'seat' as const, name, pane: 'w1:p1', session: 'acme' };
+    const tempoIo = testIo(made.root, caller);
+    tempoIo.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runTempo(['urgent'], tempoIo, { home: made.home })).toBe(1);
+    expect(tempoIo.err).toContain(`this call is ${name}`);
+    expect(tempoIo.err).not.toContain('dev mode continues');
+    expect(readFileSync(path, 'utf8')).toBe(before);
+
+    const brokerIo = testIo(made.root, caller);
+    brokerIo.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runBroker([], brokerIo, {
+      home: made.home,
+      keyReader: async () => { throw new Error('a refused seat read credentials'); },
+    })).toBe(1);
+    expect(brokerIo.err).toContain(`this call is ${name}`);
+    expect(brokerIo.err).not.toContain('dev mode continues');
+  });
+}
+
+for (const value of ['', '0', 'true']) {
+  test(`dev mode ${JSON.stringify(value)} does not waive tempo or broker placement`, async () => {
+    const made = repo();
+    const tempoIo = testIo(made.root, UNPLACED);
+    tempoIo.env = { TEAMCLI_DEV_MODE: value };
+    expect(await runTempo(['urgent'], tempoIo, { home: made.home })).toBe(1);
+    expect(tempoIo.err).not.toContain('dev mode continues');
+    const brokerIo = testIo(made.root, UNPLACED);
+    brokerIo.env = { TEAMCLI_DEV_MODE: value };
+    expect(await runBroker([], brokerIo, {
+      home: made.home,
+      keyReader: async () => { throw new Error('a refused caller read credentials'); },
+    })).toBe(1);
+    expect(brokerIo.err).not.toContain('dev mode continues');
+  });
+}

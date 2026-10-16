@@ -15,7 +15,7 @@ export default tempo;
 
 /**
  * `team tempo <word>`: write the team's tempo. The five watch waits stay as written; the
- * word scales them once the owner approves the file. `normal` is that file with the key
+ * word scales them as soon as the watch reads the live file. `normal` is that file with the key
  * omitted, so writing it changes no approval.
  */
 export async function runTempo(argv: string[], io: Io, sources: { home?: string } = {}): Promise<number> {
@@ -72,7 +72,6 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
     const wrote = writeTeamFile(loaded.path, next);
     if (wrote.ok) {
       io.stdout(`tempo: ${word}\n`);
-      if (word !== 'normal') io.stderr('team tempo: it takes effect when the file is approved\n');
       // exit: tempo.set
       return 0;
     }

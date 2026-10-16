@@ -1861,7 +1861,7 @@ describe('team up, live', () => {
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(made.creates.filter((label) => label !== 'watchdog')).toEqual(['claude-coordinator-acme · project coordinator']);
-    expect(io.out).toContain('the approval allows 1 seats; 2 would be running');
+    expect(io.out).toContain('the file allows 1 seats; 2 would be running');
   });
 
   test('a machine past the file refuses before any server starts', async () => {

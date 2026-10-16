@@ -207,7 +207,6 @@ function gate(opts: {
   const approved = opts.approved ?? opts.live;
   const sources: GrantSources = {
     standing: () => verified(approved, opts.dropGrant),
-    approvedCopy: () => approved,
   };
   return grantGate({ act: opts.act, io: opts.io(dir), home: join(dir, 'home'), sources });
 }
@@ -403,7 +402,7 @@ describe('an ordinary approve that also moves a sovereign section', () => {
       act: 'approve',
       io: ORCHESTRATOR(dir),
       home: join(dir, 'home'),
-      sources: { standing: () => standing, approvedCopy: () => GRANTED_UP },
+      sources: { standing: () => standing },
     });
     expect(verdict).toEqual({ kind: 'refused', id: 'grant.not-ordinary', text: 'this change needs the owner: `grant` changed' });
     expect(standing.record).toEqual(recordOf(GRANTED_UP));
@@ -445,7 +444,7 @@ describe('the granted seat aiming the owner\'s flags', () => {
       act: 'up',
       io: testIo(dir, SEAT),
       home: join(dir, 'home'),
-      sources: { standing: () => verified(GRANTED), approvedCopy: () => GRANTED },
+      sources: { standing: () => verified(GRANTED) },
     })).toEqual({ kind: 'passed', grant: { session: 'arena', seat: 'lead', scope: ['up', 'down', 'approve', 'init'] } });
 
     const text = `team status: --file is the owner's, from a terminal outside herdr; this call is lead\n`;

@@ -163,7 +163,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | ``team add: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team add: <name>: its pane holds a process this record cannot tie to the launch` — the record holds the pane's own shell pid and the CLI's pids, read when the seat was launched; the pane is running neither, and the agent session herdr shows there is not the stored one. Nothing is closed and no second CLI is started in it | 1 |
 | ``team add: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify. A missing record is not a refusal, and neither is a file that differs from a stored copy | 1 |
-| `team add: the approved file has no seat "<name>"` | 1 |
+| `team add: the file has no seat "<name>"` | 1 |
 | `team add: <name> is already running`. When that seat's screen is one the profile does not recognise, the owner is also told `team remove <name> --abandon closes its workspace without typing`; anyone else is told `the owner runs team remove <name> --abandon, which closes its workspace without typing` | 1 |
 | `team add: no launch profile for \`<cli>\` in this version` | 1 |
 | `team add: the approval allows <n> seats; <m> would be running` / `… <n> temporary seats; …` / `… <n> <vendor> seats; …` | 1 |
@@ -307,7 +307,7 @@ asked anything:
 
 ```console
 $ team add scratch ; echo "exit $?"
-team add: the approved file has no seat "scratch"
+team add: the file has no seat "scratch"
 exit 1
 $ team add --temporary --like claude-beacon --until later ; echo "exit $?"
 team add: --until is result:<path> or merged:<branch>

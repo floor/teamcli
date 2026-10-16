@@ -1,8 +1,7 @@
 // The `information` layer's first reader: what one project's team file, state and approval store
 // say about its labs, accounts and windows, in the rows `status` already prints. It reads files
-// only — the team file (one that cannot be read falls back to the copy the approval stored), the
-// state beside it, the store — and writes nothing at all: no `last_valid` copy, no log line, no
-// lock, no state. It runs nothing, reads no pane, no vendor file, no vendor key.
+// only — the live team file, the state beside it, the store — and writes nothing at all:
+// no `last_valid` copy, no log line, no lock, no state. It runs nothing, reads no pane, no vendor file, no vendor key.
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { budgetsInForceOf, notInForce, watchInForceOf } from '../approve/approval.ts';
@@ -45,7 +44,7 @@ export function viewFor(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSo
   return { full: walkCaller(io).kind === 'owner', mine };
 }
 
-/** The line a team's rows read when neither its file nor an approved copy of it can be read. */
+/** The line a team's rows read when its live file cannot be read. */
 export const NO_FIGURES = 'no figures (the file could not be read)';
 
 /** The line a block prints when its file names no account: a person or an agent asking what is
@@ -65,17 +64,8 @@ export const NOTHING_COUNTED = "not known: this team's file declares no account,
  *  `Standing` carries one opaque `why`, so the sentence replaces it as a whole. */
 export const NOT_VERIFIED = 'the approval on this machine does not verify for this project';
 
-/** The line a block shows a caller who is not the owner in place of a stored reading that names
- *  an account the approved team in force does not. The state file is signed by nothing — it is a
- *  cache, not the approved copy — so an account string in it is the state's, not this team's, and
- *  a caller who is not the owner reads a reading by that name only when the copy in force backs
- *  it: it is a budget in force's account, or the account a seat in force's own `account:`/`vendor:`
- *  resolves to (the counting rule's own resolution, `budgets/gate.ts:31`). The names come from the
- *  approved copy in force and never from the live file, so a name only the live file writes is
- *  unbound until the owner approves it — the third read's finding, and the reason a live edit
- *  could bind a state string by name. The reading is not rendered at all, and the owner reads it
- *  as before — the after-review's second read found the leak this line closes: `--json` as a seat
- *  printed a stored reading's `account: /…` and `seat: /…` verbatim. */
+/** A restricted view shows a stored reading only when the live file names its account,
+ *  either in budgets or through a seat's account/vendor. State strings alone do not bind names. */
 export const UNBOUND_ACCOUNT = "a stored reading names an account this team's file does not: not shown";
 
 /** The same line for a stored reading whose window or source is not one this tool writes: the
@@ -118,7 +108,7 @@ export type TeamProblem =
 export type ProjectUsage = {
   /** The project's name as this caller reads it: the live file's own `project`, for the owner
    *  and for a caller who is not the owner alike — the live file is the record. Null when
-   *  neither its file nor a stored copy of it can be read. */
+   *  its live file cannot be read. */
   project: string | null;
   rows: UsageRow[];
   /** The one line the block prints when nothing the file declares is counted, in the tool's own
@@ -164,8 +154,8 @@ export type ProjectUsageOptions = {
 /**
  * One project's block: the accounts its budgets in force name, and any reading its state still
  * holds, each row exactly as `status` builds it. The team file is read through
- * `validateTeamFile`; a file that cannot be read falls back to the copy its approval stored; when
- * neither can be read, `project` is null and there are no rows (`NO_FIGURES`). The state is read
+ * `validateTeamFile`; when it cannot be read, `project` is null and there are no rows
+ * (`NO_FIGURES`). The state is read
  * once and never written, and nothing here opens a lock, a pane or a vendor file; it never opens a
  * CLI's session file or a lab's credential; it reads TeamCLI's own key only to verify the
  * agreement, as `status` does. The key read is `approvalStanding`'s, and it was promised away in
@@ -181,7 +171,7 @@ export type ProjectUsageOptions = {
 export function projectUsage(root: string, options: ProjectUsageOptions): ProjectUsage {
   const { home, now, restricted } = options;
   const standing = approvalStanding(root, home);
-  const team = teamOf(root, standing, home);
+  const team = teamOf(root, home);
   const notes: string[] = [];
   let readings: Seen[] = [];
   let spend: SpendReading[] = [];
@@ -200,7 +190,7 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     stateProblem = { kind: 'state', tail: stateTailOf(message), text: shownNote(message, root, restricted) };
   }
   if (team === null) {
-    // Neither the file nor an approved copy of it can be read: no figures at all (`NO_FIGURES`),
+    // The live file cannot be read: no figures at all (`NO_FIGURES`),
     // plus the state's own problem when there is one.
     const problems: TeamProblem[] = [{ kind: 'no-figures', text: NO_FIGURES }];
     if (stateProblem !== null) problems.push(stateProblem);
@@ -350,18 +340,8 @@ function boundReadings(list: readonly Seen[], budgets: TeamFile['budgets'], inFo
   return kept;
 }
 
-/** The one line the block prints when nothing its file declares is counted, in the tool's own
- *  words; null when the file's own accounts are the ones in force. Two conditions, ruled after
- *  the coordinator's real run. A file that names no account prints the ruled sentence — also
- *  when leftover readings print rows under it, while no budget in force names one. A file that
- *  declares accounts the approval does not back counts none of them, rows or no rows: not
- *  verified prints `notInForce`'s why-line for that standing (`approval.ts:47-52`), and a
- *  verified standing prints `status`'s own line for a file the owner has not approved
- *  (`status.ts:229`) whenever the budgets in force are the approved copy's — that is exactly
- *  when `compare` reports the `budgets` section, the same digests `budgetsInForceOf` reads. A
- *  refused approval's `why` is the store's own text and is the owner's; a caller who is not the
- *  owner gets `NOT_VERIFIED` instead, while `none` and `legacy` — the tool's own two lines, with
- *  no path in them (`approval.ts:47-52`) — print to everyone. */
+/** Why the live accounts count nothing. A refused approval's details are shown only to
+ *  the owner; other callers receive the fixed NOT_VERIFIED sentence. */
 function whyNotCountedOf(standing: Standing, team: TeamFile, budgets: TeamFile['budgets'], restricted: boolean): string | null {
   if (Object.keys(team.budgets.accounts).length === 0) {
     return Object.keys(budgets.accounts).length === 0 ? NOTHING_COUNTED : null;
@@ -374,17 +354,14 @@ function whyNotCountedOf(standing: Standing, team: TeamFile, budgets: TeamFile['
   return null;
 }
 
-/** The team file at the root as the layer reads it: the file itself through `validateTeamFile`,
- *  and the copy the approval stored when the file cannot be read (§ 2.1). */
-function teamOf(root: string, standing: Standing, home: string): TeamFile | null {
+/** Validate the live team file; an unreadable or invalid file has no fallback. */
+function teamOf(root: string, home: string): TeamFile | null {
   const live = readText(join(root, TEAM_FILE));
   if (live !== null) {
     const checked = validateTeamFile(live, { home, root });
     if (checked.ok) return checked.team;
   }
-  if (standing.kind !== 'verified') return null;
-  const stored = validateTeamFile(standing.record.file);
-  return stored.ok ? stored.team : null;
+  return null;
 }
 
 function readText(path: string): string | null {

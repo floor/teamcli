@@ -5,7 +5,7 @@
 // default — authority, money, the ceilings, identity, trust, the workspace — and so is any
 // section the parser grows later, because the test is membership, not exclusion. Here the
 // guard is the real one: gate-level scenes against `delegateGate` with only the reads a
-// scratch test cannot make faked (the standing, the approved copy, herdr, the state, the
+// scratch test cannot make faked (the standing, herdr, the state, the
 // placement), and end-to-end runs of `runApprove` over a real signed store in a scratch
 // home — the real guard, the real key, the real log line.
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -104,7 +104,6 @@ type Scene = {
   team?: TeamFile;
   file?: string;
   standing?: Standing;
-  copy?: string | null;
   state?: State | null;
   agents?: (session: string) => HerdrAgent[] | null;
   ancestors?: Process[] | null;
@@ -115,7 +114,6 @@ type Scene = {
 
 function gate(scene: Scene = {}): DelegateVerdict {
   const team = scene.team ?? base;
-  const file = scene.file ?? yaml;
   // The approved file is `base`; a scene's `team` is a candidate against it. Scenes that
   // approve of a different file pass their own standing, as delegate.test.ts does.
   const standing = scene.standing ?? verified(base, yaml);
@@ -138,7 +136,6 @@ function gate(scene: Scene = {}): DelegateVerdict {
     io: { env: {}, stdinIsTTY: true },
     sources: {
       standing: () => standing,
-      approvedCopy: () => (scene.copy === undefined ? file : scene.copy),
       state: () => (scene.state === undefined ? empty : scene.state),
       agents,
       sessionRunning: () => null,
@@ -221,10 +218,13 @@ describe('the ordinary-change guard', () => {
     expect(refused({ team: reordered, standing: verified(base, yaml) }).text).toBe('this change needs the owner: `delegates` changed');
   });
 
-  test('the earlier steps still win: an unverified approval, an unreadable copy, before the guard', () => {
+  test('the earlier steps still win: an unverified approval, before the guard', () => {
     const candidate = notOrdinary[0]![1];
     expect(refused({ team: candidate, standing: { kind: 'none' } }).id).toBe('approve.delegate-approval');
-    expect(refused({ team: candidate, copy: null, standing: verified(base, yaml) }).id).toBe('approve.delegate-approved-copy');
+    // No stored copy is consulted: the guard reads the record's own fingerprints against the
+    // live candidate, so the same scene with a verified standing reaches the guard and refuses
+    // on the section.
+    expect(refused({ team: candidate, standing: verified(base, yaml) }).id).toBe('approve.delegate-not-ordinary');
   });
 });
 

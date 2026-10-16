@@ -1133,6 +1133,10 @@ scene('down.delegate-approval', async (place) => {
   write(place, DELEGATED);
   return show(await down(place, [], other, delegated('down.delegate-approval', 'delegation needs a verified approval: no approval is in force')), 'delegation needs a verified approval');
 });
+scene('down.delegate-command', async (place) => {
+  write(place, DELEGATED);
+  return show(await down(place, [], other, delegated('down.delegate-command', 'the delegate may not run down')), 'may not run down');
+});
 scene('down.delegate-evidence', async (place) => {
   write(place, DELEGATED);
   return show(await down(place, [], other, delegated('down.delegate-evidence', "delegation cannot verify its placement or seats: herdr doesn't answer")), 'cannot verify its placement or seats');
@@ -2016,7 +2020,7 @@ scene('worktree.forbidden', async (place) => {
 });
 scene('worktree.trust', async (place) => {
   approve(place, worktreeText({ trust: '../worktrees/acme/task' }));
-  return show(await worktree(place, ['new', 'select-width', '--kind', 'fix']), 'outside the approved trust');
+  return show(await worktree(place, ['new', 'select-width', '--kind', 'fix']), "outside the file's trust paths");
 });
 scene('worktree.symlink', async (place) => {
   approve(place, worktreeText());
@@ -2629,7 +2633,7 @@ async function tempo(place: Place, argv: string[], caller: Caller = owner): Prom
 
 scene('tempo.set', async (place) => {
   write(place, TEAM);
-  return show(await tempo(place, ['urgent']), 'it takes effect when the file is approved');
+  return show(await tempo(place, ['urgent']), 'tempo: urgent');
 });
 scene('tempo.unchanged', async (place) => {
   write(place, TEAM.replace('format: 1\n', 'format: 1\ntempo: urgent\n'));
