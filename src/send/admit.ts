@@ -29,9 +29,10 @@ export type AdmitTeam = {
   orchestrator?: string | null;
   /** The session the team runs in, when the record carries it; a grant may spell a team by it. */
   session?: string | null;
-  /** The roster lines, and, where the record holds it, whether the seat has the `leads`
-   *  capability — the only thing that makes a seat its team's lead to admission. */
-  roster: { agent: string; seat: string; role: string; leads?: boolean }[];
+  /** The roster lines, and, where the record holds them, the capabilities that make a seat's
+   *  place in the chain what it is: `leads`, the only thing that makes a seat its team's lead to
+   *  admission, and `assistant`, which puts a seat at the entity's assistant position. */
+  roster: { agent: string; seat: string; role: string; leads?: boolean; assistant?: boolean }[];
 };
 
 /** Every registered team, by team id — `readTeams`' own shape. */
@@ -171,8 +172,14 @@ export function admitSend(
   if (callerTeam !== undefined && targetTeam === callerTeam && leadsOwnTeam) {
     return { ok: true, rule: 'an orchestrator or operator to a seat of its own team' };
   }
-  // An assistant writes to the coordinator of its own entity: the seat above the entity's teams.
-  if (roleOf(caller, callerTeam) === 'assistant' && onMainCoordinator(target, callerTeam?.entity, teams)) {
+  // The entity's assistant writes to the coordinator of its own entity: the seat above the
+  // entity's teams. Which seat that is, is a place in the chain and the capability the file
+  // marks — the entity's first assistant — never the word in a role.
+  const assistant = entityAssistant(callerTeam?.entity, teams);
+  if (
+    assistant !== null && callerTeamId === assistant.team && seatOf(caller) === assistant.seat
+    && onMainCoordinator(target, callerTeam?.entity, teams)
+  ) {
     return { ok: true, rule: "an assistant seat to its entity's coordinator" };
   }
   // Any seat writes to its own team's orchestrator.
@@ -321,6 +328,24 @@ function leadSeat(team: AdmitTeam | undefined): string | null {
   if (!team) return null;
   if (team.orchestrator) return team.orchestrator;
   return team.roster.find((entry) => entry.leads === true)?.seat ?? null;
+}
+
+/** The entity's assistant, with the team it sits in: the seat holding the `assistant` capability
+ *  nearest the head of the chain — the entity's own team first (the team whose project is the
+ *  entity itself), the entity's other teams after it by team id, each roster in the order the
+ *  file declares it — and null when no seat of the entity holds the capability. A capability and
+ *  a place in the chain, never a role's name: a role is each team's own word, in any language. */
+function entityAssistant(entity: string | null | undefined, teams: AdmitTeams): { team: string; seat: string } | null {
+  if (!entity) return null;
+  const head = (id: string): number => (teams[id]?.project === entity ? 0 : 1);
+  const ids = Object.keys(teams).sort((a, b) => head(a) - head(b) || (a < b ? -1 : a > b ? 1 : 0));
+  for (const id of ids) {
+    const team = teams[id];
+    if (!team || team.entity !== entity) continue;
+    const line = team.roster.find((entry) => entry.assistant === true);
+    if (line) return { team: id, seat: line.seat };
+  }
+  return null;
 }
 
 /** The registered projects naming a team, in project-id order, with their ids — the reverse index
