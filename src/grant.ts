@@ -42,14 +42,14 @@ export function logGranted(dir: string, seat: string, act: GrantScope, now?: Dat
 }
 
 /**
- * Whether this caller may perform `act` under the grant the approval in force names.
+ * Whether this caller may perform `act` under the grant the live file names.
  * `up`, `down` and `approve` call this. It reads the live default file and the approval again on this
  * call: no remembered copy, no `--file`, and no walk of other sessions the state holds.
  * It decides and stops. It does not print, write, or launch.
  *
- * The grant it trusts is the approved copy's. A live edit that has not been signed is a
- * difference: every act but `approve` refuses the whole difference, and `approve` refuses
- * every owner section outside `ORDINARY_SECTIONS`, `grant` included.
+ * The grant it trusts is the live file's. A stored copy is not a gate: an edit of `grant`
+ * admits the seat the file names now. `approve` still refuses every owner section outside
+ * `ORDINARY_SECTIONS`, `grant` included, and that act still needs a readable stored copy.
  */
 export function grantGate(input: {
   act: GrantScope;
@@ -72,31 +72,25 @@ export function grantGate(input: {
     return refuse('approval', `a grant needs a verified approval: ${notInForce(standing)}`);
   }
 
-  const copy = sources.approvedCopy ? sources.approvedCopy(loaded.root) : approvedCopy(loaded.root, home);
-  const approved = copy === null ? null : validated(copy);
-  if (approved === null) {
-    return refuse('approved-copy', 'a grant needs a readable approved copy: run `team approve`');
-  }
-
-  // The difference step. `approve` admits an ordinary difference — the roster and `rules` —
-  // and refuses every other owner section, `grant` included, because `grant` is not in
-  // `ORDINARY_SECTIONS`. Every other act needs the live file to be the approved one, so a
-  // grant edited in the live file and not yet signed authorises nothing.
-  const differences = compare(approvedFingerprints(standing.record), fingerprints(loaded.team));
+  // `approve` still refuses an owner section outside the ordinary list. Every other act
+  // reads the live file: a fingerprint difference is not a refusal.
+  let grant = loaded.team.grant;
   if (act === 'approve') {
-    const kept = differences.filter((difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name));
+    const copy = sources.approvedCopy ? sources.approvedCopy(loaded.root) : approvedCopy(loaded.root, home);
+    const approved = copy === null ? null : validated(copy);
+    if (approved === null) {
+      return refuse('approved-copy', 'a grant needs a readable approved copy: run `team approve`');
+    }
+    const kept = compare(approvedFingerprints(standing.record), fingerprints(loaded.team)).filter(
+      (difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name),
+    );
     if (kept.length > 0) {
       return refuse('not-ordinary', `this change needs the owner: ${kept.map(describe).join('; ')}`);
     }
-  } else if (differences.length > 0) {
-    return refuse(
-      'drift',
-      `a grant needs the approved file: the file is not the approved one (${differences.map(describe).join('; ')}): run \`team approve\``,
-    );
+    grant = approved.grant;
   }
 
-  const grant = approved.grant;
-  if (grant === null) return refuse('omitted', 'the approved file grants nothing');
+  if (grant === null) return refuse('omitted', 'the file grants nothing');
 
   // The placement `add` and `remove` use for a named seat: this session, this name, the pane
   // the state records for it now. The session is the grant's, not a session the caller picks

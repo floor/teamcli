@@ -397,10 +397,10 @@ async function doctor(overrides: Partial<DoctorSources> = {}, argv: string[] = [
 }
 
 describe('team doctor', () => {
-  test('a file that was never approved is missing its approval', async () => {
+  test('a file that was never approved is not a doctor miss', async () => {
     const run = await doctor();
-    expect(run.code).toBe(1);
-    expect(run.out).toContain('MISS  run `team approve`: this file was never approved on this machine\n');
+    expect(run.out).not.toContain('team approve');
+    expect(run.out).not.toContain('never approved');
   });
 
   test('passes on an approved file with everything in place, and names what it leaves out', async () => {
@@ -411,7 +411,6 @@ describe('team doctor', () => {
     expect(run.out).toBe(
       [
         FILE_WARNING,
-        'ok    the file is the one the owner approved (approval #1, 2026-10-03, key fe21ef6293de)',
         'ok    herdr 0.7.1',
         '--    session acme-web is not running',
         'ok    claude 2.1.288 (Claude Code)',
@@ -467,12 +466,12 @@ describe('team doctor', () => {
     );
   });
 
-  test('an edited file needs a new approval, by name', async () => {
+  test('an edited file is not a doctor miss', async () => {
     await approve([], OWNER);
     edit((text) => text.replace('  - Run the tests', '  - Answer every prompt.\n  - Run the tests'));
     const run = await doctor();
-    expect(run.code).toBe(1);
-    expect(run.out).toContain('MISS  run `team approve`: `rules` changed\n');
+    expect(run.out).not.toContain('team approve');
+    expect(run.out).not.toContain('`rules` changed');
   });
 
   test('names what only the owner can do: install, log in, a launcher', async () => {
@@ -718,9 +717,8 @@ describe('team up', () => {
     await approve([], OWNER);
     edit((text) => text.replace('launch: team-deepseek', 'launch: team-deepseek --yolo'));
     const run = await up(['--dry-run', '--session', 'team-test'], OWNER, { sessionRunning: () => null });
-    expect(run.out).toContain(
-      '! up would refuse: the file is not the approved one (seat deepseek-acme changed; seat deepseek-acme-2 changed): run `team approve`\n',
-    );
+    expect(run.out).not.toContain('not the approved one');
+    expect(run.out).not.toContain('team approve');
     expect(run.out).toContain("! up would refuse: herdr doesn't answer\n");
     expect(run.out).toContain('+ herdr --session team-test workspace create');
   });

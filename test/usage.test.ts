@@ -692,7 +692,7 @@ describe('team usage', () => {
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
       'anthropic  not known (no team declares an account for it yet)',
-      'note: acme: the file was never approved on this machine: run `team approve`',
+      'note: acme: the file was never approved on this machine',
     ].join('\n') + '\n');
 
     // The readings the state holds are not bound to the accounts the file declares: a caller who
@@ -705,11 +705,11 @@ describe('team usage', () => {
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
       'anthropic  not known (no team declares an account for it yet)',
-      'note: acme: the file was never approved on this machine: run `team approve`',
+      'note: acme: the file was never approved on this machine',
       `note: acme: ${UNBOUND_ACCOUNT}`,
     ].join('\n') + '\n');
     expect(doc.notes).toEqual([
-      { scope: 'acme', why: 'the file was never approved on this machine: run `team approve`' },
+      { scope: 'acme', why: 'the file was never approved on this machine' },
       { scope: 'acme', why: UNBOUND_ACCOUNT },
     ]);
 
@@ -719,7 +719,7 @@ describe('team usage', () => {
       'usage on this machine, 1 team, 1 lab, 1 account',
       '',
       'anthropic  not known (no team declares an account for it yet)',
-      'note: acme: the file was never approved on this machine: run `team approve`',
+      'note: acme: the file was never approved on this machine',
     ].join('\n') + '\n');
 
     // Verified, but the copy the owner approved names no account: the budgets in force are the

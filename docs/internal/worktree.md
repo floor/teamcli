@@ -42,7 +42,7 @@ When an owner section or a seat was added, removed or changed, the command print
 stderr before its normal output and before a later refusal (the trust, the limit, an unapproved
 seat):
 
-    team worktree: using the approved workspace settings; the file has unapproved changes: run `team approve`
+    team worktree: using the stored workspace settings; the file has changed since that copy was stored
 
 The exit code is the one the run itself has. The log line is unchanged: the note is not written to
 `team.log`. A caller the approved copy does not allow is refused before the note, and nothing is
@@ -52,14 +52,13 @@ session too. That session change is the drift, the note prints, and state is wri
 approved session while `{repo}` is still the live name.
 
 `--seat` is checked against the approved seats. The live seat list is read for one distinction: a
-name the file declares and the approved copy does not gets `seat <name> is not in the approved
-file`; a name neither declares gets `--seat "<name>" names no declared seat`.
+name the file declares and the stored copy does not gets `seat <name> is not in the stored
+copy`; a name neither declares gets `--seat "<name>" names no declared seat`.
 
 A verified record whose stored copy this version cannot read — empty, invalid, or otherwise — refuses
-with `the approved copy can't be read`, whether or not the fingerprints match. A record whose `file`
+with `the stored copy can't be read`, whether or not the fingerprints match. A record whose `file`
 is not a string never becomes a verified standing. The store refuses it first, and the command
-prints that line unchanged: `the approval record cannot be read (... "file" is not a string): run
-team approve once`.
+prints that line unchanged: `the approval record cannot be read (... "file" is not a string)`.
 
 Writes `.agents/team.log`, `.agents/team.state.json` (one record under the session: the folder, the
 branch, the seat when `--seat` names one, and whether `workspace.setup` succeeded), and, with `new`,
@@ -97,10 +96,10 @@ the same way.
 | ``team worktree: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
 | ``team worktree: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team worktree: session can't be "default", herdr's own session` | 1 |
-| ``team worktree: the file was never approved on this machine: run `team approve` `` | 1 |
-| ``team worktree: approved before records were signed: run `team approve` once`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
-| ``team worktree: the approval record cannot be read (<store>/approval.json: "file" is not a string): run `team approve` once`` — the record's `file` is not a string; the store refuses it before this command reads a copy | 1 |
-| ``team worktree: the approved copy can't be read: run `team approve` `` — a verified record whose stored copy this version can't read, whether or not the fingerprints match | 1 |
+| ``team worktree: the file was never approved on this machine `` | 1 |
+| ``team worktree: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
+| ``team worktree: the approval record cannot be read (<store>/approval.json: "file" is not a string)`` — the record's `file` is not a string; the store refuses it before this command reads a copy | 1 |
+| ``team worktree: the stored copy can't be read `` — a verified record whose stored copy this version can't read, whether or not the fingerprints match | 1 |
 | `team worktree: a task name is one segment of letters, digits, ".", "_" and "-", and it starts with a letter or a digit` | 1 |
 | `team worktree: --kind: <the same, for the kind>` | 1 |
 | `team worktree: workspace.mode is shared: this team keeps one checkout, so there is no task worktree to create` | 1 |
@@ -108,7 +107,7 @@ the same way.
 | `team worktree: --kind is required: the branch pattern is "{kind}/{task}"` | 1 |
 | `team worktree: --kind has nowhere to go: the branch pattern is "{task}"` | 1 |
 | `team worktree: <folder> is outside the approved trust paths` | 1 |
-| ``team worktree: seat <name> is not in the approved file: run `team approve` `` — a seat the file declares and the approved copy does not | 1 |
+| ``team worktree: seat <name> is not in the stored copy `` — a seat the file declares and the approved copy does not | 1 |
 | `team worktree: --seat "x" names no declared seat` | 1 |
 | `team worktree: "t" is already recorded` / `"t" is already recorded in session x` | 1 |
 | `team worktree: the worktree limit is 8, and 8 are open (workspace.limit in the team file)` then one line per recorded worktree | 1 |
@@ -289,7 +288,7 @@ seats:
 
 ```console
 $ team worktree new read-back --kind fix ; echo "exit $?"
-team worktree: using the approved workspace settings; the file has unapproved changes: run `team approve`
+team worktree: using the stored workspace settings; the file has changed since that copy was stored
 ../worktrees/beacon/read-back
 exit 0
 ```
@@ -298,7 +297,7 @@ The seat the file added is refused, because the approved copy doesn't declare it
 
 ```console
 $ team worktree new later-task --kind fix --seat claude-later ; echo "exit $?"
-team worktree: using the approved workspace settings; the file has unapproved changes: run `team approve`
-team worktree: seat claude-later is not in the approved file: run `team approve`
+team worktree: using the stored workspace settings; the file has changed since that copy was stored
+team worktree: seat claude-later is not in the stored copy
 exit 1
 ```

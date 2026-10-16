@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { approvalDifferencesOf, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
+import { budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
@@ -270,7 +270,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.default-session
     return 1;
   }
-  // A missing record is the live file. A legacy or refused record is still not in force.
+  // A missing record is the live file, and so is a verified one: the stored copy is not a
+  // gate and is not the text this edit starts from. A legacy or refused record is still not
+  // in force.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
     out.stderr(`team add: ${plainText(notInForce(standing))}\n`);
@@ -278,30 +280,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.ceilings
     return 1;
   }
-  let approvedText: string;
-  let approvedTeam: TeamFile;
-  let ceilings: Ceilings;
-  if (standing.kind === 'none') {
-    approvedText = readFileSync(path, 'utf8');
-    approvedTeam = team;
-    ceilings = ceilingsOf(team);
-  } else {
-    const differences = approvalDifferencesOf(standing, team);
-    if (differences.length) {
-      out.stderr(`team add: the file is not the approved one (${plainText(differences.join('; '))}): run \`team approve\`\n`);
-      // exit: add.differs
-      return 1;
-    }
-    approvedText = standing.record.file;
-    const approved = validateTeamFile(approvedText, { home: sources.home, fs: sources.fs, root });
-    if (!approved.ok) {
-      out.stderr('team add: the approved copy can\'t be read: run `team approve`\n');
-      // exit: add.approved-copy
-      return 1;
-    }
-    approvedTeam = approved.team;
-    ceilings = standing.record.approval.ceilings;
-  }
+  const approvedText = readFileSync(path, 'utf8');
+  const approvedTeam = team;
+  const ceilings = ceilingsOf(team);
 
   const live = sources.sessionState(session);
   if (live === null) {
@@ -852,10 +833,9 @@ function seatPlan(
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
     stopped: false,
-    // An option seat's rules keep coming from the live file, as main's launch line does; a
-    // message seat's file and line are the approved copy's, whatever the live file says now.
+    // An option seat's launch line and a message seat's rules file both come from the live file.
     rules: rulesOf(team, seat, root),
-    ...seatDeliveryOf(standing, team, seat, root, home),
+    ...seatDeliveryOf(standing, team, seat, root, home, true),
     ...(start.lobby ? { lobby: true } : {}),
   };
 }
@@ -968,8 +948,10 @@ function hostOf(input: {
     typeLine: () => false,
     deliverRules: async (session, pane, cli, file, seconds) => {
       // The rules go to the file first; nothing is typed until it holds them. The writer
-      // builds the path itself, from the approval in force and the seat's name.
-      const written = writeRulesFile(input.standing, file.seat, input.root, input.home, file.text, rulesFileHash(file.text));
+      // builds the path itself, from the live project and the seat's name.
+      const written = writeRulesFile(
+        input.standing, file.seat, input.root, input.home, file.text, rulesFileHash(file.text), undefined, input.team.project,
+      );
       if (!written.ok) return fileRefusalOf(written);
       if (!typeablePath(file.path)) {
         return { stop: 'path', typed: false, sent: false, kind: 'unknown' as const, row: null };
@@ -1101,8 +1083,8 @@ function hostOf(input: {
     },
     drop(name) {
       // A temporary seat's rules file goes with the seat. The remover builds the path itself,
-      // from the approval in force and the seat's name, and walks the writer's checked chain.
-      if (temporary && name === seat.name) removeRulesFile(input.standing, name, input.root, input.home);
+      // from the live project and the seat's name, and walks the writer's checked chain.
+      if (temporary && name === seat.name) removeRulesFile(input.standing, name, input.root, input.home, input.team.project);
       let pane: string | undefined;
       updateState(dir, (file) => {
         const current = file.sessions[session];

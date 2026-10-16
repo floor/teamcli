@@ -528,12 +528,11 @@ async function recover(
   if (!named && !host.rename(session, pane, name)) return 'rule delivery';
   if (profile.rulesOption !== null) return true;
   // The rules are delivered exactly as `up` delivers them: written to the seat's per-seat
-  // file first — from the approved copy of the team file, as `up`'s are — then the one line
-  // that points at it, the only shape of rules a read-back can prove; this command shares
-  // that delivery.
+  // file first — from the live file, as `up`'s are — then the one line that points at it,
+  // the only shape of rules a read-back can prove; this command shares that delivery.
   const delivery = rulesDeliveryOf(standing, team, seat, root, host.home);
   if ('refusal' in delivery) return 'rule delivery';
-  if (!writeRulesFile(standing, seat.name, root, host.home, delivery.text, rulesFileHash(delivery.text)).ok) return 'rule delivery';
+  if (!writeRulesFile(standing, seat.name, root, host.home, delivery.text, rulesFileHash(delivery.text), undefined, team.project).ok) return 'rule delivery';
   let processRefusal: Refusal | null = null;
   const delivered = await deliverRules(
     profile.cli,

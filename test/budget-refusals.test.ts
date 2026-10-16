@@ -842,7 +842,8 @@ describe('an unapproved edit to the budgets', () => {
     writeTeamYaml(WEAKER);
     const dry = await up(['--dry-run'], world());
     expect(dry.out).toContain(`skip worker: would refuse: ${TAIL}`);
-    expect(dry.out).toContain('! up would refuse: the file is not the approved one (`budgets` changed): run `team approve`');
+    expect(dry.out).not.toContain('not the approved one');
+    expect(dry.out).not.toContain('team approve');
     const refused = await up([], world());
     expect(refused.code).toBe(1);
     expect(refused.labels).toEqual([]);
@@ -858,8 +859,8 @@ describe('an unapproved edit to the budgets', () => {
     store([reading('anthropic', 80), reading('openai', 5)]);
     writeTeamYaml(WEAKER);
     const before = await add(['worker'], world());
-    expect(before.code).toBe(1);
-    expect(before.err).toContain('the file is not the approved one (`budgets` changed)');
+    expect(before.err).not.toContain('not the approved one');
+    expect(before.err).not.toContain('team approve');
     expect(before.labels).toEqual([]);
     approve(WEAKER);
     const after = await add(['worker'], world());

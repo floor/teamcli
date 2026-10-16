@@ -4289,7 +4289,7 @@ describe('team up, the pause', () => {
       expect(made.renames).not.toContain('cursor-acme');
       expect(seat?.stage).toBe('launched');
       expect(io.out).toContain(
-        'cursor-acme: left out: runs GPT Sol 5.6; the file says Grok 4.7; left at launched, not named. Add --model grok-4.7-high to its launch, or correct the file\'s model and version and run `team approve`\n',
+        'cursor-acme: left out: runs GPT Sol 5.6; the file says Grok 4.7; left at launched, not named. Add --model grok-4.7-high to its launch, or correct the file\'s model and version\n',
       );
       return;
     }

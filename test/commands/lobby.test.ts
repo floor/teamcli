@@ -1880,12 +1880,12 @@ describe('legacy files and migration', () => {
         + `${join(base, 'worktrees', 'acme')} is the folder workspace.path "../worktrees/{repo}/{task}" places worktrees in, replacing "../worktrees/acme/*"\n`,
     );
 
-    // Migrated but unapproved: the migration note is gone — the file is no longer legacy — and
-    // the approval finding carries the next step.
+    // Migrated and different from the stored copy: the migration note is gone, and doctor
+    // does not name a deleted command.
     writeFileSync(join(root, '.agents', 'team.yaml'), migratedTeamYaml());
     const docUnapproved = await runDoctorCmd();
     expect(docUnapproved.out).not.toContain('the file is legacy');
-    expect(docUnapproved.out).toContain('MISS  run `team approve`');
+    expect(docUnapproved.out).not.toContain('team approve');
 
     approveYaml(migratedTeamYaml());
     const docAfter = await runDoctorCmd();
@@ -1893,17 +1893,18 @@ describe('legacy files and migration', () => {
     expect(docAfter.out).not.toContain('the file is legacy');
   });
 
-  test('a migrated but unapproved file refuses up and add', async () => {
+  test('a migrated file that differs from the stored copy still mounts', async () => {
     approveYaml(legacyTeamYaml());
     writeFileSync(join(root, '.agents', 'team.yaml'), migratedTeamYaml());
 
     const upRes = await runUpCmd([], world());
-    expect(upRes.code).toBe(1);
-    expect(upRes.err).toContain('the file is not the approved one');
+    expect(upRes.err).not.toContain('the file is not the approved one');
+    expect(upRes.err).not.toContain('team approve');
+    expect(upRes.code, upRes.err + upRes.out).toBe(0);
 
     const addRes = await runAddCmd(['worker'], world());
-    expect(addRes.code).toBe(1);
-    expect(addRes.err).toContain('the file is not the approved one');
+    expect(addRes.err).not.toContain('the file is not the approved one');
+    expect(addRes.err).not.toContain('team approve');
   });
 
   test('temporary add waits in machine lobby', async () => {
@@ -2131,8 +2132,8 @@ describe('the upgrade from 0.2.1', () => {
     const afterA = await runUpCmd([], world());
     expect(afterA.err).not.toContain('the file is legacy');
     expect(afterA.err).not.toContain('outside trust');
-    expect(afterA.err).toContain('the file is not the approved one');
-    expect(afterA.err).toContain('run `team approve`');
+    expect(afterA.err).not.toContain('the file is not the approved one');
+    expect(afterA.err).not.toContain('team approve');
 
     // An entry the owner added by hand under the init ones — kept, absolute, named as his.
     const handAdded = v021TeamYaml().replace('  - ../worktrees/acme/*\n', '  - ../worktrees/acme/*\n  - ../allies/*\n');
@@ -2146,7 +2147,8 @@ describe('the upgrade from 0.2.1', () => {
     const afterB = await runUpCmd([], world());
     expect(afterB.err).not.toContain('the file is legacy');
     expect(afterB.err).not.toContain('outside trust');
-    expect(afterB.err).toContain('the file is not the approved one');
+    expect(afterB.err).not.toContain('the file is not the approved one');
+    expect(afterB.err).not.toContain('team approve');
 
     // The approval 0.2.1 left is format-1 and unsigned. The block is computed from the
     // file, so it is the same one, and pasting it leaves exactly the approval step.
@@ -2188,7 +2190,8 @@ describe('the upgrade from 0.2.1', () => {
     expect(after.err).not.toContain('the file is legacy');
     expect(after.err).not.toContain('outside trust');
     expect(after.err).not.toContain('inside the protected checkout');
-    expect(after.err).toContain('the file is not the approved one');
+    expect(after.err).not.toContain('the file is not the approved one');
+    expect(after.err).not.toContain('team approve');
   });
 
   test('a folder the containment rule refuses is never suggested: the key that forces it is named', async () => {
@@ -2760,7 +2763,7 @@ describe('the upgrade from 0.2.1', () => {
     const doc = await runDoctorCmd([], over);
     expect(doc.out).toContain(
       'worker: runs Claude Opus 5.5; the file\'s version "0" is the placeholder init writes — '
-        + 'write "5.5" into the file, then run `team approve`',
+        + 'write "5.5" into the file',
     );
     // Information, not a block: the note adds no finding that stops anything.
     expect(doc.code).toBe(0);
@@ -2774,7 +2777,7 @@ describe('the upgrade from 0.2.1', () => {
     const docOther = await runDoctorCmd([], over);
     expect(docOther.out).toContain(
       'warn  worker: runs Claude Opus 5.5; the file says Claude Sonnet 0 — '
-        + 'write model: "Claude Opus" and version: "5.5" into the file, then run `team approve`',
+        + 'write model: "Claude Opus" and version: "5.5" into the file',
     );
     expect(docOther.out).not.toContain('the placeholder init writes');
 
@@ -3177,7 +3180,7 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     // The file is no longer legacy, so the migration note stays away; the next step the owner
     // has is the approval.
     expect(doc.out).not.toContain('the file is legacy');
-    expect(doc.out).toContain('MISS  run `team approve`');
+    expect(doc.out).not.toContain('team approve');
   });
 
   test('a resumed launch from a migrated approved file keeps the recorded start folder', async () => {

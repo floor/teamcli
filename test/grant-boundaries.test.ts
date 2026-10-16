@@ -351,11 +351,10 @@ describe('the grant\'s scope', () => {
 });
 
 describe('the signature the gate trusts', () => {
-  test('a grant added to the live file and not yet approved is invisible to every act', () => {
+  test('a grant added to the live file admits up, and approve still names the owner', () => {
     expect(gate({ act: 'up', live: GRANTED, approved: ONE, sessions: SEATED, io: ORCHESTRATOR })).toEqual({
-      kind: 'refused',
-      id: 'grant.drift',
-      text: 'a grant needs the approved file: the file is not the approved one (`grant` changed): run `team approve`',
+      kind: 'passed',
+      grant: { session: 'arena', seat: 'lead', scope: ['up', 'down', 'approve', 'init'] },
     });
     expect(gate({ act: 'approve', live: GRANTED, approved: ONE, sessions: SEATED, io: ORCHESTRATOR })).toEqual({
       kind: 'refused',
@@ -372,7 +371,7 @@ describe('the signature the gate trusts', () => {
       expect(gate({ act, live: ONE, approved: ONE, dropGrant: true, sessions: SEATED, io: ORCHESTRATOR })).toEqual({
         kind: 'refused',
         id: 'grant.omitted',
-        text: 'the approved file grants nothing',
+        text: 'the file grants nothing',
       });
     }
   });

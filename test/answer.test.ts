@@ -1431,7 +1431,7 @@ describe('team answer', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(host.keys).toEqual([]);
-    expect(io.err).toBe('the file was never approved on this machine: run `team approve`\n');
+    expect(io.err).toBe('the file was never approved on this machine\n');
 
     await approve(root, home);
     const hanging = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');

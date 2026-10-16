@@ -39,13 +39,6 @@
     {
       "code": 1,
       "command": "add",
-      "id": "add.approved-copy",
-      "meaning": "the approved copy can't be read",
-      "trigger": "team add worker"
-    },
-    {
-      "code": 1,
-      "command": "add",
       "id": "add.branch-missing",
       "meaning": "the merged branch doesn't exist",
       "trigger": "team add --temporary --like lead --until merged:missing"
@@ -160,13 +153,6 @@
       "command": "add",
       "id": "add.detached",
       "meaning": "a run with no terminal",
-      "trigger": "team add worker"
-    },
-    {
-      "code": 1,
-      "command": "add",
-      "id": "add.differs",
-      "meaning": "the file differs from its approval",
       "trigger": "team add worker"
     },
     {
@@ -963,13 +949,6 @@
     {
       "code": 1,
       "command": "down",
-      "id": "down.approved-copy",
-      "meaning": "the approved copy of the team file cannot be read",
-      "trigger": "team down"
-    },
-    {
-      "code": 1,
-      "command": "down",
       "id": "down.caller",
       "meaning": "the caller may not change the team",
       "trigger": "team down"
@@ -1049,20 +1028,6 @@
       "command": "down",
       "id": "down.grant-approval",
       "meaning": "a grant needs a verified approval",
-      "trigger": "team down"
-    },
-    {
-      "code": 1,
-      "command": "down",
-      "id": "down.grant-approved-copy",
-      "meaning": "a grant needs a readable approved copy",
-      "trigger": "team down"
-    },
-    {
-      "code": 1,
-      "command": "down",
-      "id": "down.grant-drift",
-      "meaning": "a grant needs the approved file",
       "trigger": "team down"
     },
     {
@@ -1831,13 +1796,6 @@
     {
       "code": 1,
       "command": "remove",
-      "id": "remove.approved-copy",
-      "meaning": "the approved copy of the team file cannot be read",
-      "trigger": "team remove lead"
-    },
-    {
-      "code": 1,
-      "command": "remove",
       "id": "remove.busy",
       "meaning": "the seat is not free",
       "trigger": "team remove worker"
@@ -2506,13 +2464,6 @@
       "id": "up.detached",
       "meaning": "a run with no terminal",
       "trigger": "team up --session elsewhere"
-    },
-    {
-      "code": 1,
-      "command": "up",
-      "id": "up.differs",
-      "meaning": "the file differs from its approval",
-      "trigger": "team up"
     },
     {
       "code": 1,

@@ -1528,7 +1528,7 @@ describe('team remove, the session mutator lock', () => {
     made.agents.push({ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
     // A refused record is decided before the lock site, so the refused run must not leave a
     // lock file the next real run would meet. A missing record is not that refusal.
-    made.sources.standing = () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' });
+    made.sources.standing = () => ({ kind: 'refused', why: 'the record cannot be verified' });
     const io = testIo(dir, owner);
     expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(1);
     expect(io.err).toContain('cannot be verified');

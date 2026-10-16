@@ -11,7 +11,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.agents` | `add` | 1 | the agents can't be read | `team add worker` |
 | `add.already-running` | `add` | 1 | the seat is already running | `team add worker` |
 | `add.another-pane` | `add` | 1 | the state records another pane for the caller's seat | `team add worker` |
-| `add.approved-copy` | `add` | 1 | the approved copy can't be read | `team add worker` |
 | `add.branch-missing` | `add` | 1 | the merged branch doesn't exist | `team add --temporary --like lead --until merged:missing` |
 | `add.budget` | `add` | 1 | the budget refuses the seat | `team add worker` |
 | `add.caller` | `add` | 1 | the caller may not change the team | `team add worker` |
@@ -29,7 +28,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.delegate-flag` | `add` | 1 | the delegate may not use this flag | `team add worker --temporary` |
 | `add.delegate-placement` | `add` | 1 | the approved delegate must be an external non-seat pane | `team add worker` |
 | `add.detached` | `add` | 1 | a run with no terminal | `team add worker` |
-| `add.differs` | `add` | 1 | the file differs from its approval | `team add worker` |
 | `add.doctor` | `add` | 1 | doctor refuses the launch | `team add worker` |
 | `add.file-owner` | `add` | 1 | --file is the owner's | `team add worker --file .agents/team.yaml` |
 | `add.herdr` | `add` | 1 | herdr doesn't answer | `team add worker` |
@@ -143,7 +141,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.stopped` | `down` | 0 | the seats that could be stopped were stopped | `team down` |
 | `down.abandon` | `down` | 1 | only the owner abandons a team | `team down --abandon` |
 | `down.another-pane` | `down` | 1 | the state records another pane for the caller's seat | `team down` |
-| `down.approved-copy` | `down` | 1 | the approved copy of the team file cannot be read | `team down` |
 | `down.caller` | `down` | 1 | the caller may not change the team | `team down` |
 | `down.delegate` | `down` | 1 | the caller is not the approved delegate of any entry | `team down, from a pane no delegate entry names` |
 | `down.delegate-approval` | `down` | 1 | delegation needs a verified approval | `team down, with no approval in force` |
@@ -156,8 +153,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.detached` | `down` | 1 | a run with no terminal | `team down` |
 | `down.file-owner` | `down` | 1 | --file is the owner's | `team down --file .agents/team.yaml` |
 | `down.grant-approval` | `down` | 1 | a grant needs a verified approval | `team down` |
-| `down.grant-approved-copy` | `down` | 1 | a grant needs a readable approved copy | `team down` |
-| `down.grant-drift` | `down` | 1 | a grant needs the approved file | `team down` |
 | `down.grant-scope` | `down` | 1 | the grant does not list down | `team down` |
 | `down.held` | `down` | 1 | a step was held | `team down` |
 | `down.legacy` | `down` | 1 | a legacy approval record stops nobody | `team down` |
@@ -267,7 +262,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.agents` | `remove` | 1 | the agents can't be read | `team remove worker` |
 | `remove.ambiguous` | `remove` | 1 | herdr lists more than one agent of this name | `team remove lead` |
 | `remove.another-pane` | `remove` | 1 | the state records another pane for the caller's seat | `team remove worker` |
-| `remove.approved-copy` | `remove` | 1 | the approved copy of the team file cannot be read | `team remove lead` |
 | `remove.busy` | `remove` | 1 | the seat is not free | `team remove worker` |
 | `remove.caller` | `remove` | 1 | the caller may not change the team | `team remove worker` |
 | `remove.coordinator` | `remove` | 1 | only the owner removes the orchestrator's or the operator's seat | `team remove lead` |
@@ -364,7 +358,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.delegate-placement` | `up` | 1 | the approved delegate must be an external non-seat pane | `team up` |
 | `up.deny` | `up` | 1 | deny | `team up` |
 | `up.detached` | `up` | 1 | a run with no terminal | `team up --session elsewhere` |
-| `up.differs` | `up` | 1 | the file differs from its approval | `team up` |
 | `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
 | `up.grant-another-pane` | `up` | 1 | the granted seat is not on its recorded pane | `team up` |
 | `up.grant-approval` | `up` | 1 | a grant needs a verified approval | `team up` |

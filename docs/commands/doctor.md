@@ -1,7 +1,7 @@
 # team doctor
 
-Reads the machine and says what the team needs before it can run: whether this file is the one the
-owner approved, whether herdr and each seat's CLI are installed, at the tested version and logged in,
+Reads the machine and says what the team needs before it can run: whether herdr and each seat's CLI
+are installed, at the tested version and logged in,
 whether each launch names the model the file says, whether a watch has run for the session, and what
 each approved budget check reads right now. `up` and `add` refuse until the missing ones that block
 them are done; the last line counts those.
@@ -91,7 +91,6 @@ Everything here is as it should be:
 $ team doctor ; echo "exit $?"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
-ok    the file is the one the owner approved (approval #1, 2026-10-04, key fe21ef6293de)
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
 --    session beacon is running
