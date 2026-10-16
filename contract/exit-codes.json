@@ -1341,6 +1341,13 @@
     {
       "code": 2,
       "command": "doctor",
+      "id": "doctor.both-modes",
+      "meaning": "both focused modes were asked at once",
+      "trigger": "team doctor --login --jules"
+    },
+    {
+      "code": 2,
+      "command": "doctor",
       "id": "doctor.file",
       "meaning": "the team file can't be read",
       "trigger": "team doctor --file missing.yaml"

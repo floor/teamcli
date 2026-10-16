@@ -532,6 +532,18 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
       if (profile.loginCheck === null) return null;
       return state === 'logged-out' ? false : true;
     },
+    // The two reads `doctor --jules` makes, answered as fixtures: the Jules CLI saying it is
+    // logged in and listing this project's repository, and the project's own origin remote. No
+    // page's example reaches a real `jules` or a real `git`.
+    command(binary, args) {
+      if (binary === 'jules' && args.join(' ') === 'remote list --repo') {
+        return { status: 0, stdout: 'floor/agents\nfloor/beacon\nfloor/welcome\n', stderr: '' };
+      }
+      if (binary === 'git' && args[0] === '-C' && args.slice(2).join(' ') === 'remote get-url origin') {
+        return { status: 0, stdout: 'git@github.com:floor/beacon.git\n', stderr: '' };
+      }
+      return null;
+    },
     herdrVersion: () => (herdr === 'none' ? null : '0.7.1'),
     sessionRunning: () => (herdr === 'none' ? null : herdr === 'running'),
     now,

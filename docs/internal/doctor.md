@@ -185,6 +185,20 @@ name them, then the same last line. A login check that passed is `ok  `; one tha
 with the command that logs in; a CLI that can't be asked — one with no login check, or no launch
 profile in this version — is `note`.
 
+`--jules` reads the Jules CLI's own steps alone, the same way, and never signs in. Whether the CLI is
+on the PATH comes first: not there is one `MISS` naming `npm install -g @google/jules`, and nothing
+further is read — there is no binary to run. Then the one call `jules remote list --repo` answers
+the login and the GitHub link together: a refusal or a non-zero status is one `MISS` naming `jules
+login` — the refusal is repeated, never parsed, so which half is missing is the CLI's own line to
+say, and the first line it printed stands after the `MISS` when it printed one — and the repository
+is not asked about. An answer lists the connected repositories in `owner/repo` lines; the project's
+own is read
+from its `origin` remote (`git -C <root> remote get-url origin`, github.com only) and looked for in
+them. Absent is a `MISS` naming `https://jules.google.com`; an origin that cannot be read as a
+github repository is a note, never a guess, and the login line stands on its own. A `--jules`
+finding never reaches a launch — `up` and `add` run the full report, which does not read Jules — so
+its summary prints no block clause.
+
 A watch that has not run, or whose heartbeat is old, is `MISS` here but not a reason for `up` to
 refuse: `up` starts the watch itself. A recorded pane the session no longer has is `MISS` too.
 This miss is not a reason for `up` to refuse.
@@ -204,6 +218,7 @@ empty. The exit code is the same as without `--json`.
 | Message | Exit |
 | --- | --- |
 | `team doctor: unknown option --x` / `team doctor: unexpected "x"` / `team doctor: --session needs a value` (each with the usage) | 2 |
+| `team doctor: --login and --jules answer different questions; ask one at a time` (with the usage) | 2 |
 | `team doctor: line <n>: <message>` / `team doctor: <message>` | 2 |
 
 ## Examples, moved here whole
@@ -760,6 +775,20 @@ MISS  log in to codex: `codex login`
 team doctor: 1 missing, 0 warnings: 1 of them block `up` and `add`
 exit 1
 ```
+
+`--jules` names the first step the Jules CLI is missing. The machine this was written on has no
+Jules CLI, so one line names the install and nothing else is read:
+
+```console
+$ team doctor --jules ; echo "exit $?"
+MISS  install the Jules CLI: `npm install -g @google/jules` — the owner's step
+team doctor: 1 missing, 0 warnings
+exit 1
+```
+
+With the CLI installed, logged in and the repository connected, two `ok  ` lines stand in its
+place — `jules: logged in, with GitHub linked` and `jules: <owner>/<repo> is connected` — and the
+summary reads `team doctor: nothing missing, 0 warnings`.
 
 A check that was edited after its approval never runs: the file on disk no longer hashes to what
 the owner approved, and the account reads unknown. The file

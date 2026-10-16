@@ -8,7 +8,7 @@ them are done; the last line counts those.
 
 ## Synopsis
 
-    team doctor [--session <name>] [--file <path>] [--login] [--json]
+    team doctor [--session <name>] [--file <path>] [--login] [--jules] [--json]
 
 ## Flags
 
@@ -17,6 +17,7 @@ them are done; the last line counts those.
 | `--session` | `<name>` | the herdr session to report on, instead of `team.session` |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml` |
 | `--login` | — | the seats' CLIs' logins alone, one line per CLI, instead of the whole report; herdr, the session and the machine are not read |
+| `--jules` | — | the Jules CLI's own steps alone — installed, logged in with GitHub linked, and this project's repository connected to it — instead of the whole report; herdr, the session, the machine and the seats' CLIs are not read |
 | `--json` | — | the report as one JSON document on stdout |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -128,5 +129,31 @@ ok    claude-code: logged in
 team doctor: nothing missing, 0 warnings
 exit 0
 ```
+
+`--jules` reads the Jules CLI's own three questions the same way — installed, logged in with GitHub
+linked, and this project's repository connected to it — and no herdr, session, machine or seat CLI:
+
+```console
+$ team doctor --jules ; echo "exit $?"
+ok    jules: logged in, with GitHub linked
+ok    jules: floor/beacon is connected
+team doctor: nothing missing, 0 warnings
+exit 0
+```
+
+A missing step is named one at a time, in this order, and the run stops at the first one — each
+the owner's step:
+
+```
+MISS  install the Jules CLI: `npm install -g @google/jules` — the owner's step
+MISS  log in to Jules and link it to GitHub: `jules login` — the owner's step
+MISS  connect floor/beacon to Jules: https://jules.google.com — the owner's step
+```
+
+The login and the GitHub link are one step: the refusal is repeated, never parsed, so which half is
+missing is the CLI's own line to say — `jules login` settles both. The command runs nothing but its
+two reads — `jules remote list --repo` and `git remote get-url origin` — and never signs in.
+`--login` and `--jules` answer different questions and are asked one at a time; both at once is an
+invocation error.
 
 Rationale, behaviour, refusals and known limits: [docs/internal/doctor.md](../internal/doctor.md).
