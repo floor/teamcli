@@ -6,7 +6,7 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
-import { entityGrantAdmits, entityGrantAdmitsCwd, grantGate, logGranted } from '../grant.ts';
+import { entityGrantAdmits, entityGrantAdmitsCwd, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { markStopped, takeOut } from '../file/lines.ts';
@@ -131,7 +131,12 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // file is read, so this decision answers this refusal alone — the loaded file's root decides
   // the caller rule below, and a team outside the granted paths still refuses there.
   const detached = detachedRefusal(walkCaller(io));
+  // The grants folder answers before the clock does, exactly as `init` asks it: a machine that
+  // holds no create-grant at all never evaluates `sources.now`, so a detached caller's refusal
+  // still comes before any source is read — `test/owner-no-tty-boundaries.test.ts` throws at
+  // every one of them and pins that order.
   const runnerGranted = detached !== undefined
+    && readEntityCreateGrants(sources.home).length > 0
     && entityGrantAdmitsCwd(io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   if (detached !== undefined && !runnerGranted) {
     io.stderr(`team remove: ${detached}\n`);

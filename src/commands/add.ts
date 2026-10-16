@@ -9,7 +9,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
-import { entityGrantAdmits, entityGrantAdmitsCwd } from '../grant.ts';
+import { entityGrantAdmits, entityGrantAdmitsCwd, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
@@ -157,7 +157,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // file is read, so this decision answers this refusal alone — the loaded file's root decides
   // the caller rule below, and a team outside the granted paths still refuses there.
   const detached = detachedRefusal(walkCaller(io));
+  // The grants folder answers before the clock does, exactly as `init` asks it: a machine that
+  // holds no create-grant at all never evaluates `sources.now`, so a detached caller's refusal
+  // still comes before any source is read — `test/owner-no-tty-boundaries.test.ts` throws at
+  // every one of them and pins that order.
   const runnerGranted = detached !== undefined
+    && readEntityCreateGrants(sources.home).length > 0
     && entityGrantAdmitsCwd(io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   if (detached !== undefined && !runnerGranted) {
     out.stderr(`team add: ${detached}\n`);

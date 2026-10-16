@@ -263,15 +263,21 @@ export function entityGrantAdmits(
   options: { home?: string; now?: Date; cwd?: string } = {},
 ): boolean {
   const home = options.home ?? homedir();
-  const nowMs = (options.now ?? new Date()).getTime();
   const cwd = options.cwd ?? io.cwd;
   const grants = readEntityCreateGrants(home);
   if (grants.length === 0) return false;
+  // The clock is read only once a grant answers to this caller and this folder: identity and
+  // containment are checked first, so a detached caller no grant names never evaluates `now` —
+  // the order `test/owner-no-tty-boundaries.test.ts` throws its clock at. Expiry still decides
+  // before any grant admits.
+  let nowMs: number | undefined;
+  const nowOf = () => (nowMs ??= (options.now ?? new Date()).getTime());
   for (const grant of grants) {
-    const expMs = Date.parse(grant.expires);
-    if (!Number.isFinite(expMs) || nowMs >= expMs) continue;
     if (!grantMatchesCaller(grant, io)) continue;
-    if (grant.paths.some((entry) => pathUnderGranted(entry, root, cwd, home))) return true;
+    if (!grant.paths.some((entry) => pathUnderGranted(entry, root, cwd, home))) continue;
+    const expMs = Date.parse(grant.expires);
+    if (!Number.isFinite(expMs) || nowOf() >= expMs) continue;
+    return true;
   }
   return false;
 }
