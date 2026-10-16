@@ -847,7 +847,10 @@ describe('an unapproved edit to the budgets', () => {
     expect(dry.out).not.toContain('run `team approve`');
     const refused = await up([], world());
     expect(refused.code).toBe(1);
-    expect(refused.labels).toEqual([]);
+    // The file difference is not a refusal, so the lead, whose account has room, launches.
+    // The worker stays out: the weaker reserve in the live file is not what the check reads.
+    expect(refused.labels).toEqual([TITLE]);
+    expect(refused.out).toContain(`worker: left out: refused: ${TAIL}\n`);
     // The owner approves the reserve the file now sets: the same reading no longer refuses.
     approve(WEAKER);
     const after = await up([], world());
