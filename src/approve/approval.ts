@@ -15,7 +15,7 @@ import {
 import { applyTempo, type Tempo } from '../file/sections/tempo.ts';
 import { compare, describe, fingerprints, legacyLabelDigests, legacySeatDigests, legacyWatchDigest, OWNER_SECTIONS, type Fingerprints } from './fingerprint.ts';
 
-/** The ceilings an approval fixes: `up` and `add` read them from the record, never from the file. */
+/** The launch ceilings declared in the file. An approval also stores a snapshot of them. */
 export function ceilingsOf(team: TeamFile): Ceilings {
   return { seats: team.limits.seats, temporary: team.limits.temporary, vendors: { ...team.limits.vendors } };
 }

@@ -3,7 +3,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { budgetsInForceOf, notInForce } from '../approve/approval.ts';
+import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
@@ -745,10 +745,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // and nothing here tells the caller to run a herdr command.
   let clearStopped = false;
 
-  // One verified snapshot carries the whole command: the refusal when there is
-  // one, and the ceilings the launch holds. A legacy or refused record is not
-  // an approval in force, and says so in its own words. Read before the caller
-  // gate so an out-of-band owner token can be matched against what `up` would launch.
+  // Read the approval before the caller gate so an out-of-band owner token can be
+  // matched against its fingerprints and generation. Launch limits come from the live file.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   // The out-of-band owner authorization: a non-owner caller is admitted as the owner for this one
   // launch when the token equals the fingerprint of the approved record `up` would launch — its
@@ -1188,8 +1186,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     stampLobbyTrust(true);
     const plan = buildPlan();
 
-    // The ceilings the launch holds are the verified record's own, fixed at approval.
-    const ceilings: Ceilings | null = standing.kind === 'verified' ? standing.record.approval.ceilings : null;
+    // Every launch uses the limits declared in the live file, with or without a stored approval.
+    const ceilings = ceilingsOf(team);
     const running: Running[] = [];
     if (agents) {
       const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
@@ -1305,7 +1303,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           }
         }
         const seat = team.seats.find((item) => item.name === name);
-        if (!seat || !ceilings) return null;
+        if (!seat) return null;
         return overCeiling(ceilings, running, seat);
       },
       record(name, patch) {
