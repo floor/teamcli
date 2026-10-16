@@ -2,10 +2,19 @@
 
 Watches a running team. Every `watch.interval` seconds it reads the session — the seats, their
 screens, the file, the approval, the machine — prints what is wrong, and removes a merged worktree
-whose end holds. When a report is waiting, and an approval is in force, it types one fixed line
-into an idle seat — the nudge — so that seat reads the log. It writes the seats' sidebar lines —
-the workspace title from the file, and the display line from the file and the pane's screen; it
-paints them on its first cycle and again when the title, the model or the effort changes.
+whose end holds. A temporary seat is left as it is: the owner removes it. When a report is
+waiting, it types one fixed line into an idle seat — the nudge — so that seat reads the log. The
+operator is not that seat. A missing approval does not stop that line. It writes the seats'
+sidebar lines — the workspace title from the file, and the display line from the file and the
+pane's screen; it paints them on its first cycle and again when the title, the model or the
+effort changes.
+
+`watch.nudge`, when the file sets it, is sent to each idle worker once `idle_first` has passed and
+again every `idle_repeat` when that is set. The body goes to the same drop file `team send` uses,
+and the pane receives one short line naming that file. When `watch.nudge` is omitted, that body is
+the report line. The text is taken from the live file, so it does not wait for an approval. The
+operator, the orchestrator, and the pane the watch itself is running in are never the target, and
+neither is a pane that is in a dialog or already holds unsent text.
 
 ## Synopsis
 
@@ -17,7 +26,7 @@ paints them on its first cycle and again when the title, the model or the effort
 | --- | --- |
 | `--session <name>` | the herdr session to watch, instead of `team.session` |
 | `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
-| `--no-nudge` | the owner's. Type nothing into any pane: no report nudge and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
+| `--no-nudge` | the owner's. Type nothing into any pane: no report nudge, no work prompt and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
 | `--no-notify` | the owner's. No desktop notification for a report addressed to the operator. A report addressed to the owner is still notified, still written to the log, and still visible in `team status` |
 | `--help`, `-h` | the usage, and exit 0 |
 

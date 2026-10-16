@@ -8,10 +8,16 @@ and the one schema example stay on the page.
 
 ## What it types, and what it leaves alone
 
-A temporary seat is left as it is: the owner removes it. The operator is not that seat. A file
-that was never approved, a legacy record, and a refused record type nothing. It types nothing into
+A temporary seat is left as it is: the owner removes it. The operator is not that seat. A missing
+approval does not stop that line. It types nothing into
 a screen it can't read as an empty idle prompt, so a permission dialog and a half-typed sentence
-are left alone. A box that already holds the nudge's own line is sent, not typed into twice — and
+are left alone. `watch.nudge`, when the file sets it, is sent to each idle worker once
+`idle_first` has passed and again every `idle_repeat` when that is set. The body goes to the
+same drop file `team send` uses, and the pane receives one short line naming that file.
+When `watch.nudge` is omitted, that body is the report line. The text is taken from the
+live file, so it does not wait for an approval. The operator, the orchestrator, and the
+pane the watch itself is running in are never the target, and neither is a pane that is in
+a dialog or already holds unsent text. A box that already holds the nudge's own line is sent, not typed into twice — and
 only by the watch process that typed it: the same text from anyone else, or found after a restart,
 is its owner's, and is never sent or cleared. A screen hatch is an escape hatch for a CLI whose
 screens the data primitives cannot express. The guarantees cover what a hatch returns and what
@@ -124,7 +130,6 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `the file was never approved on this machine` | there is no approval record for this project |
 | `approved before records were signed` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
 | `<why the record was refused>` | a signed record that does not verify (changed after approval, another root, a replayed or rolled-back generation): said once, and the watch keeps watching |
-| `the file differs from the approved one: <differences>` | the file is not the approved one; the differences read as `team status` prints them |
 | `the load is <n> per core, above <n>` | over `machine.load_max` |
 | `free memory is <n>%, below <n>%` | under `machine.memory_min` |
 | `free disk is <n> GB, below <n> GB` | under `machine.disk_min` |
@@ -318,8 +323,8 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-The file is part of the same pass. A `trust` line changed since the owner approved it is reported at
-the next one, and the team keeps running until the owner approves it again:
+The file is part of the same pass. The live file is the record, so a `trust` line changed since the
+owner approved it logs no difference, and the team keeps running:
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -358,7 +363,6 @@ seats:
 ```console
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the file differs from the approved one: `trust` changed
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
 ```
@@ -366,7 +370,9 @@ exit 0
 The watch's own timings are the owner's too: `interval`, `idle_first`, `idle_repeat`, `team_idle`,
 `nudge_wait` and `unsent_after` are approved with the file, and an edit to one of them changes
 nothing until the owner approves it — the passes keep running with the values of the approved copy,
-or with the defaults when nothing was approved, and the difference is reported.
+or with the defaults when nothing was approved.
+`watch.nudge` is read from the live file on each pass, including while those timings are still
+the approved copy or the defaults.
 By default an idle seat is reported once per idle period (`idle_repeat` is off). A team that wants
 repeated idle reports turns them on by setting `watch.idle_repeat` to the repeat interval (such as
 `idle_repeat: 20m`), repeating every 20 minutes while the seat stays quiet.
@@ -375,7 +381,7 @@ A check the team doesn't want is turned off in `watch.checks` — a section only
 so it is approved like the rest of them. While that edit is unapproved, the approved list stays
 in force: nothing new is turned off, and a check the approved file turned off stays off. The
 machine below sits at 8% free memory, and this file turns that report off. The approved list left
-it on, so the report still comes, with the difference beside it.
+it on, so the report still comes.
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -418,7 +424,6 @@ seats:
 ```console machine=tight
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the file differs from the approved one: `watch.checks` changed
 2026-10-04T09:00:00.000Z free memory is 8%, below 15%
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
