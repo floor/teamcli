@@ -25,7 +25,7 @@ seats:
     version: "5.5"
     launch: claude --model claude-opus-5-5
   - role: assistant
-    name: iris
+    name: alpha
     cli: claude-code
     vendor: anthropic
     model: Claude Opus
@@ -55,10 +55,10 @@ describe('the projection', () => {
     const home = '/Users/x';
     expect(projectionOf(team(teamText(REACH)), home)).toEqual({
       version: 1,
-      seats: [{ alias: 'iris', route: 'iris', key_id: 'seat-iris-1', guard_dir: '/Users/x/.config/team/lobby/guard-floor-iris', reach: ['grokbot'] }],
+      seats: [{ alias: 'alpha', route: 'alpha', key_id: 'seat-alpha-1', guard_dir: '/Users/x/.config/team/lobby/guard-floor-alpha', reach: ['grokbot'] }],
     });
-    const named = projectionOf(team(teamText('    reach:\n      to: [grokbot]\n      alias: "Iris-X"\n      route: floor-20\n      key_id: seat-iris-1\n      guard_dir: /Users/x/guard-floor-iris\n')), home);
-    expect(named.seats).toEqual([{ alias: 'iris-x', route: 'floor-20', key_id: 'seat-iris-1', guard_dir: '/Users/x/guard-floor-iris', reach: ['grokbot'] }]);
+    const named = projectionOf(team(teamText('    reach:\n      to: [grokbot]\n      alias: "Alpha-X"\n      route: floor-20\n      key_id: seat-alpha-1\n      guard_dir: /Users/x/guard-floor-alpha\n')), home);
+    expect(named.seats).toEqual([{ alias: 'alpha-x', route: 'floor-20', key_id: 'seat-alpha-1', guard_dir: '/Users/x/guard-floor-alpha', reach: ['grokbot'] }]);
   });
 
   test('the generator emits only seats whose reach.to includes a known front', () => {
@@ -66,9 +66,9 @@ describe('the projection', () => {
     // never pass: no grant, and a grant whose only front is unknown, project nothing — no
     // roster entry, no front entry, no lane. The parse refuses those shapes, so this check
     // keeps a future parser change honest.
-    const plain = { ...seatOf('iris', teamText(REACH)) };
+    const plain = { ...seatOf('alpha', teamText(REACH)) };
     delete plain.reach;
-    const granted = seatOf('iris', teamText(REACH));
+    const granted = seatOf('alpha', teamText(REACH));
     const hand: TeamFile = {
       ...team(teamText()),
       seats: [
@@ -104,7 +104,7 @@ describe('the projection file', () => {
     expect(reachProjectionNote(first)).toBe('reach projection: 1 seat');
     expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({
       version: 1,
-      seats: [{ alias: 'iris', route: 'iris', key_id: 'seat-iris-1', guard_dir: join(lobby, 'guard-floor-iris'), reach: ['grokbot'] }],
+      seats: [{ alias: 'alpha', route: 'alpha', key_id: 'seat-alpha-1', guard_dir: join(lobby, 'guard-floor-alpha'), reach: ['grokbot'] }],
     });
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(existsSync(join(lobby, 'reach-roster.json.tmp'))).toBe(false);
@@ -144,11 +144,11 @@ describe('the projection file', () => {
     const before = readFileSync(path, 'utf8');
     const hand: TeamFile = {
       ...team(teamText()),
-      seats: [{ ...seatOf('iris', teamText(REACH)), reach: { to: ['grokbot'], alias: 'no good' } }],
+      seats: [{ ...seatOf('alpha', teamText(REACH)), reach: { to: ['grokbot'], alias: 'no good' } }],
     };
     const refused = writeReachProjection(hand, home);
     expect(refused.written).toBe(false);
-    expect(refused.reason).toBe('invalid reach seat "iris": alias "no good", route "no good", key_id "seat-no good-1"');
+    expect(refused.reason).toBe('invalid reach seat "alpha": alias "no good", route "no good", key_id "seat-no good-1"');
     expect(readFileSync(path, 'utf8')).toBe(before);
   });
 });

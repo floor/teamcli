@@ -8,7 +8,7 @@
       "limits": "888481c6aec18c8d559e311bc77beef27dbe30579b7cc0cae6e98238eaa04540",
       "machine": "3a444f08a4111fe6d4e515a62c7a80a8930ac15d5a01917a9d4c39ae92f2a150",
       "rules": "d947efae84f8cd138beb250601620b4ec5cf12ccea5f0e87c2d8b95424223fb3",
-      "identity": "96b8a513367bed2526d2954cdb30234f67b3bfd74bc947967f4de29f810d7835",
+      "identity": "83dabdab87863ac080b2fa683d0c48920695fcd82427035cfb5a3bcd4c8cc228",
       "workspace": "8ea2e7b20df3f1e9811702ff24cc2aefacda9df55ec22d4f8a1ea615f9d66fe7",
       "coordinator": "c84023d1e33072dbe09c9072acef5d7dfd98f794e9522ec885e5dce8a4d02011",
       "operator": "b819983464219b94dab906a40b4768a62cfacffe6afe3e3fd679e81f65c3401f",
@@ -30,5 +30,5 @@
     "vendors": {}
   },
   "checks": {},
-  "file": "format: 1\nproject: proofs\nsession: proofs-team\nvisibility: public\ncoordinator: coordinator-seat\noperator: operator-seat\nidentity:\n  humans:\n    - Dr Jones\nrules:\n  - sign every commit\ntrust:\n  - ../shared\nworkspace:\n  mode: shared\nwatch:\n  interval: 2m\n  checks:\n    unsent: off\nbudgets:\n  accounts:\n    openai:\n      kind: subscription\n      reserve: 20%\n      sources:\n        - status_line\nseats:\n  - role: coordinator\n    name: coordinator-seat\n    cli: claude-code\n    vendor: anthropic\n    model: claude-opus-5-5\n    version: \"5.5\"\n    launch: claude\n  - role: implementer\n    name: operator-seat\n    cli: codex\n    vendor: openai\n    account: openai\n    model: gpt-5.3\n    version: \"5.3\"\n    launch: codex exec\n"
+  "file": "format: 1\nproject: proofs\nsession: proofs-team\nvisibility: public\ncoordinator: coordinator-seat\noperator: operator-seat\nidentity:\n  humans:\n    - Dana Example\nrules:\n  - sign every commit\ntrust:\n  - ../shared\nworkspace:\n  mode: shared\nwatch:\n  interval: 2m\n  checks:\n    unsent: off\nbudgets:\n  accounts:\n    openai:\n      kind: subscription\n      reserve: 20%\n      sources:\n        - status_line\nseats:\n  - role: coordinator\n    name: coordinator-seat\n    cli: claude-code\n    vendor: anthropic\n    model: claude-opus-5-5\n    version: \"5.5\"\n    launch: claude\n  - role: implementer\n    name: operator-seat\n    cli: codex\n    vendor: openai\n    account: openai\n    model: gpt-5.3\n    version: \"5.3\"\n    launch: codex exec\n"
 }

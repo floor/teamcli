@@ -119,7 +119,10 @@ test('budgets.check_every refuses a zero pause too', () => {
 // An approval record written by main's code today (test/fixtures/approval-main.json, its
 // fingerprints taken with main's own reader) still verifies the same file on this branch: the
 // modules produce the digests main's monolith does. The record carries its own copy of the
-// approved text, so the fixture is the proof.
+// approved text, so the fixture is the proof. One digest is not main's: the copy's human name
+// was neutralised, since the public tree keeps no real names, and the identity digest was
+// re-taken with this reader when that name changed — every other digest, and all the seats,
+// are the ones main wrote.
 describe('an approval written by main', () => {
   const root = '/flo632a/root';
 

@@ -76,7 +76,7 @@ the same checkout.
 Session names that match after lowercasing and removing hyphens, underscores and dots are
 near-duplicates (`md3-io` and `md3io`). The note is `near <the other sessions>`. A pair the
 directory rule already names is not named again as near. A shared prefix is not enough:
-`radiooooo` and `radiooooo-ios` are different names, and so are `teamcli` and `teamcli.io`.
+`acme` and `acme-ios` are different names, and so are `teamcli` and `teamcli.io`.
 
 ## Exit codes
 

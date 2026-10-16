@@ -15,10 +15,10 @@ import { storePath, writeApproval } from '../../src/store/store.ts';
 import { testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-14T12:00:00Z');
-const LABEL = 'Iris · first assistant';
+const LABEL = 'Alpha · first assistant';
 const DISPLAY = 'Grok 4.7 high';
 
-function teamYaml(irisStopped: boolean): string {
+function teamYaml(alphaStopped: boolean): string {
   return `format: 1
 project: acme
 coordinator: lead
@@ -35,7 +35,7 @@ seats:
     version: "5.5"
     launch: claude --model claude-opus-5-5
   - role: first assistant
-    name: iris
+    name: alpha
     label: "${LABEL}"
     cli: grok
     vendor: xai
@@ -44,7 +44,7 @@ seats:
     display: Grok 4.7
     effort: high
     launch: grok --model grok-4.7
-${irisStopped ? '    stopped: true\n' : ''}`;
+${alphaStopped ? '    stopped: true\n' : ''}`;
 }
 
 function trusted(text: string, root: string): string {
@@ -83,10 +83,10 @@ function doctor(home: string): DoctorSources {
 function expectTitle(out: string): void {
   expect(out).toContain(`--label '${LABEL}'`);
   expect(out).toContain(`--display-agent '${DISPLAY}'`);
-  expect(out).not.toContain('--label iris');
-  expect(out).not.toContain("--label 'iris'");
-  expect(out).not.toContain('--display-agent iris');
-  expect(out).not.toContain("--display-agent 'iris'");
+  expect(out).not.toContain('--label alpha');
+  expect(out).not.toContain("--label 'alpha'");
+  expect(out).not.toContain('--display-agent alpha');
+  expect(out).not.toContain("--display-agent 'alpha'");
 }
 
 const launch: Launch = {
@@ -114,7 +114,7 @@ describe('a grok seat', () => {
     const { base, root, home } = place();
     approve(trusted(teamYaml(true), root), root, home);
     const io = testIo(root, { kind: 'owner' });
-    const code = await runAdd(['iris', '--dry-run', '--file', '.agents/team.yaml'], io, {
+    const code = await runAdd(['alpha', '--dry-run', '--file', '.agents/team.yaml'], io, {
       home,
       sessionState: () => 'absent',
       agents: () => [],

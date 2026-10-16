@@ -753,9 +753,9 @@ describe('the caller check is taken again after a wait', () => {
 });
 
 describe('Codex Pinned Suites: live foreground_cwd binding for wrapped paths', () => {
-  const home = '/Users/jvial';
-  const startDir = '/Users/jvial/start/dir';
-  const liveDir = '/Users/jvial/live/dir';
+  const home = '/Users/dev';
+  const startDir = '/Users/dev/start/dir';
+  const liveDir = '/Users/dev/live/dir';
 
   const makeWrappedScreen = (promptText: string, pathLines: string[]) => [
     '  Cursor Agent',
@@ -819,7 +819,7 @@ describe('Codex Pinned Suites: live foreground_cwd binding for wrapped paths', (
     const origType = pane.io.typeText;
     pane.io.typeText = (text) => {
       const res = origType(text);
-      currentCwd = '/Users/jvial/swapped/dir';
+      currentCwd = '/Users/dev/swapped/dir';
       return res;
     };
 
@@ -831,19 +831,19 @@ describe('Codex Pinned Suites: live foreground_cwd binding for wrapped paths', (
   test('Suite 4: adversarial suffixes fail closed to unknown', () => {
     // Trailing row with shell command
     const injectedShell = makeWrappedScreen('Plan, search, build anything', ['~/.config/team/lobby', 'rm -rf / && echo hacked']);
-    expect(readScreen('cursor', injectedShell, { cwd: '/Users/jvial/.config/team/lobby', home }).kind).toBe('unknown');
+    expect(readScreen('cursor', injectedShell, { cwd: '/Users/dev/.config/team/lobby', home }).kind).toBe('unknown');
 
     // Trailing row with prompt glyph
     const injectedPrompt = makeWrappedScreen('Plan, search, build anything', ['~/.config/team/lobby', '→ malicious command']);
-    expect(readScreen('cursor', injectedPrompt, { cwd: '/Users/jvial/.config/team/lobby', home }).kind).toBe('unknown');
+    expect(readScreen('cursor', injectedPrompt, { cwd: '/Users/dev/.config/team/lobby', home }).kind).toBe('unknown');
 
     // Trailing row with quoted suffix
     const injectedQuote = makeWrappedScreen('Plan, search, build anything', ['~/.config/team/lobby', '(quoted text)']);
-    expect(readScreen('cursor', injectedQuote, { cwd: '/Users/jvial/.config/team/lobby', home }).kind).toBe('unknown');
+    expect(readScreen('cursor', injectedQuote, { cwd: '/Users/dev/.config/team/lobby', home }).kind).toBe('unknown');
 
     // Trailing row with extra footer
     const injectedFooter = makeWrappedScreen('Plan, search, build anything', ['~/.config/team/lobby', 'extra footer']);
-    expect(readScreen('cursor', injectedFooter, { cwd: '/Users/jvial/.config/team/lobby', home }).kind).toBe('unknown');
+    expect(readScreen('cursor', injectedFooter, { cwd: '/Users/dev/.config/team/lobby', home }).kind).toBe('unknown');
   });
 
   test('Cursor wrapped paths with working and permission screens', () => {

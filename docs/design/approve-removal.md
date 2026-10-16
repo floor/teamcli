@@ -60,7 +60,7 @@ Two direct tests, with no approval record in the scratch home. Allow: the caller
 
 ## Five seats, no owner terminal
 
-The target is a team of five in `~/Code/radiooooo/v4`: one orchestrator, two builders, two testers, mounted and ready for a first brief in 30 seconds, with no owner at a terminal. The test uses a scratch copy of that shape, not that folder. The caller is the orchestrator seat named by `grant`, placed in the file's session, stdin not a terminal.
+The target is a team of five in `~/Code/acme/v4`: one orchestrator, two builders, two testers, mounted and ready for a first brief in 30 seconds, with no owner at a terminal. The test uses a scratch copy of that shape, not that folder. The caller is the orchestrator seat named by `grant`, placed in the file's session, stdin not a terminal.
 
 No prompt on that path:
 

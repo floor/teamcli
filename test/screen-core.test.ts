@@ -1230,8 +1230,8 @@ ${steps}`;
 });
 
 describe('status-then-one status row trailing path matching', () => {
-  const home = '/Users/jvial';
-  const liveDir = '/Users/jvial/.config/team/lobby';
+  const home = '/Users/dev';
+  const liveDir = '/Users/dev/.config/team/lobby';
   const data = screenData('cursor');
   if (!data) throw new Error('missing cursor data');
 
@@ -1255,8 +1255,8 @@ describe('status-then-one status row trailing path matching', () => {
     expect(statusRowOf(data, lines)).toBeNull();
 
     // With differing cwd, fails closed to unknown
-    expect(classifyLines(data, lines, { cwd: '/Users/jvial/other', home }).kind).toBe('unknown');
-    expect(statusRowOf(data, lines, { cwd: '/Users/jvial/other', home })).toBeNull();
+    expect(classifyLines(data, lines, { cwd: '/Users/dev/other', home }).kind).toBe('unknown');
+    expect(statusRowOf(data, lines, { cwd: '/Users/dev/other', home })).toBeNull();
   });
 
   test('single prompt row in trailing lines rejects status row (reviewer-claude probe)', () => {
