@@ -151,10 +151,41 @@ describe('team seats', () => {
     expect(code).toBe(0);
     expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                LAST ACTIVE  PANE');
     expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               now          pane-1');
-    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  4m ago       pane-2');
+    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT Sol 6 (from launch)       xhigh   idle (screen not recognised), parked  4m ago       pane-2');
     expect(io.out).toContain('deepseek-acme            seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       done (screen not recognised)          1h ago       pane-3');
     expect(io.out).toContain('deepseek-acme-2          seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle (screen not recognised)          -            pane-4');
     expect(io.out).not.toContain('grok-acme');
+  });
+
+  test('falls back to launch line model labelled (from launch) when screen model is unread but launch line names a model', async () => {
+    const teamContent = example.replace('stopped: true              # kept in the file; `up` doesn\'t start it, `add grok-acme` does', '');
+    writeFileSync(file, teamContent);
+    const checked = validateTeamFile(teamContent);
+    if (!checked.ok) throw new Error('team content does not validate');
+    standing = verifiedOf(checked.team, teamContent, dir, NOW);
+
+    updateState(join(dir, '.agents'), (state) => {
+      state.sessions['acme-web']!.seats['grok-acme'] = {
+        id: 'seat_555555555555',
+        pane: 'pane-5',
+        workspace: 'ws-5',
+        stage: 'ready',
+        model: 'Grok',
+        version: '4.7',
+        cli: 'grok',
+        launch_line: 'grok --model grok-4.7',
+        last_active: '2026-10-03T14:00:00Z',
+      };
+    });
+    if (live) {
+      live.agents.push(agent('grok-acme', 'ws-5', 'pane-5', 'idle', 'grok'));
+      live.workspaces.push({ id: 'ws-5', label: 'grok 4.7' });
+      live.screens['pane-5'] = 'Unrecognized Grok dialog screen without status row';
+    }
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runSeats(['--file', file], io, statusSources);
+    expect(code).toBe(0);
+    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7 (from launch)');
   });
 
   test('--all includes stopped seats with retained id and last_active', async () => {

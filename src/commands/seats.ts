@@ -6,6 +6,7 @@ import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { mayReadTeam } from '../read-gate.ts';
+import { profileFor } from '../profiles/profile.ts';
 import { emptySession, isSeatId, readState, type SessionState } from '../state.ts';
 import { compare, type Comparison, type Live } from '../status/compare.ts';
 import { waitOrStop } from '../wait.ts';
@@ -106,12 +107,20 @@ export function seatRegistryRows(
     const lastActiveDisplay = workingNow ? 'now' : formatRelativeTime(lastActive, now);
     const pane = row.pane === '-' ? null : row.pane;
     const launchLine = recorded?.launch_line ?? declared?.launch ?? likeSeat?.launch ?? null;
+    let model = row.model;
+    if (model.endsWith('(unread)') && launchLine) {
+      const prof = profileFor(cli);
+      const named = prof?.modelOf(launchLine);
+      if (named) {
+        model = `${named.model}${named.version ? ` ${named.version}` : ''} (from launch)`;
+      }
+    }
     rows.push({
       name: row.name,
       id,
       role,
       cli,
-      model: row.model,
+      model,
       effort,
       status: row.state,
       ...(row.stored ? { stored: row.stored } : {}),
