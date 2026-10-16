@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +13,7 @@ import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 import type { Live } from '../../src/status/compare.ts';
 import type { Standing } from '../../src/store/store.ts';
-import { testIo } from '../helpers.ts';
+import { gitEnv, testIo } from '../helpers.ts';
 
 const example = readFileSync(new URL('../fixtures/example.yaml', import.meta.url), 'utf8');
 const NOW = new Date('2026-10-03T14:10:00Z');
@@ -149,12 +150,47 @@ describe('team seats', () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runSeats(['--file', file], io, statusSources);
     expect(code).toBe(0);
-    expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE  SOURCE  LAST ACTIVE  PANE');
-    expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               idle   cli     now          pane-1');
-    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  idle   herdr   4m ago       pane-2');
-    expect(io.out).toContain('deepseek-acme            seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       done (screen not recognised)          done   herdr   1h ago       pane-3');
-    expect(io.out).toContain('deepseek-acme-2          seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle (screen not recognised)          idle   herdr   -            pane-4');
+    expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE    SOURCE  LAST ACTIVE  PANE');
+    // The coordinator is idle at its prompt, but its record was touched 12s before NOW — a
+    // trace inside the window, which an idle word yields to (src/labels/state.ts).
+    expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               working  trace   now          pane-1');
+    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  idle     herdr   4m ago       pane-2');
+    expect(io.out).toContain('deepseek-acme            seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       done (screen not recognised)          done     herdr   1h ago       pane-3');
+    expect(io.out).toContain('deepseek-acme-2          seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle (screen not recognised)          idle     herdr   -            pane-4');
     expect(io.out).not.toContain('grok-acme');
+  });
+
+  test('a seat whose idle screen hides a commit inside the window reads working, source trace', async () => {
+    const worktree = join(dir, 'worktrees', 'codex-task');
+    mkdirSync(worktree, { recursive: true });
+    // Committed two minutes before NOW, through a real repository the table reads back with
+    // `git log` (src/labels/traces.ts). The window's boundary counts as inside.
+    const when = '2026-10-03T14:08:00Z';
+    const git = (...args: string[]): string =>
+      execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], {
+        cwd: worktree,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...gitEnv(), GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when },
+      });
+    git('init', '-q');
+    writeFileSync(join(worktree, 'note.txt'), 'note\n');
+    git('add', 'note.txt');
+    git('commit', '-q', '-m', 'the work so far');
+    updateState(join(dir, '.agents'), (state) => {
+      state.sessions['acme-web']!.worktrees['codex-task'] = {
+        path: worktree,
+        branch: 'feat/codex-task',
+        seat: 'codex-acme',
+        setup: 'ok',
+      };
+    });
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file], io, statusSources)).toBe(0);
+    // codex-acme's pane holds no screen read and herdr says idle — without the commit its row
+    // reads `idle herdr`, as the scene above pins. The commit inside the window is a trace, and
+    // a fresh trace beats an idle word: working, from TeamCLI's own record.
+    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  working  trace   4m ago       pane-2');
   });
 
   test('--all includes stopped seats with retained id and last_active', async () => {
@@ -162,7 +198,7 @@ describe('team seats', () => {
     const code = await runSeats(['--file', file, '--all'], io, statusSources);
     expect(code).toBe(0);
     // A retained seat is done (its process is gone), not judged blind on its day-old trace.
-    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done   process  1d ago       -');
+    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done     process  1d ago       -');
   });
 
   test('--json and --all --json emit the SeatsJson payload', async () => {
@@ -252,9 +288,9 @@ describe('team status --all', () => {
     const code = await runStatus(['--file', file, '--all'], io, statusSources);
     expect(code).toBe(0);
     expect(io.out).toContain('team acme-web, session "acme-web"');
-    expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE  SOURCE   LAST ACTIVE  PANE');
-    expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               idle   cli      now          pane-1');
-    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done   process  1d ago       -');
+    expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE    SOURCE   LAST ACTIVE  PANE');
+    expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               working  trace    now          pane-1');
+    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done     process  1d ago       -');
     expect(io.out).toContain('0 difference(s)');
     expect(io.out).toContain('note: codex-acme: version unread');
   });

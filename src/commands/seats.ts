@@ -7,6 +7,7 @@ import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { observedSeatState, sayThreshold, type SeatStateWord, type StateSource } from '../labels/state.ts';
+import { newestTraceAt, seatTraces } from '../labels/traces.ts';
 import { DEFAULT_STATE_THRESHOLDS } from '../settings/inherit.ts';
 import { emptySession, isSeatId, liveHold, readState, type SessionState } from '../state.ts';
 import { compare, type Comparison, type Difference, type Live } from '../status/compare.ts';
@@ -16,6 +17,16 @@ import { realSources as realStatusSources, type StatusSources } from './status.t
 export type SeatsSources = StatusSources & {
   /** Waits between `--watch` passes; false ends the loop. */
   wait?(seconds: number): Promise<boolean>;
+};
+
+/** Where a seat's own traces are read from (src/labels/traces.ts): the project's name, its
+ *  root, and the home whose store holds the send history. A home of `undefined` is a caller
+ *  standing in for no store at all — the message trace is skipped, as status.ts's store-backed
+ *  differences are. */
+export type SeatTraceSources = {
+  project: string;
+  root: string;
+  home?: string;
 };
 
 export const realSeatsSources: SeatsSources = {
@@ -92,6 +103,8 @@ export function seatRegistryRows(
   now: Date,
   all: boolean,
   held = false,
+  /** Where the traces are read from; absent is the old carried-forward `last_active` alone. */
+  traceSources?: SeatTraceSources,
 ): SeatRegistryRow[] {
   const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
   const seenIds = new Set<string>();
@@ -114,14 +127,31 @@ export function seatRegistryRows(
     const recordedPane = recorded?.pane;
     const agent = live.agents.find((candidate) => candidate.name === row.name)
       ?? (recordedPane !== undefined ? live.agents.find((candidate) => candidate.pane === recordedPane) : undefined);
-    // The seat-state reading: the CLI's own screen first, then herdr, then the traces — and the
-    // certainties the comparison already judged: a seat the file stops, or one its own process
-    // has left, is done and not judged blind.
+    const screenText = agent && live.screens[agent.pane] !== undefined ? live.screens[agent.pane] : undefined;
+    // The seat-state reading: the CLI's own screen first, then herdr, then the traces (a fresh
+    // one even over an idle word) — and the certainties the comparison already judged: a seat
+    // the file stops, or one its own process has left, is done and not judged blind. The trace is
+    // TeamCLI's own (src/labels/traces.ts) beside the record's carried-forward `last_active`.
+    const trace = traceSources === undefined
+      ? recorded?.last_active ?? retained?.last_active ?? null
+      : newestTraceAt(
+          seatTraces({
+            seat: { name: row.name, cli },
+            session: state,
+            project: traceSources.project,
+            root: traceSources.root,
+            home: traceSources.home,
+            ...(screenText !== undefined ? { screen: screenText } : {}),
+            at: now,
+          }),
+          recorded?.last_active,
+          retained?.last_active,
+        );
     const reading = observedSeatState({
       cli,
       ...(agent ? { agent: { pane: agent.pane, status: agent.status } } : {}),
-      ...(agent && live.screens[agent.pane] !== undefined ? { screenText: live.screens[agent.pane] } : {}),
-      trace: recorded?.last_active ?? retained?.last_active ?? null,
+      ...(screenText !== undefined ? { screenText } : {}),
+      trace,
       // Gone on purpose — stopped by the file, kept only as a retained record, or the
       // comparison's own 'missing'/'stopped' — is done, not judged blind.
       ...(declared?.stopped === true || retained !== undefined || row.state === 'missing' || row.state === 'stopped'
@@ -168,9 +198,11 @@ export function blindDifferences(
   comparison: Comparison,
   now: Date,
   held = false,
+  /** Where the traces are read from; absent is the old carried-forward `last_active` alone. */
+  traceSources?: SeatTraceSources,
 ): Difference[] {
   const said = sayThreshold(DEFAULT_STATE_THRESHOLDS.blind_after_seconds);
-  return seatRegistryRows(team, state, live, comparison, now, true, held)
+  return seatRegistryRows(team, state, live, comparison, now, true, held, traceSources)
     .filter((row) => row.blind)
     .map((row): Difference => ({
       what: `${row.name}: unknown for over ${said} — blind, and it counts as not working`,
@@ -268,7 +300,11 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       return 2;
     }
     const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
-    const rows = seatRegistryRows(team, state, live, comparison, now, all, liveHold(whole, now) !== null);
+    const rows = seatRegistryRows(team, state, live, comparison, now, all, liveHold(whole, now) !== null, {
+      project: team.project,
+      root,
+      home: sources.home,
+    });
 
     if (json) {
       const doc: SeatsJson = {
