@@ -983,7 +983,7 @@ async function executeQueuedSend(
       dir,
       'send',
       who,
-      `${seatName}: delivered (drop ${String(body.length)} characters, herdr status ${submittedStatus})`,
+      `${seatName}: delivered (drop ${String(body.length)} characters, ${result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${submittedStatus}`})`,
       host.now(),
     );
     appendHistory(team.project, root, host.home, {

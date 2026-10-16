@@ -4,8 +4,9 @@ Writes one message to one seat. A plain send writes the body whole to a drop fil
 by renaming a temporary file into place, and types one short trigger line that names that file.
 That is the path for every seat. The body is never typed, and it is never split across several
 writes. `delivered` means herdr reported the seat `working` — or `done` or `blocked`, and not
-the status read before Enter — after that one line and Enter, the line had left the seat's input
-box, and the pane was not a dialog this command already classifies: question, permission, trust, vendor notice, provider error, or
+the status read before Enter — after that one line and Enter, or the transcript shows the drop
+being read (a CLI's status can lag while it works), the line had left the seat's input box, and
+the pane was not a dialog this command already classifies: question, permission, trust, vendor notice, provider error, or
 rate limit. A screen that is one of those is not reached. The report names the kind and the
 drop path, and nothing further is pressed. The exit code of the typing commands is not the
 evidence. On herdr 0.7.1 the working status is the pane hint `ctrl+c to stop` for cursor, a
@@ -148,8 +149,11 @@ pressed and what the input box holds (`the box holds "…"`, `the box is empty`,
 not be read`); `--json` carries the same text as `box`, `null` when the box could not be read. The
 box is read with its styling (`herdr pane read --format ansi`), and faint text — a suggestion or a
 placeholder — counts as an empty box: it is never waited on, never cleared and never a reason for
-an Enter. After Enter the run verifies two things: the trigger has left the box, and herdr reports
-the seat working (or a `done` or `blocked` that is new). A try that shows neither is followed by a
+an Enter. After Enter the run verifies two things: the trigger has left the box, and either herdr reports
+the seat working (or a `done` or `blocked` that is new) or the transcript shows the drop being
+read — a row that names the drop's id and is not the echo of the trigger line, such as `Explored 1
+file (<id>)`. herdr's status can lag or stay idle while a CLI works, so a box that has cleared is
+waited on for up to 20 seconds in all before the run gives up. A try that shows neither is followed by a
 re-read, and another Enter goes only to a box that still holds exactly the trigger line — never
 to an empty one, to one that holds something else, or to a dialog — at most three Enters in all,
 waiting 1, 3 and then 9 seconds for the seat to show it. A box that cannot be read at all is

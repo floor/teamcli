@@ -4,8 +4,11 @@ import { join } from 'node:path';
 import {
   BACKOFF_MS,
   MAX_TRIES,
+  VERIFY_TOTAL_MS,
   bindPane,
   deliverTrigger,
+  dropIdOf,
+  showsDrop,
   type DeliverHost,
 } from '../src/send/deliver.ts';
 import { SETTLE_MS, type NativePane } from '../src/send/native.ts';
@@ -19,13 +22,17 @@ const PROMPT = '\u276f\u00a0';
 const INPUT_ROW = IDLE.split('\n').findIndex((row) => row.startsWith(PROMPT));
 const FAINT = (text: string): string => `\x1b[0m\x1b[2m${text}\x1b[0m`;
 
-function screenWith(row: string): string {
+function screenWith(row: string, transcript: string[] = []): string {
   const rows = IDLE.split('\n');
   rows[INPUT_ROW] = row;
+  transcript.forEach((text, at) => {
+    rows[5 + at] = text;
+  });
   return rows.join('\n');
 }
 
-const LINE = 'Read /tmp/drops/native/m1 and do that.';
+const DROP_ID = '3f2c9a1e-7b44-4d0a-9c1e-5a6b7c8d9e0f';
+const LINE = `Read /tmp/drops/native/${DROP_ID} and do that.`;
 const PROFILE = 'claude-code';
 
 type Behaviour = {
@@ -43,13 +50,18 @@ type Behaviour = {
   keepsLine?: boolean;
   /** The pane refuses the typed text. */
   refusesText?: boolean;
+  /** Milliseconds after the Enter before herdr's status moves; Infinity never moves. */
+  lagMs?: number;
+  /** The transcript rows the pane draws once a line was submitted. */
+  transcript?: string[];
 };
 
 /** A seat's pane: one box, one herdr status, every key logged. */
 function fakeCli(behaviour: Behaviour = {}): DeliverHost & { typed: string[]; enters: number; waited: number[]; log: string[] } {
   let box = behaviour.preload ?? '';
   let swallowed = 0;
-  let status = 'idle';
+  let submittedAt: number | null = null;
+  let clock = 0;
   const typed: string[] = [];
   const waited: number[] = [];
   const log: string[] = [];
@@ -73,18 +85,23 @@ function fakeCli(behaviour: Behaviour = {}): DeliverHost & { typed: string[]; en
         swallowed += 1;
         return true;
       }
-      status = behaviour.after ?? 'working';
+      submittedAt = clock;
       if (!behaviour.keepsLine) box = '';
       return true;
     },
-    status: (_pane: string): string | null => status,
+    status: (_pane: string): string | null => {
+      if (submittedAt === null || clock - submittedAt < (behaviour.lagMs ?? 0)) return 'idle';
+      return behaviour.after ?? 'working';
+    },
     wait: async (ms: number): Promise<void> => {
       waited.push(ms);
+      clock += ms;
     },
     readAnsi: (_pane: string): string | null => {
       if (behaviour.dialog !== undefined) return behaviour.dialog;
       if (box !== '') return screenWith(`${PROMPT}${box}`);
-      return screenWith(behaviour.empty === 'blank' ? PROMPT : `${PROMPT}${FAINT('Try "fix typecheck errors"')}`);
+      const rows = submittedAt === null ? [] : (behaviour.transcript ?? []);
+      return screenWith(behaviour.empty === 'blank' ? PROMPT : `${PROMPT}${FAINT('Try "fix typecheck errors"')}`, rows);
     },
   };
   return cli;
@@ -245,6 +262,90 @@ describe('a box that cannot be read', () => {
     const result = await deliverTrigger(blind, 'w1:p1', LINE, PROFILE);
     expect(result.outcome).toBe('not-submitted');
     expect(result.box).toBeUndefined();
+  });
+});
+
+describe('a seat whose status lags', () => {
+  const explored = `\u25cf Explored 1 file (${DROP_ID})`;
+
+  test('a cleared box and a transcript that shows the drop read is delivered, with no status change at all', async () => {
+    const cli = fakeCli({ after: 'idle', transcript: [`\u25cf Read /tmp/drops/native/${DROP_ID} and do that.`, explored] });
+    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    expect(result).toMatchObject({ outcome: 'delivered', tries: 1, evidence: 'transcript' });
+    expect(cli.enters).toBe(1);
+  });
+
+  test('the same is delivered whatever the faint suggestion, or a blank box', async () => {
+    const cli = fakeCli({ after: 'idle', empty: 'blank', transcript: [explored] });
+    expect(await deliverTrigger(cli, 'w1:p1', LINE, PROFILE)).toMatchObject({ outcome: 'delivered', evidence: 'transcript' });
+  });
+
+  test('the echo of the trigger in the transcript is not the drop being read', async () => {
+    const echo = [`\u276f Read /tmp/drops/native/${DROP_ID} and do that.`];
+    const cli = fakeCli({ after: 'idle', transcript: echo });
+    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    expect(result).toMatchObject({ outcome: 'not-submitted', box: '' });
+    expect(cli.enters).toBe(1);
+  });
+
+  test('an echo wrapped over rows is not the drop being read either', async () => {
+    const echo = ['\u276f Read /tmp/drops/native/', `  ${DROP_ID} and do`, '  that.'];
+    const cli = fakeCli({ after: 'idle', transcript: echo });
+    expect(await deliverTrigger(cli, 'w1:p1', LINE, PROFILE)).toMatchObject({ outcome: 'not-submitted' });
+  });
+
+  test('a status that moves late, inside the longer window, is delivered', async () => {
+    const cli = fakeCli({ lagMs: 15_000 });
+    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    expect(result).toMatchObject({ outcome: 'delivered', tries: 1, evidence: 'status' });
+    expect(cli.enters).toBe(1);
+  });
+
+  test('a status that never moves, and a transcript that shows nothing, ends not-submitted after the whole window', async () => {
+    const cli = fakeCli({ lagMs: Infinity });
+    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    expect(result).toMatchObject({ outcome: 'not-submitted', box: '', tries: 1 });
+    expect(settled(cli)).toBe(VERIFY_TOTAL_MS);
+  });
+
+  test('a transcript that shows the drop does not count while the box still holds the trigger', async () => {
+    const cli = fakeCli({ keepsLine: true, after: 'idle', transcript: [explored] });
+    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    expect(result.outcome).toBe('not-submitted');
+    expect(result.box).toBe(LINE);
+  });
+
+  test('a box that cannot be read has no transcript to go by', async () => {
+    const cli = fakeCli({ after: 'idle', transcript: [explored] });
+    const blind: DeliverHost = { ...cli };
+    delete blind.readAnsi;
+    expect((await deliverTrigger(blind, 'w1:p1', LINE, PROFILE)).outcome).toBe('not-submitted');
+  });
+});
+
+describe('the drop in a screen', () => {
+  test('the id is the last segment of the path the trigger names', () => {
+    expect(dropIdOf(LINE)).toBe(DROP_ID);
+    expect(dropIdOf('hello there')).toBeNull();
+    expect(dropIdOf('Read /tmp/dir/ and do that.')).toBeNull();
+  });
+
+  test('a row that names the id counts, with or without styling and decoration', () => {
+    expect(showsDrop(`\x1b[2m\u25cf Explored 1 file (${DROP_ID})\x1b[0m`, LINE)).toBe(true);
+    expect(showsDrop(`\u2502 Read(${DROP_ID}) \u2502`, LINE)).toBe(true);
+    expect(showsDrop(`reading ${DROP_ID}`, LINE)).toBe(true);
+  });
+
+  test('the trigger line, whole or wrapped, does not count', () => {
+    expect(showsDrop(`\u276f ${LINE}`, LINE)).toBe(false);
+    expect(showsDrop(`\u2502 ${LINE} \u2502`, LINE)).toBe(false);
+    expect(showsDrop(`  ${DROP_ID} and do that.`, LINE)).toBe(false);
+    expect(showsDrop('Read /tmp/drops/native/', LINE)).toBe(false);
+  });
+
+  test('another drop, or none, does not count', () => {
+    expect(showsDrop('Explored 1 file (aaaaaaaa-0000)', LINE)).toBe(false);
+    expect(showsDrop('', LINE)).toBe(false);
   });
 });
 

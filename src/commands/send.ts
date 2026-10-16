@@ -29,8 +29,8 @@ Writes one message to one seat. A plain send writes the body whole to a drop fil
 (mode 0600, atomic rename) and types one short trigger line, for every seat. The body
 is never typed and never split across several writes. delivered means herdr reported
 the seat working — or done or blocked, changed from the status read before Enter —
-after that line and Enter and the line has left the seat's input box, and the pane is
-not a dialog this command already classifies
+after that line and Enter, or the transcript shows the drop being read, and the line has
+left the seat's input box, and the pane is not a dialog this command already classifies
 (question, permission, trust, vendor notice, provider error, rate limit). A screen that
 is one of those is not reached: the kind and the drop path are named, and nothing
 further is pressed. Who may call it is the registry's decision, default deny: the
@@ -44,8 +44,9 @@ log.
 
 The outcome is one of seven, and none of them is silent:
   delivered    the drop path (exit 0): herdr reported the seat working — or done or
-               blocked, changed from the status read before Enter — the line had left
-               the input box, and the pane was not one of the dialogs listed above
+               blocked, changed from the status read before Enter — or the transcript
+               showed the drop read, the line had left the input box, and the pane
+               was not one of the dialogs listed above
   answered     --wait to a Claude Code seat: the reply came back; the reply follows
                on stdout (exit 0)
   held         the message is safely on disk, and the pane was left untouched because
@@ -497,7 +498,7 @@ async function deliverNative(
       record('not-submitted');
       return notSubmitted(io, dir, who, seatName, result, where, host, report);
     }
-    logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, herdr status ${result.status ?? 'working'})`, host.now());
+    logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
     record('delivered');
     return delivered(io, seatName, report);
   } finally {
@@ -695,6 +696,11 @@ function held(io: Io, dir: string, who: string, seat: string, reason: string, ho
     io.stderr(`team send: ${seat}: held: ${reason}\n`);
   }
   return 1; // exit: send.held
+}
+
+/** What showed a delivered seat took the line, as the log words it. */
+function evidenceOf(result: DeliverResult): string {
+  return result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${result.status ?? 'working'}`;
 }
 
 /** The trigger was typed and never taken: the seat did not begin processing it. The message is on

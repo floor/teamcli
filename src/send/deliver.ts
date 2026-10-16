@@ -9,6 +9,7 @@
 // greyed suggestion or placeholder is faint (SGR 2), the screen reads it `idle`, and so it counts
 // as an empty box — it is never text to wait for, never text to clear, and never a reason for an
 // Enter. Only text the CLI drew unstyled is in the box.
+import { stripSgr } from '../ansi.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { classify, readBox, readScreen } from '../watch/screen.ts';
 import { POLL_MS, SETTLE_MS, sawSubmission, type NativePane } from './native.ts';
@@ -21,6 +22,14 @@ export const BLIND_TRIES = 2;
 
 /** How long each try waits for the seat to show the submission: 1s, 3s, then 9s. */
 export const BACKOFF_MS: readonly number[] = [1000, 3000, 9000];
+
+/** How long in all a seat whose box has cleared is given to show it took the line. herdr's status
+ *  can lag or stay idle while a CLI works (agy does), so a cleared box is waited on past the
+ *  tries' own windows. */
+export const VERIFY_TOTAL_MS = 20_000;
+
+/** The transcript is read once a second, not at every status poll. */
+const TRANSCRIPT_EVERY = Math.ceil(1000 / POLL_MS);
 
 /** What a delivery needs from the pane: one seat's pane, the session already bound. */
 export type DeliverHost = {
@@ -46,8 +55,9 @@ export type DeliverResult = {
   tries: number;
   /** One line saying why, for a log or a receipt. */
   reason?: string;
-  /** herdr's status when the submission showed, with `delivered`. */
+  /** What showed the seat took the line, with `delivered`: herdr's status, or the transcript. */
   status?: string;
+  evidence?: 'status' | 'transcript';
   /** The dialog kind the screen showed, when that is why the seat was not reached. */
   dialog?: string;
 };
@@ -76,7 +86,7 @@ export function dialogKind(profile: string, screen: string | null): string | nul
 type Look =
   | { state: 'unread' }
   | { state: 'dialog'; kind: string }
-  | { state: 'empty' }
+  | { state: 'empty'; screen: string }
   | { state: 'trigger' }
   | { state: 'other'; text: string };
 
@@ -86,7 +96,7 @@ function look(host: DeliverHost, pane: string, line: string, profile: string): L
   if (screen === null) return { state: 'unread' };
   const dialog = dialogKind(profile, screen);
   if (dialog !== null) return { state: 'dialog', kind: dialog };
-  if (readScreen(profile, screen).kind !== 'unsent') return { state: 'empty' };
+  if (readScreen(profile, screen).kind !== 'unsent') return { state: 'empty', screen };
   if (boxHoldsText(profile, line, screen)) return { state: 'trigger' };
   return { state: 'other', text: boxText(profile, screen) };
 }
@@ -96,6 +106,34 @@ function boxText(profile: string, screen: string): string {
   if (box === null) return '';
   const pad = ' '.repeat(box.indent);
   return [box.first, ...box.rows.map((row) => (row.startsWith(pad) ? row.slice(pad.length) : row))].join('\n').trimEnd();
+}
+
+/** The drop file's id: the last segment of the path the trigger line names, or null for a line
+ *  that is not `Read <path> and do that.`. */
+export function dropIdOf(line: string): string | null {
+  const named = /^Read (\S+) and do that\.$/.exec(line);
+  const path = named?.[1];
+  if (path === undefined) return null;
+  const id = path.slice(path.lastIndexOf('/') + 1);
+  return id === '' ? null : id;
+}
+
+/**
+ * Whether the screen shows the seat reading the drop: a row that names the drop's id and is not the
+ * trigger's own echo. A submitted line stays in the transcript (whole, or wrapped over several
+ * rows, behind a bullet or a border), and that echo says the line was sent, not that anyone read
+ * the file; a row such as `Explored 1 file (<id>)` does.
+ */
+export function showsDrop(screen: string, line: string): boolean {
+  const id = dropIdOf(line);
+  if (id === null) return false;
+  for (const row of stripSgr(screen).split('\n')) {
+    if (!row.includes(id)) continue;
+    const fragment = row.trim().replace(/^[^A-Za-z0-9/~.]+/, '').replace(/[^A-Za-z0-9/~.]+$/, '');
+    if (fragment !== '' && line.includes(fragment)) continue;
+    return true;
+  }
+  return false;
 }
 
 function dialogStop(kind: string, tries: number): DeliverResult {
@@ -159,12 +197,20 @@ export async function deliverTrigger(host: DeliverHost, pane: string, line: stri
       tries += 1;
     }
     const verified = await verify(host, pane, line, profile, before, BACKOFF_MS[round] ?? 9000);
-    if (verified !== null) return { outcome: 'delivered', tries, status: verified };
+    if (verified !== null) return { outcome: 'delivered', tries, ...verified };
     seen = look(host, pane, line, profile);
     if (seen.state === 'dialog') return dialogStop(seen.kind, tries);
     if (seen.state === 'other') break;
     // With the box unreadable an Enter is a guess: the one repeat the run before this had, no more.
     if (seen.state === 'unread' && tries >= BLIND_TRIES) break;
+  }
+  // A box that has cleared with no sign yet is not given up on at the end of the tries: the seat
+  // may be working while herdr still reads it idle.
+  if (seen.state === 'empty') {
+    const spent = BACKOFF_MS.slice(0, MAX_TRIES).reduce((sum, ms) => sum + ms, 0);
+    const late = await verify(host, pane, line, profile, before, Math.max(0, VERIFY_TOTAL_MS - spent));
+    if (late !== null) return { outcome: 'delivered', tries, ...late };
+    seen = look(host, pane, line, profile);
   }
   const box = boxOf(seen, line);
   return {
@@ -175,17 +221,34 @@ export async function deliverTrigger(host: DeliverHost, pane: string, line: stri
   };
 }
 
-/** The status that showed the seat took the line, once the box no longer holds it; else null. */
-async function verify(host: DeliverHost, pane: string, line: string, profile: string, before: string | null, window: number): Promise<string | null> {
+/**
+ * What showed the seat took the line, once the box no longer holds it; else null. Either herdr's
+ * status changed (working, or a new done/blocked), or the box is empty and the transcript shows
+ * the drop being read, which does not wait on a status that can lag.
+ */
+async function verify(
+  host: DeliverHost,
+  pane: string,
+  line: string,
+  profile: string,
+  before: string | null,
+  window: number,
+): Promise<{ status: string; evidence: 'status' | 'transcript' } | null> {
   const samples: string[] = [];
+  let polls = 0;
   for (let waited = 0; waited < window; waited += POLL_MS) {
     await host.wait(POLL_MS);
+    polls += 1;
     const sample = host.status(pane);
-    if (sample === null) continue;
-    samples.push(sample);
-    if (!sawSubmission(before, samples)) continue;
-    if (look(host, pane, line, profile).state === 'trigger') continue;
-    return sample;
+    let changed = false;
+    if (sample !== null) {
+      samples.push(sample);
+      changed = sawSubmission(before, samples);
+    }
+    if (!changed && polls % TRANSCRIPT_EVERY !== 0) continue;
+    const seen = look(host, pane, line, profile);
+    if (changed && sample !== null && seen.state !== 'trigger') return { status: sample, evidence: 'status' };
+    if (seen.state === 'empty' && showsDrop(seen.screen, line)) return { status: 'transcript', evidence: 'transcript' };
   }
   return null;
 }
