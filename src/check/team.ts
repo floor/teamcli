@@ -22,6 +22,7 @@ import type { Io } from '../io.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
+import { ofTeam, ProjectsError } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { emptySession, readState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
@@ -160,6 +161,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...signingDifferences(team, live, root, sources.home),
     ...attentionDifferences(team, state, live),
     ...labelDifferences(team, state, live),
+    ...projectDifferences(root, sources.home),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same row `status` prints: a legacy record or one the verification refused still says what
     // it is; a machine that never approved the file is the ordinary file now, and nothing to repair.
@@ -314,6 +316,30 @@ function displayLineMatches(seat: Seat, line: string, screen: string | undefined
   if (model !== (observedCut < 0 ? observed : observed.slice(0, observedCut))) return false;
   if (effort === (seat.effort || 'default')) return true;
   return seat.cli === 'grok' || EFFORT_WORDS.has(effort);
+}
+
+/**
+ * The project registry's word on this team (src/registry/projects.ts): `ofTeam` answers with the
+ * one project whose records name this team, null for a team no project names — a team that is
+ * its own project, which is no difference — and refuses the state this check refuses too, a team
+ * two projects both name, naming both. The refusal is repeated here rather than re-derived: the
+ * registry owns the rule. A registry that does not read refuses the same way, and its error says
+ * so in the same line, so a machine whose registry cannot be read is not read as fine either.
+ * The repair is on the registry file in both cases, and no team command writes it yet. A check
+ * with no home to answer for reads no registry, exactly as the approval store is not read.
+ */
+function projectDifferences(root: string, home: string | undefined): Difference[] {
+  if (home === undefined) return [];
+  try {
+    ofTeam(home, teamIdOf(root));
+    return [];
+  } catch (error) {
+    if (!(error instanceof ProjectsError)) throw error;
+    return [{
+      what: `the project registry: ${error.message}`,
+      repair: 'fix the project registry (~/.config/team/projects.yaml)',
+    }];
+  }
 }
 
 /**
