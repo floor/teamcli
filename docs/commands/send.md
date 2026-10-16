@@ -230,11 +230,11 @@ seats:
     launch: codex -m gpt-6-sol
 ```
 
-A plain send, Claude Code included, is a drop file and one trigger. `delivered` is herdr reporting the seat working:
+A plain send to a Claude Code seat goes over its cross-session socket, and nothing is typed. `delivered (socket)` means the socket took the message. When no socket is found or the socket refuses, the send falls back to a drop file and one trigger, and says so: `delivered (typed, socket <reason>)`.
 
 ```console
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
-claude-keeper: delivered
+claude-keeper: delivered (socket)
 exit 0
 ```
 
