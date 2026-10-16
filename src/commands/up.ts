@@ -803,7 +803,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
-  if (detached !== undefined) {
+  // A detached run is refused unless a create-grant admits it: the grant holder's own runner
+  // outside herdr is the one detached caller the grant may name.
+  if (detached !== undefined && !createGranted) {
     refusals.push(detached);
   } else if (!named) {
     // Dev mode mounts and says the placement as a warning. Anyone else is denied.
