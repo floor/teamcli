@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { resolveLobby } from '../lobby/gate.ts';
+import * as projects from './projects.ts';
 import { writeAtomic } from '../state.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
@@ -158,19 +159,38 @@ export function findTeam(home: string, key: string): TeamRecord | null {
 }
 
 /** What of a team file the registry keeps. */
-export type TeamSeed = { project: string; entity: string | null; session: string; lobby: string | null };
+export type TeamSeed = {
+  project: string;
+  entity: string | null;
+  session: string;
+  lobby: string | null;
+  /** The project the file names this team sits in, as written, or null when it names none — the
+   *  team is then its own project. Absent (undefined) leaves the registry's pointer as it is. */
+  inProject?: string | null;
+};
 
 /**
  * Records a team from its file: registers it, or brings the registered record in line with the
- * file, with the lifecycle given. The roster is kept as it is. Never throws: the registry is a
- * record of what the commands did, so a registry that cannot be written is a line for the caller
- * to say, not a reason for the command to fail. Returns that line, or null.
+ * file, with the lifecycle given. The roster is kept as it is. A seed that names the project its
+ * file points to also joins it: the project record is made if the registry has none, gains the
+ * team, and loses it if the file moves the team or stops naming a project. Never throws: the
+ * registry is a record of what the commands did, so a registry that cannot be written is a line
+ * for the caller to say, not a reason for the command to fail. Returns that line, or null.
  */
 export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: TeamLifecycle, by: string): string | null {
+  const real = realRoot(root);
+  const teamId = teamIdOf(real);
+  const inProject = seed.inProject;
+  let projectId: string | null | undefined;
   try {
-    const real = realRoot(root);
-    upsertTeam(home, teamIdOf(real), {
+    projectId = inProject === undefined ? undefined : inProject === null ? null : projects.projectIdOf(inProject);
+  } catch (error) {
+    return `the project registry was not updated: ${(error as Error).message}`;
+  }
+  try {
+    upsertTeam(home, teamId, {
       project: seed.project,
+      projectId,
       entity: seed.entity,
       session: seed.session,
       root: real,
@@ -178,9 +198,40 @@ export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: 
       lifecycle,
       by,
     });
-    return null;
   } catch (error) {
     return `the team registry was not updated: ${(error as Error).message}`;
+  }
+  if (inProject === undefined) return null;
+  try {
+    if (inProject === null) projectLeave(home, teamId, null);
+    else projectJoin(home, teamId, inProject, seed.entity, by);
+    return null;
+  } catch (error) {
+    return `the project registry was not updated: ${(error as Error).message}`;
+  }
+}
+
+/** The team joins the project the file names: the record is made if the registry has none — with
+ *  the name the file wrote and the team's entity — and lists the team. Keys by `projectIdOf`, so
+ *  the spelling the file chose is the display name and the ID is the same one every reader
+ *  derives. Then the team leaves every other project that named it. */
+function projectJoin(home: string, teamId: string, name: string, entity: string | null, by: string): void {
+  const id = projects.projectIdOf(name);
+  const held = projects.get(home, id);
+  if (!held) {
+    projects.upsertProject(home, id, { name, entity, teams: [teamId], by });
+  } else if (!held.teams.includes(teamId)) {
+    projects.upsertProject(home, id, { teams: [...held.teams, teamId] });
+  }
+  projectLeave(home, teamId, id);
+}
+
+/** The team leaves every project that names it except `keep` (null: every one). */
+function projectLeave(home: string, teamId: string, keep: string | null): void {
+  for (const held of projects.list(home)) {
+    const id = held.id as string;
+    if (id === keep || !held.teams.includes(teamId)) continue;
+    projects.upsertProject(home, id, { teams: held.teams.filter((team) => team !== teamId) });
   }
 }
 
