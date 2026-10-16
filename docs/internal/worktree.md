@@ -50,9 +50,9 @@ seat):
 The exit code is the one the run itself has. The log line is unchanged: the note is not written to
 `team.log`. A caller the approved copy does not allow is refused before the note, and nothing is
 created. `project` itself is not this drift: a file that sets `session` and changes only `project`
-prints no note. When `session` is omitted it defaults to the project name, so a rename changes the
-session too. That session change is the drift, the note prints, and state is written under the
-approved session while `{repo}` is still the live name.
+prints no note. When `session` is omitted it follows the entity and the project name — the project
+name alone when no entity is named — so a rename changes the session too. The live file is the
+record, so the state lands under the new session name, and `{repo}` is the live name as well.
 
 `--seat` is checked against the approved seats. The live seat list is read for one distinction: a
 name the file declares and the stored copy does not gets `seat <name> is not in the stored
