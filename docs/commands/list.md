@@ -62,8 +62,11 @@ team/session, the project and the lobby, the seat count, and three state words: 
 registry holds a record for the team — a session nothing registered is not defined), `APPROVED`
 (the team file at the record's root loads and validates) and `RUNNING` (herdr holds the session).
 `team list [<entity>]` filters to one
-entity, and rows are grouped by entity. `--json` carries the same fields per row, `source` and the
-three state words included.
+entity, and rows are grouped by entity. The three states print as `yes`, `no` or `?` — the last
+for a state that cannot be read. `--json` carries the same fields per row — `entity`, `team`,
+`project`, `lobby`, `seats`, `defined`, `approved`, `running`, `source`. With `--seats` a registry
+row prints its roster under it, indented two spaces, one `seat`, `agent`, `role` line per seat, and
+`--json` adds that `roster` to the row.
 
 ## Seat rows
 
