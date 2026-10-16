@@ -18,7 +18,7 @@ import { clearStopped, seatIsStopped } from '../file/lines.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
-import { insideTrust, isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
+import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
@@ -34,8 +34,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
-import { entityGrantAdmits } from '../grant.ts';
-import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
+import { lobbyPretrustLine } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
@@ -682,20 +681,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         { write: true, now: sources.now() },
       );
       if (line) return refusePretrust(out, built.name, line, false);
-    }
-    // A seat started under an entity create-grant has no terminal to answer its CLI's folder
-    // dialog: its own start folder (the project, for a lead) is trusted in that CLI's record, only
-    // inside the grant's paths and the file's `trust:`. The owner and a caller the grant does not
-    // admit write nothing. Never a refusal: the seat starts as it would have.
-    if (wouldLaunch && migrated && !isOwner(caller) && entityGrantAdmits(root, io, { home: sources.home, now: sources.now() })) {
-      const trustedFolders = prepared.team.trust ?? [];
-      grantedFolderPretrust(seatForPlan, sources.home, {
-        now: sources.now(),
-        grant: {
-          covers: (folder) => entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: folder }),
-          listed: (folder) => insideTrust(folder, trustedFolders, root, sources.home),
-        },
-      });
     }
     if (decision.kind === 'unknown') out.stderr(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
     // The audit line, exactly at the effects boundary: a delegated run that reaches here is
