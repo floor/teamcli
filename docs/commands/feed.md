@@ -75,17 +75,13 @@ seats:
     launch: codex -m gpt-6-sol
 ```
 
-Before any message has been sent, `team feed` reports an empty history:
+Before any message has been sent, `team feed` reports an empty history; after a send it prints the recorded exchange
+with its timestamp, sender, recipient, outcome, and body:
 
 ```console
 $ team feed ; echo "exit $?"
 (no messages)
 exit 0
-```
-
-After a send, `team feed` prints the recorded exchange with its timestamp, sender, recipient, outcome, and body:
-
-```console
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
 gpt-reviewer: delivered
 exit 0
