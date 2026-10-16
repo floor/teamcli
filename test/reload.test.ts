@@ -12,6 +12,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
+import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
@@ -111,9 +112,11 @@ function logText(): string {
 function harness(options: { status?: string; text?: string; create?: boolean; present?: boolean } = {}): {
   sources: ReloadSources;
   closed: string[];
+  commands: string[];
 } {
   const panes = new Map<string, string>();
   const closed: string[] = [];
+  const commands: string[] = [];
   let clock = NOW.getTime();
   let n = 0;
   const text = options.text ?? IDLE;
@@ -128,8 +131,10 @@ function harness(options: { status?: string; text?: string; create?: boolean; pr
       panes.set(pane, IDLE);
       return { pane, workspace: `ws-${n}` };
     },
-    paneRun(_session, pane) {
-      panes.set(pane, IDLE);
+    paneRun(_session, pane, command) {
+      commands.push(command);
+      // The relaunched CLI draws its own model on the status row.
+      panes.set(pane, command.includes('sonnet') ? IDLE.replace('Opus 5.5', 'Sonnet 5.5') : IDLE);
       return true;
     },
     renameAgent: () => true,
@@ -157,7 +162,7 @@ function harness(options: { status?: string; text?: string; create?: boolean; pr
     },
     now: () => new Date(clock),
   };
-  return { sources: { launch, home, now: () => new Date(clock) }, closed };
+  return { sources: { launch, home, now: () => new Date(clock) }, closed, commands };
 }
 
 beforeEach(() => {
@@ -312,17 +317,23 @@ describe('team reload', () => {
     expect(logText()).toBe('');
   });
 
-  test('a granted reload against a file that is not the approved copy closes nothing', async () => {
+  test('a granted reload runs the live file\'s edited launch line with no approval of the edit', async () => {
+    remember('lead', 'low');
     remember('worker', 'low');
-    const text = readFileSync(join(dir, 'team.yaml'), 'utf8').replace('label: worker', 'label: renamed');
+    const line = 'claude --model claude-sonnet-5-5';
+    const text = readFileSync(join(dir, 'team.yaml'), 'utf8')
+      .replaceAll('model: Claude Opus', 'model: Claude Sonnet')
+      .replaceAll('launch: claude --model claude-opus-5-5', `launch: ${line}`);
     writeFileSync(join(dir, 'team.yaml'), text);
-    const { sources, closed } = harness();
+    const { sources, closed, commands } = harness();
     const io = testIo(root, LEAD);
     const code = await runReload(['worker'], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toContain('not the approved one');
-    expect(closed).toEqual([]);
-    expect(logText()).toBe('');
+    expect(code, io.out + io.err).toBe(0);
+    expect(closed).toEqual(['worker-ws']);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toContain(line);
+    expect(readState(dir).sessions.alpha?.seats.worker?.launch_line).toContain(line);
+    expect(logText()).toContain('grant [grant] lead reload: worker model');
   });
 
   test('a granted reload of another seat logs the grant and the difference', async () => {
@@ -334,5 +345,74 @@ describe('team reload', () => {
     expect(closed).toEqual(['worker-ws']);
     expect(logText()).toContain('grant [grant] lead reload: worker effort');
     expect(logText()).not.toContain('reload [owner]');
+  });
+
+  describe('the granted close without typing', () => {
+    const RATE = `API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00\n${IDLE}`;
+
+    test('a quota screen is closed without typing and relaunched from the live file', async () => {
+      if (readScreen('claude-code', RATE).kind !== 'rate limit') {
+        throw new Error('the fixture screen must read as a rate limit');
+      }
+      remember('lead', 'low');
+      remember('worker', 'low');
+      const { sources, closed, commands } = harness({ text: RATE });
+      const io = testIo(root, LEAD);
+      const code = await runReload(['worker'], io, sources);
+      expect(code, io.out + io.err).toBe(0);
+      expect(closed).toEqual(['worker-ws']);
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toContain('claude --model claude-opus-5-5');
+      expect(logText()).toContain('grant [grant] lead reload: worker effort');
+    });
+
+    test('a box holding team\'s own unsent trigger line is closed without typing and relaunched', async () => {
+      remember('lead', 'low');
+      remember('worker', 'low');
+      const dropDir = join(dir, 'send-drops', 'alpha', 'worker');
+      mkdirSync(dropDir, { recursive: true });
+      const dropPath = join(dropDir, '6f2c7d30-1111-4c5d-8e9f-0a1b2c3d4e5f');
+      writeFileSync(dropPath, 'the brief itself\n');
+      const { sources, closed, commands } = harness({ text: claudeBox(`Read ${dropPath} and do that.`) });
+      const io = testIo(root, LEAD);
+      const code = await runReload(['worker'], io, sources);
+      expect(code, io.out + io.err).toBe(0);
+      expect(closed).toEqual(['worker-ws']);
+      expect(commands).toHaveLength(1);
+    });
+
+    test('the owner\'s own unsent text is still refused, grant or no grant', async () => {
+      remember('lead', 'low');
+      remember('worker', 'low');
+      const { sources, closed } = harness({ text: claudeBox('draft the release notes') });
+      const io = testIo(root, LEAD);
+      const code = await runReload(['worker'], io, sources);
+      expect(code).toBe(1);
+      expect(io.err).toContain('holds unsent text');
+      expect(closed).toEqual([]);
+      expect(logText()).toBe('');
+    });
+
+    test('a working seat is still refused', async () => {
+      remember('lead', 'low');
+      remember('worker', 'low');
+      const { sources, closed } = harness({ status: 'working' });
+      const io = testIo(root, LEAD);
+      const code = await runReload(['worker'], io, sources);
+      expect(code).toBe(1);
+      expect(io.err).toContain('is working');
+      expect(closed).toEqual([]);
+      expect(logText()).toBe('');
+    });
+
+    test('the owner\'s own run keeps the quota refusal', async () => {
+      remember('worker', 'low');
+      const { sources, closed } = harness({ text: RATE });
+      const io = testIo(root, OWNER);
+      const code = await runReload(['worker'], io, sources);
+      expect(code).toBe(1);
+      expect(io.err).toContain('not at an idle prompt');
+      expect(closed).toEqual([]);
+    });
   });
 });

@@ -364,7 +364,7 @@ export function machineFindings(team: TeamFile, root: string, sources: DoctorSou
   return problem === null ? [] : [{ level: 'warn', text: plainLine(problem) }];
 }
 
-// `watch` is the watch values in force — the approved ones — so an unapproved interval edit can't
+// `watch` is the watch values in force — the live file's under a verified standing — so a standing
 // move the verdict either way.
 function watchFindings(
   watch: TeamFile['watch'],

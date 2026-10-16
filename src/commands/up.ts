@@ -272,11 +272,11 @@ type Running = { name: string; vendor: string; temporary: boolean };
 function overCeiling(ceilings: Ceilings, running: readonly Running[], seat: Seat): string | null {
   if (running.some((item) => item.name === seat.name)) return null;
   const count = running.length + 1;
-  if (count > ceilings.seats) return `the approval allows ${ceilings.seats} seats; ${count} would be running`;
+  if (count > ceilings.seats) return `the file allows ${ceilings.seats} seats; ${count} would be running`;
   const cap = ceilings.vendors[seat.vendor];
   if (cap !== undefined) {
     const vendors = running.filter((item) => item.vendor === seat.vendor).length + 1;
-    if (vendors > cap) return `the approval allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
+    if (vendors > cap) return `the file allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
   }
   return null;
 }
@@ -588,58 +588,34 @@ function denyUp(out: { stderr(text: string): void }): number {
   // exit: up.deny
   // exit: up.delegate
   // exit: up.delegate-approval
-  // exit: up.delegate-approved-copy
-  // exit: up.delegate-drift
   // exit: up.delegate-evidence
   // exit: up.delegate-placement
   // exit: up.delegate-command
   // exit: up.grant-another-pane
   // exit: up.grant-approval
-  // exit: up.grant-approved-copy
   // exit: up.grant-caller
-  // exit: up.grant-drift
   // exit: up.grant-no-pane
   // exit: up.grant-scope
   return 1;
 }
 
-/** Doctor's never-approved line. The other two non-verified cases share `notInForce`'s text. */
-const NEVER_APPROVED_DOCTOR = 'run `team approve`: this file was never approved on this machine';
-
 /** Pulls the dev-mode warnings out of `refusals` and joins them into the one line. */
 function devWarningLine(refusals: string[], standing: Standing, caller: Caller): string {
   const placement = `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-  const mismatches = new Set(
-    refusals.map(approvedCopyMismatch).filter((inner): inner is string => inner !== null),
-  );
   const kept: string[] = [];
   const warnings: string[] = [];
   for (const line of refusals) {
-    if (devModeWarning(line, standing, placement, mismatches)) warnings.push(line);
+    if (devModeWarning(line, standing, placement)) warnings.push(line);
     else kept.push(line);
   }
   refusals.splice(0, refusals.length, ...kept);
   return [...new Set(warnings)].join('; ');
 }
 
-/** The approved-copy mismatch `up` itself says. A grant or a delegation says the same words
- *  after its own prefix, and those stay refusals. The returned text is the parenthetical. */
-function approvedCopyMismatch(line: string): string | null {
-  const prefix = 'the file is not the approved one (';
-  const suffix = '): run `team approve`';
-  if (!line.startsWith(prefix) || !line.endsWith(suffix)) return null;
-  return line.slice(prefix.length, line.length - suffix.length);
-}
-
-function devModeWarning(line: string, standing: Standing, placement: string, mismatches: ReadonlySet<string>): boolean {
+function devModeWarning(line: string, standing: Standing, placement: string): boolean {
   if (line === placement) return true;
-  if (approvedCopyMismatch(line) !== null) return true;
-  // Doctor says the same mismatch as `run \`team approve\`: <differences>`, and that miss
-  // blocks the launch on its own. It joins the warning; it is not a second refusal.
-  if (standing.kind === 'verified' && mismatches.has(line.slice('run `team approve`: '.length))) return true;
   if (standing.kind === 'verified') return false;
-  if (line === notInForce(standing)) return true;
-  return standing.kind === 'none' && line === NEVER_APPROVED_DOCTOR;
+  return line === notInForce(standing);
 }
 
 export async function runUp(argv: string[], io: Io, sources: UpSources): Promise<number> {
@@ -815,8 +791,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   if (standing.kind === 'none') {
     if (dev) refusals.push(notInForce(standing));
   } else if (standing.kind !== 'verified') refusals.push(notInForce(standing));
-  // The budget readings the gate refuses on are the approved ones: an unapproved lower reserve
-  // unblocks nothing, not even the seat a dry run would plan.
+  // The budget readings the gate refuses on are the live file's own: a standing that is not
+  // verified names no account at all, not even for a dry run's plan.
   const budgets = budgetsInForceOf(standing, team);
 
   // A file a CLI reads at start refuses only a launch into the lobby. `doctor` reports it
@@ -934,7 +910,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // What makes a standing that is not verified safe is not the defaults' own values —
   // `defaultBudgets` names no account, and `seatBudget` reads it `clear`: permissive as a
   // value. It is the ordering: the refusal above is carried into every exit below, and this
-  // guard keeps the planning pass from consulting a budget at all, so an unapproved file
+  // guard keeps the planning pass from consulting a budget at all, so a file no approval
+  // covers
   // buys nothing from the budget, not even a mark in a dry run's plan.
   const budgetGate = sources.seatBudget ?? seatBudget;
   const budgetOf = (seat: (typeof team.seats)[number]) =>

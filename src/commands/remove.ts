@@ -26,6 +26,7 @@ import { paneStillRunning, realSources as downSources, stateOf, stateOfPane, typ
 import { boxHoldsText } from '../launch/deliver.ts';
 import { removeRulesFile } from '../launch/rules-file.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
+import { holdsTriggerLine } from './send.ts';
 
 export type RemoveSources = DownSources & {
   /** Foreground process names in the pane, or null when the pane can't be read. */
@@ -63,8 +64,6 @@ export const USAGE = 'Usage: team remove <name> [--keep] [--abandon] [--session 
 function delegateRefused(io: { stderr(text: string): void }, verdict: { text: string }): number {
   io.stderr(`team remove: ${verdict.text}\n`);
   // exit: remove.delegate-approval
-  // exit: remove.delegate-approved-copy
-  // exit: remove.delegate-drift
   // exit: remove.delegate-evidence
   // exit: remove.delegate-placement
   // exit: remove.delegate
@@ -268,6 +267,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // exit: remove.never-approved
     return 1;
   }
+  // The granted orchestrator: the caller is the seat the live file's `grant` names, for a scope
+  // that lists `reload`, under an approval in force. That caller's `remove --keep` may close,
+  // without typing, a seat a quota screen holds or one whose box holds team's own unsent
+  // trigger line — the close `remove --abandon` makes. Every other caller keeps today's rule.
+  const grantedCaller = standing.kind === 'verified' && team.grant !== null
+    && team.grant.session === session && team.grant.scope.includes('reload')
+    && caller.kind === 'seat' && team.grant.seat === caller.name;
   // The live file names the seat. A stored copy is not a second roster.
   const copySeat = team.seats.find((seat) => seat.name === name);
   const temporary = Boolean(recorded?.temporary) && copySeat === undefined;
@@ -277,7 +283,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const listed = agents.filter((item) => item.name === name);
-  // A name the approved copy does not carry, and the live file does not declare. The owner
+  // A name the live file does not declare. The owner
   // keeps today's refusal, and so does a record with no single live agent, a temporary record,
   // and a name the live file still declares. A caller who is not the owner, meeting one live
   // agent herdr reports idle or done whose screen — read with the cli the record carries — is
@@ -288,6 +294,9 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // Both busy refusals — a working leftover, and a seat this run will not take — print here,
   // so the exit marker has one site.
   let busy: string | undefined;
+  // Set below when the granted orchestrator's `--keep` closes a quota screen, or a box holding
+  // team's own unsent trigger line, without typing.
+  let unaskedClose = false;
   if (!copySeat && !abandon) {
     const only = listed.length === 1 ? listed[0] : undefined;
     if (!temporary && declared === undefined && caller.kind !== 'owner' && only) {
@@ -301,7 +310,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       }
     }
     if (!leave && busy === undefined) {
-      io.stderr(`team remove: ${name}: its record is not an approved seat; left as it is (the owner cleans it: team remove ${name} --abandon)\n`);
+      io.stderr(`team remove: ${name}: its record is not a declared seat; left as it is (the owner cleans it: team remove ${name} --abandon)\n`);
       // exit: remove.unverified
       return 1;
     }
@@ -331,6 +340,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   if (agent && !leave && busy === undefined) {
     const liveCwd = sources.foregroundCwd ? sources.foregroundCwd(session, agent.pane) : null;
     const screen = sources.screen(session, agent.pane, cli, liveCwd);
+    const screenText = sources.screenText(session, agent.pane, cli);
     // A box that holds exactly the profile's exit text — an earlier run typed it and never
     // confirmed it — is cleared with the profile's one key inside the stop, and the removal
     // then proceeds as on an empty box. The same box on a CLI with no key is named for the
@@ -346,11 +356,17 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       processNames: profile?.processNames ?? [],
     });
     const holdsExit = where === 'unsent' && profile !== null
-      && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
+      && boxHoldsText(cli, profile.exit, screenText, { cwd: liveCwd ?? undefined, home: sources.home });
     const clearable = holdsExit && profile?.exitClear !== null;
-    leave = caller.kind !== 'owner' && where !== 'free' && where !== 'exited' && where !== 'working' && !clearable
+    // The granted orchestrator's `--keep` close without typing: a quota screen, or a box holding
+    // exactly a trigger line naming a file in this seat's drop dir. The owner's own unsent text
+    // reads false, and a working seat never reaches this branch.
+    unaskedClose = grantedCaller && args.flags.has('keep')
+      && (screen.kind === 'rate limit'
+        || (where === 'unsent' && holdsTriggerLine(cli, screenText, dir, session, name)));
+    leave = !unaskedClose && caller.kind !== 'owner' && where !== 'free' && where !== 'exited' && where !== 'working' && !clearable
       && (agent.status === 'idle' || agent.status === 'done');
-    if (where !== 'free' && where !== 'exited' && !abandon && !clearable && !leave) {
+    if (!unaskedClose && where !== 'free' && where !== 'exited' && !abandon && !clearable && !leave) {
       // A refusal here is the kept safety: herdr reports the seat working, its screen shows a
       // running turn, or the caller is the owner, who keeps these refusals whole — a caller other
       // than the owner meeting an idle or done seat never arrives, the leave took it above. The
@@ -367,7 +383,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
           ? `holds this CLI's exit text (${profile?.exit}) unsent in its input box; left as it is (the owner sends it or clears it in its pane)`
           : LEFT[where];
       busy = `team remove: ${name} ${held}${way}\n`;
-    } else if (!profile && !abandon && !leave) {
+    } else if (!unaskedClose && !profile && !abandon && !leave) {
       io.stderr(`team remove: no launch profile for \`${cli}\`; left as it is\n`);
       // exit: remove.no-profile
       return 1;
@@ -430,8 +446,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
           ...(screen.kind === 'exit question' ? { atExitQuestion: true } : {}),
         },
         keep: args.flags.has('keep'),
-        abandon: copySeat ? abandon && where !== 'free' : true,
-        closeUnasked: abandon,
+        abandon: copySeat ? (abandon || unaskedClose) && where !== 'free' : true,
+        closeUnasked: abandon || unaskedClose,
         unasked: `team remove ${name} --abandon closes it`,
       });
       // exit: remove.no-launch

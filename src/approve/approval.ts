@@ -175,7 +175,7 @@ export function approvalDifferencesOf(
 
 /**
  * What in the file the owner has not approved on this machine, one line per
- * difference. Empty when the file is the approved one; null when no verified
+ * difference. Empty when the file matches the last approval; null when no verified
  * approval is in force for this root — never approved, or a record that does
  * not verify. A file runs only when this is empty.
  */
@@ -185,98 +185,38 @@ export function approvalDifferences(team: TeamFile, root: string, home: string =
 }
 
 /**
- * The watch values in force. The watch section is the owner's, so what a file sets takes effect
- * only once the owner has approved it: a file never approved runs with the defaults, and a file
- * whose `watch` section differs from the approved one runs with the values of the approved copy.
- * An edit to a threshold changes nothing until `approve`. A tempo scales those waits on the way
- * out: an unapproved `relaxed` or `urgent` scales by the approved tempo, which is `normal`
- * for a record that predates the key.
- *
- * `watch.checks` is the finer line inside that section. Whenever its digest differs, the checks
- * in force are the approved copy's — or none, when that copy can't be read — even when the
- * timings themselves are unchanged and the rest of the section is the file's.
+ * The watch values in force. The live file is the record: a verified standing runs the watch
+ * section as the file writes it, tempo included, and a file that changed since the last
+ * approval is not held back. A standing that is not verified — never approved, legacy, or a
+ * record the verification refused — runs the defaults.
  */
 export function watchInForceOf(standing: Standing, team: TeamFile): TeamFile['watch'] {
   if (standing.kind !== 'verified') return defaultWatch();
-  const record = standing.record;
-  const differences = compare(approvedFingerprints(record), fingerprints(team));
-  const timingsDiffer = differences.some((difference) => difference.kind === 'section' && difference.name === 'watch');
-  const checksDiffer = differences.some((difference) => difference.kind === 'section' && difference.name === 'watch.checks');
-  const tempoDiffer = differences.some((difference) => difference.kind === 'section' && difference.name === 'tempo');
-  const tempo = tempoDiffer ? approvedTempo(record) : team.tempo;
-  if (!timingsDiffer && !checksDiffer) return applyTempo(team.watch, tempo);
-  const copy = validateTeamFile(record.file);
-  const approved = copy.ok ? copy.team.watch : defaultWatch();
-  if (!timingsDiffer) return applyTempo({ ...team.watch, checks: approved.checks }, tempo);
-  return applyTempo(approved, tempo);
-}
-
-/** The tempo of the approved copy. A copy that can't be read, or that predates the key, is `normal`. */
-function approvedTempo(record: ApprovalRecord): Tempo {
-  const copy = validateTeamFile(record.file);
-  return copy.ok ? copy.team.tempo : 'normal';
+  return applyTempo(team.watch, team.tempo);
 }
 
 /**
- * The budget values in force. The `budgets` section is the owner's like the watch's, so what a
- * file sets takes effect only once the owner has approved it: a file never approved runs with the
- * defaults — no accounts — and a file whose `budgets` section differs from the approved one runs
- * with the values of the approved copy, accounts included. An unapproved edit — a reserve lowered,
- * a mark dropped, `check_every` stretched, an account taken out — silences nothing and unblocks
- * nothing until `approve`.
+ * The budget values in force. The live file is the record: a verified standing runs the
+ * `budgets` section as the file writes it. A standing that is not verified runs the defaults —
+ * no accounts — so nothing counts before the first approval, exactly as before.
  */
 export function budgetsInForceOf(standing: Standing, team: TeamFile): TeamFile['budgets'] {
   if (standing.kind !== 'verified') return defaultBudgets();
-  const record = standing.record;
-  if (approvedFingerprints(record).sections['budgets'] === fingerprints(team).sections['budgets']) return team.budgets;
-  const copy = validateTeamFile(record.file);
-  return copy.ok ? copy.team.budgets : defaultBudgets();
+  return team.budgets;
 }
 
 /**
- * The one team file in force: a verified standing's stored copy, validated, whole — never the
- * live file, and never a field of the live file merged in: a quiet fingerprint is not a reason to
- * skip that copy. Null when the stored copy can't be read, whatever the fingerprints say: there is
- * no value to work from. A standing that isn't verified hands the live file back: nothing is
- * approved, and the file's own names are the only ones there are. Every reader that shows a name
- * in force reads it from this object — `usage`'s binding of a stored reading and the project name
- * it prints — so a name only the live file writes is never taken for an approved one. `project`
- * is part of that rule: it is not an owner section, so a rename leaves the approval verified, and
- * a reader that shows the name the owner agreed to must take it from this object, never from the
- * live file (the second lab's route, closed in `projectUsage`). The worktree subcommands are
- * the one exception, and say so themselves (`worktreeTeamInForceOf` below).
+ * The team file the worktree subcommands read, and whether it has drifted from the last
+ * approval. The live file is the record, so the team handed back is the file itself and the
+ * subcommands act on it as written. `differs` is the informational half: the file's
+ * fingerprints against the record's own, so a section or a seat that was added, removed or
+ * changed since the last approval prints the note. A standing that isn't verified hands the
+ * live file back with `differs: false`.
  */
-export function teamInForceOf(standing: Standing, team: TeamFile): TeamFile | null {
-  if (standing.kind !== 'verified') return team;
-  const copy = validateTeamFile(standing.record.file);
-  return copy.ok ? copy.team : null;
-}
-
-/**
- * The team file the worktree subcommands read, and whether the live file has drifted from it.
- * Every owner section is the copy in force's; `project` is the live file's — that field is not an
- * owner section, so a rename is not drift, and `{repo}` stays the name the file has now (the merge
- * lives here, not in `teamInForceOf`: only these subcommands read a name the owner has not
- * approved, and their gate admits the owner, the orchestrator and the operator alone). `differs` is a
- * separate question: the live file compared with the approved copy in both directions, so a
- * section or a seat that was added, removed or changed prints the note. Null when the stored copy
- * can't be read — there is no value to work from, and the command refuses. A standing that isn't
- * verified hands the live file back with `differs: false` — the caller's gate refuses before it
- * reads any of it.
- */
-export function worktreeTeamInForceOf(standing: Standing, team: TeamFile): { team: TeamFile; differs: boolean } | null {
-  const inForce = teamInForceOf(standing, team);
-  if (inForce === null) return null;
-  const merged = standing.kind === 'verified' ? { ...inForce, project: team.project } : inForce;
-  return { team: merged, differs: standing.kind === 'verified' && ownerDrift(inForce, team) };
-}
-
-/** An owner section or a seat added, removed or changed between the approved copy and the live file. */
-function ownerDrift(approved: TeamFile, live: TeamFile): boolean {
-  const approvedPrint = fingerprints(approved);
-  const livePrint = fingerprints(live);
-  // `compare` reports a seat added to its second file, not one taken out of it, so both orders.
-  return compare(approvedPrint, livePrint).length > 0 || compare(livePrint, approvedPrint).length > 0;
+export function worktreeTeamInForceOf(standing: Standing, team: TeamFile): { team: TeamFile; differs: boolean } {
+  if (standing.kind !== 'verified') return { team, differs: false };
+  const differences = compare(approvedFingerprints(standing.record), fingerprints(team));
+  return { team, differs: differences.length > 0 };
 }
 
 /** The wrappers a standalone caller uses: each does its own one read, then derives. */

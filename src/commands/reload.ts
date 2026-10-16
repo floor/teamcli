@@ -30,6 +30,7 @@ import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { readScreen } from '../watch/screen.ts';
+import { holdsTriggerLine } from './send.ts';
 import type { Launch } from './up.ts';
 
 export const USAGE = 'Usage: team reload <seat> [--file <path>]\n';
@@ -105,9 +106,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       out.stderr(`team reload: ${said.text}\n`);
       // exit: reload.grant-another-pane
       // exit: reload.grant-approval
-      // exit: reload.grant-approved-copy
       // exit: reload.grant-caller
-      // exit: reload.grant-drift
       // exit: reload.grant-file
       // exit: reload.grant-no-pane
       // exit: reload.grant-omitted
@@ -167,6 +166,10 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     return 0;
   }
 
+  // Set when the granted orchestrator's close may go without asking: the seat's screen is a
+  // quota one or its box holds team's own unsent trigger line. The close re-derives both
+  // readings itself before it closes anything.
+  let closeUnasked = false;
   const listed = sources.launch.agents(session)?.find((agent) => agent.name === seat.name);
   if (listed && listed.pane === recorded.pane && listed.workspace === recorded.workspace) {
     const text = sources.launch.paneText(session, recorded.pane);
@@ -176,16 +179,24 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       // exit: reload.working
       return 1;
     }
-    if (kind === 'unsent') {
+    // The granted orchestrator may close, without typing, a seat a quota screen holds or one
+    // whose box holds team's own unsent trigger line: the workspace is closed as `remove
+    // --abandon` closes one, and the launch below starts from the live file. Anything else in
+    // the box — the owner's own unsent text — keeps the refusals below, and so does the owner's
+    // own run of this command.
+    const unasked = grantSeat !== null
+      && (kind === 'rate limit' || holdsTriggerLine(seat.cli, text ?? undefined, dir, session, seat.name));
+    if (kind === 'unsent' && !unasked) {
       out.stderr(`team reload: ${seat.name} holds unsent text; nothing closed\n`);
       // exit: reload.unsent
       return 1;
     }
-    if (!((listed.status === 'idle' || listed.status === 'done') && kind === 'idle')) {
+    if (!((listed.status === 'idle' || listed.status === 'done') && kind === 'idle') && !unasked) {
       out.stderr(`team reload: ${seat.name} is not at an idle prompt; nothing closed\n`);
       // exit: reload.not-idle
       return 1;
     }
+    closeUnasked = unasked;
   }
 
   const runLock = acquireRunLock(dir, session);
@@ -214,7 +225,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         workspace: recorded.workspace,
         launched: recorded.launched,
         cli: seat.cli,
-        reload: { detail },
+        reload: { detail, ...(closeUnasked ? { unasked: true as const } : {}) },
       },
     };
     const steps = upPlan({
@@ -234,6 +245,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       paneText: (current, pane) => launch.paneText(current, pane),
       classify(current, pane, cli) {
         return readScreen(cli, launch.paneText(current, pane) ?? undefined).kind;
+      },
+      holdsTrigger(current, pane, cli) {
+        return holdsTriggerLine(cli, launch.paneText(current, pane) ?? undefined, dir, session, seat.name);
       },
       shellBack: (current, pane) => launch.shellBack?.(current, pane) ?? null,
       agentPanes: (current) => launch.agentPanes(current),
