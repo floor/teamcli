@@ -44,7 +44,7 @@ import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
-import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
+import { approvalStanding, approvedCopy, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
@@ -271,9 +271,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.default-session
     return 1;
   }
-  // A missing record is the live file, and so is a verified one: the stored copy is not a
-  // gate and is not the text this edit starts from. A legacy or refused record is still not
-  // in force.
+  // A missing record is the live file, and so is a verified one: the edit starts from
+  // the live text. A seat the live file no longer names is put back from the stored
+  // copy's stanza alone. A legacy or refused record is still not in force.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
     out.stderr(`team add: ${plainText(notInForce(standing))}\n`);
@@ -308,9 +308,19 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const recorded = readState(dir).sessions[session] ?? emptySession();
 
   const original = readFileSync(path, 'utf8');
+  const asked = args.rest[0] ?? '';
+  const stored = seatSource(standing, root, sources.home);
+  const fromStore = stored !== null && !team.seats.some((seat) => seat.name === asked);
   const built = temporary
     ? temporarySeat(args.values, original, approvedTeam, recorded, agents, root, team.workspace.base)
-    : declaredSeat(args.rest[0] ?? '', original, approvedText, approvedTeam, sources.home, sources.fs);
+    : declaredSeat(
+      asked,
+      original,
+      fromStore ? stored.text : approvedText,
+      fromStore ? stored.team : approvedTeam,
+      sources.home,
+      sources.fs,
+    );
   if ('error' in built) {
     out.stderr(`team add: ${plainText(built.error)}\n`);
     // exit: add.no-seat
@@ -373,8 +383,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
   // A delegated add may start only a declared, not-stopped seat that is not running: one that
-  // would restore a missing seat or clear `stopped` edits the file and re-signs the approval,
-  // and that stays the owner's. Refused after the already-running refusal, before the write,
+  // would restore a missing seat or clear `stopped` edits the file, and that stays the owner's.
+  // Refused after the already-running refusal, before the write,
   // the digest and any dry-run plan — so a delegated add writes neither file nor approval.
   if (delegatePane !== null && built.edited !== original) {
     out.stderr(`team add: ${plainText(ADD_DELEGATE_EDIT.text)}\n`);
@@ -743,6 +753,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   } finally {
     runLock.release();
   }
+}
+
+/** The stored copy, when this standing has one that still parses. Used only to put back a
+ *  seat the live file no longer names. The edit itself stays on the live text. */
+function seatSource(standing: Standing, root: string, home: string | undefined): { text: string; team: TeamFile } | null {
+  if (standing.kind !== 'verified') return null;
+  const text = approvedCopy(root, home);
+  if (text === null) return null;
+  const parsed = validateTeamFile(text, { home });
+  return parsed.ok ? { text, team: parsed.team } : null;
 }
 
 function declaredSeat(
