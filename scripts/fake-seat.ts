@@ -5,21 +5,19 @@
 // profile matches.
 //
 //   bun scripts/fake-seat.ts <idle|unsent|permission> <log-file>
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 export type FakeMode = 'idle' | 'unsent' | 'permission';
 
-const RULE = '─'.repeat(60);
-// The status line `seatModel` reads: "… · Opus 5.5 · …". The e2e's seats declare that model.
-const STATUS = '  main · … · Opus 5.5 · S: $0.0 · W: 0%\n  ⏵⏵ bypass permissions on (shift+tab to cycle)';
+const FIXTURES: Record<FakeMode, string> = {
+  idle: readFileSync(new URL('../test/fixtures/claude-code/2.1.289/idle-suggestion-plain.txt', import.meta.url), 'utf8'),
+  unsent: readFileSync(new URL('../test/fixtures/claude-code/2.1.289/unsent-typed-ansi.txt', import.meta.url), 'utf8'),
+  permission: readFileSync(new URL('../test/fixtures/claude-code/2.1.289/permission-create-plain.txt', import.meta.url), 'utf8'),
+};
 
-/** The screen this mode draws, in the shapes `src/watch/screen.ts` classifies. */
+/** The screen this mode draws, from the captured Claude Code 2.1.289 fixtures (`src/watch/screen.ts`). */
 export function screenFor(mode: FakeMode): string {
-  if (mode === 'unsent') return `● Done.\n\n${RULE}\n❯ a line that was never sent\n${RULE}\n${STATUS}\n`;
-  if (mode === 'permission') {
-    return 'Bash command\n\n  chmod +x run.sh\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No, and tell Claude what to do differently\n\nEsc to cancel · Tab to amend\n';
-  }
-  return `● Done.\n\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
+  return FIXTURES[mode];
 }
 
 /** The typed line a seat leaves on. The exit is the text and the Enter, never the text alone. */
