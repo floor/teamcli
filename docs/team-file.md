@@ -148,10 +148,8 @@ grant:
   the orchestrator's seat. `team down` admits that seat when the list includes `down`, and leaves
   the orchestrator's seat and the operator's seat running. `team reload <seat>` admits that
   seat when the list includes `reload`: one named seat, closed only at an idle prompt when its
-  declared model or effort differs from the launch, then launched again. That caller may also
-  close, without typing, a seat a quota screen holds or one whose box holds team's own unsent
-  trigger line. It does not name the caller's own seat. A file that omits `grant` keeps
-  today's `down`.
+  declared model or effort differs from the launch, then launched again. It does not name the
+  caller's own seat. A file that omits `grant` keeps today's `down`.
 
 ## `delegates`
 

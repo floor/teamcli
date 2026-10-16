@@ -12,7 +12,6 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
@@ -347,72 +346,4 @@ describe('team reload', () => {
     expect(logText()).not.toContain('reload [owner]');
   });
 
-  describe('the granted close without typing', () => {
-    const RATE = `API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00\n${IDLE}`;
-
-    test('a quota screen is closed without typing and relaunched from the live file', async () => {
-      if (readScreen('claude-code', RATE).kind !== 'rate limit') {
-        throw new Error('the fixture screen must read as a rate limit');
-      }
-      remember('lead', 'low');
-      remember('worker', 'low');
-      const { sources, closed, commands } = harness({ text: RATE });
-      const io = testIo(root, LEAD);
-      const code = await runReload(['worker'], io, sources);
-      expect(code, io.out + io.err).toBe(0);
-      expect(closed).toEqual(['worker-ws']);
-      expect(commands).toHaveLength(1);
-      expect(commands[0]).toContain('claude --model claude-opus-5-5');
-      expect(logText()).toContain('grant [grant] lead reload: worker effort');
-    });
-
-    test('a box holding team\'s own unsent trigger line is closed without typing and relaunched', async () => {
-      remember('lead', 'low');
-      remember('worker', 'low');
-      const dropDir = join(dir, 'send-drops', 'alpha', 'worker');
-      mkdirSync(dropDir, { recursive: true });
-      const dropPath = join(dropDir, '6f2c7d30-1111-4c5d-8e9f-0a1b2c3d4e5f');
-      writeFileSync(dropPath, 'the brief itself\n');
-      const { sources, closed, commands } = harness({ text: claudeBox(`Read ${dropPath} and do that.`) });
-      const io = testIo(root, LEAD);
-      const code = await runReload(['worker'], io, sources);
-      expect(code, io.out + io.err).toBe(0);
-      expect(closed).toEqual(['worker-ws']);
-      expect(commands).toHaveLength(1);
-    });
-
-    test('the owner\'s own unsent text is still refused, grant or no grant', async () => {
-      remember('lead', 'low');
-      remember('worker', 'low');
-      const { sources, closed } = harness({ text: claudeBox('draft the release notes') });
-      const io = testIo(root, LEAD);
-      const code = await runReload(['worker'], io, sources);
-      expect(code).toBe(1);
-      expect(io.err).toContain('holds unsent text');
-      expect(closed).toEqual([]);
-      expect(logText()).toBe('');
-    });
-
-    test('a working seat is still refused', async () => {
-      remember('lead', 'low');
-      remember('worker', 'low');
-      const { sources, closed } = harness({ status: 'working' });
-      const io = testIo(root, LEAD);
-      const code = await runReload(['worker'], io, sources);
-      expect(code).toBe(1);
-      expect(io.err).toContain('is working');
-      expect(closed).toEqual([]);
-      expect(logText()).toBe('');
-    });
-
-    test('the owner\'s own run keeps the quota refusal', async () => {
-      remember('worker', 'low');
-      const { sources, closed } = harness({ text: RATE });
-      const io = testIo(root, OWNER);
-      const code = await runReload(['worker'], io, sources);
-      expect(code).toBe(1);
-      expect(io.err).toContain('not at an idle prompt');
-      expect(closed).toEqual([]);
-    });
-  });
 });

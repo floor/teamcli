@@ -7,13 +7,9 @@ reaches that seat. This command names one seat and does only that swap.
 
 The close happens at an idle prompt. A seat that is working, a seat whose input box holds
 unsent text, and a seat whose screen is not an idle prompt are left as they are: nothing is
-closed and nothing is launched. One caller may close two more screens without asking: the
-granted orchestrator may close a seat a quota or usage-limit screen holds, and a seat whose
-box holds unsent text team itself typed — a send trigger line — closing the workspace without
-typing into it, the way `team remove <seat> --abandon` closes one. Text the owner left in the
-box is not team's, and a working seat is left for everyone. A seat whose launch was not
-recorded — one brought up before the record existed — is refused the same way. The next
-launch that reaches an idle prompt writes the record, and a later reload can read it.
+closed and nothing is launched. A seat whose launch was not recorded — one brought up before
+the record existed — is refused the same way. The next launch that reaches an idle prompt
+writes the record, and a later reload can read it.
 
 A matching seat exits without closing anything and without a log line. A close that passes
 is logged at that moment, before the workspace is closed. The owner's line names the seat

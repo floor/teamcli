@@ -82,9 +82,6 @@ export type Host = {
    *  pane or workspace any other seat's record names. */
   seatStates?(session: string): Record<string, SeatState> | null;
   classify(session: string, pane: string, cli: string): ScreenKind;
-  /** Whether the pane's input box holds, unsent, exactly a trigger line team itself typed.
-   *  Absent: never. A granted reload's close asks this, for the box it may close unasked. */
-  holdsTrigger?(session: string, pane: string, cli: string): boolean;
   /** The pane's visible text, ANSI styling and all, or null when the pane can't be read. */
   paneText?(session: string, pane: string): string | null;
   /** Whether the pane's foreground program is back to its shell; null when herdr can't tell. */
@@ -1263,16 +1260,11 @@ export async function executePlan(
             refuse('is working; nothing closed');
             break;
           }
-          // A granted reload may close, without asking, a seat a quota screen holds or one whose
-          // box holds team's own unsent trigger line — both readings taken here again, at the
-          // close, from the pane itself. Anything else in the box keeps the refusals.
-          const unasked = op.reload.unasked === true
-            && (kind === 'rate limit' || host.holdsTrigger?.(session, op.pane, op.cli) === true);
-          if (kind === 'unsent' && !unasked) {
+          if (kind === 'unsent') {
             refuse('holds unsent text; nothing closed');
             break;
           }
-          if (!((status === 'idle' || status === 'done') && kind === 'idle') && !unasked) {
+          if (!((status === 'idle' || status === 'done') && kind === 'idle')) {
             refuse('is not at an idle prompt; nothing closed');
             break;
           }

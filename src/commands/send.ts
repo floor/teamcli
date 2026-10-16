@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -67,28 +67,6 @@ of the one <message> argument.
 
 Not in this build: broadcast, and a reply from a seat that is not Claude Code.
 `;
-
-/** The seat's drop dir: the folder under the project's state a send writes its bodies to. */
-export function dropDirOf(dir: string, session: string, seat: string): string {
-  return join(dir, 'send-drops', session, seat);
-}
-
-/** Whether the pane's input box holds, unsent, exactly a trigger line team itself typed — one
- *  naming a file still in this seat's drop dir. Text anyone else left in the box, and a box
- *  holding no trigger at all, read false. `reload` and `remove --keep` ask this before they
- *  close a seat without typing. */
-export function holdsTriggerLine(cli: string, screen: string | undefined, dir: string, session: string, seat: string): boolean {
-  let ids: string[];
-  try {
-    ids = readdirSync(dropDirOf(dir, session, seat));
-  } catch {
-    return false;
-  }
-  return ids.some((id) => {
-    const line = triggerLine(join(dropDirOf(dir, session, seat), id));
-    return line !== null && boxHoldsText(cli, line, screen);
-  });
-}
 
 export type SendHost = {
   /** The live agents of a session; null when herdr can't be reached. */

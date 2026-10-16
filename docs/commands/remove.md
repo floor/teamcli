@@ -49,13 +49,6 @@ A caller other than the owner meeting a seat herdr reports idle or done that is 
 seat out of the team and leaves its pane running: nothing typed, the workspace left open, the
 pane's agent renamed so it no longer answers the seat's name.
 
-One caller may close more than that: the granted orchestrator — the seat the file's `grant`
-names, for a scope listing `reload`, under an approval in force — running `remove <seat>
---keep` on a seat a quota or usage-limit screen holds, or one whose box holds unsent text
-team itself typed (a send trigger line), closes the workspace without typing into it, the way
-`--abandon` closes one. Text the owner left in the box is not team's, and a working seat is
-left for every caller.
-
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |

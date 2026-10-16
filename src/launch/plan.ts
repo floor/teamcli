@@ -91,11 +91,9 @@ export type Op =
       /**
        * The declared model or effort differs from the launch record. The close re-reads the
        * pane and closes only at an idle prompt: not while working, and not while the box
-       * holds unsent text. `detail` is the audit line's difference. `unasked` is set by a
-       * granted reload: its caller may also close a quota screen, or a box holding team's own
-       * unsent trigger line, without asking — both readings re-derived at the close.
+       * holds unsent text. `detail` is the audit line's difference.
        */
-      reload?: { detail: string; unasked?: true };
+      reload?: { detail: string };
     }
   | { do: 'spawn-watch'; command: string; cwd: string; file?: string }
   | {
@@ -204,10 +202,8 @@ export interface UpSeat {
     /** The pane still holds the launched process and the model on its screen is not the file's.
      *  The close re-reads the screen; `way` is what the refusal names for this caller. */
     drift?: { way: string };
-    /** Set by `team reload`: close only at an idle prompt, then launch the file's line. A
-     *  granted reload may also close, without asking, a quota screen or a box holding team's
-     *  own unsent trigger line. */
-    reload?: { detail: string; unasked?: true };
+    /** Set by `team reload`: close only at an idle prompt, then launch the file's line. */
+    reload?: { detail: string };
   };
   /** A ready seat whose model drifted and that this `up` will not close: herdr reports it
    *  working, or its screen shows a running turn. The record stays ready. */
