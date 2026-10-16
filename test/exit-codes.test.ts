@@ -3597,6 +3597,15 @@ for (const command of ['up', 'down', 'add'] as const) {
         expect(dry.code, id).toBe(row.code);
         const shared = refusalCore(`${real.err}${real.out}`).slice(0, 80);
         expect(shared.length, id).toBeGreaterThan(0);
+        if (shared === 'deny') {
+          // `up`'s bare word is the one refusal with no sentence of its own to echo: a real run
+          // says the word alone, and a dry run is never denied — it names the reason and the
+          // owner's own command instead, which this holds to the caller the real run answered.
+          const dryText = `${dry.err}${dry.out}`;
+          expect(dryText, id).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
+          expect(dryText, id).toContain('! to unblock: the owner runs `team up');
+          continue;
+        }
         expect(refusalCore(`${dry.err}${dry.out}`), id).toContain(shared);
       } finally {
         compareDry = false;

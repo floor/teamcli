@@ -5038,8 +5038,11 @@ describe('team up, delegated', () => {
       machine: () => fine,
     }, made));
     expect(code).toBe(1);
-    expect(io.err).toBe('deny\n');
-    expect(io.out).toBe('');
+    // A dry run is never answered with the bare word: it names the reason and the owner's own
+    // command, and the refusal leaves through the real run's exit — the plan, nothing run.
+    expect(io.err).toBe('');
+    expect(io.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is it runs in pane main/w9:p1, which no grant lists\n');
+    expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
     expect(made.starts).toBe(0);
     expect(made.creates).toEqual([]);
   });
