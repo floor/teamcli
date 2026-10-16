@@ -129,6 +129,11 @@ needs no caller check.
 A team's leads brief its own seats directly; another team's seats are reached through that team's
 orchestrator, or by an owner-signed grant naming the pair.
 
+An assistant seat is the seat its file marks `assistant: true` — a place in the chain and a
+capability, never a role's name: the entity's assistant is the first mark found walking its teams
+in chain order, the entity's own team first and then its other teams by team id, so an entity
+whose files mark none has no assistant for the rule to admit.
+
 An owner-signed grant is a record in the owner's grants folder (`~/.config/team/grants/`, the
 same folder the standing create-grants live in), naming the pair it admits and when it stops:
 
