@@ -94,6 +94,11 @@ watch: none
 format: 1
 project: beacon
 operator: claude-keeper
+
+trust:
+  - ~/.config/team/lobby
+  - ~/Code/beacon
+
 workspace:
   mode: shared
 seats:
