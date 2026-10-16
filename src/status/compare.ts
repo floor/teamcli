@@ -7,6 +7,7 @@ import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { usesLauncher } from '../launch/line.ts';
+import { defaultSocketsDir, socketOfProcesses } from '../send/address.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
@@ -22,7 +23,17 @@ export type Live = {
   processes?: Record<string, PaneProcesses | null>;
 };
 
-export type Row = { name: string; id?: string; state: string; model: string; pane: string; stored?: string; start_cwd?: string };
+export type Row = {
+  name: string;
+  id?: string;
+  state: string;
+  model: string;
+  pane: string;
+  stored?: string;
+  start_cwd?: string;
+  /** How a send would reach this seat: over the session's socket in its pane, else typed. */
+  reach?: 'socket' | 'typed';
+};
 
 /** The repair of the one precondition `status` knows: the file's approval is not in force. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
@@ -120,9 +131,10 @@ function limitMark(seat: Seat | undefined, screen: Screen): string | null {
   return screen.reset === null ? ` (rate limit${on})` : ` (rate limit${on}, resets at ${screen.reset})`;
 }
 
-// Compares the file and the state with the live session. Pure: every input is handed in.
-// `watch` is the watch values in force — the live file's under a verified standing, the defaults
-// under none — so the verdict reads one object.
+// Compares the file and the state with the live session. Pure over what is handed in, but for
+// one probe: a seat reads `socket` only while the session's socket file is really there, so the
+// filesystem decides that word. `watch` is the watch values in force — the live file's under a
+// verified standing, the defaults under none — so the verdict reads one object.
 export function compare(
   team: TeamFile,
   session: string,
@@ -130,6 +142,7 @@ export function compare(
   live: Live,
   now: Date = new Date(),
   watch: TeamFile['watch'] = team.watch,
+  sockets: string = defaultSocketsDir(),
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -471,6 +484,16 @@ export function compare(
         repair: `team watch --session ${session}`,
       });
     }
+  }
+
+  // How a send would reach each seat, read over the processes herdr already reported: `socket`
+  // while the pane's own processes carry a session socket (the rule the launch records with,
+  // address.ts), `typed` otherwise — a seat that is not a Claude Code one, a pane that is gone,
+  // or one herdr could not read. No extra herdr call: the reading is the row's own pane.
+  for (const row of rows) {
+    const declared = team.seats.find((seat) => seat.name === row.name);
+    const processes = live.processes?.[row.pane] ?? null;
+    row.reach = declared?.cli === 'claude-code' && socketOfProcesses(processes, sockets) ? 'socket' : 'typed';
   }
 
   return { rows, differences, notes };
