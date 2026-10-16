@@ -8,8 +8,9 @@
 //     channel to create, close or rename a workspace or to type into a pane, so "nothing was
 //     launched" is what the scene is built on, and every call taken is on the pane herdr named;
 // (c) registers herdr does not place as that seat are refused, and nothing at all is written:
-//     no agent of the name in the session, two agents of the name, a pane holding a shell, and
-//     a screen the file-cli's reader does not know;
+//     no agent of the name in the session, two agents of the name, a pane holding a shell, a
+//     pane whose foreground process is not the one the file's `cli` names, and a screen the
+//     file-cli's reader does not know;
 // (d) the run is repeatable: the second run says `already registered` without reading the pane
 //     again, and `--dry-run` verifies the same way and writes nothing.
 // Fake herdr throughout, a temporary home and a pinned caller: no live session is read.
@@ -95,6 +96,10 @@ function sources(w: World, led: Ledger = [], over: Partial<RegisterSources> = {}
       led.push(`processes ${session} ${pane}`);
       return { shell: 400, foreground: [401] };
     },
+    foreground: (session, pane) => {
+      led.push(`foreground ${session} ${pane}`);
+      return ['claude'];
+    },
     paneText: (session, pane) => {
       led.push(`text ${session} ${pane}`);
       return CLAUDE_IDLE;
@@ -140,7 +145,7 @@ describe('a running seat', () => {
     expect(r.out).toContain('lead: registered — pane w1:p1; nothing was launched');
     // The whole verification, and nothing else: reads of the session, its agents and the one
     // pane herdr named the seat on — no second pane, and no call anything like a write.
-    expect(r.led).toEqual(['session acme', 'agents acme', 'processes acme w1:p1', 'text acme w1:p1']);
+    expect(r.led).toEqual(['session acme', 'agents acme', 'processes acme w1:p1', 'foreground acme w1:p1', 'text acme w1:p1']);
 
     const held = readState(w.dir).sessions.acme?.seats.lead;
     expect(held?.stage).toBe('ready');
@@ -210,7 +215,7 @@ describe('a running seat', () => {
 
     expect(r.code).toBe(0);
     expect(r.out).toContain('lead: would register — pane w1:p1; nothing would be launched');
-    expect(r.led).toEqual(['session acme', 'agents acme', 'processes acme w1:p1', 'text acme w1:p1']);
+    expect(r.led).toEqual(['session acme', 'agents acme', 'processes acme w1:p1', 'foreground acme w1:p1', 'text acme w1:p1']);
     expect(written(w)).toEqual(NOTHING);
   });
 });
@@ -245,6 +250,38 @@ describe('a pane herdr does not place as that seat', () => {
 });
 
 describe('a cli mismatch', () => {
+  test('is refused when the pane runs a program the file-cli does not name', async () => {
+    const w = world();
+    const seen: string[] = [];
+    const r = await register(w, ['lead'], {
+      foreground: (session, pane) => {
+        seen.push(`foreground ${session} ${pane}`);
+        return ['codex'];
+      },
+      paneText: () => {
+        throw new Error('the screen must not be read');
+      },
+    });
+
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('holds no `claude-code` process; nothing was registered');
+    // The refusal lands on the pane herdr named, before the screen is read: a pane running
+    // another cli is not read as this seat at all.
+    expect(seen).toEqual(['foreground acme w1:p1']);
+    expect(written(w)).toEqual(NOTHING);
+
+    // An unreadable foreground list is the same refusal, not a pass.
+    const blind = await register(w, ['lead'], {
+      foreground: () => null,
+      paneText: () => {
+        throw new Error('the screen must not be read');
+      },
+    });
+    expect(blind.code).toBe(1);
+    expect(blind.err).toContain('holds no `claude-code` process; nothing was registered');
+    expect(written(w)).toEqual(NOTHING);
+  });
+
   test('is refused when the screen is one the file-cli\'s own reader does not know', async () => {
     const w = world();
     const r = await register(w, ['lead'], { paneText: () => '$ ls -la\ntotal 0\n$ ' });
