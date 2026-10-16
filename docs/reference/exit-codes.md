@@ -132,6 +132,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `conformance-adapter.finished` | `conformance-adapter` | 0 | the protocol finished | `team conformance-adapter` |
 | `doctor.clear` | `doctor` | 0 | nothing is missing | `team doctor` |
 | `doctor.missing` | `doctor` | 1 | something is missing | `team doctor` |
+| `doctor.both-modes` | `doctor` | 2 | both focused modes were asked at once | `team doctor --login --jules` |
 | `doctor.file` | `doctor` | 2 | the team file can't be read | `team doctor --file missing.yaml` |
 | `doctor.file-invalid` | `doctor` | 2 | the team file can't be parsed | `team doctor --file team.yaml` |
 | `doctor.invocation` | `doctor` | 2 | the invocation can't be read | `team doctor extra` |

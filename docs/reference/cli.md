@@ -213,7 +213,7 @@ Hidden: no
 
 Usage:
 
-    team doctor [--session <name>] [--file <path>] [--login]
+    team doctor [--session <name>] [--file <path>] [--login] [--jules]
 
 ### Flags
 
@@ -221,6 +221,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--jules` | no | no | no |
 | `--login` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |

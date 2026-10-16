@@ -64,13 +64,28 @@ export type DoctorSources = {
   processComm?(pid: number): string | null;
   /** Whether the session still has this pane. Null when herdr can't say, which says nothing. */
   watchPane?(session: string, pane: string, workspace?: string): boolean | null;
+  /** One command's raw answer, both streams — the reads that are not a seat's launcher (a `git`
+   *  remote, the Jules CLI). Absent in a test: "could not be run", never consent to touch the
+   *  machine. */
+  command?(binary: string, args: string[]): CommandRead | null;
 };
 
 export type CommandRunner = (binary: string, args: string[]) => { status: number | null; stdout: string } | null;
 
+/** A command's status and both streams, as the two `--jules` reads see them: a CLI names the
+ *  missing step on standard error as often as on standard output, and the first line it printed
+ *  is what the report repeats. */
+export type CommandRead = { status: number | null; stdout: string; stderr: string };
+
 export function run(binary: string, args: string[]): { status: number | null; stdout: string } | null {
   const result = spawnSync(binary, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 });
   return result.error ? null : { status: result.status, stdout: result.stdout };
+}
+
+/** `run` with standard error kept: the same spawn, both streams, for `--jules`'s two reads. */
+export function readCommand(binary: string, args: string[]): CommandRead | null {
+  const result = spawnSync(binary, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000 });
+  return result.error ? null : { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
 export const realCommandRunner = run;
@@ -122,6 +137,7 @@ export const realSources: DoctorSources = {
   home: homedir(),
   getuid: () => process.getuid?.() ?? 0,
   runCheck: (path) => runCommand(path),
+  command: readCommand,
   paneText: (session, pane) => paneRead(pane, 40, session) ?? undefined,
   machine: readMachine,
   watchAlive(pid) {
@@ -146,7 +162,7 @@ export const realSources: DoctorSources = {
   },
 };
 
-export const USAGE = 'Usage: team doctor [--session <name>] [--file <path>] [--login]\n';
+export const USAGE = 'Usage: team doctor [--session <name>] [--file <path>] [--login] [--jules]\n';
 
 export type Level = 'ok' | 'warn' | 'miss' | 'note';
 export type Finding = { level: Level; text: string };
@@ -758,6 +774,62 @@ export function doctorFindings(
   return findings;
 }
 
+/** The project's `owner/repo` from a github `origin` remote URL, or null — `git@github.com:o/r.git`
+ *  and `https://github.com/o/r` (a trailing slash, a `.git` suffix) are the same repository, and any
+ *  other host is not one this check can speak about. */
+export function githubOrigin(text: string): string | null {
+  const value = text.trim().replace(/\/+$/, '');
+  const found = /^(?:https:\/\/github\.com\/|git@github\.com:)([^/\s]+)\/([^/\s]+)$/.exec(value);
+  if (!found) return null;
+  const repo = (found[2] as string).replace(/\.git$/, '');
+  return repo === '' ? null : `${found[1]}/${repo}`;
+}
+
+/** The first line a failed CLI printed, cleaned for the report: the missing step the CLI itself
+ *  names, kept short. Null when it printed nothing this can repeat. */
+function saidLine(read: CommandRead): string | null {
+  for (const stream of [read.stderr, read.stdout]) {
+    const line = stream.split('\n').map((text) => text.trim()).find((text) => text !== '');
+    if (line !== undefined) return line.length > 160 ? `${line.slice(0, 157)}...` : line;
+  }
+  return null;
+}
+
+/**
+ * `team doctor --jules`: whether the Jules CLI, the owner's Google login, the GitHub link and this
+ * project's repository are all in place, and which step is missing when they are not. Two reads —
+ * `jules remote list --repo` (the login and the GitHub link answer in its status, the connected
+ * repositories in its lines) and `git remote get-url origin` (which repository this project means)
+ * — and nothing else: no login, no session, no API key, no write.
+ */
+export function doctorJulesFindings(root: string, sources: DoctorSources): Finding[] {
+  const findings: Finding[] = [];
+  if (!sources.onPath('jules')) {
+    findings.push({ level: 'miss', text: plainLine("install the Jules CLI: `npm install -g @google/jules` — the owner's step") });
+    return findings;
+  }
+  const answer = sources.command?.('jules', ['remote', 'list', '--repo']) ?? null;
+  if (answer === null || answer.status !== 0) {
+    // One line names both: the refusal is repeated, never parsed, so which half is missing is the
+    // CLI's own line to say. The repair is the same either way.
+    findings.push({ level: 'miss', text: plainLine("log in to Jules and link it to GitHub: `jules login` — the owner's step") });
+    const said = answer === null ? null : saidLine(answer);
+    if (said !== null) findings.push({ level: 'note', text: plainLine(`jules said: ${said}`) });
+    return findings;
+  }
+  findings.push({ level: 'ok', text: plainLine('jules: logged in, with GitHub linked') });
+  const origin = sources.command?.('git', ['-C', root, 'remote', 'get-url', 'origin']) ?? null;
+  const repo = origin !== null && origin.status === 0 ? githubOrigin(origin.stdout) : null;
+  if (repo === null) {
+    findings.push({ level: 'note', text: plainLine("the project's github repository was not read from the origin remote") });
+    return findings;
+  }
+  const connected = answer.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+  if (connected.includes(repo)) findings.push({ level: 'ok', text: plainLine(`jules: ${repo} is connected`) });
+  else findings.push({ level: 'miss', text: plainLine(`connect ${repo} to Jules: https://jules.google.com — the owner's step`) });
+  return findings;
+}
+
 export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Finding[] {
   const clis: string[] = [];
   for (const seat of team.seats) {
@@ -784,10 +856,17 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
 
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'file'], ['login']);
+  const args = readArgs(argv, ['session', 'file'], ['login', 'jules']);
   if (args.error || args.rest.length) {
     out.stderr(`team doctor: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
     // exit: doctor.invocation
+    return 2;
+  }
+  if (args.flags.has('login') && args.flags.has('jules')) {
+    // The two focused modes answer different questions and have no meaningful order: asking both
+    // is an invocation error, refused before the file or any source is read.
+    out.stderr(`team doctor: --login and --jules answer different questions; ask one at a time\n${USAGE}`);
+    // exit: doctor.both-modes
     return 2;
   }
   let home: string | undefined;
@@ -812,6 +891,8 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   const findings = args.flags.has('login')
     ? doctorLoginFindings(team, sources)
+    : args.flags.has('jules')
+    ? doctorJulesFindings(root, sources)
     : [
         ...doctorFindings(
           team,
@@ -834,8 +915,9 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   const missing = findings.filter((finding) => finding.level === 'miss').length;
   const warnings = findings.filter((finding) => finding.level === 'warn').length;
   // The same rule `up` and `add` refuse on. A missing watch is `miss` but blocks nothing, so the
-  // refusal line is printed only when at least one finding blocks, and counts those.
-  const blockers = findings.filter(blocksLaunch).length;
+  // refusal line is printed only when at least one finding blocks, and counts those. `--jules`
+  // findings never reach a launch: `up` and `add` run the full report, which does not read Jules.
+  const blockers = args.flags.has('jules') ? 0 : findings.filter(blocksLaunch).length;
   const plural = warnings === 1 ? '' : 's';
   let summary = `team doctor: ${missing} missing, ${warnings} warning${plural}`;
   if (!missing) summary = `team doctor: nothing missing, ${warnings} warning${plural}`;
