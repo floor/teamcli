@@ -9,13 +9,12 @@ The owner alone runs it, from a terminal outside herdr.
 
     team tempo <word>
 
-`<word>` is `relaxed`, `normal` or `urgent`.
+## Flags
 
-## What it reads and writes
-
-Reads the team file in the current folder. Writes one line, `tempo: <word>`, after `format:`
-when the key is missing, or on the line that already names it. The rest of the file is left
-as it is. A line that already says that word is not rewritten.
+| Flag | Meaning |
+| --- | --- |
+| `<word>` | `relaxed`, `normal` or `urgent` |
+| `--help`, `-h` | the usage, and exit 0 |
 
 ## Who may run it
 
@@ -68,27 +67,4 @@ team tempo: it takes effect when the file is approved
 exit 0
 ```
 
-The same word again leaves the line:
-
-```console
-$ team tempo urgent ; echo "exit $?"
-tempo: urgent
-exit 0
-```
-
-A word the file does not know is the usage:
-
-```console
-$ team tempo faster ; echo "exit $?"
-team tempo: "faster" must be relaxed, normal or urgent
-Usage: team tempo <word>
-exit 2
-```
-
-A seat can't run it:
-
-```console caller=agent
-$ team tempo urgent ; echo "exit $?"
-team tempo: only the owner runs tempo, from a terminal outside herdr; this call is unplaced (it is run by an agent (claude) outside herdr)
-exit 1
-```
+Rationale, behaviour, refusals and known limits: [docs/internal/tempo.md](../internal/tempo.md).
