@@ -5,6 +5,22 @@ Shows the team as it stands: one line per seat with what the session's herdr sho
 that repairs it. It changes nothing but the owner's `last_valid` copy of the file it read; a run that
 is not the owner's writes nothing at all.
 
+A pane that no longer holds the process `team` launched is not by itself a difference: when a
+program `team` did not launch is in front and the agent session stored at its launch is the
+session the pane reports now — a herdr restart brings the pane back under a new shell pid — the
+row is the ordinary one. Otherwise a pane with no CLI left reads `missing` (the CLI ended, or a
+restore left the shell in front) and a pane fronted by any other program reads `restored, not
+launched by team`; both carry a difference, and the second's model is `-`, never the file's.
+
+That pane is not silent, though: when the seat's launch line starts a launcher — a program other
+than the CLI's own binary, or a file that says the launcher chooses the model — the run adds a
+difference of its own, `<seat>: its launch line starts a launcher, and the process in its pane is
+not the one team launched`; the row stays the one the live session gives it. And a pane this
+record cannot tie is repaired by that restart — `team remove <seat> --keep, then team add <seat>`,
+or `team down, then team up` for a lead — when its screen names a model the file does not carry,
+or its launch line starts a launcher; a pane it can say nothing about is repaired by looking at
+it. Nothing either report says starts a seat.
+
 ## Synopsis
 
     team status [--session <name>] [--file <path>] [--all] [--json]
@@ -25,11 +41,12 @@ is not the owner's writes nothing at all.
 | --- | --- |
 | the owner, from a terminal outside herdr | read the team, and aim the read with `--file` and `--session` |
 | a seat of the team, placed in the file's session, on the pane the state records for it | read the team; a seat the state records no pane for, or records on another pane, fails closed |
-| a pane outside the team that the approved file names in its `delegates` entries | read the team; a pane only the live file names does not pass |
+| a pane outside the team that the live file names in its `delegates` entries | read the team; a pane newly named by the live file also passes |
 | anyone else, an owner's run without a terminal included | nothing: the fixed sentence `team status: this team is not yours to read` on stderr, stdout empty, exit 2 |
 
-`--file` and `--session` aimed by anyone else are refused before any file or session is read
-(`--file is the owner's, from a terminal outside herdr; this call is …`), exit 1. And herdr has to
+`--file` and `--session` aimed by anyone else are refused before any file or session is read —
+`--file is the owner's, from a terminal outside herdr; this call is …`, or `only the owner runs
+this, from a terminal outside herdr` for a run with no terminal — and exit 1. And herdr has to
 answer once the caller has passed the gate: without it, `status` can't say anything and exits 2.
 
 ## Output and exit codes
@@ -43,6 +60,12 @@ answer once the caller has passed the gate: without it, `status` can't say anyth
 
 `--json` prints the same reading as one document and nothing else, with the same exit code; a caller
 who may not read the team gets the fixed sentence and no document.
+
+Every line the table prints is cleaned first: escape sequences, control characters and invisible
+format characters carried by the team file, the state, a pane or herdr are removed, and the columns
+are padded on the cleaned text, so a value can never move the cursor, paint the terminal or open a
+second line. `--json` is the one text not cleaned: the document carries each string as it was read,
+escaped where JSON requires it, for a parser rather than a terminal.
 
 ## Example
 

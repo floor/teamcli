@@ -184,11 +184,11 @@ describe('team status', () => {
     expect(code).toBe(1);
     expect(out).toContain(
       'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
-        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file and run team approve\n',
+        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n',
     );
     expect(out).toContain(
       'difference: codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol\n' +
-        '  repair: restart the seat on the file\'s model (team remove codex-acme --keep, then team add codex-acme), or correct the file and run team approve\n',
+        '  repair: restart the seat on the file\'s model (team remove codex-acme --keep, then team add codex-acme), or correct the file\n',
     );
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
   });
@@ -211,7 +211,7 @@ describe('team status', () => {
     expect(code).toBe(1);
     expect(out).toContain(
       'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
-        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file and run team approve\n',
+        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n',
     );
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
     expect(out).not.toContain('codex-acme runs');
@@ -224,7 +224,7 @@ describe('team status', () => {
     expect(code).toBe(1);
     expect(out).toContain(
       'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
-        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file and run team approve\n',
+        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n',
     );
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
     expect(out).not.toContain('codex-acme runs');
@@ -340,7 +340,7 @@ describe('team status', () => {
     if (!approvedFile.ok) throw new Error('the approved variant does not validate');
     standing = verifiedOf(approvedFile.team, approvedText, dir, NOW);
     const changed = await status();
-    expect(changed.out).toContain('difference: the file differs from the approved one: `rules` changed\n  repair: the owner runs team approve');
+    expect(changed.out).toContain('difference: the file has changed since the last approval: `rules` changed\n  repair: the live file is what the commands read');
     expect(changed.out).toContain('2 difference(s)');
     standing = { kind: 'none' };
     expect((await status()).out).toContain('difference: the file was never approved on this machine');
@@ -560,6 +560,24 @@ describe('team status', () => {
     ]);
   });
 
+  test("--json: a grok seat's model — the footer names it, a question widget falls back to the launch line's", async () => {
+    const grokScreen = (name: string) => readFileSync(new URL(`./fixtures/grok/1.0.52/${name}.txt`, import.meta.url), 'utf8');
+    live = {
+      ...built(),
+      agents: [...built().agents, agent('grok-acme', 'w10', 'idle', 'grok')],
+      workspaces: [...built().workspaces, { id: 'w10', label: 'grok 4.7' }],
+      screens: { ...built().screens, 'w10:p1': grokScreen('idle') },
+    };
+    const clean = JSON.parse((await status('--json')).out) as { rows: { name: string; model: string; pane: string }[]; notes: string[] };
+    expect(clean.rows.find((row) => row.name === 'grok-acme')).toMatchObject({ model: 'Grok 4.7', pane: 'w10:p1' });
+    expect(clean.notes).toEqual(clean.notes.filter((note) => !note.startsWith('grok-acme:')));
+
+    live = { ...live, screens: { ...live.screens, 'w10:p1': grokScreen('question') } };
+    const asked = JSON.parse((await status('--json')).out) as { rows: { name: string; model: string; pane: string }[]; notes: string[] };
+    expect(asked.rows.find((row) => row.name === 'grok-acme')).toMatchObject({ model: 'Grok 4.7 (from launch)', pane: 'w10:p1' });
+    expect(asked.notes).toContain("grok-acme: its screen shows no model; the launch line's Grok 4.7 stands");
+  });
+
   test('--json: reports differences with exit 1 and the same structure', async () => {
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const { code, out } = await status('--json');
@@ -621,19 +639,19 @@ describe('team status', () => {
     standing = { kind: 'none' };
     const unapproved = await status();
     expect(unapproved.code).toBe(1);
-    const approve = unapproved.out.indexOf('difference: the file was never approved on this machine\n  repair: the owner runs team approve');
+    const approve = unapproved.out.indexOf('difference: the file was never approved on this machine\n  repair: the live file is what the commands read');
     expect(approve).toBeGreaterThanOrEqual(0);
-    expect(unapproved.out).toContain('repair: team add deepseek-acme (after: the owner runs team approve)');
-    expect(unapproved.out).toContain('repair: team add deepseek-acme-2 (after: the owner runs team approve)');
+    expect(unapproved.out).toContain('repair: team add deepseek-acme (after: the live file is what the commands read)');
+    expect(unapproved.out).toContain('repair: team add deepseek-acme-2 (after: the live file is what the commands read)');
     expect(unapproved.out.indexOf('difference: deepseek-acme is in the file and is not running')).toBeGreaterThan(approve);
     expect(unapproved.out).toContain('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
   });
 
   test('B: whose repair: each repair string that names an owner command asserted exactly', async () => {
-    // 1. the owner runs team approve
+    // 1. the live file is what the commands read
     standing = { kind: 'none' };
     const approveRun = await status();
-    expect(approveRun.out).toContain('repair: the owner runs team approve');
+    expect(approveRun.out).toContain('repair: the live file is what the commands read');
 
     // 2. the owner runs team up
     const validTeam = validateTeamFile(example);
@@ -806,7 +824,7 @@ describe('team status', () => {
     expect(noOwner.out).toContain('1 difference(s)\n');
     expect(noOwner.out).not.toContain('for the owner');
 
-    // 2. With an owner repair: unapproved file (repair: the owner runs team approve)
+    // 2. With an owner repair: unapproved file (repair: the live file is what the commands read)
     live = built();
     standing = { kind: 'none' };
     const withOwner = await status();

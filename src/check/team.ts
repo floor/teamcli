@@ -154,7 +154,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     ...approvalDrift(approvalCase(standing, team)),
     ...overrideDrift(overrides),
-    ...rulesFileDifferences(standing, root, sources.home),
+    ...rulesFileDifferences(standing, team, root, sources.home),
   ]);
   const differences = comparison.differences;
   for (const difference of differences) {
