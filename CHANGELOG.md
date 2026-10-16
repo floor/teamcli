@@ -19,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `socket` or `typed` — read from the pane's own processes, so no extra herdr call. The `--json`
   row keeps the shape it published.
 
+- The project level: entity, then project, then team, then seat. `team projects` lists the
+  registry's projects — each one's immutable id, display name, entity, lead seat by agent id and
+  teams. A team names its project in its team file; today's `project:` field keeps meaning the
+  team, a team that names none is its own project, and a team the files place in two is refused by
+  `team check`.
+
+- `team status --project <name>` covers every team of one project, and `team send --list` shows
+  each addressable seat's project.
+
+- Settings inherit entity, then project, then team, then seat — a lower level may tighten, and
+  loosen only where the level above allows it. The first project-level setting,
+  `seats_cross_teams` (default off), decides whether a seat may cross teams within its project.
+
+- Within a project the project lead and each of its teams' leads are admitted to each other, and
+  the leads of teams in one project are admitted to one another. A lead is read from the role's
+  `leads` capability, never from a role's name.
+
 ### Changed
 
 - `team up --dry-run` is never answered with the bare word `deny`: for a caller the run does not
