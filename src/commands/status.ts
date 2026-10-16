@@ -23,6 +23,7 @@ import { profileFor } from '../profiles/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { readTeams } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
+import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
@@ -398,7 +399,9 @@ export function protectedCheckouts(team: TeamFile, root: string, sources: { bran
  * registry does not know is said as such, never left out.
  */
 function projectReport(name: string, out: Io, io: Io, sources: StatusSources, json: boolean): number {
-  const project = sources.projects?.byName(name) ?? null;
+  // An injected projects source answers for itself; with none, the registry the home holds is the
+  // reading — the same file `team projects` reads, bound to the injected home, never another's.
+  const project = sources.projects ? sources.projects.byName(name) : projectRegistry.byName(sources.home ?? homedir(), name);
   if (!project) {
     out.stderr(`team status: no project named ${JSON.stringify(name)}; nothing to show\n`);
     // exit: status.project-unknown

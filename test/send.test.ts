@@ -11,6 +11,7 @@ import type { ProjectSources, ProjectView } from '../src/commands/projects.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { upsertProject } from '../src/registry/projects.ts';
 import { dropMessage, sawSubmission, triggerLine, TRIGGER_MAX, type NativePane } from '../src/send/native.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../src/send/uds.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
@@ -791,6 +792,19 @@ describe('team send: --list', () => {
     };
 
     const code = await runSend(['--list'], io, fake(sockets, { projects }));
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('lead  claude-code  coordinator  TeamCLI\nhelper  claude-code  implementer  TeamCLI\nnative  codex  reviewer  TeamCLI\n');
+  });
+
+  test("with no projects source injected, the registry the host's home holds places the team", async () => {
+    const { root, sockets } = world();
+    const io = owner(root);
+    // Written through the registry's own writer, under the home the host carries: the reading that
+    // finds it is the one bound to that home, not to wherever the process runs.
+    upsertProject(join(base, 'home'), '4f2a1b7c9d0e', { name: 'TeamCLI', entity: 'floor', lead: 'agt_2b9f', teams: [teamIdOf(root)] });
+
+    const code = await runSend(['--list'], io, fake(sockets));
 
     expect(code).toBe(0);
     expect(io.out).toBe('lead  claude-code  coordinator  TeamCLI\nhelper  claude-code  implementer  TeamCLI\nnative  codex  reviewer  TeamCLI\n');
