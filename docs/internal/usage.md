@@ -32,7 +32,7 @@ be read counts in the machine's teams and reads the fixed sentence `a store on t
 be read: the owner reads the reason`, never a refusal for the rest; the stores folder itself
 unreadable is the one refusal (below). A root two stores record — a rename keeps the old folder —
 is one team. The approval read is the current project's store. Another store for that root is left
-in place, and `team approve` and `team doctor` name it.
+in place, and `team doctor` names it.
 
 It writes **nothing at all**: unlike `status`, it keeps no `last_valid` copy of the files it read,
 and unlike `up`, `add` and `watch` it opens no lock, writes no state and logs no line.

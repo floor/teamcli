@@ -353,7 +353,7 @@ const COMMANDS: Case[] = [
     anotherPane: (name, pane) => `team add: ${ANOTHER_PANE(name, pane)}\n`,
     sessionOwner: (who) => `team add: ${OWNER_ONLY(who)}\n`,
     fileOwner: (who) => `team add: --file is the owner's, from a terminal outside herdr; this call is ${who}\n`,
-    owner: `team add: ${NEVER_APPROVED}\n`,
+    owner: '',
   },
   {
     name: 'remove',
@@ -585,6 +585,15 @@ for (const command of COMMANDS) {
         expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 0, out: `removed ${SEAT}\n`, err: '' });
         return;
       }
+      if (command.name === 'add') {
+        // probe-seat is not in the file. That refusal comes before trust or the approval record.
+        expect(run.code).toBe(1);
+        expect(run.out).toBe('');
+        expect(run.err).toBe('team add: the approved file has no seat "probe-seat"\n');
+        expect(run.err).not.toContain('never approved');
+        expect(readFileSync(file, 'utf8')).toBe(run.before);
+        return;
+      }
       expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err: command.owner });
       expect(readFileSync(file, 'utf8')).toBe(run.before);
     });
@@ -593,6 +602,13 @@ for (const command of COMMANDS) {
       const run = await command.run({ kind: 'owner' }, [], { state: null });
       if (command.name === 'remove') {
         expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 0, out: `removed ${SEAT}\n`, err: '' });
+        return;
+      }
+      if (command.name === 'add') {
+        expect(run.code).toBe(1);
+        expect(run.out).toBe('');
+        expect(run.err).toBe('team add: the approved file has no seat "probe-seat"\n');
+        expect(run.err).not.toContain('never approved');
         return;
       }
       expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err: command.owner });
@@ -1136,11 +1152,10 @@ describe('up and the panes a force-close leaves behind', () => {
   });
 });
 
-// remove stops a seat and edits the file: without an approval in force it does neither, in the
-// words every command uses for the case.
-describe('remove needs an approval in force', () => {
+// remove stops a seat and edits the file. A missing record is the live file. A legacy record
+// or one the verification refused still does neither.
+describe('remove and a record that is not in force', () => {
   const CASES: { name: string; sources: () => RemoveSources; why: string }[] = [
-    { name: 'never approved', sources: () => removeSources({ home: emptyHome }), why: `team remove: ${NEVER_APPROVED}\n` },
     {
       name: 'a legacy record',
       sources: () => removeSources({ standing: () => ({ kind: 'legacy' }) }),
@@ -1161,6 +1176,13 @@ describe('remove needs an approval in force', () => {
       expect(readFileSync(stateFile, 'utf8')).toBe(run.beforeState);
     });
   }
+
+  test('a missing record does not refuse, and the seat leaves the file', async () => {
+    const run = await call((io) => runRemove([SEAT], io, removeSources({ home: emptyHome })), { kind: 'owner' });
+    expect(run.err).not.toContain('never approved');
+    expect(run.code).toBe(0);
+    expect(readFileSync(file, 'utf8')).not.toContain(`name: ${SEAT}`);
+  });
 });
 
 // The idle screen a launched seat shows: what `up` reads to call it ready. Each CLI's own —

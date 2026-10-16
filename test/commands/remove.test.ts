@@ -1526,12 +1526,12 @@ describe('team remove, the session mutator lock', () => {
   test('a refusal decided above the lock leaves no lock behind', async () => {
     const made = world();
     made.agents.push({ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
-    // No approval under this home: `remove.never-approved` is decided before the lock site, so
-    // the refused run must not leave a lock file the next real run would meet.
-    made.sources.home = join(dir, 'nowhere');
+    // A refused record is decided before the lock site, so the refused run must not leave a
+    // lock file the next real run would meet. A missing record is not that refusal.
+    made.sources.standing = () => ({ kind: 'refused', why: 'the record cannot be verified: run `team approve` once' });
     const io = testIo(dir, owner);
     expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(1);
-    expect(io.err).toContain('never approved');
+    expect(io.err).toContain('cannot be verified');
     expect(made.typed).toEqual([]);
     expect(existsSync(lockFile())).toBe(false);
   });

@@ -17,7 +17,6 @@ import { basename, join } from 'node:path';
 import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
 import { legacySeatDigests } from '../../src/approve/fingerprint.ts';
 import { loadConfig } from '../../src/check/load.ts';
-import { runApprove } from '../../src/commands/approve.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { testIo } from '../helpers.ts';
@@ -256,7 +255,7 @@ describe('a project rename', () => {
     expect(existsSync(join(beta, 'approval.json'))).toBe(true);
   });
 
-  test('approve and doctor name the earlier store, and the ledger is read from the one store in force', async () => {
+  test('doctor names the earlier store, and the ledger is read from the one store in force', async () => {
     const root = join(home, 'repo');
     mkdirSync(join(root, '.agents'), { recursive: true });
     const text = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8')
@@ -272,16 +271,6 @@ describe('a project rename', () => {
     writeApproval(current, { approval: approvalOf(checked.team, root), file: text }, [opus], home);
     const note = otherStoreNote(basename(oldStore));
 
-    const shown = testIo(root, { kind: 'owner' });
-    const code = await runApprove(['--show'], shown, {
-      ask: async () => null,
-      waiting: () => 'empty',
-      now: () => new Date('2026-10-15T01:15:00Z'),
-      home,
-    });
-    expect(code).toBe(0);
-    expect(shown.out).toContain(`Note: ${note}\n`);
-    expect(shown.out).not.toContain('the record is approval #1');
     expect(existsSync(join(oldStore, 'approval.json'))).toBe(true);
     expect(findStore(root, home)).toBe(current);
 

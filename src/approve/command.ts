@@ -2,11 +2,11 @@ import { closeSync, constants, fstatSync, openSync, readdirSync, readSync, readl
 import { homedir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { approvedFingerprints, approvalOf, ceilingsOf } from '../approve/approval.ts';
+import { approvedFingerprints, approvalOf, ceilingsOf } from './approval.ts';
 import { checkDrift, resolveChecks } from '../budgets/checks.ts';
-import { formatDiff } from '../approve/diff.ts';
-import { compare, describe, fingerprints } from '../approve/fingerprint.ts';
-import { approveFingerprint, ownerAuthorized } from '../approve/owner-token.ts';
+import { formatDiff } from './diff.ts';
+import { compare, describe, fingerprints } from './fingerprint.ts';
+import { approveFingerprint, ownerAuthorized } from './owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources } from '../delegate.ts';
@@ -17,7 +17,7 @@ import { grantGate, logGranted } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { OVERRIDE_CHANGED, overrideFile } from '../profiles/overrides.ts';
-import { approvalStanding, findStore, LEGACY_LINE, otherMatchingStores, otherStoreNote, readApproval, storePath, writeApproval, type Ceilings } from '../store/store.ts';
+import { approvalStanding, LEGACY_LINE, readApproval, storePath, writeApproval, type Ceilings } from '../store/store.ts';
 import { keyFingerprint, keyOf, keyRefusal, keyState, recordedGeneration } from '../store/keys.ts';
 
 // What a read of the terminal found: a canonical-mode line is queued (`waiting`), nothing is
@@ -249,17 +249,11 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   }
   let previous: ReturnType<typeof readApproval> = null;
   try {
-    // The same store `approvalStanding` reads. The write below still goes to the
-    // current project's folder; a rename that has not been approved again is diffed
-    // against the one approval this root has, not reported as never approved.
-    previous = readApproval(findStore(root, sources.home) ?? store);
+    previous = readApproval(store);
   } catch {
     // A malformed record is named by the standing below; nothing is diffed against it.
   }
   const standing = approvalStanding(root, sources.home);
-  for (const name of otherMatchingStores(root, sources.home)) {
-    io.stdout(`Note: ${otherStoreNote(name)}\n`);
-  }
   const ceilings = ceilingsOf(team);
   const seats = team.seats.length;
 

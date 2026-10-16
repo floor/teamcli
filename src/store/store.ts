@@ -94,7 +94,7 @@ export function otherMatchingStores(root: string, home: string = homedir()): str
   return locateStores(root, home).others;
 }
 
-/** The sentence `approve` and `doctor` print for one other store. The name is the folder's own. */
+/** The sentence `doctor` prints for one other store. The name is the folder's own. */
 export function otherStoreNote(name: string): string {
   return `another approval store matches this project root and was left in place: ${name}`;
 }
