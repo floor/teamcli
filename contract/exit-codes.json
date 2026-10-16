@@ -3455,6 +3455,13 @@
     {
       "code": 1,
       "command": "worktree",
+      "id": "worktree.remove-branch",
+      "meaning": "the --branch given does not name the branch the worktree is on",
+      "trigger": "team worktree remove task --branch fix/other"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
       "id": "worktree.remove-failed",
       "meaning": "the worktree was not removed",
       "trigger": "team worktree remove task"
@@ -3535,6 +3542,13 @@
       "id": "worktree.unreadable",
       "meaning": "the worktree couldn't be read",
       "trigger": "team worktree remove task"
+    },
+    {
+      "code": 2,
+      "command": "worktree",
+      "id": "worktree.branch-flags",
+      "meaning": "new and list take no --branch",
+      "trigger": "team worktree new task --branch fix/task"
     },
     {
       "code": 2,

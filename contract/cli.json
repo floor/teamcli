@@ -1883,6 +1883,12 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--branch",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--file",
               "repeatable": false,
               "takesValue": true
@@ -1917,14 +1923,14 @@
           ],
           "subcommands": [],
           "usage": [
-            "team worktree remove <task> [--session <name>] [--file <path>]"
+            "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]"
           ]
         }
       ],
       "usage": [
         "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]",
         "team worktree list [--session <name>] [--file <path>]",
-        "team worktree remove <task> [--session <name>] [--file <path>]"
+        "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]"
       ]
     }
   ],
