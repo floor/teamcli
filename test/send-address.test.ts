@@ -6,6 +6,8 @@ import { setHerdrRun } from '../src/herdr.ts';
 import { getAgent, registerAgent, type AgentInit } from '../src/registry/agents.ts';
 import {
   defaultSocketsDir,
+  defaultSocketsDirAlt,
+  defaultSocketsDirs,
   liveSocketOf,
   paneSocket,
   refreshAgentAddress,
@@ -15,14 +17,17 @@ import {
 
 let home: string;
 let socks: string;
+let altSocks: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'team-address-'));
   socks = mkdtempSync(join(tmpdir(), 'team-socks-'));
+  altSocks = mkdtempSync(join(tmpdir(), 'team-socks-alt-'));
 });
 afterEach(() => {
   setHerdrRun(null);
   rmSync(home, { recursive: true, force: true });
   rmSync(socks, { recursive: true, force: true });
+  rmSync(altSocks, { recursive: true, force: true });
 });
 
 // A socket the way a live session leaves one: the pid names the file.
@@ -91,6 +96,48 @@ describe('socketOfProcesses', () => {
     expect(socketOfProcesses(null, socks)).toBeNull();
     expect(socketOfProcesses(undefined, socks)).toBeNull();
     expect(socketOfProcesses({ shell: 100, foreground: [200] }, socks)).toBeNull();
+  });
+});
+
+describe('the two folders discovery walks', () => {
+  test('a socket found only in the fallback folder is the pane\'s socket', () => {
+    const live = sock(200, altSocks);
+    expect(socketOfProcesses({ shell: 100, foreground: [200] }, [socks, altSocks])).toBe(live);
+  });
+
+  test('pids are walked before folders: an earlier pid in the fallback beats a later one in the temp folder', () => {
+    sock(100, socks);
+    const earlier = sock(200, altSocks);
+    expect(socketOfProcesses({ shell: 100, foreground: [200] }, [socks, altSocks])).toBe(earlier);
+  });
+
+  test('the temp folder is tried before the fallback for one pid', () => {
+    const first = sock(200, socks);
+    sock(200, altSocks);
+    expect(socketOfProcesses({ shell: 100, foreground: [200] }, [socks, altSocks])).toBe(first);
+  });
+
+  test('a stale record falls through to a socket only the fallback folder carries', () => {
+    const recorded = sock(999);
+    const fresh = sock(201, altSocks);
+    expect(liveSocketOf(recorded, { shell: 100, foreground: [201] }, [socks, altSocks])).toBe(fresh);
+  });
+
+  test('a launch records a socket that sits only in the fallback folder', () => {
+    const agent = registerAgent(home, init());
+    const live = sock(200, altSocks);
+    setHerdrRun(() => processInfo(100, [200]));
+    expect(refreshAgentAddress(home, agent.id, 'w36:p1', undefined, [socks, altSocks])).toEqual({ address: live });
+    expect(getAgent(home, agent.id)?.reach.address).toBe(live);
+  });
+
+  test('a relaunch whose new socket sits only in the fallback folder replaces the old address', () => {
+    const old = sock(400);
+    const agent = registerAgent(home, init({ reach: { team: 'teamcli', seat: 'builder-1', session: 'teamcli', pane: 'w36:p1', address: old } }));
+    const fresh = sock(200, altSocks);
+    setHerdrRun(() => processInfo(100, [200]));
+    expect(refreshAgentAddress(home, agent.id, 'w36:p1', undefined, [socks, altSocks])).toEqual({ address: fresh });
+    expect(getAgent(home, agent.id)?.reach.address).toBe(fresh);
   });
 });
 
@@ -209,5 +256,15 @@ describe('refreshAgentAddress', () => {
 describe('defaultSocketsDir', () => {
   test('the real folder is the runtime temp folder\'s cc-socks', () => {
     expect(defaultSocketsDir()).toBe(join(tmpdir(), 'cc-socks'));
+  });
+});
+
+describe('defaultSocketsDirs', () => {
+  test('the temp folder\'s own and the fallback the sessions were seen in, each once', () => {
+    const dirs = defaultSocketsDirs();
+    expect(dirs[0]).toBe(defaultSocketsDir());
+    expect(dirs).toContain('/tmp/cc-socks');
+    expect(dirs).toContain(defaultSocketsDirAlt());
+    expect(new Set(dirs).size).toBe(dirs.length);
   });
 });

@@ -7,7 +7,7 @@ import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { usesLauncher } from '../launch/line.ts';
-import { defaultSocketsDir, socketOfProcesses } from '../send/address.ts';
+import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
@@ -142,7 +142,7 @@ export function compare(
   live: Live,
   now: Date = new Date(),
   watch: TeamFile['watch'] = team.watch,
-  sockets: string = defaultSocketsDir(),
+  sockets: string | readonly string[] = defaultSocketsDirs(),
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];

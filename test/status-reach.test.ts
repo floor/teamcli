@@ -33,12 +33,14 @@ const processes = (pid: number): PaneProcesses => ({ shell: SHELL_PID, foregroun
 let dir: string;
 let file: string;
 let socks: string;
+let altSocks: string;
 let team: TeamFile;
 let standing: Standing;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'team-reach-'));
   socks = mkdtempSync(join(tmpdir(), 'team-reach-socks-'));
+  altSocks = mkdtempSync(join(tmpdir(), 'team-reach-socks-alt-'));
   mkdirSync(join(dir, '.agents'));
   file = join(dir, '.agents', 'team.yaml');
   writeFileSync(file, example);
@@ -54,6 +56,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
   rmSync(socks, { recursive: true, force: true });
+  rmSync(altSocks, { recursive: true, force: true });
 });
 
 function live(processes?: Record<string, PaneProcesses | null>): Live {
@@ -66,13 +69,21 @@ function live(processes?: Record<string, PaneProcesses | null>): Live {
   };
 }
 
-function rows(live: Live) {
-  return compare(team, 'acme-web', emptySession(), live, NOW, team.watch, socks).rows;
+function rows(live: Live, sockets: string | readonly string[] = socks) {
+  return compare(team, 'acme-web', emptySession(), live, NOW, team.watch, sockets).rows;
 }
 
 test('a claude-code seat whose pane carries a live socket file reads socket', () => {
   writeFileSync(join(socks, `${String(SESSION_PID)}.sock`), '');
   const found = rows(live({ 'w1:p1': processes(SESSION_PID) })).find((row) => row.name === 'claude-coordinator-acme');
+  expect(found?.reach).toBe('socket');
+});
+
+// The two folders discovery walks: the temp folder's own and `/tmp/cc-socks`, where this Mac's
+// sessions were seen to write while `tmpdir()` answered the per-user folder.
+test('a socket that sits only in the fallback folder also reads socket', () => {
+  writeFileSync(join(altSocks, `${String(SESSION_PID)}.sock`), '');
+  const found = rows(live({ 'w1:p1': processes(SESSION_PID) }), [socks, altSocks]).find((row) => row.name === 'claude-coordinator-acme');
   expect(found?.reach).toBe('socket');
 });
 
