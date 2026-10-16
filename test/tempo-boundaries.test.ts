@@ -11,7 +11,7 @@ import { approvalOf, watchInForceOf } from '../src/approve/approval.ts';
 import { compare, describe as describeDifference, fingerprints } from '../src/approve/fingerprint.ts';
 import type { Caller, CallerSources, Process } from '../src/caller.ts';
 import { runTempo, setTempo } from '../src/commands/tempo.ts';
-import { runApprove, type ApproveSources } from '../src/commands/approve.ts';
+import { runApprove, type ApproveSources } from '../src/approve/command.ts';
 import { delegateGate, type DelegateVerdict } from '../src/delegate.ts';
 import { applyTempo } from '../src/file/sections/tempo.ts';
 import type { TeamFile } from '../src/file/types.ts';

@@ -43,11 +43,18 @@ timeouts:
   exit: 30s
 # From a run: `grok models` (1.0.50) printed "Default model: grok-4.7-build-fast" and the
 # available ids `grok-4.7`, `grok-4.7-build-fast`, `grok-4.6`, `grok-4.5`; `grok --help` lists
-# `-m, --model <MODEL>` as "Model ID to use". The box footer spells a running model as
-# `Grok 4.7 (xhigh)` or `Grok 4.7 Fast (xhigh)` (captures) — what the ids' model fields spell.
-# No `status_model`: the model stands on the box's footer row, and a status row is read only
-# from the composer modes that draw one (none of the box-to-rule box), so a grok seat's model
-# is not checked; `up` writes that its screen shows no model this version can read.
+# `-m, --model <MODEL>` as "Model ID to use". The same help (1.0.60) lists no status-line flag.
+# `grok models` names the account default, which follows the last launch, not one pane.
+# The running model is the box's closing rule. A scratch pane at `stty size` `23 53`:
+# `grok --always-approve --model grok-4.7` drew
+# `╰──────────── Grok 4.7 (high) · always-approve ─╯` under `Grok Build  1.0.52 [stable]`,
+# and the same flags once the CLI reported 1.0.60 drew that rule under
+# `Grok Build  1.0.60 [stable]`. `--model grok-4.7-build-fast` drew
+# `╰─────── Grok 4.7 Fast (high) · always-approve ─╯` under `Grok Build  1.0.60 [stable]`.
+# A private home whose config set `[ui.status_line]` `items = ["model"]` first drew a browser
+# sign-in with no model, then the same closing rule and no separate status row. The owner's
+# config was not edited. The tested range stays 1.0.50–1.0.52: those 1.0.60 runs showed the
+# footer and are not a full capture set. A question widget replaces the box, so it stays unread.
 startup_reads:
   - AGENTS.md
   - CLAUDE.md
@@ -66,6 +73,25 @@ models:
       ignore_case: true
       model: 'Grok {1}'
       version: '{1}'
+# The last six plain lines. Fast is first, so `Grok 4.7 Fast (` is not read as `Grok`. The
+# effort paren is required, so `Grok Build` and `Grok 4.7 is here!` do not match. The paren
+# and `· always-approve` stay outside the model. The file's model is the name without the
+# version: a non-fast footer reads `Grok`, a fast footer reads `Grok Fast`, and the version
+# is the number in the footer. A `Grok` seat whose footer says Fast therefore differs.
+status_model:
+  - match: 'Grok\s+([0-9]+(?:\.[0-9]+)*)\s+Fast\s+\('
+    model: 'Grok Fast'
+    version: '{1}'
+    yields: ['Grok Fast']
+    version_like: '^[0-9]+(?:\.[0-9]+)*$'
+  - match: 'Grok\s+([0-9]+(?:\.[0-9]+)*)\s+\('
+    model: Grok
+    version: '{1}'
+    yields: [Grok]
+    version_like: '^[0-9]+(?:\.[0-9]+)*$'
+# A question widget replaces the box, and no rule reads a model off it. The model column then
+# falls back to the launch line's model, labelled, never `(unread)`.
+unread_model: launch
 screen:
   unknown:
     - any: ['Resume this session with:']

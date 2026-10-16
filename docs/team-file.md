@@ -99,7 +99,7 @@ A lab whose help or model list names none is left out of the file, and a vendor 
 accepts any effort.
 
 A word outside its lab's list is a warning, and the warning names the words that lab allows.
-It does not fail `team check`, `team approve` or `team up`. That is not a regression for a file
+It does not fail `team check` or `team up`. That is not a regression for a file
 that already loaded: an unknown field is refused, so no such file contains `effort`. Left out,
 the field is not stored on the seat, and the seat's approval key is unchanged. Adding it, in
 or out of the list, changes that key, because the word is part of the seat.
@@ -120,6 +120,7 @@ grant:
     - down
     - approve
     - init
+    - reload
 ```
 
 - `session` is the team's own session: the `session` key, or the project name when that key is
@@ -127,27 +128,28 @@ grant:
 - `seat` is the orchestrator's name, the one `coordinator:` or `leads: true` resolves. The
   operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":
   "<written>"`.
-- `scope` names acts from the closed set `up`, `down`, `approve`, `init` and `swap`. The list is
-  non-empty, each act appears once, and the order is part of the value the owner approves. An
-  empty list is `grant.scope must name at least one of: up, down, approve, init, swap`. A repeated act
-  is `grant.scope names "<act>" twice`. Any other word is `grant.scope must name up, down,
-  approve, init, swap: "<word>" is not one`.
+- `scope` names acts from the closed set `up`, `down`, `approve`, `init`, `reload` and `swap`. The
+  list is non-empty, each act appears once, and the order is part of the value the owner
+  approves. An empty list is `grant.scope must name at least one of: up, down, approve, init,
+  reload, swap`. A repeated act is `grant.scope names "<act>" twice`. Any other word is
+  `grant.scope must name up, down, approve, init, reload, swap: "<word>" is not one`.
 - `swap` in `scope` admits the orchestrator's seat to `team remove <operator> --keep`: the swap
   of the operator's agent (`docs/commands/remove.md`). Never its own seat — a seat cannot close
   the pane its own call runs in — so the orchestrator's own swap stays the owner's or a
   delegate's whose entry lists `swap`. The grant itself stays an owner section.
 - `approve` in `scope` is an ordinary approval: the roster and `rules`. A change to `grant`
-  itself, and a change to any other owner section, stays the owner's to approve. `team approve`
-  admits the orchestrator's seat for that class when the approved grant lists `approve`. The
-  run is this folder's own file, `--file` is refused, and the first approval of a team stays
-  the owner's. A roster edit that moves the derived ceiling — a file that declares no `limits`
-  — stays the owner's too.
+  itself, and a change to any other owner section, stays the owner's. The grant admits the
+  orchestrator's seat for that class when it lists `approve`. The run is this folder's own
+  file, `--file` is refused, and the first approval of a team stays the owner's. A roster
+  edit that moves the derived ceiling — a file that declares no `limits` — stays the owner's too.
 - Any other key, including `path`, is an unknown field.
 - `team up` admits the orchestrator's seat when the approved grant lists `up`. The run is this
   folder's own file: `--session` and `--file` are refused, and the run does not relaunch or close
   the orchestrator's seat. `team down` admits that seat when the list includes `down`, and leaves
-  the orchestrator's seat and the operator's seat running. A file that omits `grant` keeps
-  today's `down`.
+  the orchestrator's seat and the operator's seat running. `team reload <seat>` admits that
+  seat when the list includes `reload`: one named seat, closed only at an idle prompt when its
+  declared model or effort differs from the launch, then launched again. It does not name the
+  caller's own seat. A file that omits `grant` keeps today's `down`.
 
 ## `delegates`
 
