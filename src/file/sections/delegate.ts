@@ -43,7 +43,7 @@ export const delegates: Section = {
         },
       },
     },
-    $comment: 'the panes that may run these of up, down, add, remove and approve. Omitted means no delegate',
+    $comment: 'the panes that may run these of up, down, add, remove and approve; swap admits remove --keep and add of a lead seat. Omitted means no delegate',
   },
 };
 
@@ -124,7 +124,8 @@ function readPane(entry: YamlEntry | undefined, check: Check, line: number, sess
 }
 
 /**
- * A non-empty ordered list of distinct lower-case `up`, `down`, `add`, `remove` and `approve`.
+ * A non-empty ordered list of distinct lower-case `up`, `down`, `add`, `remove`, `approve` and
+ * `swap` (the replacement of a lead seat's agent: `remove <lead> --keep`, then `add <lead>`).
  * `approve` is grantable like the rest: a delegated approval of a change to any owner section
  * but `rules` is refused by the gate's allowlist, never here (src/delegate.ts).
  */

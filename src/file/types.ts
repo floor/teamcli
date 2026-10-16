@@ -4,8 +4,10 @@ import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
-/** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation. */
-export const GRANT_SCOPES = ['up', 'down', 'approve', 'init'] as const;
+/** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation.
+ *  `swap` lets the granted seat stop another lead seat for a replacement (`team remove <lead>
+ *  --keep`, then `team add <lead>`); never its own seat. */
+export const GRANT_SCOPES = ['up', 'down', 'approve', 'init', 'reload', 'swap'] as const;
 export type GrantScope = (typeof GRANT_SCOPES)[number];
 
 /**
@@ -81,7 +83,8 @@ export type Seat = {
   /**
    * The seat's effort word, when the file sets one. Absent otherwise, so a file that omits it
    * keeps the digest it had. A lab with a vocabulary warns when the word is outside it; the
-   * warning does not fail the file, and launch does not read the field.
+   * warning does not fail the file. The launch line does not pass the word to the CLI. The
+   * idle record stores it, and `team reload` compares it with the file.
    */
   effort?: string;
   mode: Mode;
@@ -152,6 +155,8 @@ export type TeamFile = {
     quotaMarks: number[];
     // The checks this file turns off, by name. The four that can't be turned off never appear.
     checks: string[];
+    /** Text sent to each idle worker. Absent: the watch's report line. */
+    nudge?: string;
   };
   budgets: {
     staleAfter: number;

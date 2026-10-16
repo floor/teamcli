@@ -6,7 +6,7 @@
 // row alone — the same line the composer reads, so the two cannot disagree — and a screen that
 // shows no such row names no model.
 import { stripSgr } from '../ansi.ts';
-import { statusModelRules, statusOnLine } from '../profiles/profile.ts';
+import { profileFor, statusModelRules, statusOnLine } from '../profiles/profile.ts';
 import { screenData, statusRow } from '../watch/screen.ts';
 
 export type Running = { model: string; version: string };
@@ -69,4 +69,14 @@ export function canShowModel(seat: { cli: string; model: string; version?: strin
       rule.yields.includes(seat.model) &&
       (seat.version === undefined || (rule.versionLike !== null && rule.versionLike.test(seat.version))),
   );
+}
+
+/**
+ * Whether a seat's model column falls back to the launch line's model, labelled, when its
+ * screen names none: the profile says so. A question widget replaces grok's box and hides the
+ * footer the model rules read, and the launch line's model still stands there — so its column
+ * shows it labelled, where a profile without the fallback keeps `(unread)`.
+ */
+export function launchModelWhenUnread(cli: string): boolean {
+  return profileFor(cli)?.unreadModel === 'launch';
 }
