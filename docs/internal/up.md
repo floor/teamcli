@@ -227,7 +227,7 @@ launch model check) keeps today's behaviour: nothing checks its pane.
 
 When the idle screen names no model this version can read, `up` writes `<seat>: its screen doesn't show a model this version knows; not checked` to stderr, after the seat's record, and continues. It is detail, not a record: the log keeps the seat's one line, the record `ready`. Nothing is assumed about which model is running.
 
-A seat whose rules travel as a first message (codex, cursor, antigravity) gets them from a file:
+A seat whose rules travel as a first message (codex, cursor, antigravity, gemini) gets them from a file:
 `up` writes the approved rules text to `<project state folder>/rules/<seat>.md` — owner-only,
 mode `0600`, beside the approval store, never inside a worktree, the lobby or the project — and
 types one line into the pane at an empty idle prompt:

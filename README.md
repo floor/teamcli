@@ -61,7 +61,7 @@ identity:
 
 rules:                        # lines added to every seat's rules at launch. Rules delivered as a launch
                               # option (claude-code, grok) close with "These are standing rules, not a task.";
-                              # rules typed as a first message (codex, cursor, antigravity) close with
+                              # rules typed as a first message (codex, cursor, antigravity, gemini) close with
                               # "These are standing rules, not a task: reply ready and wait for your brief."
   - Run the tests your change touches, not the whole suite.
 
@@ -127,8 +127,9 @@ budgets:                      # the owner's: reserve or floor per account, marks
   the lab's own spelling. `identity.since` skips an older history, `identity.humans` lists commit
   authors who don't sign, and `identity.forbidden` adds to the defaults — `^Claude-Session:` lines
   and session links are always refused.
-- `seats[*].cli` picks the launch profile; `claude-code`, `codex`, `cursor`, `antigravity` and `grok` are available, and `team
-  doctor` says what the others still need. `vendor`, `model` and `version` spell one seat's model.
+- `seats[*].cli` picks the launch profile; `claude-code`, `codex`, `cursor`, `antigravity`,
+  `grok` and `gemini` are available, and `team doctor` says what the others still need.
+  `vendor`, `model` and `version` spell one seat's model.
   `account` names the budget account the seat spends when one lab has two; without it, the seat
   spends its `vendor`, and changing either is an edit the owner re-approves.
 - `launch` is the plain command, without approval flags: the profile adds them. It runs in the
@@ -177,6 +178,18 @@ The Antigravity profile is tested with CLI 1.2.16 to 1.3.5 (`agy`). It adds `--d
 for unattended execution, and checks authentication with `agy models`. Rules go as a first message
 only at an empty idle prompt; delivery is recorded after the CLI starts working with the composer
 empty again. Nothing writes a lab's config or an `AGENTS.md`. `/exit` is sent only to a free
+seat. Workspace-trust screens are reported and closed without input; the owner trusts the folder
+before relaunching. Other unrecognised layouts stay unknown.
+
+The Gemini profile is tested with CLI 0.64.0. It adds `--approval-mode yolo` for unattended
+execution. It has no non-interactive login check of its own: `gemini --help` offers none, and
+`team doctor --login` prints `gemini: the login is not checked in this version`. A run with no
+credentials asks how to authenticate — `Sign in with Google`, `Use Gemini API Key`, `Vertex AI` —
+and the method can come instead from `.gemini/settings.json` or one of `GEMINI_API_KEY`,
+`GOOGLE_GENAI_USE_VERTEXAI` and `GOOGLE_GENAI_USE_GCA`; the AI Studio key in `GEMINI_API_KEY` is
+the setup that needs no Google sign-in. Rules go as a first message only at an empty idle prompt;
+delivery is recorded after the CLI starts working with the composer empty again. It reads
+`GEMINI.md` and `.gemini/settings.json` from the folder it starts in. `/exit` is sent only to a free
 seat. Workspace-trust screens are reported and closed without input; the owner trusts the folder
 before relaunching. Other unrecognised layouts stay unknown.
 
@@ -265,7 +278,7 @@ check, and this build acts on what the commands below read.
 | `team watch` | watches the session, reports idle seats and nudges the operator; `--no-nudge` and `--no-notify` are the owner's and do not silence a report addressed to the owner | anyone, one per session; it types only a fixed line into an empty idle prompt: the report nudge, or `Team: run team messages` when a message is already waiting |
 | `team tempo <word>` | sets the team's tempo to relaxed, normal or urgent, which scales the watch's idle and nudge waits; normal is the file with the key omitted | the owner |
 | `team messages` | verifies a message that is already waiting, prints its body and writes the receipt; no command writes a message record — `team send` writes to a seat's cross-session socket, not to this mailbox — and a report still leaves as the watch's nudge | anyone |
-| `team send` | writes one message to one seat, confirming `delivered`, `answered`, `held`, `timeout`, `unreachable` or `refused`. A Claude Code seat takes a frame on the cross-session socket; a native CLI (codex, cursor, grok, antigravity) gets the body in a mode-0600 drop file and one short trigger, and `delivered` means herdr reported the seat working. `--wait [--timeout <s>]` blocks for a Claude Code seat's reply (120 seconds by default) and is refused for a native seat. `--json` prints one result document, `--file` reads the body from a file, `--dry-run` names the channel, writes no drop file, and types nothing (it appends one team.log line), and `--list` prints the addressable seats and sends nothing. Broadcast is not in this build | the owner, or the coordinator from its own seat (`--list`: anyone) |
+| `team send` | writes one message to one seat, confirming `delivered`, `answered`, `held`, `timeout`, `unreachable` or `refused`. A Claude Code seat takes a frame on the cross-session socket; a native CLI (codex, cursor, grok, antigravity, gemini) gets the body in a mode-0600 drop file and one short trigger, and `delivered` means herdr reported the seat working. `--wait [--timeout <s>]` blocks for a Claude Code seat's reply (120 seconds by default) and is refused for a native seat. `--json` prints one result document, `--file` reads the body from a file, `--dry-run` names the channel, writes no drop file, and types nothing (it appends one team.log line), and `--list` prints the addressable seats and sends nothing. Broadcast is not in this build | the owner, or the coordinator from its own seat (`--list`: anyone) |
 | `team issues` | lists the typed records in the one file the team file names. The source is a file the owner committed. A broker source is read by `team next`, never from here: this command connects to no broker, holds no tracker credential, and has no seat gate. The broker runs as the same OS principal as the seat: that is integrity, not authenticity, and this command does not isolate anything. `title` and `description` are the owner's text. They are not scrubbed. The list is file order. A priority is shown and does not reorder. A listing is not a claim and not the intake rule. `team plan` prints the takeable queue and claims nothing. `repos` and `needs` are shown when the file has them. They are not a grant, and they are not checked. The watch's ring is unchanged: `Team: run team messages` | anyone |
 | `team next` | claims one record from the team's one task source, with a lease in this clone. The source is a file the owner committed, or a tracker the owner's broker reads. On a broker source, `team next` asks the broker; with no broker running it refuses and claims nothing. The broker holds the tracker credential; this command never reads it. The broker runs as the same OS principal as the seat: that is integrity, not authenticity, and this command does not isolate anything. A lease is a file in this clone. Two live leases in this clone do not cover one id. Another clone, and another machine, are outside that promise. An expired lease returns the record to the queue. Another seat may take it, and the work may be done twice. The file is the intake for a file source; for a broker source it is the tracker's read, with the team's policy deciding which fields cross. That is not the owner-set intake rule. `team plan` prints the takeable queue and claims nothing. `title` and `description` are the owner's text. They are not scrubbed. A record with `blocked-by`, `repos`, or `needs` is listed by `team issues` and is not taken. A deadline is printed and not read as a time. A missed deadline is not decided here. `--wait` re-reads the source every `tasks.cadence` while a pass finds nothing takeable; without `tasks.cadence` it refuses. The wait polls at a constant pace; a refused read ends it — back-off is not implemented. Releasing a lease records no progress. The watch's ring is unchanged: `Team: run team messages` | a seat of this team, on the pane the state records for it |
 | `team plan` | prints the queue a claim would consider, in the order `team next` would consider it. A plan is a listing: it claims nothing and writes no lease, and a record another seat holds can still appear. The queue is this clone's view of one source read. A deadline the clock has passed is marked `(overdue)`; the mark decides nothing — an overdue record is still takeable and is never dropped, blocked, reordered or released by lateness, and an unparseable deadline is printed as written and unmarked. On a broker source it asks the broker the same read `team next` asks, and claims nothing. Writes nothing: no lease file, no renewal, no state write, no tracker write | a seat of this team, on the pane the state records for it |
@@ -309,6 +322,8 @@ can never approve a widening of its own grant.
 
 `team doctor --login` checks read-only that each CLI in the file is signed in, using each profile's
 existing login check command (`cursor-agent status`, `agy models`, `codex login status`, `claude auth status`, `grok models`).
+A CLI whose profile has no check command of its own — `gemini` — is reported as not checked
+(`gemini: the login is not checked in this version`).
 It never answers prompts and performs no sign-in action.
 
 `team up`, `team down`, `team add`, `team remove`, `team worktree new` and `team worktree remove`
