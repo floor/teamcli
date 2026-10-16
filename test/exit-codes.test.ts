@@ -2993,6 +2993,12 @@ scene('send.unreachable', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { agents: false })), 'unreachable');
 });
+scene('send.not-submitted', async (place) => {
+  write(place, TEAM);
+  const host = sendHost(place);
+  host.native.status = () => 'idle';
+  return show(await sent(place, ['lead', 'hello'], owner, host), 'not-submitted');
+});
 scene('send.delivered', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place)), 'lead: delivered');
