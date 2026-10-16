@@ -113,6 +113,7 @@ describe('checkLogin with fake command results', () => {
       idleTimeout: 30,
       exitTimeout: 10,
       lastUsedModel: false,
+      unreadModel: null,
       modelOf: () => null,
       startsOnLastModel: false,
       modelFlag: () => ({ option: '--model', id: null }),

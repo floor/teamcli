@@ -192,7 +192,7 @@ export function launchLimit(
 export function swapTotalProblem(machine: Machine, limits: TeamFile['machine']): string | null {
   if (machine.swapTotal === null || machine.swapFree === null) return null;
   if (limits.swapFreeMin <= machine.swapTotal) return null;
-  return `the machine check asks for ${gb(limits.swapFreeMin)} free swap; at this reading the machine has ${gb(machine.swapTotal)} in total, so \`team up\` would refuse now; set \`machine.swap_free_min\` to a figure this machine can keep, then run \`team approve\``;
+  return `the machine check asks for ${gb(limits.swapFreeMin)} free swap; at this reading the machine has ${gb(machine.swapTotal)} in total, so \`team up\` would refuse now; set \`machine.swap_free_min\` to a figure this machine can keep`;
 }
 
 /**

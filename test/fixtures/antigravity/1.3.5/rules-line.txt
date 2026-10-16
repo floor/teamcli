@@ -1,0 +1,19 @@
+      ▄▀▀▄
+     ▀▀▀▀▀▀
+    ▀▀▀▀▀▀▀▀
+   ▄▀▀    ▀▀▄
+  ▄▀▀      ▀▀▄
+
+  Antigravity CLI 1.3.5
+  <account> (<plan>)
+  Gemini 4 Argon (Medium)
+  <workspace>
+
+─────────────────────────────────────────────────────
+> Read
+  /home/owner/.config/team/demo-3f9c2a8e1d7b/rules/i
+  mplementer.md (sha256 5e1d0a9c4b2f): your
+  standing rules for this session; reply ready and
+  wait for your brief.
+─────────────────────────────────────────────────────
+                              Gemini 4 Argon · medium

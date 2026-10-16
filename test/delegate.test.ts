@@ -255,11 +255,17 @@ describe('refusal priority', () => {
 
   test('each earlier refusal wins, and an unlisted command wins over a prohibited flag', () => {
     expect(refused({ standing: { kind: 'none' }, copy: null, team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-approval');
-    expect(refused({ copy: null, team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-approved-copy');
+    // An unreadable copy and a fingerprint difference are not refusals for `up`. Unreadable
+    // evidence still is, and a prohibited flag still is, after the live file is read.
+    expect(gate({ copy: null, team: drifted })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(refused({ copy: null, team: drifted, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-evidence');
     const approved = verified(base, yaml);
-    expect(refused({ team: drifted, standing: approved, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-drift');
+    expect(gate({ team: drifted, standing: approved })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(refused({ team: drifted, standing: approved, stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-evidence');
     expect(refused({ stateError: 'the state can\'t be read', flags: ['session'] }).id).toBe('up.delegate-evidence');
-    expect(refused({ team: { ...base, session: 'other' }, standing: approved, flags: ['session'] }).id).toBe('up.delegate-drift');
+    // The delegate pane lives in session "other", so a file whose session is "other" is a placement
+    // refusal, and that check is earlier than a prohibited flag.
+    expect(refused({ team: { ...base, session: 'other' }, standing: approved, flags: ['session'] }).id).toBe('up.delegate-placement');
     const outside = { ...base, delegates: [{ pane: 'alpha/w9:p9', commands: ['up'] as DelegateCommand[] }] };
     expect(refused({ team: outside, standing: verified(outside, yaml), ancestors: terminal }).id).toBe('up.delegate-placement');
     expect(refused({ ancestors: terminal, flags: ['session'] }).id).toBe('up.delegate');
@@ -280,13 +286,14 @@ describe('refusal priority', () => {
     );
   });
 
-  test('the standing text is notInForce, and drift names every difference', () => {
+  test('the standing text is notInForce, and up reads the live file', () => {
     expect(refused({ standing: { kind: 'none' } }).text).toBe(`delegation needs a verified approval: ${notInForce({ kind: 'none' })}`);
     expect(refused({ standing: { kind: 'legacy' } }).text).toContain(LEGACY_LINE);
-    expect(refused({ copy: 'not a team file' }).text).toBe('delegation needs a readable approved copy: run `team approve`');
-    expect(refused({ team: drifted, standing: verified(base, yaml) }).text).toBe(
-      'delegation needs the approved file: the file is not the approved one (`rules` changed; seat lead changed): run `team approve`',
-    );
+    expect(gate({ copy: 'not a team file' })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    expect(refused({ command: 'approve', copy: 'not a team file' }).text).toBe('delegation needs a readable approved copy: run `team approve`');
+    expect(gate({ team: drifted, standing: verified(base, yaml) })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
+    const delegated = { ...base, delegates: [{ pane: 'other/w1:p1', commands: ['up'] as DelegateCommand[] }] };
+    expect(refused({ command: 'approve', team: delegated, standing: verified(base, yaml) }).text).toContain('this change needs the owner');
   });
 });
 
@@ -412,9 +419,9 @@ describe('commands and flags', () => {
   test('every preflight id of the four commands', () => {
     for (const command of commands) {
       expect(refused({ command, standing: { kind: 'none' } }).id).toBe(`${command}.delegate-approval`);
-      expect(refused({ command, copy: null }).id).toBe(`${command}.delegate-approved-copy`);
+      expect(gate({ command, copy: null })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
       const drifted = { ...base, rules: ['changed'] };
-      expect(refused({ command, team: drifted, standing: verified(base, yaml) }).id).toBe(`${command}.delegate-drift`);
+      expect(gate({ command, team: drifted, standing: verified(base, yaml) })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
       expect(refused({ command, state: null }).id).toBe(`${command}.delegate-evidence`);
       const inside = { ...base, delegates: [{ pane: 'alpha/w9:p9', commands: [command] }] };
       expect(refused({ command, team: inside, standing: verified(inside, yaml) }).id).toBe(`${command}.delegate-placement`);
@@ -461,15 +468,18 @@ describe('the match is the whole pane string', () => {
     expect(gate({ state: recorded })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
   });
 
-  test('a reordered command list and a reordered entry are drift', () => {
+  test('a reordered command list and a reordered entry admit the live pane', () => {
     const reordered = parsed(yaml.replace('commands: [up, down, add, remove]', 'commands: [remove, add, down, up]'));
-    expect(refused({ team: reordered, standing: verified(base, yaml) }).text).toContain('`delegates` changed');
+    expect(gate({ team: reordered, standing: verified(base, yaml) })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
     const swapped = parsed(`${yaml}  - pane: other/w2:p1\n    commands: [add]\n`.replace(
       '  - pane: other/w1:p1\n    commands: [up, down, add, remove]\n  - pane: other/w2:p1\n    commands: [add]\n',
       '  - pane: other/w2:p1\n    commands: [add]\n  - pane: other/w1:p1\n    commands: [up, down, add, remove]\n',
     ));
     const approved = parsed(`${yaml}  - pane: other/w2:p1\n    commands: [add]\n`);
-    expect(refused({ team: swapped, file: yaml, standing: verified(approved, `${yaml}  - pane: other/w2:p1\n    commands: [add]\n`) }).id).toBe('up.delegate-drift');
+    expect(gate({ team: swapped, file: yaml, standing: verified(approved, `${yaml}  - pane: other/w2:p1\n    commands: [add]\n`) })).toEqual({
+      kind: 'passed',
+      pane: 'other/w1:p1',
+    });
   });
 });
 

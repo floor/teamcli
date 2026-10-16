@@ -200,7 +200,7 @@ describe('the machine\'s figures', () => {
     };
     const small: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 1e9, swapFree: 0.5e9, swapUsed: 0.5e9 };
     expect(swapTotalProblem(small, limits)).toBe(
-      'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep, then run `team approve`',
+      'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep',
     );
     // The check can pass in principle — its floor sits under the machine's total — and the free
     // figure is low right now: `up`'s refusal and the watch's finding, and nothing here.
@@ -278,7 +278,7 @@ describe('a pass of the watch', () => {
     const { labels, ...rest } = pass({
       team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(),
     });
-    expect(rest).toEqual({ reports: [], nudge: null, fallback: null, ring: null, mailboxNote: null, readings: [] });
+    expect(rest).toEqual({ reports: [], nudge: null, work: [], fallback: null, ring: null, mailboxNote: null, readings: [] });
     expect(labels.length).toBe(5);
   });
 
@@ -992,13 +992,13 @@ describe('team watch', () => {
     ['legacy', () => ({ kind: 'legacy' as const })],
     ['refused', () => ({
       kind: 'refused' as const,
-      why: 'the record does not carry a valid signature: it was changed after approval, or written without the key: run `team approve` once',
+      why: 'the record does not carry a valid signature: it was changed after approval, or written without the key',
     })],
-  ] satisfies Array<[string, WatchSources['standing']]>)('types nothing while the record is %s', async (_name, standing) => {
+  ] satisfies Array<[string, WatchSources['standing']]>)('still nudges an idle seat while the record is %s', async (_name, standing) => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources(1, { standing }));
     expect(code).toBe(0);
-    expect(typed).toEqual([]);
+    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
   });
 
   test('types nothing when herdr lists two agents of the idle seat', async () => {
@@ -1083,7 +1083,28 @@ describe('team watch', () => {
     // The file says 120s; the values in force say 5s, and the wait between passes is theirs.
     expect(io.out).toContain('watching the session "acme-web" every 5s');
     expect(waits).toEqual([5]);
-    expect(io.out).toContain('the file differs from the approved one: `watch` changed');
+    expect(io.out).not.toContain('the file differs from the approved one');
+  });
+
+  test('an edited grant and delegates logs no approved-copy difference', async () => {
+    writeFileSync(
+      file,
+      `${example}\ngrant:\n  session: acme-web\n  seat: claude-coordinator-acme\n  scope: [up, down]\ndelegates:\n  - pane: other/pane-1\n    commands: [up, down]\n`,
+    );
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runWatch(['--file', file], io, sources(1, {
+      standing: (root) => {
+        const parsed = validateTeamFile(example);
+        if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+        return verifiedOf(parsed.team, example, root);
+      },
+    }));
+    expect(code).toBe(0);
+    expect(io.out).not.toContain('the file differs from the approved one');
+    expect(io.out).not.toContain('grant');
+    expect(io.out).not.toContain('delegates');
+    const log = readFileSync(join(dir, '.agents', 'team.log'), 'utf8');
+    expect(log).not.toContain('the file differs from the approved one');
   });
 
   test('when it stops, its record is cleared and that is notified', async () => {
@@ -2002,7 +2023,7 @@ describe('the sidebar of a running seat', () => {
     grokScene.workspaces.push({ id: 'w8', label: 'old' });
     const grok = pass({ team: grokFile, watch: grokFile.watch, state: emptySession(), live: grokScene, machine: fine, now: 0, memory: newMemory() });
     const grokLine = line(grok, 'grok-acme');
-    expect(grokLine).toBe('Grok 4.7 xhigh');
+    expect(grokLine).toBe('Grok 4.6 xhigh');
     expect(grokLine?.startsWith('grok ')).toBe(false);
     expect(grok.labels.find((item) => item.name === 'grok-acme')?.title).toBe('grok-acme · reviewer');
   });

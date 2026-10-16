@@ -7,8 +7,8 @@ codes stay on the page.
 
 ## What the run does: the report and the machine it reads
 
-Reads the machine and says what the team needs before it can run: whether this file is the one the
-owner approved, whether herdr and each seat's CLI are installed, at the tested version and logged in,
+Reads the machine and says what the team needs before it can run: whether herdr and each seat's CLI
+are installed, at the tested version and logged in,
 whether each launch names the model the file says — and, when it names none, what checks the model
 the seat really runs — whether each seat's launch line can run in the folder the seat starts in,
 whether a watch has run for the session, and what each approved budget check reads right now. `up`
@@ -51,7 +51,6 @@ whoever runs it and whatever file it reads.
 
 One line per finding, the level first, then two spaces:
 
-    ok    the file is the one the owner approved (approval #1, 2026-10-04, key fe21ef6293de)
     warn  claude-beacon: its name repeats "beacon"; the session already carries it
     warn  claude-beacon: the launch starts Claude Opus 5.5, the file says Claude Sonnet 5.5
     --    codex-scribe: the model is chosen by its launcher; checked on the running seat
@@ -62,15 +61,12 @@ One line per finding, the level first, then two spaces:
 | --- | --- |
 | `ok  ` | as it should be |
 | `warn` | worth knowing; `up` and `add` go ahead |
-| `MISS` | a reason to refuse: something has to be installed, logged in or approved first |
+| `MISS` | a reason to refuse: something has to be installed or logged in first, or a record the machine cannot verify |
 | `--  ` | neither: a note, like whether the session is running |
 
 The findings come in order: the file's own warnings, one warning per seat whose name or label
 repeats the project or the session (the session already carries it; the warning never refuses the
-file), the approval — `ok  ` with the signing's number, its date and the signing key's
-fingerprint (`ok    the file is the one the owner approved (approval #1, 2026-10-04, key fe21ef6293de)`) when the record
-verifies, `MISS` with the one-line repair when it does not: never approved on this machine,
-written before records were signed, or refused with the case — the override file when it is not the approved copy or cannot be parsed (a
+file), the approval — no line when there is no record or the record verifies, and one `MISS` with the case when the record is legacy (`approved before records were signed`) or refused — the override file when it is not the approved copy or cannot be parsed (a
 missing line either way: `up` and `add` refuse, and the approved copy stays in force — or the
 shipped profiles, when nothing was approved), each account whose `check`
 command is unapproved, or no longer matches the file hashed at approval (a warning either way: that
@@ -143,12 +139,11 @@ every line that names it.
 The placeholder `version: "0"` a fresh `init` writes before the owner fills the release number no
 longer stops a seat's first launch — the launch compares the model family only — so a seat that
 runs despite it is said as information: `--    <seat>: runs Claude Opus 5.5; the file's version "0"
-is the placeholder init writes — write "5.5" into the file, then run \`team approve\``. The note is
+is the placeholder init writes — write "5.5" into the file. The note is
 said only for a live seat whose screen names a model of the family the file declares; a seat on
 another family keeps the launch's own line. No other spelling is the placeholder: `version: "0.0"`
 stops the launch as any mismatch would. Nothing is lost by it — a "0" never pinned a release — and
-the file's approval still covers the version as written, so pinning the number is one edit and one
-`team approve`.
+pinning the number is one edit of the live file.
 
 A seat the state records waiting at **trust** gets one line of its own. A fresh read of its pane
 must show the recorded trust dialog — the same reading `team answer` checks, and the reason the
@@ -258,7 +253,6 @@ Everything here is as it should be:
 $ team doctor ; echo "exit $?"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
-ok    the file is the one the owner approved (approval #1, 2026-10-04, key fe21ef6293de)
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
 --    session beacon is running
@@ -291,7 +285,6 @@ later `up` can meet a different one:
 $ team doctor ; echo "exit $?"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
-ok    the file is the one the owner approved (approval #1, 2026-10-04, key fe21ef6293de)
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
 --    session beacon is running
@@ -299,7 +292,7 @@ ok    claude 2.1.288
 ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
-warn  the machine check asks for 0.1 GB free swap; at this reading the machine has 0.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep, then run `team approve`
+warn  the machine check asks for 0.1 GB free swap; at this reading the machine has 0.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
 team doctor: nothing missing, 3 warnings
 exit 0
 ```
@@ -320,7 +313,6 @@ herdr's own version line says only where it sits, for the same reason:
 $ team doctor ; echo "exit $?"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
-ok    the file is the one the owner approved (approval #1, 2026-10-04, key fe21ef6293de)
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
 --    session beacon is running
@@ -339,7 +331,6 @@ everything else is as the owner's:
 $ team doctor ; echo "exit $?"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
-ok    the file is the one the owner approved (approval #1, 2026-10-04, key fe21ef6293de)
 --    the budget checks were not run: only the owner runs them
 ok    herdr 0.7.1
 --    session beacon is running
@@ -404,7 +395,6 @@ seats:
 $ team doctor ; echo "exit $?"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
-MISS  run `team approve`: `limits` changed; seat codex-scribe is not in the approved file
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
 --    session beacon is running
@@ -413,7 +403,7 @@ ok    claude-code: logged in
 MISS  install `codex`: it is not on the PATH (codex: codex-scribe)
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
-team doctor: 2 missing, 2 warnings: 2 of them block `up` and `add`
+team doctor: 1 missing, 2 warnings: 1 of them block `up` and `add`
 exit 1
 ```
 
@@ -470,7 +460,6 @@ seats:
 $ team doctor ; echo "exit $?"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
-MISS  run `team approve`: `limits` changed; seat claude-beacon changed; seat codex-scribe is not in the approved file
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
 --    session beacon is running
@@ -480,7 +469,7 @@ warn  claude-beacon: the launch starts Claude Opus 5.5, the file says Claude Son
 MISS  install `codex`: it is not on the PATH (codex: codex-scribe)
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
-team doctor: 2 missing, 3 warnings: 2 of them block `up` and `add`
+team doctor: 1 missing, 3 warnings: 1 of them block `up` and `add`
 exit 1
 ```
 
@@ -549,7 +538,6 @@ seats:
 $ team doctor ; echo "exit $?"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
-MISS  run `team approve`: `limits` changed; seat codex-scribe is not in the approved file; seat codex-reader is not in the approved file
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
 --    session beacon is running
@@ -560,8 +548,8 @@ ok    codex: logged in
 warn  codex-scribe: the launch runs team-codex, not codex, and names no model: if the launcher chooses the model, say so with model_from: launcher
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
-team doctor: 1 missing, 3 warnings: 1 of them block `up` and `add`
-exit 1
+team doctor: nothing missing, 3 warnings
+exit 0
 ```
 
 The wrapper is told by the launch line's first words: none of them is the CLI's own binary, so the
@@ -629,7 +617,6 @@ seats:
 $ team doctor ; echo "exit $?"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
-MISS  run `team approve`: `limits` changed; seat codex-scribe is not in the approved file; seat codex-reader is not in the approved file
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
 --    session beacon is running
@@ -640,8 +627,8 @@ ok    codex: logged in
 --    codex-scribe: the model is chosen by its launcher; checked on the running seat
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
-team doctor: 1 missing, 2 warnings: 1 of them block `up` and `add`
-exit 1
+team doctor: nothing missing, 2 warnings
+exit 0
 ```
 
 `model_from: launcher` wins over the launch line's shape, whatever the shape is; the key is part of
@@ -706,7 +693,7 @@ exit 1
 ```
 
 A check that was edited after its approval never runs: the file on disk no longer hashes to what
-the owner approved, and the account reads unknown until `team approve` is run again. The file
+the owner approved, and the account reads unknown. The file
 itself is back to the approved one here; only the script changed:
 
 ```yaml file=.agents/team.yaml
@@ -755,7 +742,6 @@ echo "weekly 99% used"
 $ team doctor ; echo "exit $?"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
-ok    the file is the one the owner approved (approval #1, 2026-10-04, key fe21ef6293de)
 warn  the check for openai changed after approval and was not run; that account reads unknown
 ok    herdr 0.7.1
 --    session beacon is running

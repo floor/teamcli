@@ -31,8 +31,8 @@ describe('npm-readme.md', () => {
     expect(markdown.split('\n').length).toBeLessThan(100);
   });
 
-  test('the Start block is the shortest working start: init, approve, doctor, up', () => {
-    expect(startCommands(markdown)).toEqual(['team init', 'team approve', 'team doctor', 'team up']);
+  test('the Start block is the shortest working start: init, doctor, up', () => {
+    expect(startCommands(markdown)).toEqual(['team init', 'team doctor', 'team up']);
   });
 
   test('every Start command is a `$ ` line of a page test/docs.test.ts runs', () => {

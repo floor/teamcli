@@ -583,6 +583,28 @@ Usage:
 | --- | --- | --- |
 | `package@version` | no | no |
 
+## `reload`
+
+Hidden: no
+
+Usage:
+
+    team reload <seat> [--file <path>]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `remove`
 
 Hidden: no
@@ -607,6 +629,31 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `name` | no | no |
+
+## `restart`
+
+Hidden: no
+
+Usage:
+
+    team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--abandon` | no | no | no |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
 
 ## `seats`
 

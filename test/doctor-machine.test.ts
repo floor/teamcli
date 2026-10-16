@@ -19,7 +19,7 @@ const NOW = new Date('2026-10-04T09:00:00Z');
 
 // The file declares no `swap_free_min`, so the check in force is the 100MB floor.
 const SENTENCE =
-  'the machine check asks for 0.1 GB free swap; at this reading the machine has 0.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep, then run `team approve`';
+  'the machine check asks for 0.1 GB free swap; at this reading the machine has 0.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep';
 
 // A machine reading whose 40MB of swap in total cannot hold the 100MB the check wants.
 const SMALL: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 40e6, swapFree: 20e6, swapUsed: 20e6 };

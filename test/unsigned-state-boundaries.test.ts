@@ -286,13 +286,14 @@ describe('the unnamed pane a seat may adopt', () => {
 
 describe('a live agent the file does not declare', () => {
   test('charges the seats ceiling like a declared one', async () => {
+    const yaml = `${readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')}limits:\n  seats: 2\n  temporary: 1\n  vendors:\n    anthropic: 1\n    openai: 1\n`;
+    writeFileSync(join(project, '.agents', 'team.yaml'), yaml);
     const loaded = loadTeamFile(project, { home });
     if (!loaded.ok) throw new Error('load');
-    const yaml = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
     writeApproval(
       storePath(loaded.team.project, loaded.root, home),
       {
-        approval: { ...approvalOf(loaded.team, loaded.root), ceilings: { seats: 2, temporary: 1, vendors: { anthropic: 1, openai: 1 } } },
+        approval: approvalOf(loaded.team, loaded.root),
         file: yaml,
       },
       loaded.team.seats,
