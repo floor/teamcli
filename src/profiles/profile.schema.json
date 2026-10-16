@@ -221,6 +221,25 @@
         "additionalProperties": false,
         "properties": { "block": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/blockStep" } } }
       },
+      "allOf": [
+        {
+          "if": { "required": ["live"] },
+          "then": {
+            "anyOf": [{ "required": ["any"] }, { "required": ["all"] }],
+            "not": {
+              "anyOf": [
+                { "required": ["footer"] },
+                { "required": ["on_footer"] },
+                { "required": ["below_last_rule"] },
+                { "required": ["without_rule"] },
+                { "required": ["none_after"] },
+                { "required": ["only_after"] },
+                { "required": ["block"] }
+              ]
+            }
+          }
+        }
+      ],
       "properties": {
         "any": { "$ref": "#/$defs/patterns" },
         "all": { "$ref": "#/$defs/patterns" },
@@ -228,6 +247,7 @@
         "on_footer": { "type": "boolean" },
         "below_last_rule": { "type": "string", "maxLength": 200 },
         "without_rule": { "type": "boolean" },
+        "live": { "type": "boolean", "description": "an any/all rule read on the live region alone: the composer's own rows and the newest turn above them, never a turn the window has scrolled past" },
         "none_after": {
           "type": "object",
           "additionalProperties": false,
