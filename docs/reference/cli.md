@@ -979,17 +979,22 @@ Usage:
 
     team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
+    team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
     team send --list [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--channel` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--list` | no | no | no |
+| `--ms` | yes | no | no |
+| `--record` | yes | no | no |
 | `--timeout` | yes | no | no |
 | `--wait` | no | no | no |
 | `-h` | no | no | yes |

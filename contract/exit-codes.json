@@ -2830,6 +2830,20 @@
       "trigger": "team send --list"
     },
     {
+      "code": 0,
+      "command": "send",
+      "id": "send.record-dry-run",
+      "meaning": "a recorded native delivery was resolved and nothing was written",
+      "trigger": "team send --record builder-2 --channel native --ms 812 --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "send",
+      "id": "send.recorded",
+      "meaning": "a native delivery the sender made itself was written to the history",
+      "trigger": "team send --record builder-2 --channel native --ms 812"
+    },
+    {
       "code": 1,
       "command": "send",
       "id": "send.detached",

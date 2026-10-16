@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { readArgs } from '../args.ts';
+import { readArgs, type Args } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -18,6 +18,7 @@ import { liveSocketOf } from '../send/address.ts';
 import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
 import { readSendGrants } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
+import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { bindPane, deliverTrigger, showsHeldFrameDialog, type DeliverResult } from '../send/deliver.ts';
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
@@ -33,6 +34,8 @@ const SOCKET_FIRST = false;
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+       team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
+       team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
        team send --list [--json]
 
 Writes one message to one seat. A plain send writes the body whole to a drop file
@@ -90,6 +93,17 @@ dialog ends the run at once as held (socket); nothing is typed while it stands.
 written. --json prints one result document instead of the lines:
 {seat, status, exit, reply?, error?, ids}. --file reads the body from a file instead
 of the one <message> argument.
+
+--record writes no drop file, sends no frame and touches no pane: the sender
+delivered with its own tool (a Claude Code seat's cross-session message), and this
+writes down that delivery — one history line, outcome delivered, via native, with
+the span the sender measured in --ms (a whole number of milliseconds). --channel
+takes native, the one channel this half exists for, and is required beside --record;
+--wait and --timeout are refused there, because nothing is delivered here. The
+recipient's record and admission are judged exactly as a plain send's — a recorded
+delivery is never a way around the rules — and the body is optional: given, it is
+recorded verbatim, and without it the line says the text did not pass through this
+CLI. \`team route <seat>\` answers the address such a delivery uses.
 
 Not in this build: broadcast, and a reply from a seat that is not Claude Code.
 `;
@@ -170,7 +184,7 @@ type Aim = {
 };
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  const args = readArgs(argv, ['file', 'timeout'], ['wait', 'json', 'list', 'dry-run']);
+  const args = readArgs(argv, ['file', 'timeout', 'record', 'channel', 'ms'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
   const report: Report = { json: args.flags.has('json'), seat: seatName ?? null, sent: null };
   if (args.error) return usage(io, args.error, report);
@@ -181,6 +195,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return 1;
   }
   if (args.flags.has('list')) return listSeats(io, host, report);
+  // The native half of the channel: nothing is delivered here, so the seat is named by
+  // `--record` and the rest of the line is the record's own options, judged on their own.
+  if (args.values.record !== undefined) return recordRun(args, io, host);
   // Send to outcome is measured from here, past the refusals that read nothing (a refused run
   // reads no clock): this command's own handling, the same span the daemon measures from its
   // handler. The host's clock, not the wall clock: a fixed clock in a test or the docs runner
@@ -357,6 +374,141 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   }
   report.sent = msgId;
   return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, msgId, body, trigger, host, report, startedAt, socketNote ?? undefined);
+}
+
+/**
+ * `team send --record <seat> --channel native --ms <N>`: the sender delivered with its own tool
+ * — a Claude Code seat's cross-session message — and this writes the one history line every
+ * other outcome gets, with the span the sender measured. Nothing is delivered here: no drop
+ * file, no frame, no pane, and no socket is ever opened. The seat is named by the option, so
+ * the positionals are the body, not the seat.
+ *
+ * Everything the record claims is judged first, and judged exactly as a plain send's target is:
+ * the caller and its placement, the recipient's registry record, admission over the same
+ * records with the grant store last (the prologue below is `runSend`'s own, step for step). A
+ * native delivery must not become a way around the rules — only around the transport.
+ */
+function recordRun(args: Args, io: Io, host: SendHost): number {
+  const seatName = args.values.record as string;
+  const report: Report = { json: args.flags.has('json'), seat: seatName, sent: null };
+  const channel = args.values.channel;
+  const msRaw = args.values.ms;
+  const file = args.values.file;
+  if (args.flags.has('wait') || args.values.timeout !== undefined) {
+    return usage(io, '--wait and --timeout are not meaningful with --record: nothing is delivered here', report);
+  }
+  if (channel === undefined) return usage(io, `--record needs --channel ${NATIVE_CHANNEL}`, report);
+  if (channel !== NATIVE_CHANNEL) {
+    return usage(io, `--channel takes ${NATIVE_CHANNEL} (got "${channel}"): the other channels send themselves`, report);
+  }
+  if (msRaw === undefined) {
+    return usage(io, '--record needs --ms <N>: the span the sender measured, in whole milliseconds', report);
+  }
+  const ms = /^\d+$/.test(msRaw) ? Number(msRaw) : -1;
+  if (ms < 0 || !Number.isSafeInteger(ms)) {
+    return usage(io, `--ms takes a whole number of milliseconds (got "${msRaw}")`, report);
+  }
+  if (file !== undefined && args.rest.length > 0) {
+    return usage(io, 'a message and --file cannot both be given', report);
+  }
+  let body: string;
+  if (file !== undefined) {
+    try {
+      body = readFileSync(resolve(io.cwd, file), 'utf8');
+    } catch {
+      return configuration(io, `the message file cannot be read: ${file}`, report);
+    }
+  } else if (args.rest.length > 0) {
+    body = args.rest.join(' ');
+  } else {
+    // The sender's text travelled in its own tool's call; the record says so rather than
+    // inventing one.
+    body = NATIVE_BODY_MARKER;
+  }
+  if (body.trim() === '') return usage(io, 'the message is empty', report);
+
+  const loaded = loadTeamFile(io.cwd, { home: host.home });
+  if (!loaded.ok) {
+    const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
+    return configuration(io, message || 'the team file cannot be read', report);
+  }
+  const { team, root } = loaded;
+  const dir = dirname(loaded.path);
+  const fileTeamId = teamIdOf(root);
+  const judged = judgeCallerIn(io, dir, team);
+  const { caller } = judged;
+  const who = logWho(caller, team);
+  const from = caller.kind === 'seat' ? caller.name : 'owner';
+  const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
+  if ('error' in resolved && isRegistrySpec(seatName)) return refuse(io, dir, who, resolved.error, host, report);
+  const hit = 'error' in resolved ? null : resolved;
+  const standing = standingOf(dir, judged.session, caller);
+  let to: Aim;
+  let admission: Admission;
+  if (hit === null) {
+    const placement = placementProblemOf(caller, standing);
+    if (placement) return refuse(io, dir, who, placement, host, report);
+    admission = admissionOf(caller, team, null, seatName, host.home, fileTeamId, () => host.now(), standing);
+    if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
+    const configured = team.seats.find((seat) => seat.name === seatName);
+    if (!configured) {
+      return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
+    }
+    to = { seat: seatName, session: team.session, cli: configured.cli, pane: null, address: null, dir, project: team.project, root, cross: false };
+  } else {
+    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
+    if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
+    const cross = hit.team.root !== root;
+    to = {
+      seat: hit.agent.reach.seat,
+      session: hit.agent.reach.session,
+      cli: hit.agent.cli,
+      pane: hit.pane,
+      address: hit.agent.reach.address,
+      dir: cross ? join(hit.team.root, '.agents') : dir,
+      project: hit.team.project,
+      root: hit.team.root,
+      cross,
+    };
+  }
+  report.seat = to.seat;
+  const msgId = randomUUID();
+  if (args.flags.has('dry-run')) return recordDryRun(io, to.seat, ms, report);
+  const written = appendHistory(to.project, to.root, host.home, {
+    ts: host.now().toISOString(),
+    from,
+    to: to.seat,
+    body,
+    id: msgId,
+    outcome: 'delivered',
+    ms,
+    via: NATIVE_CHANNEL,
+  });
+  if (!written.ok) return refuse(io, dir, who, `the delivery could not be recorded: ${written.reason}`, host, report);
+  logLine(to.dir, 'send', who, `${to.seat}: recorded (native, ${String(ms)} ms)`, host.now());
+  return recorded(io, to.seat, ms, msgId, report);
+}
+
+/** The native delivery is in the history: one line, `via: native`, the sender's own span. Exit
+ *  0, always. */
+function recorded(io: Io, seat: string, ms: number, id: string, report: Report): number {
+  if (report.json) {
+    io.stdout(document({ seat, status: 'recorded', exit: 0, ids: { sent: id, reply: null } }));
+  } else {
+    io.stdout(`${seat}: recorded (native, ${String(ms)} ms)\n`);
+  }
+  return 0; // exit: send.recorded
+}
+
+/** What --record would write, with nothing written and nothing read: the run's own wording.
+ *  Exit 0, always. */
+function recordDryRun(io: Io, seat: string, ms: number, report: Report): number {
+  if (report.json) {
+    io.stdout(document({ seat, status: 'dry-run', exit: 0, ids: { sent: null, reply: null } }));
+  } else {
+    io.stdout(`${seat}: would record (native, ${String(ms)} ms); nothing was written\n`);
+  }
+  return 0; // exit: send.record-dry-run
 }
 
 function finishDaemonSend(
