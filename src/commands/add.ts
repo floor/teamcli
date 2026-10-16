@@ -9,13 +9,14 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
+import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, seatIsStopped } from '../file/lines.ts';
-import { loadTeamFile, placedProblems } from '../file/load.ts';
+import { findRoot, loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -43,6 +44,7 @@ import { logLine } from '../log.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
+import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
@@ -151,8 +153,22 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.invocation
     return 2;
   }
+  // A create-grant's own runner is the one detached caller the record may name: this sentence is
+  // not for it, exactly as `init` asks it. Only the cwd's root is known this early, before any
+  // file is read, so this decision answers this refusal alone — the loaded file's root decides
+  // the caller rule below, and a team outside the granted paths still refuses there.
   const detached = detachedRefusal(walkCaller(io));
-  if (detached !== undefined) {
+  // Asked only for the placement that would be refused, and only when a record exists, so a
+  // caller with none is refused without reading a repository or a clock —
+  // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
+  // order, exactly as `down` and `init` ask it.
+  let runnerGranted = false;
+  if (detached !== undefined && readEntityCreateGrants(sources.home).length > 0) {
+    const hereRoot = findRoot(io.cwd);
+    runnerGranted = hereRoot !== null
+      && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
+  }
+  if (detached !== undefined && !runnerGranted) {
     out.stderr(`team add: ${detached}\n`);
     // exit: add.detached
     return 1;
@@ -215,6 +231,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 2;
   }
   const { team, root, path } = loaded;
+  // The create-grant, decided on the loaded root: the team this run would change must be under
+  // the granted paths. The early `runnerGranted` above answered the detached sentence alone.
   const dir = dirname(path);
   // The gate judges the caller placed in the session this command asks about — the proof its pane
   // is that session's. With no `--session` the session judged is the caller's own placement: the
@@ -227,6 +245,18 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const { caller, shown } = judged;
   const session = judged.session;
   const mayChange = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
+  // A create-grant the record holds for this loaded root is the run's admission: the ordinary
+  // rule's sentence is then not a refusal, and the delegate gate — which the ordinary refusal
+  // alone summons — has nothing to replace. Asked only where the ordinary rule has just refused,
+  // and only when a record exists, so a caller with none reads no clock for it, exactly as
+  // `down` asks it. A lead seat is not granted: the second half of a swap is the owner's, the
+  // granted seat's or an approved delegate's, as `remove`'s own gate says, so a run naming a
+  // lead seat is not admitted by the record and the ordinary caller refusal below stands.
+  const leadSeat = !temporary && isLeadSeat(team, args.rest[0] ?? '');
+  const createGranted = mayChange.kind !== 'ok'
+    && !leadSeat
+    && readEntityCreateGrants(sources.home).length > 0
+    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
   // The delegate branch, tried only when the ordinary rule just refused and the file names a
   // delegate at all: with no `delegates` section every refusal below stays exactly today's, and
   // the gate is never asked. A refused verdict takes the ordinary refusal's place; a passed one
@@ -236,7 +266,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // command performs is then a delegated one: the would-edit refusal below keeps it from
   // writing the file or the approval, and `logDelegated` attributes it at its effects.
   let delegatePane: string | null = null;
-  if (mayChange.kind !== 'ok' && team.delegates) {
+  if (mayChange.kind !== 'ok' && team.delegates && !createGranted) {
     const verdict = (sources.delegateGate ?? delegateGate)({
       command: 'add',
       team,
@@ -262,7 +292,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.another-pane
     return 1;
   }
-  if (mayChange.kind === 'refused' && delegatePane === null) {
+  if (mayChange.kind === 'refused' && delegatePane === null && !createGranted) {
     out.stderr(`team add: only the owner, the orchestrator or the operator runs it; this call is ${plainLine(describeCaller(shown))}\n`);
     // exit: add.caller
     return 1;
@@ -1097,6 +1127,16 @@ function hostOf(input: {
       if (patch.pane) {
         if (replaced) forgetLaunchedPane(input.home, replaced, session);
         noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
+        // The registry: the seat's agent is registered at its first launch, re-pointed after.
+        if (name === seat.name) {
+          const made = registerLaunch(
+            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
+            seat,
+            patch.pane,
+            readState(dir).sessions[session]?.seats[name]?.id,
+          );
+          if ('note' in made) logLine(dir, 'add', input.caller, made.note, input.now());
+        }
       }
     },
     running(name) {
@@ -1121,6 +1161,11 @@ function hostOf(input: {
         delete current.seats[name];
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
+      // The registry: a temporary seat's agent ends with it; a declared seat's comes back as itself.
+      if (name === seat.name) {
+        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, temporary ? 'retired' : 'stopped');
+        if (ended) logLine(dir, 'add', input.caller, ended.note, input.now());
+      }
     },
     // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
     // here with the same function the records use: no escape sequence or bidi override reaches
