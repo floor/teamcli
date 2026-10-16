@@ -19,7 +19,7 @@ The project's name is TeamCLI; the package and the command are `team`. The site 
 [RFC 000](https://github.com/floor/teamcli/discussions/147).
 
 **Status: early, herdr only.** This build parses and
-validates the file, checks who is calling, and holds `add`, `answer`, `approve`, `check`, `doctor`,
+validates the file, checks who is calling, and holds `add`, `answer`, `check`, `doctor`,
 `down`, `init`, `list`, `release`, `remove`, `status`, `up`, `watch` and `worktree`.
 
 ## Install
@@ -36,8 +36,9 @@ team --version            # 0.4.8
 `team init` keeps `.agents/team.yaml` out of git through `.git/info/exclude`, never by editing
 `.gitignore`: a public repository shouldn't carry its roster. A fresh clone therefore has no team
 file. Run `team init` to write one, or `team init --restore` to bring back the copy you last
-approved on this machine. A file you receive from someone else runs nothing until you approve it
-yourself.
+approved on this machine. A file you receive from someone else is read as it is — no step records
+it first — and `up` starts its seats only from the owner's terminal, or from a seat the file's
+`grant` names.
 
 ## The file's format
 
@@ -261,7 +262,7 @@ check, and this build acts on what the commands below read.
 | `team doctor` | checks this machine for what the file needs: herdr, each CLI, login, launch line, model, watch heartbeat; `--login` checks only CLI sign-ins | anyone; read only |
 | `team status` | prints the file's seats against the running session, each difference with its repair; `--json` outputs a stable JSON document (`format: 1`) for scripts; exit 1 when they differ | the owner, a seat of that team on its recorded pane, or a pane the approved file names; `--file` and `--session` are the owner's; read only |
 | `team list` | lists the herdr sessions on this machine, running ones by default; `--all` includes stopped sessions; `--json` prints a stable array, empty when there is nothing; an orphan session and an unreadable seat do not fail it | anyone, from any folder; read only |
-| `team up` / `team down` | starts / stops the session and its seats | `up`: the owner; `down`: the owner, the coordinator or the operator seat |
+| `team up` / `team down` | starts / stops the session and its seats | `up`: the owner at a terminal outside herdr, or the seat the file's `grant` names for `up` (anyone else is told `deny`); `down`: the owner, the coordinator or the operator seat |
 | `team watch` | watches the session, reports idle seats and nudges the operator; `--no-nudge` and `--no-notify` are the owner's and do not silence a report addressed to the owner | anyone, one per session; it types only a fixed line into an empty idle prompt: the report nudge, or `Team: run team messages` when a message is already waiting |
 | `team tempo <word>` | sets the team's tempo to relaxed, normal or urgent, which scales the watch's idle and nudge waits; normal is the file with the key omitted | the owner |
 | `team messages` | verifies a message that is already waiting, prints its body and writes the receipt; no command writes a message record — `team send` writes to a seat's cross-session socket, not to this mailbox — and a report still leaves as the watch's nudge | anyone |
@@ -282,8 +283,9 @@ that `bun run ci` runs against a fixture team. [herdr as a team uses
 it](https://github.com/floor/teamcli/blob/main/docs/reference/herdr.md) — the session, the
 workspaces and panes a team lives in, and the two names a seat shows — is the reference beside them.
 
-The owner is a terminal outside herdr with no agent process above it. `up` reads the
-processes above the call and refuses a seat — or a script a seat runs — that makes it: a guard
+The owner is a terminal outside herdr with no agent process above it. `up` reads the processes above
+the call: the owner's placement starts the team, and a seat — or a script a seat runs — that makes
+it is told the one word `deny`, unless the file's `grant` names that seat for `up`. That is a guard
 against a mistaken agent, not a hostile one, so a seat that forges the owner's placement is a
 known limitation, being hardened. With no `--file`, the file is `.agents/team.yaml` of
 the repository's main checkout, found through git's common directory. A folder that is not a git
