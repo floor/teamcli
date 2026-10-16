@@ -23,7 +23,7 @@ export function validateTeamFile(text: string, options: { home?: string; fs?: Fs
   try {
     root = parseYaml(text);
   } catch (error) {
-    if (error instanceof YamlError) return { ok: false, errors: [{ line: error.line, message: error.message }] };
+    if (error instanceof YamlError) return { ok: false, parse: true, errors: [{ line: error.line, message: error.message }] };
     throw error;
   }
   const check = new Check();
