@@ -1,6 +1,8 @@
 // The trace half of a seat's own state: the last thing the seat is known to have done, each
 // fact read from the source that keeps it — the commit at the seat's worktree's tip, the last
-// ack or message the send history holds for it, and the last tool row its pane shows. The
+// ack or message the send history holds for it, and the last tool row its pane shows. Only a
+// commit, an ack and a message carry their own instant: a tool row carries none, because a
+// screen carries no clock — it is kept for display and is never weighed as recency. The
 // labels' line follows the file and the screen (`observe.ts`); these are the traces
 // `src/labels/state.ts`'s column reads beside it, `newestTraceAt()` being the instants
 // comparison the tables weigh them with. Every reader answers null when its source
@@ -12,17 +14,30 @@ import { stripSgr } from '../ansi.ts';
 import { readHistory } from '../send/history.ts';
 import type { SessionState } from '../state.ts';
 
-export type SeatTrace = {
-  kind: 'commit' | 'message' | 'ack' | 'tool';
-  /** ISO instant: the commit's own date (`%aI`, which a rebase does not move), the send
-   *  history's `ts`, or the read's own instant for a tool row — a screen carries no clock. */
-  at: string;
-  /** One short line: the commit's subject; the message's direction and outcome; the tool row's
-   *  own words. Never a message body, and never screen text but the tool row itself. */
-  what: string;
-  /** A commit's short hash (`%h`). The other kinds carry none. */
-  ref?: string;
-};
+export type SeatTrace =
+  | {
+      kind: 'commit';
+      /** The commit's own date (`%aI`, which a rebase does not move), ISO 8601. */
+      at: string;
+      /** The commit's subject. */
+      what: string;
+      /** The commit's short hash (`%h`). */
+      ref?: string;
+    }
+  | {
+      kind: 'message' | 'ack';
+      /** The send history's own `ts`, ISO 8601. */
+      at: string;
+      /** The message's direction and outcome. Never a message body. */
+      what: string;
+    }
+  | {
+      /** A tool row, with no instant of its own: a screen carries no clock, so its age is
+       *  unknown — kept for display, never weighed as recency (`newestTraceAt` skips it). */
+      kind: 'tool';
+      /** The row's own words — never screen text but the row itself. */
+      what: string;
+    };
 
 export type TraceInput = {
   seat: { name: string; cli: string };
@@ -35,7 +50,6 @@ export type TraceInput = {
   home?: string;
   /** The seat's pane, the same read `observe.ts` takes. */
   screen?: string;
-  at: Date;
 };
 
 /** The three sources together, in this order, each or none: the worktree's last commit, the
@@ -47,19 +61,20 @@ export function seatTraces(input: TraceInput): SeatTrace[] {
   if (commit) out.push(commit);
   const message = input.home === undefined ? null : messageTrace(input.project, input.root, input.seat.name, input.home);
   if (message) out.push(message);
-  const tool = toolTrace(input.seat.cli, input.screen, input.at);
+  const tool = toolTrace(input.seat.cli, input.screen);
   if (tool) out.push(tool);
   return out;
 }
 
-/** The newest instant among the traces and any carried-forward ISO strings beside them (a seat
- *  record's `last_active`, say), as the original string: instants, not text — a commit's `%aI`
- *  carries its own offset, so comparing the strings would misread one. An unparseable string is
- *  ignored rather than guessed at, and nothing to compare answers null. */
+/** The newest instant among the traces that carry one — a tool row carries none, so it is
+ *  skipped — and any carried-forward ISO strings beside them (a seat record's `last_active`,
+ *  say), as the original string: instants, not text — a commit's `%aI` carries its own offset,
+ *  so comparing the strings would misread one. An unparseable string is ignored rather than
+ *  guessed at, and nothing to compare answers null. */
 export function newestTraceAt(traces: SeatTrace[], ...carried: Array<string | null | undefined>): string | null {
   let newest: string | null = null;
   let newestMs = Number.NEGATIVE_INFINITY;
-  for (const at of [...traces.map((trace) => trace.at), ...carried]) {
+  for (const at of [...traces.map((trace) => (trace.kind === 'tool' ? undefined : trace.at)), ...carried]) {
     if (at === undefined || at === null) continue;
     const ms = Date.parse(at);
     if (!Number.isFinite(ms) || ms <= newestMs) continue;
@@ -134,15 +149,16 @@ export function messageTrace(project: string, root: string, seat: string, home: 
  * `● Ran (args)` (1.3.5), either with a ` (ctrl+o to expand)` hint that is trimmed off — both
  * in `test/fixtures/antigravity`, whose permission dialogs echo the row without the marker and
  * stay unread. The other CLIs' captures hold no such row, so they have no trace rather than a
- * guess. The screen carries no clock: the read's own instant stands as the trace's time.
+ * guess. The screen carries no clock, so the trace carries none: a row sits in the scrollback
+ * long after the work it shows, and weighing it as fresh would read an idle seat as working.
  */
-export function toolTrace(cli: string, screen: string | undefined, at: Date): SeatTrace | null {
+export function toolTrace(cli: string, screen: string | undefined): SeatTrace | null {
   if (cli !== 'claude-code' && cli !== 'antigravity') return null;
   if (screen === undefined || screen === '') return null;
   let found: SeatTrace | null = null;
   for (const row of stripSgr(screen).split('\n')) {
     const what = toolRow(cli, row.trim());
-    if (what !== null) found = { kind: 'tool', at: at.toISOString(), what };
+    if (what !== null) found = { kind: 'tool', what };
   }
   return found;
 }

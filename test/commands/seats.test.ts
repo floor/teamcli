@@ -16,6 +16,8 @@ import type { Standing } from '../../src/store/store.ts';
 import { gitEnv, testIo } from '../helpers.ts';
 
 const example = readFileSync(new URL('../fixtures/example.yaml', import.meta.url), 'utf8');
+// A real idle capture, scrollback and all: the table's own reading of a pane.
+const claudeIdle = readFileSync(new URL('../fixtures/claude-code/2.1.289/idle-suggestion-plain.txt', import.meta.url), 'utf8');
 const NOW = new Date('2026-10-03T14:10:00Z');
 
 const claudeScreen = (model: string) => `❯ \n${'─'.repeat(40)}\n  main · …/acme · ${model} · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
@@ -191,6 +193,18 @@ describe('team seats', () => {
     // reads `idle herdr`, as the scene above pins. The commit inside the window is a trace, and
     // a fresh trace beats an idle word: working, from TeamCLI's own record.
     expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  working  trace   4m ago       pane-2');
+  });
+
+  test('an idle screen whose scrollback holds an old tool row reads idle, not working', async () => {
+    // Claude Code leaves its `⏺ Bash(...)` rows in the scrollback, and a screen carries no
+    // clock: the row is never weighed as a fresh trace (src/labels/traces.ts). deepseek-acme-2
+    // records no last_active and no worktree, so before this rule the read's own instant stood
+    // as the row's time and the idle seat read working/trace forever. The screen is the real
+    // 2.1.289 idle capture with one tool row above its composer.
+    live!.screens['pane-4'] = `⏺ Bash(ls -la)\n${claudeIdle}`;
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file], io, statusSources)).toBe(0);
+    expect(io.out).toContain('deepseek-acme-2          seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle                                  idle     cli     -            pane-4');
   });
 
   test('--all includes stopped seats with retained id and last_active', async () => {

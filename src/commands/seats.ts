@@ -142,7 +142,6 @@ export function seatRegistryRows(
             root: traceSources.root,
             home: traceSources.home,
             ...(screenText !== undefined ? { screen: screenText } : {}),
-            at: now,
           }),
           recorded?.last_active,
           retained?.last_active,
