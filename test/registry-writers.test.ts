@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -12,6 +12,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { findAgent, getAgent, readAgents } from '../src/registry/agents.ts';
 import { getTeam, teamIdOf } from '../src/registry/teams.ts';
+import { get as getProject, projectIdOf, projectsFile } from '../src/registry/projects.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
@@ -234,6 +235,61 @@ describe('registry writers: the shared register-or-repoint rule', () => {
     const made = registerLaunch(input, worker, 'pane-1');
     expect('note' in made && made.note.length > 0).toBe(true);
     expect(registerEnd(input, 'worker', 'stopped')).toBeNull();
+  });
+});
+
+describe('the project a team leads, read through the launch', () => {
+  /** The fixture's file, also naming the project it sits in and claiming its lead. */
+  function leadFixture(): { fixture: Fixture; input: RegistryTeam } {
+    const fixture = makeFixture();
+    const yaml = TEAM_YAML
+      .replace('workspace:\n', `trust:\n  - ~/.config/team/lobby\n  - ${fixture.root}\nworkspace:\n`)
+      .replace('workspace:\n', 'in_project: TeamCLI\nproject_lead: true\nworkspace:\n');
+    writeFileSync(fixture.file, yaml);
+    const parsed = validateTeamFile(yaml, { home: fixture.home, root: fixture.root });
+    if (!parsed.ok) throw new Error('lead fixture does not validate');
+    return { fixture, input: { home: fixture.home, team: parsed.team, root: fixture.root, by: 'owner' } };
+  }
+
+  test("a launch writes the project's lead as the lead seat's agent", () => {
+    const { fixture, input } = leadFixture();
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const id = (registerLaunch(input, lead, 'pane-1') as { id: string }).id;
+    expect(getProject(fixture.home, projectIdOf('TeamCLI'))).toMatchObject({
+      name: 'TeamCLI',
+      lead: id,
+      teams: [teamIdOf(fixture.root)],
+    });
+  });
+
+  test('a launch before the lead seat has launched leaves no lead, and the lead launch points it', () => {
+    const { fixture, input } = leadFixture();
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    registerLaunch(input, worker, 'pane-w');
+    expect(getProject(fixture.home, projectIdOf('TeamCLI'))?.lead).toBeNull();
+    const id = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
+    expect(getProject(fixture.home, projectIdOf('TeamCLI'))?.lead).toBe(id);
+  });
+
+  test('the mark moving in the file re-points the lead on the next launch', () => {
+    const { fixture, input } = leadFixture();
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    const leadId = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
+    const workerId = (registerLaunch(input, worker, 'pane-w') as { id: string }).id;
+    expect(getProject(fixture.home, projectIdOf('TeamCLI'))?.lead).toBe(leadId);
+    const moved = { ...input, team: { ...input.team, orchestrator: 'worker' } };
+    registerLaunch(moved, worker, 'pane-w2');
+    expect(getProject(fixture.home, projectIdOf('TeamCLI'))?.lead).toBe(workerId);
+  });
+
+  test('a file that leads no project writes no lead', () => {
+    const fixture = makeFixture();
+    const input = registryOf(fixture);
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    registerLaunch(input, lead, 'pane-1');
+    expect(existsSync(projectsFile(fixture.home))).toBe(false);
   });
 });
 

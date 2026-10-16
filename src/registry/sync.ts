@@ -7,6 +7,7 @@
 // or the stop is done, and the next launch writes the record again. Every function here catches.
 import { findAgent, readAgents, registerAgent, updateAgent } from '../registry/agents.ts';
 import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf } from '../registry/teams.ts';
+import * as projects from '../registry/projects.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 
 /** What every writer here is told about the team it writes for. */
@@ -33,7 +34,7 @@ function noteOf(error: unknown): string {
  *  `noteTeam` never throws; the line it returns is why the record was not written. */
 function ensureTeam(input: RegistryTeam): string | null {
   const { team, root, home, by } = input;
-  const seed = { project: team.project, entity: team.entity, session: input.session ?? team.session, lobby: team.lobby };
+  const seed = { project: team.project, entity: team.entity, session: input.session ?? team.session, lobby: team.lobby, inProject: team.inProject };
   return noteTeam(home, root, seed, 'running', by);
 }
 
@@ -51,6 +52,18 @@ function writeRoster(input: RegistryTeam, teamId: string, seat: string, entry: {
     roster.push(seat === leadSeat ? { ...line, leads: true } : line);
   }
   setRoster(input.home, teamId, roster);
+}
+
+/** This team leads the project its file names: the project's `lead` is the agent of the seat the
+ *  file marks as the team's lead — the `leads: true` seat, or the older `coordinator:` key, both
+ *  resolved to `team.orchestrator`; the capability, never a role name. Re-resolved on every
+ *  launch, from the roster just written, so it follows the mark when the file moves it. A lead
+ *  seat with no agent yet leaves the project with none, which teams read as ordinary. */
+function recordProjectLead(input: RegistryTeam, teamId: string): void {
+  const { team, home } = input;
+  if (!team.projectLead || team.inProject === null) return;
+  const lead = getTeam(home, teamId)?.roster.find((item) => item.seat === team.orchestrator)?.agent ?? null;
+  projects.upsertProject(home, projects.projectIdOf(team.inProject), { lead });
 }
 
 /**
@@ -85,6 +98,7 @@ export function registerLaunch(
         reach, mcp: [], skills: [], lifecycle: 'running', by, ...seatHandle,
       });
     writeRoster(input, teamId, seat.name, { agent: agent.id, role: seat.role });
+    recordProjectLead(input, teamId);
     return { id: agent.id };
   } catch (error) {
     return { note: noteOf(error) };
