@@ -20,7 +20,10 @@ too is one as well — `the project <name> has <n> lead teams: <names>`, repaire
 `take "project_lead: true" off all but one of them`. The two herdr sidebar lines each file seat
 carries are compared on the same pass: a workspace label or display line that reads as neither the
 file's own text nor a line the watch may paint is a difference repaired with
-`team register <seat>`, which re-applies both lines from the file without a relaunch.
+`team register <seat>`, which re-applies both lines from the file without a relaunch. A seat no
+source has heard from past the blind threshold reads `unknown (blind)` in
+[`team seats`](seats.md) and counts as not working: `<seat>: unknown for over <threshold> — blind,
+and it counts as not working`, repaired with the owner's look at the pane.
 
 ## Synopsis
 
