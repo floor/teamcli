@@ -91,18 +91,19 @@ test('a registry with no projects says so', async () => {
   const io = testIo('/anywhere');
   const code = await runProjects([], io, sourcesOf([]));
   expect(code).toBe(0);
-  expect(io.out).toBe('(no projects)\n');
+  expect(io.out).toBe('ID  NAME  ENTITY  LEAD  TEAMS\n0 project(s)\n');
 });
 
-test('--json carries the records, ids and provenance included, and matches PROJECTS_OUTPUT_SCHEMA', async () => {
+test('--json carries the records, ids, provenance and deliveryOrder included, and matches PROJECTS_OUTPUT_SCHEMA', async () => {
   const io = testIo('/anywhere');
-  const code = await runProjects(['--json'], io, sourcesOf([project()]));
+  const withDelivery = project({ deliveryOrder: ['native', 'typed'] });
+  const code = await runProjects(['--json'], io, sourcesOf([withDelivery]));
   expect(code).toBe(0);
   const parsed = assertMatchesOutputSchema(io.out, PROJECTS_OUTPUT_SCHEMA);
   expect(parsed).toEqual({
     schema: { name: 'team.projects', version: 1 },
     format: 1,
-    projects: [project()],
+    projects: [withDelivery],
   });
 });
 

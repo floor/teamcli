@@ -256,6 +256,7 @@ describe('team seats', () => {
     expect(parsedActive.format).toBe(1);
     expect(parsedActive.project).toBe('acme-web');
     expect(parsedActive.session).toBe('acme-web');
+    expect(parsedActive.notice).toBeUndefined();
     expect(parsedActive.seats.map((s) => s.name)).toEqual([
       'claude-coordinator-acme',
       'codex-acme',
@@ -304,6 +305,12 @@ describe('team seats', () => {
     expect(await runSeats(['--file', file, '--json'], ioErr, { ...statusSources, live: () => null })).toBe(2);
     expect(ioErr.err).toBe('');
     assertJsonErrorShape(ioErr.out, { id: 'seats.herdr', messageContains: "herdr doesn't answer" });
+
+    writeFileSync(file, 'not: [valid');
+    const ioNotice = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], ioNotice, statusSources)).toBe(0);
+    const parsedNotice = assertMatchesOutputSchema<SeatsJson>(ioNotice.out, SEATS_OUTPUT_SCHEMA);
+    expect(parsedNotice.notice).toContain('team.yaml is invalid');
   });
 
   test('--json carries each seat’s state and state_source, and blind only where it applies', async () => {
@@ -357,7 +364,21 @@ describe('team seats', () => {
   test('--watch refreshes until wait returns false and refuses --json', async () => {
     const ioBad = testIo(dir, { kind: 'owner' });
     expect(await runSeats(['--file', file, '--watch', '--json'], ioBad, statusSources)).toBe(2);
-    expect(ioBad.err).toContain("--watch and --json can't be used together");
+    expect(ioBad.err).toBe('');
+    assertJsonErrorShape(ioBad.out, {
+      id: 'seats.invocation',
+      messageContains: "--watch and --json can't be used together",
+      repair: null,
+    });
+
+    const ioMissing = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', join(dir, 'missing.yaml'), '--json'], ioMissing, statusSources)).toBe(2);
+    expect(ioMissing.err).toBe('');
+    assertJsonErrorShape(ioMissing.out, {
+      id: 'seats.file',
+      messageContains: 'no team file',
+      repair: null,
+    });
 
     let ticks = 0;
     const ioWatch = testIo(dir, { kind: 'owner' });

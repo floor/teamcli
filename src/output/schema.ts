@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
+import { DELIVERY_LEGS } from '../settings/inherit.ts';
 import { DIFFERENCE_WHO_VALUES, SEVERITY_LEVELS } from './text.ts';
 
 export interface CommandSchemaSpec {
@@ -297,6 +298,7 @@ export const SEATS_OUTPUT_SCHEMA: CommandSchemaSpec = {
     format: { type: 'integer', const: 1 },
     project: { type: 'string', minLength: 1 },
     session: { type: 'string', minLength: 1 },
+    notice: { type: ['string', 'null'] },
     seats: {
       type: 'array',
       items: {
@@ -360,6 +362,10 @@ export const PROJECTS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           teams: {
             type: 'array',
             items: { type: 'string' },
+          },
+          deliveryOrder: {
+            type: 'array',
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
           },
           provenance: {
             type: 'object',
