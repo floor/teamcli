@@ -17,6 +17,7 @@ import type { Live } from '../src/status/compare.ts';
 import { runningModel } from '../src/status/statusline.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { testIo, withWas } from './helpers.ts';
+import { assertJsonErrorShape } from './helpers/output.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 const NOW = new Date('2026-10-03T14:10:00Z');
@@ -575,6 +576,33 @@ describe('team status', () => {
     expect(await status()).toMatchObject({ code: 2, err: expect.stringContaining('herdr doesn\'t answer') });
     expect(await status('--fix')).toMatchObject({ code: 2, err: expect.stringContaining('unknown option --fix') });
     expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]\n');
+
+    const badAfter = await status('--nope', '--json');
+    expect(badAfter.code).toBe(2);
+    expect(badAfter.err).toBe('');
+    assertJsonErrorShape(badAfter.out, {
+      id: 'status.invocation',
+      messageContains: 'unknown option --nope',
+      repair: null,
+    });
+
+    const badEquals = await status('--json=1');
+    expect(badEquals.code).toBe(2);
+    expect(badEquals.err).toBe('');
+    assertJsonErrorShape(badEquals.out, {
+      id: 'status.invocation',
+      messageContains: 'unknown option --json',
+      repair: null,
+    });
+
+    const herdrJson = await status('--json');
+    expect(herdrJson.code).toBe(2);
+    expect(herdrJson.err).toBe('');
+    assertJsonErrorShape(herdrJson.out, {
+      id: 'status.herdr',
+      messageContains: "herdr doesn't answer",
+      repair: 'start herdr and run `team status` again',
+    });
   });
 
   test('--json: pins the stable format 1 shape on a clean team', async () => {

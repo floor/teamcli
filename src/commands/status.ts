@@ -10,6 +10,7 @@ import { recall } from '../budgets/readings.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
+import { isParseError } from '../file/load.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
@@ -23,6 +24,7 @@ import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import {
   contextLine,
+  hasJsonFlag,
   projectContextLine,
   renderDifferences,
   renderNotes,
@@ -32,6 +34,7 @@ import {
   toJsonDifference,
   ttyStyle,
   writeJson,
+  writeJsonError,
   type DifferenceSummaryCounts,
   type DifferenceWho,
   type OutputSchemaTag,
@@ -190,6 +193,7 @@ Exits 0 when the session agrees with the file (or the project is listed), 1 when
 export async function runStatus(argv: string[], io: Io, sources: StatusSources): Promise<number> {
   const out = cleanedIo(io);
   const args = readArgs(argv, ['session', 'file', 'project'], ['all', 'json']);
+  const json = hasJsonFlag(argv);
   // `--project` reads the project level instead of one team: the project's teams, from the
   // registry, wherever the run stands — no team file and no caller gate, the way `team projects`
   // reads. `--session` and `--file` name one team's readings and do not apply beside it.
@@ -198,12 +202,16 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     const why = args.error ?? (args.rest.length
       ? `unexpected "${args.rest[0]}"`
       : '--project reads the project; --session and --file name one team');
-    out.stderr(`team status: ${plainText(why)}\n${USAGE}`);
+    if (json) {
+      writeJsonError(io, 'status.invocation', plainText(why), null);
+    } else {
+      out.stderr(`team status: ${plainText(why)}\n${USAGE}`);
+    }
     // exit: status.invocation
     return 2;
   }
   if (args.values.project !== undefined) {
-    return projectReport(args.values.project, out, io, sources, args.flags.has('json'));
+    return projectReport(args.values.project, out, io, sources, json);
   }
   // `--file` and `--session` are the owner's. The walk decides that before any file or session
   // is read, the same gate `worktree` and `watch` use. A plain folder's own seats need no flag:
@@ -214,13 +222,22 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   if (args.values.file !== undefined) {
     const refusal = fileOwnerRefusal(io, args.values.file);
     if (refusal !== undefined) {
-      out.stderr(`team status: ${plainText(refusal)}\n`);
+      if (json) {
+        writeJsonError(io, 'status.file-owner', plainText(refusal), 'the owner runs `team status --file <path>` from a terminal outside herdr', 1, 'owner-only');
+      } else {
+        out.stderr(`team status: ${plainText(refusal)}\n`);
+      }
       // exit: status.file-owner
       return 1;
     }
   }
   if (args.values.session !== undefined && !owner) {
-    out.stderr(`team status: ${plainText(sessionOwnerRefusal(walked))}\n`);
+    const refusal = plainText(sessionOwnerRefusal(walked));
+    if (json) {
+      writeJsonError(io, 'status.session-owner', refusal, 'the owner runs `team status --session <name>` from a terminal outside herdr', 1, 'owner-only');
+    } else {
+      out.stderr(`team status: ${refusal}\n`);
+    }
     // exit: status.session-owner
     return 1;
   }
@@ -242,14 +259,24 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       return 2;
     }
   } else if (!current.ok) {
-    printProblems(out, current.errors);
+    if (json) {
+      const id = current.errors[0]?.message.includes('not inside a git repository')
+        ? 'status.not-a-repo'
+        : current.errors.some(isParseError)
+          ? 'status.file-invalid'
+          : 'status.file';
+      const msg = current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${plainText(p.message)}`).join('; ');
+      writeJsonError(io, id, msg, null);
+    } else {
+      printProblems(out, current.errors);
+    }
     // exit: status.not-a-repo
     // exit: status.file
     // exit: status.file-invalid
     return 2;
   }
   const { team, root, dir } = current;
-  if (!args.flags.has('json') && current.notice) out.stdout(`${plainText(current.notice)}\n`);
+  if (!json && current.notice) out.stdout(`${plainText(current.notice)}\n`);
 
   const session = args.values.session ?? team.session;
   // The one read of the approval store: everything below derives from it.
@@ -262,7 +289,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const state = whole.sessions[session] ?? emptySession();
   const live = sources.live(session, team, state);
   if (!live) {
-    out.stderr('team status: herdr doesn\'t answer; is it installed and running?\n');
+    if (json) {
+      writeJsonError(io, 'status.herdr', "herdr doesn't answer; is it installed and running?", 'start herdr and run `team status` again');
+    } else {
+      out.stderr('team status: herdr doesn\'t answer; is it installed and running?\n');
+    }
     // exit: status.herdr
     return 2;
   }
@@ -284,7 +315,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.
-  const registryRows = all || args.flags.has('json')
+  const registryRows = all || json
     ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir, session })
     : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
@@ -332,7 +363,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ? comparison.rows
     : comparison.rows.filter((row) => row.state !== 'stopped');
 
-  if (args.flags.has('json')) {
+  if (json) {
     writeJson(io, 'team.status', {
       format: 1 as const,
       project: team.project,
@@ -462,7 +493,11 @@ function projectReport(name: string, out: Io, io: Io, sources: StatusSources, js
   // reading — the same file `team projects` reads, bound to the injected home, never another's.
   const project = sources.projects ? sources.projects.byName(name) : projectRegistry.byName(sources.home ?? homedir(), name);
   if (!project) {
-    out.stderr(`team status: no project named ${JSON.stringify(name)}; nothing to show\n`);
+    if (json) {
+      writeJsonError(io, 'status.project-unknown', `no project named ${JSON.stringify(name)}; nothing to show`, null, 1);
+    } else {
+      out.stderr(`team status: no project named ${JSON.stringify(name)}; nothing to show\n`);
+    }
     // exit: status.project-unknown
     return 1;
   }
