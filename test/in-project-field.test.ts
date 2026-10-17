@@ -122,7 +122,6 @@ describe('every team file already in the tree loads unchanged', () => {
         {
           line,
           message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
-          repair: "set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml",
         },
       ]);
       expect(result.team.inProject).toBeNull();

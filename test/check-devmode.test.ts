@@ -1,6 +1,6 @@
 // The provenance a dev-mode registration leaves: the record `team register` writes with dev
 // mode on carries `dev_mode: true` beside the caller, and `team check` says so as a difference —
-// `registered under dev mode (by <caller>)`, repaired by the owner's own `team register`, the
+// `registered by an agent, not by the owner`, repaired by `team register <seat>`, the
 // same write with the caller gate in force. The check writes nothing, a record written in force
 // is no finding, and a check with no home reads no registry at all — the same boundary every
 // other registry read keeps. Fake herdr throughout: no live session is read.

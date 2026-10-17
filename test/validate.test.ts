@@ -30,7 +30,6 @@ seats:
 const notice = {
   line: 3,
   message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
-  repair: "set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml",
 };
 
 // Replaces one piece of a valid file, and fails loudly if the piece isn't there.
