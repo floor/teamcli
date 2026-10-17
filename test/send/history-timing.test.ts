@@ -127,17 +127,19 @@ test('team feed names the path and the milliseconds, and leaves an unmeasured li
 
   const io = testIo(root);
   expect(await runFeed([], io, { home })).toBe(0);
-  expect(io.out).toContain('15:30:00  lead -> helper  [delivered] via socket in 812 ms  took the socket');
-  expect(io.out).toContain('15:30:01  helper -> lead  [delivered]  plain');
+  expect(io.out).toBe(
+    'team acme, session "acme"\n' +
+      '  TIME      KIND                              SEAT            DETAIL\n' +
+      '  15:30:00  delivered (via socket in 812 ms)  lead -> helper  took the socket\n' +
+      '  15:30:01  delivered                         helper -> lead  plain\n' +
+      '2 event(s)\n',
+  );
 
   const json = testIo(root);
   expect(await runFeed(['--json'], json, { home })).toBe(0);
-  const lines = json.out
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-  expect(lines[0]).toMatchObject({ id: 'm1', outcome: 'delivered', ms: 812, via: 'socket' });
-  expect(lines[1]).toMatchObject({ id: 'm2', outcome: 'delivered' });
-  expect(lines[1]).not.toHaveProperty('ms');
-  expect(lines[1]).not.toHaveProperty('via');
+  const doc = JSON.parse(json.out) as { events: Array<Record<string, unknown>> };
+  expect(doc.events[0]).toMatchObject({ id: 'm1', outcome: 'delivered', ms: 812, via: 'socket' });
+  expect(doc.events[1]).toMatchObject({ id: 'm2', outcome: 'delivered' });
+  expect(doc.events[1]).not.toHaveProperty('ms');
+  expect(doc.events[1]).not.toHaveProperty('via');
 });

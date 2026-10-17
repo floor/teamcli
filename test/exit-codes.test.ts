@@ -3380,7 +3380,7 @@ async function fed(place: Place, argv: string[]): Promise<Ran> {
 
 scene('feed.ok', async (place) => {
   write(place, TEAM);
-  return show(await fed(place, []), '(no messages)');
+  return show(await fed(place, []), '0 event(s)');
 });
 scene('feed.unreadable', async (place) => {
   write(place, TEAM);

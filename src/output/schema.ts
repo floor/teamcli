@@ -714,6 +714,40 @@ export const PLAN_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team feed` (`schema/feed.schema.json`). */
+export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.feed',
+  fileName: 'feed.schema.json',
+  title: 'team feed --json output',
+  required: ['format', 'project', 'session', 'events'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    // A run outside a checkout, or one scanning every team with `--all`, names no single team.
+    project: { type: ['string', 'null'] },
+    session: { type: ['string', 'null'] },
+    events: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['ts', 'from', 'to', 'body', 'id', 'outcome'],
+        properties: {
+          ts: { type: 'string' },
+          from: { type: 'string' },
+          to: { type: 'string' },
+          body: { type: 'string' },
+          id: { type: 'string' },
+          outcome: { type: 'string' },
+          // Present only on a line the sender measured, as the history log writes it.
+          ms: { type: 'number' },
+          via: { type: 'string' },
+          failed: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team next` (`schema/next.schema.json`). */
 export const NEXT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.next',
@@ -759,6 +793,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
   ISSUES_OUTPUT_SCHEMA,
+  FEED_OUTPUT_SCHEMA,
   PLAN_OUTPUT_SCHEMA,
   NEXT_OUTPUT_SCHEMA,
 ];

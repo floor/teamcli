@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/feed.schema.json",
+  "title": "team feed --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "project",
+    "session",
+    "events"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.feed"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "session": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ts",
+          "from",
+          "to",
+          "body",
+          "id",
+          "outcome"
+        ],
+        "properties": {
+          "ts": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "ms": {
+            "type": "number"
+          },
+          "via": {
+            "type": "string"
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}
