@@ -65,7 +65,7 @@ rule above is applied exactly as it is without a `delegates` section, and only w
 does the delegate gate read the live team file directly — never the remembered copy and never the
 last copy that validated, so a file that does not load carries no delegate and the rules above
 stand. A caller that rule accepts keeps its own authority whatever the section says: the owner's
-call never reaches the gate, and neither does the orchestrator's or the operator's. A gate refusal
+call never reaches the gate, and neither does the orchestrator's. A gate refusal
 takes the place of the rule above, in the gate's own words, wherever that rule would have refused:
 a real run exits 1, and a dry run prints `! down would refuse: <the gate's text>` and then the
 plan. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch). It returns before these real-run failures, and never takes their status:

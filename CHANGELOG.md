@@ -65,7 +65,7 @@ commands read them.
   seat with its stable handle (`seat_<12 hex>`), role, CLI, model, effort, status, state, source,
   last active time and pane. STATE is the word — `working`, `idle`, `blocked`, `done`, `held`,
   `unreachable`, `unknown` — and SOURCE is where it was read: the pane's screen, herdr's word,
-  the seat's newest trace (a commit, an ack, a command) or its process; a seat no source has
+  the seat's newest trace (a commit, an ack or a message) or its process; a seat no source has
   heard from past the blind threshold reads `unknown (blind)`, and counts as not working.
   `team status`'s rows end in the word a send would use — `socket` or `typed` — and
   `team status --all` prints the expanded columns. The pane's two sidebar lines — its workspace
