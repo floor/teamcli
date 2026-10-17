@@ -280,16 +280,16 @@ function instanceLines(approved: string, source: SeatBlock, name: string): strin
 }
 
 /**
- * Rewrites `fromName` to `toName` in the file's `seats:` list (splitting `count` first if needed),
- * and also updates top-level `coordinator:` / `operator:` or `grant.seat:` when they name `fromName`.
+ * Rewrites `fromName` to `toName` in the file's `seats:` list, and also updates
+ * top-level `coordinator:` / `operator:` or `grant.seat:` when they name `fromName`.
  */
 export function renameSeat(text: string, fromName: string, toName: string): string {
-  const ready = prepared(text, fromName);
-  if (!ready) return text;
-  const blockLines = body(ready.text, ready.block).map((line) =>
+  const block = seatBlocks(text).find((item) => item.name === fromName && item.count <= 1);
+  if (!block) return text;
+  const blockLines = body(text, block).map((line) =>
     /^\s*(?:-\s+)?name:/.test(line) ? setValue(line, toName) : line,
   );
-  const withSeat = replaceLines(ready.text, ready.block.start, ready.block.end, blockLines);
+  const withSeat = replaceLines(text, block.start, block.end, blockLines);
   const lines = withSeat.split('\n');
   let inGrant = false;
   let grantIndent = 0;

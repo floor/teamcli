@@ -365,6 +365,7 @@ function computeRenumberPlan(
   const renames: Array<{ from: string; to: string }> = [];
   const movingFrom = new Set<string>();
   for (const seat of team.seats) {
+    if (seat.count > 1) continue;
     const parsed = seatNumberOf(seat.name, numbering.separator) ?? seatNumberOf(seat.name);
     if (!parsed) continue;
     const target = `${parsed.base}${numbering.separator}${formatSeatNumber(parsed.number, numbering)}`;
@@ -553,6 +554,12 @@ function executeRename(argv: string[], io: Io, sources: RenameSources): RenameOu
       io.stderr(`team rename: "${fromName}" is not a declared seat in .agents/team.yaml\n`);
       return 'refused';
     }
+    if (seat.count > 1) {
+      io.stderr(
+        `team rename: "${fromName}" is declared under "${seat.declared}" with count ${seat.count} and cannot be renamed partially\n`,
+      );
+      return 'refused';
+    }
     if (!SEAT_NAME_PATTERN.test(toName)) {
       io.stderr(
         `team rename: "${toName}" is not a valid seat name (lowercase letters, digits and hyphens, starting with a letter or digit)\n`,
@@ -592,7 +599,7 @@ function executeRename(argv: string[], io: Io, sources: RenameSources): RenameOu
 
   const priorState = readState(dir);
   writeTeamFile(path, nextText);
-  recordSeatRenameOf(standing, validated.team, nextText, root, renames, home);
+  recordSeatRenameOf(standing, validated.team, root, renames, home);
 
   const stateMoved = renameSeatInState(dir, renames);
 

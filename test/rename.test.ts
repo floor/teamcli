@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { approvalOf } from '../src/approve/approval.ts';
+import { approvalDifferences, approvalOf } from '../src/approve/approval.ts';
 import type { Caller } from '../src/caller.ts';
 import { runFeed } from '../src/commands/feed.ts';
 import { listUnacked, plantMessage, runMessages } from '../src/commands/messages.ts';
@@ -274,10 +274,10 @@ describe('team rename <seat> <new-seat> and --renumber', () => {
 
     const feedIo = testIo(fx.root, owner);
     expect(await runFeed(['--seat', 'builder-01', '--json'], feedIo, { home: fx.home })).toBe(0);
-    const lines = feedIo.out
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line) as { from: string; to: string; body: string; spec?: string });
+    const parsed = JSON.parse(feedIo.out) as {
+      events: Array<{ from: string; to: string; body: string; spec?: string }>;
+    };
+    const lines = parsed.events;
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatchObject({
       from: 'lead',
@@ -513,5 +513,97 @@ describe('team rename <seat> <new-seat> and --renumber', () => {
     ]);
     expect(loaded.team.operator).toBe('operator-01');
     expect(approvalStanding(fx.root, fx.home).kind).toBe('verified');
+    expect(approvalDifferences(loaded.team, fx.root, fx.home)).toEqual([]);
+  });
+
+  test('8. rename carries only the approved record', async () => {
+    // Clean rename keeps the approval with zero differences
+    const cleanFx = makeFixture();
+    expect(await runRename(['builder-1', 'builder-01'], testIo(cleanFx.root, owner), { home: cleanFx.home, now: () => NOW })).toBe(0);
+    const cleanLoaded = loadTeamFile(cleanFx.root, { home: cleanFx.home });
+    expect(cleanLoaded.ok).toBe(true);
+    if (cleanLoaded.ok) {
+      expect(approvalDifferences(cleanLoaded.team, cleanFx.root, cleanFx.home)).toEqual([]);
+    }
+
+    // Rename when a seat was edited since the last approval keeps that seat difference
+    const seatFx = makeFixture();
+    writeFileSync(
+      seatFx.file,
+      readFileSync(seatFx.file, 'utf8').replace(
+        'name: builder-1\n    label: builder-1\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5',
+        'name: builder-1\n    label: builder-1\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Sonnet\n    version: "4.6"\n    launch: claude --model claude-sonnet-4-6',
+      ),
+    );
+    const beforeSeatLoaded = loadTeamFile(seatFx.root, { home: seatFx.home });
+    expect(beforeSeatLoaded.ok).toBe(true);
+    if (beforeSeatLoaded.ok) {
+      expect(approvalDifferences(beforeSeatLoaded.team, seatFx.root, seatFx.home)).toEqual(['seat builder-1 changed']);
+    }
+    expect(await runRename(['builder-1', 'builder-01'], testIo(seatFx.root, owner), { home: seatFx.home, now: () => NOW })).toBe(0);
+    const afterSeatLoaded = loadTeamFile(seatFx.root, { home: seatFx.home });
+    expect(afterSeatLoaded.ok).toBe(true);
+    if (afterSeatLoaded.ok) {
+      expect(approvalDifferences(afterSeatLoaded.team, seatFx.root, seatFx.home)).toEqual([
+        'seat builder-01 is not in the last approval',
+      ]);
+    }
+    const seatStanding = approvalStanding(seatFx.root, seatFx.home);
+    expect(seatStanding.kind).toBe('verified');
+    if (seatStanding.kind === 'verified') {
+      expect(seatStanding.record.file).toContain('claude-opus-5-5');
+      expect(seatStanding.record.file).not.toContain('claude-sonnet-4-6');
+    }
+
+    // Rename when an owner section was edited since the last approval keeps that section difference
+    const secFx = makeFixture();
+    writeFileSync(
+      secFx.file,
+      readFileSync(secFx.file, 'utf8').replace('operator: operator-1', 'operator: documentarist\nlimits:\n  seats: 12'),
+    );
+    const beforeSecLoaded = loadTeamFile(secFx.root, { home: secFx.home });
+    expect(beforeSecLoaded.ok).toBe(true);
+    if (beforeSecLoaded.ok) {
+      expect(approvalDifferences(beforeSecLoaded.team, secFx.root, secFx.home)).toEqual([
+        '`limits` changed',
+        '`operator` changed',
+      ]);
+    }
+    expect(await runRename(['builder-1', 'builder-01'], testIo(secFx.root, owner), { home: secFx.home, now: () => NOW })).toBe(0);
+    const afterSecLoaded = loadTeamFile(secFx.root, { home: secFx.home });
+    expect(afterSecLoaded.ok).toBe(true);
+    if (afterSecLoaded.ok) {
+      expect(approvalDifferences(afterSecLoaded.team, secFx.root, secFx.home)).toEqual([
+        '`limits` changed',
+        '`operator` changed',
+      ]);
+    }
+    const secStanding = approvalStanding(secFx.root, secFx.home);
+    expect(secStanding.kind).toBe('verified');
+    if (secStanding.kind === 'verified') {
+      expect(secStanding.record.file).toContain('operator: operator-1');
+      expect(secStanding.record.file).not.toContain('seats: 12');
+    }
+  });
+
+  test('9. a seat declared with count > 1 is refused in single rename and skipped in --renumber', async () => {
+    const countedYaml = BASE_YAML.replace(
+      '  - role: implementer\n    name: builder-1\n    label: builder-1',
+      '  - role: implementer\n    name: builder\n    count: 2\n    label: builder',
+    );
+    const fx = makeFixture(countedYaml);
+
+    const io1 = testIo(fx.root, owner);
+    expect(await runRename(['builder', 'builder-01'], io1, { home: fx.home, now: () => NOW })).toBe(1);
+    expect(io1.err).toContain('declared under "builder" with count 2 and cannot be renamed partially');
+
+    const io2 = testIo(fx.root, owner);
+    expect(await runRename(['builder-2', 'builder-02'], io2, { home: fx.home, now: () => NOW })).toBe(1);
+    expect(io2.err).toContain('declared under "builder" with count 2 and cannot be renamed partially');
+
+    const renumIo = testIo(fx.root, owner);
+    expect(await runRename(['--renumber', '--dry-run'], renumIo, { home: fx.home, now: () => NOW })).toBe(0);
+    expect(renumIo.out).toBe(['operator-1 -> operator-01 (dry run)', 'tester-1 -> tester-01 (dry run)', ''].join('\n'));
   });
 });
+
