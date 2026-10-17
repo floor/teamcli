@@ -664,6 +664,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     root: defaultLoad !== null && defaultLoad.ok ? defaultLoad.root : null,
     now: sources.now?.() ?? new Date(),
   });
+  // The folder the aimed branch logs in: the default live file's own, the place its chain was
+  // read from; a file that would not load leaves the folder's own team file as the place.
+  const aimedDir = defaultLoad !== null && defaultLoad.ok ? dirname(defaultLoad.path) : dirname(join(io.cwd, TEAM_FILE));
   // A non-owner passing `--session`, or a `--file` other than this folder's own team file, is
   // refused before the map is walked for this run: the aim is the owner's, the walk reads a
   // session and asks the host, and the flagged path and the named session are never read. The
@@ -730,11 +733,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // the reason and the owner's own command. Either way the flagged file stays unread, so the dry
     // run prints no plan for it.
     if (gates.verdict === null && !aimedDev.on) {
+      // The state the aim's chain owed once, before the refusal ends the run: the variable
+      // ignored under a governing policy, an expiry, a source that could not be read. The
+      // run never reaches the main log below, so it writes the lines here; the refusal then
+      // names an expiry, as every caller-gate refusal does.
+      if (!dry) logDevModeState(aimedDir, 'up', callerLabel(walked), aimedDev, sources.now?.() ?? new Date());
       if (dry) {
-        out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}\n`);
+        out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}${devModeExpiryNote(aimedDev)}\n`);
         out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
       } else {
-        out.stderr('deny\n');
+        out.stderr(`deny${devModeExpiryNote(aimedDev)}\n`);
       }
       // exit: up.not-owner
       return 1;
@@ -1207,8 +1215,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
 
   // Dev mode says the no-approval lines and the caller-placement line once, as a warning,
   // and mounts. Every other refusal stays a refusal. Unset, the list is unchanged. A policy
-  // says which level set it.
-  const warning = dev.on ? `${devWarningLine(refusals, standing, caller)}${devModeLevelNote(dev)}` : '';
+  // says which level set it — but only when a gate actually folded: an admitted run owes no
+  // warning and no provenance mark, whatever set dev mode.
+  const foldedLine = dev.on ? devWarningLine(refusals, standing, caller) : '';
+  const warning = foldedLine !== '' ? `${foldedLine}${devModeLevelNote(dev)}` : '';
   // The audit line the fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
   if (!dry && warning) logDevMode(dir, 'up', callerLabel(caller), `warning: ${warning}`, sources.now?.() ?? new Date());

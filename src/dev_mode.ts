@@ -41,10 +41,27 @@ export type DevModeCommand = DevModeOperation;
 export type DevModeContext = {
   /** The home the signed policy sources live under. Absent: no chain is read, the variable alone applies. */
   home?: string;
+  /** The entity whose policy source the chain reads; a team's own `entity` stands in when absent. */
+  entity?: string | null;
   team?: TeamFile | null;
   root?: string | null;
   now?: Date;
 };
+
+function chainFor(context: DevModeContext & { home: string }): ReturnType<typeof loadAndResolvePolicyChain> {
+  const team = context.team ?? null;
+  const root = context.root ?? null;
+  return loadAndResolvePolicyChain(
+    {
+      home: context.home,
+      ...(context.entity !== undefined ? { entity: context.entity } : {}),
+      projectId: projectIdOfTeam(context.home, team, root),
+      teamRoot: root,
+      team,
+    },
+    { ...(context.now ? { now: context.now } : {}), upToLevel: 'team' },
+  );
+}
 
 /** An expired `dev-mode` declaration: what the gate fell back to `off` from, and where. */
 export type DevModeExpiry = { at: string; level: PolicyLevel };
@@ -109,12 +126,7 @@ function nearestExpiry(expired: readonly { name: string; level: PolicyLevel; exp
 export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, context: DevModeContext = {}): DevModeRun {
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return variableOnly(envSet);
-  const team = context.team ?? null;
-  const root = context.root ?? null;
-  const chain = loadAndResolvePolicyChain(
-    { home: context.home, projectId: projectIdOfTeam(context.home, team, root), teamRoot: root, team },
-    { ...(context.now ? { now: context.now } : {}), upToLevel: 'team' },
-  );
+  const chain = chainFor({ ...context, home: context.home });
   if (!chain.ok) {
     // Nothing is lifted on a policy the tool could not read or order (amendment §2.5): the
     // default does not silently stand in its place, and the run says why in its log.
@@ -130,6 +142,21 @@ export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, con
     return { on, by: level, governed: true, ignored: envSet && !on, expired, refusals: [] };
   }
   return variableOnly(envSet && DEV_MODE_OPERATIONS.includes(command));
+}
+
+/**
+ * Whether dev mode is active at the caller's place, for the readings that fold their rows under
+ * it (`team check`, `team status`): the effective `dev-mode` policy is `on` once a value
+ * governs, and before any value the variable set to exactly `1`. A chain that cannot be read
+ * reports inactive: a policy the tool could not verify does not quiet a single row.
+ */
+export function devModeActive(io: Pick<Io, 'env'>, context: DevModeContext = {}): boolean {
+  const envSet = io.env.TEAMCLI_DEV_MODE === '1';
+  if (context.home === undefined) return envSet;
+  const chain = chainFor({ ...context, home: context.home });
+  if (!chain.ok) return false;
+  if (chain.devModeGoverned) return chain.policies['dev-mode']?.value === 'on';
+  return envSet;
 }
 
 /**

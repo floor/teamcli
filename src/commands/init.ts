@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { declaredRoots } from '../entities.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
@@ -25,6 +26,36 @@ export const EXCLUDED = [TEAM_FILE, `.agents/${STATE_FILE}`, `.agents/${LOG_FILE
 export const PRIVACY = `The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or
 receives one and approves it themselves.`;
+
+/**
+ * The entity whose declared roots hold `place`, read from the owner's entities file. A root is
+ * compared by its resolved spelling — `~/…` expanded against `home`, a link resolved where it
+ * can be — so the entity governs `init` from the place the run is in, exactly as it governs the
+ * commands that read a team file there.
+ */
+function declaredEntity(home: string, place: string): string | null {
+  const resolvedPlace = resolve(place);
+  let realPlace = resolvedPlace;
+  try {
+    realPlace = realpathSync(resolvedPlace);
+  } catch {
+    // A folder that cannot be resolved is compared by its resolved spelling alone.
+  }
+  const homeResolved = resolve(home);
+  for (const [name, roots] of declaredRoots(home)) {
+    for (const root of roots) {
+      if (!root.startsWith('/') && !root.startsWith('~/')) continue;
+      const expanded = resolve(root.replace(/^~(?=$|\/)/, homeResolved));
+      if (expanded === resolvedPlace || expanded === realPlace) return name;
+      try {
+        if (realpathSync(expanded) === realPlace) return name;
+      } catch {
+        // A declared root that is not there yet is compared as it is written.
+      }
+    }
+  }
+  return null;
+}
 
 function git(root: string, ...args: string[]): string | null {
   try {
@@ -173,12 +204,27 @@ export async function runInit(
     return 1;
   }
   // Dev mode, from the caller's place: the entity's chain, read before the team file this run
-  // writes exists. A `dev-mode` value anywhere in it governs, and `TEAMCLI_DEV_MODE` is then
-  // ignored; before any such value, the variable set to exactly `1` keeps its behaviour.
+  // writes exists. The entity is the one whose declared roots hold this place — or the team
+  // file already standing there — because without it the chain holds no entity source at all,
+  // and a `dev-mode` set at the entity would not govern. A `dev-mode` value anywhere in the
+  // chain governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value, the variable
+  // set to exactly `1` keeps its behaviour.
+  const root = rootOf();
+  const place = root ?? io.cwd;
+  const standingFile = loadTeamFile(io.cwd, { ...(home !== undefined ? { home } : {}) });
   const dev = resolveDevMode('init', io, {
     ...(home !== undefined ? { home } : {}),
+    entity: home !== undefined ? declaredEntity(home, place) : null,
+    team: standingFile.ok ? standingFile.team : null,
+    root: place,
     now: sources.now?.() ?? new Date(),
   });
+  // The configuration lines the run owes once — the variable ignored under a governing policy,
+  // an expiry, a source that could not be read — written before the gate, so a refusal keeps
+  // them. A run outside any repository has no folder of its own; it is refused below and
+  // writes nothing.
+  const initDir = root === null ? null : dirname(join(root, TEAM_FILE));
+  if (initDir !== null) logDevModeState(initDir, 'init', describeCaller(caller), dev, sources.now?.());
   // The who-may-run-it gate: dev mode says the owner line once, as a warning, and the run
   // continues — exactly as `up` does. Every other refusal stays a refusal. The warning is
   // logged where the run knows the folder it writes in.
@@ -194,7 +240,6 @@ export async function runInit(
     devOwnerLine = folded;
     io.stderr(`team init: ${devOwnerLine}\n`);
   }
-  const root = rootOf();
   if (!root) {
     io.stderr('team init: not inside a git repository\n');
     // exit: init.not-a-repo
@@ -202,7 +247,6 @@ export async function runInit(
   }
   const path = join(root, TEAM_FILE);
   if (devOwnerLine !== null) logDevMode(dirname(path), 'init', describeCaller(caller), devOwnerLine, sources.now?.());
-  logDevModeState(dirname(path), 'init', describeCaller(caller), dev, sources.now?.());
   if (git(root, 'ls-files', '--error-unmatch', TEAM_FILE) !== null) {
     io.stderr(`team init: ${TEAM_FILE} is tracked by git, and a team file is private. Untrack it, keeping the file:\n  git rm --cached ${TEAM_FILE}\nthen run team init again. History is not rewritten.\n`);
     // exit: init.tracked

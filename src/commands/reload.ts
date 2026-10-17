@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { describeCaller, isOwner, walkCaller } from '../caller.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
@@ -117,6 +117,12 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     root: policyLoad.ok ? policyLoad.root : null,
     now: sources.now ? sources.now() : new Date(),
   });
+  // The configuration lines the run owes once, written where the caller's place is known and
+  // before the grant gate — a gate that refuses must not swallow them: the variable ignored
+  // under a governing policy, an expiry, a source that could not be read. Nothing is written
+  // when the chain had nothing to say.
+  const placeDir = policyLoad.ok ? dirname(policyLoad.path) : dirname(join(io.cwd, TEAM_FILE));
+  logDevModeState(placeDir, 'reload', describeCaller(caller), dev, sources.now ? sources.now() : new Date());
   let devWarning: string | null = null;
   let grantSeat: string | null = null;
   if (!owner) {
@@ -173,11 +179,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   }
 
   const dir = dirname(loaded.path);
-  // The audit line the fold owes, and the configuration lines the run owes once: written where
-  // the gate is used, before any later refusal ends the run. Nothing is written when the gate
-  // did not fold and the chain had nothing to say.
+  // The audit line the fold owes: written where the gate is used, before any later refusal
+  // ends the run. The configuration lines were already written above, before the gate.
   if (devWarning !== null) logDevMode(dir, 'reload', describeCaller(caller), devWarning, sources.now ? sources.now() : new Date());
-  logDevModeState(dir, 'reload', describeCaller(caller), dev, sources.now ? sources.now() : new Date());
   const session = team.session;
   const recorded = readState(dir).sessions[session]?.seats[seat.name];
   if (seat.stopped || !recorded || recorded.stage !== 'ready' || !recorded.pane || !recorded.workspace || !recorded.launched) {
