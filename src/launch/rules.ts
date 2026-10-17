@@ -8,6 +8,9 @@ export interface RulesInput {
   orchestrator: string;
   /** The file's own `rules`. */
   rules: readonly string[];
+  /** The seat's profile's own rules, over the file's: a safety line the CLI makes necessary.
+   *  Empty when the profile carries none. */
+  profileRules?: readonly string[];
   /** The seat's signature lines, already rendered. */
   signature: { commit: string; pullRequest: string; commitPosition: 'last-line' | 'trailer' | 'anywhere' };
   workspace: {
@@ -26,8 +29,8 @@ const COMMIT_PLACE: Record<RulesInput['signature']['commitPosition'], string> = 
 
 /**
  * The rules a seat gets at launch, one per line, in this order: the profile's
- * own (what `team` itself depends on), the file's, the seat's signature, the
- * workspace's.
+ * own (what `team` itself depends on), the rules the profile carries for
+ * every seat of its CLI, the file's, the seat's signature, the workspace's.
  */
 export function seatRules(input: RulesInput): string[] {
   const { signature, workspace } = input;
@@ -53,7 +56,7 @@ export function seatRules(input: RulesInput): string[] {
   } else if (workspace.mode === 'shared' && workspace.cwd) {
     working.push(`Change to ${workspace.cwd} before any project work.`);
   }
-  return [...own, ...input.rules, ...signing, ...working];
+  return [...own, ...(input.profileRules ?? []), ...input.rules, ...signing, ...working];
 }
 
 /** How the rules reach a seat: typed as its first message, carried as a launch option, or
@@ -94,6 +97,7 @@ export function rulesOf(team: TeamFile, seat: Seat, root: string): string {
     {
       orchestrator: team.orchestrator,
       rules: team.rules,
+      profileRules: profile?.standingRules ?? [],
       signature: {
         commit: renderSignature(commits.template, seat),
         pullRequest: renderSignature(pullRequests.template, seat),

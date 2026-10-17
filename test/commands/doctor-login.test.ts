@@ -104,6 +104,7 @@ describe('checkLogin with fake command results', () => {
       unattended: [],
       rulesOption: null,
       rulesMode: 'message',
+      standingRules: [],
       loginCheck: null,
       loginHint: 'custom login',
       exit: '/exit',

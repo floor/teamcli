@@ -244,8 +244,9 @@ every brief, and a brief is typed through the CLI's own screens — `/`, the rep
 box, the create confirmation — with the CLI's `Session created:` line as the delivery proof. A send
 names only the repo of the seat's own folder: the module proves the chooser collapsed on it before
 it types, and refuses when the account's list does not hold it. One `ctrl+c` at the table quits,
-and the profile sends no other exit key; it never sends the table's `ctrl+d` delete. herdr reports
-a jules pane's agent status unknown, so readiness is read from the screen.
+and the profile sends no other exit key; it never sends the table's `ctrl+d` delete, and the rules
+every jules seat receives carry `Never delete a Jules session.` herdr reports a jules pane's agent
+status unknown, so readiness is read from the screen.
 
 Launching a Cursor seat, like launching cursor-agent by hand, creates Cursor's own project record
 under ~/.cursor/projects for that folder; team writes no trust (.workspace-trusted) and no Cursor

@@ -26,6 +26,10 @@ tested:
 # walks them.
 unattended: []
 rules: prepend
+# The TUI's `ctrl+d` deletes a session for the whole account, not just this seat, and a delete
+# cannot be undone. The profile never sends it, and this line rides every brief the seat gets.
+standing_rules:
+  - Never delete a Jules session.
 login:
   hint: jules login
 # One ctrl+c at the table quits: pressed at the table, a read 1.5s later showed the shell.

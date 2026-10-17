@@ -31,6 +31,10 @@ export interface Profile {
    *  brief, like the Jules TUI's — has nowhere to keep a first-message line, so its profile
    *  says `prepend`. */
   rulesMode: 'option' | 'message' | 'prepend';
+  /** Rules the profile carries for every seat of this CLI, over the team file's: a safety line
+   *  the CLI itself makes necessary. They ride with the file's rules in every delivery. Empty
+   *  when the CLI needs none. */
+  standingRules: readonly string[];
   /** Arguments that exit 0 only when the owner is logged in, or null when the CLI has none. */
   loginCheck: readonly string[] | null;
   /** The command the owner runs to log in. */
@@ -308,7 +312,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads', 'standing_rules'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -586,6 +590,7 @@ function launchOf(root: YamlNode): Shipped {
   const exitEntry = optional(entries, 'exit');
   const exitKeysEntry = optional(entries, 'exit_keys');
   const composeEntry = optional(entries, 'compose_module');
+  const standingRulesEntry = optional(entries, 'standing_rules');
   const modelsEntry = optional(entries, 'models');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
   if (exitEntry !== undefined && exitKeysEntry !== undefined) {
@@ -607,6 +612,7 @@ function launchOf(root: YamlNode): Shipped {
       unattended: stringsOrEmpty(required(entries, 'unattended', root.line).value, 'unattended'),
       rulesOption: rules.option,
       rulesMode: rules.mode,
+      standingRules: standingRulesEntry ? strings(standingRulesEntry.value, 'standing_rules') : [],
       loginCheck: login.check,
       loginHint: login.hint,
       exit: exitEntry ? text(exitEntry, 'exit') : null,
