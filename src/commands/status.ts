@@ -246,11 +246,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
   if (!owner) {
     const read = current.ok && mayReadTeam(current, io, sources);
-    // A create-grant admits its holder's runner to the read, for a team whose root is under the
-    // granted paths: the same record `init` and `up` consult. It buys the read alone — `--file`
-    // and `--session` above stay the owner's, and this run keeps no `last_valid` copy. Asked only
-    // where the read gate has refused, and only when a record exists, so a seat's own reading
-    // reads no clock for it.
+    // A create-grant admits the seat whose own registry record it names to the read, for a team
+    // whose root is under the granted paths: the same record `init` and `up` consult. It buys the
+    // read alone — `--file` and `--session` above stay the owner's, and this run keeps no
+    // `last_valid` copy. Asked only where the read gate has refused, and only when a record
+    // exists, so a seat's own reading reads no clock for it.
     const granted = current.ok && !read
       && readEntityCreateGrants(sources.home ?? homedir()).length > 0
       && entityGrantAdmits(current.root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });

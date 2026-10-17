@@ -1,14 +1,14 @@
-// A create-grant names a seat of another team: `agent` is the seat's name and `session` the
-// herdr session it stands in, while the team's file names the session the team runs in — the
-// two differ. The walk places the caller in the session it stands in (the record's own
-// question) and finds no agent of it in the team's session, so the judged caller is unplaced
-// there and the ordinary rule refuses it; the record is the run's admission anyway, exactly
-// as it is for `init` and `up`, and a granted `down` stops the whole team — the orchestrator's
-// seat included, since no seat of it is the caller. The stop's log line names the caller the
-// walk judged, unplaced — the record's name is nowhere in it. Every other seat, session, path
-// and expiry still refuses, in the dry run's own words. The commands are driven through the
-// walker: the fake parents are the real `callerSources`, so `callerOf`/`walkCaller` place the
-// call exactly as they would a live one — no caller is handed in.
+// A create-grant names a seat by its registry agent id, while the seat stands in a herdr
+// session the team's file does not name — the two differ. The walk places the caller in the
+// session it stands in (the record's own question) and finds no agent of it in the team's
+// session, so the judged caller is unplaced there and the ordinary rule refuses it; the
+// record is the run's admission anyway, exactly as it is for `init` and `up`, and a granted
+// `down` stops the whole team — the orchestrator's seat included, since no seat of it is the
+// caller. The stop's log line names the caller the walk judged, unplaced — the registry id is
+// nowhere in it. Every other seat, agent id, path and expiry still refuses, in the dry run's
+// own words. The commands are driven through the walker: the fake parents are the real
+// `callerSources`, so `callerOf`/`walkCaller` place the call exactly as they would a live one —
+// no caller is handed in.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,19 +17,18 @@ import type { Process } from '../src/caller.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
 import { grantsDir } from '../src/grant.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import { emptySession, LOG_FILE, updateState } from '../src/state.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T11:00:00Z');
 const FUTURE = '2026-12-31T23:59:59Z';
 const PAST = '2026-10-16T10:59:59Z';
+const TEAM = 'aaaaaaaaaaaa';
 
-/** The record the scenes hold: one seat, in the herdr session it stands in. */
-const SEAT_GRANT = `entity: beacon\nsession: floor\nagent: iris\npaths:\n  - ~/Code/beacon\nexpires: "${FUTURE}"\n`;
-/** The same record, naming a session the seat doesn't stand in. */
-const ELSEWHERE_GRANT = `entity: beacon\nsession: dispatch\nagent: iris\npaths:\n  - ~/Code/beacon\nexpires: "${FUTURE}"\n`;
-/** The same record, past its expiry. */
-const PAST_GRANT = `entity: beacon\nsession: floor\nagent: iris\npaths:\n  - ~/Code/beacon\nexpires: "${PAST}"\n`;
+/** A record naming one seat by its registry agent id. */
+const seatGrant = (id: string, expires = FUTURE): string =>
+  `entity: beacon\nagent: ${id}\npaths:\n  - ~/Code/beacon\nexpires: "${expires}"\n`;
 
 /** The refusal every scene here that isn't admitted answers with: the walk judged the caller in
  *  the team's session, found no agent of it there, and the record didn't cover it. */
@@ -90,6 +89,23 @@ function writeGrant(home: string, body: string): void {
   writeFileSync(join(grantsDir(home), 'beacon.yaml'), body);
 }
 
+/** The seat the record names, registered where herdr places it: pane `w1:p1`, in `floor`. */
+function registerSeat(home: string, name = 'iris', pane = 'w1:p1'): string {
+  return registerAgent(home, {
+    name,
+    signing: { model: 'Claude Opus', version: '5.5', role: 'builder' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: TEAM, seat: name, session: 'floor', pane, address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'owner',
+  }).id;
+}
+
 /** The team's state as `up` left it: the team's session recorded, and — in the stop scene —
  *  the orchestrator's seat with the pane and workspace it runs on. */
 function teamAt(root: string, home: string, seats: Record<string, { pane: string; workspace: string }> = {}): void {
@@ -107,9 +123,10 @@ function teamAt(root: string, home: string, seats: Record<string, { pane: string
 }
 
 /** The walk of the seat the record names: herdr above it, the pane root among the ancestors,
- *  and only the session the seat stands in listing the pane under the seat's name. A walk
- *  asked about any other session finds no agent there, as a session that doesn't hold the
- *  pane answers. The team's file names `acceptance-test`; the seat stands in `floor`. */
+ *  and only the session the caller stands in listing the pane under the seat's name. A walk
+ *  asked about another session — the team's own `acceptance-test`, or a record's session the
+ *  caller does not stand in — finds no agent there, as a session that doesn't hold the pane
+ *  answers. The team's file names `acceptance-test`; the seat stands in `floor`. */
 function seatIo(cwd: string, name = 'iris', session = 'floor', pane = 'w1:p1') {
   const root = 4242;
   const io = testIo(cwd);
@@ -144,7 +161,8 @@ describe('the record admits the seat whose team file names another session', () 
   test('down stops the team, the orchestrator\'s seat included', async () => {
     const sb = makeSandbox();
     try {
-      writeGrant(sb.home, SEAT_GRANT);
+      const iris = registerSeat(sb.home);
+      writeGrant(sb.home, seatGrant(iris));
       teamAt(sb.covered, sb.home, { orchestrator: { pane: 'orch-pane', workspace: 'orch-ws' } });
       const closed: string[] = [];
       let box = claudeBox('');
@@ -197,7 +215,8 @@ describe('the record admits the seat whose team file names another session', () 
   test('a dry run plans the stop instead of refusing it', async () => {
     const sb = makeSandbox();
     try {
-      writeGrant(sb.home, SEAT_GRANT);
+      const iris = registerSeat(sb.home);
+      writeGrant(sb.home, seatGrant(iris));
       teamAt(sb.covered, sb.home);
       const io = seatIo(sb.covered);
       const code = await runDown(['--dry-run'], io, drySources(sb.home));
@@ -212,10 +231,11 @@ describe('the record admits the seat whose team file names another session', () 
 });
 
 describe('every other seat, session and path still refuses', () => {
-  test('another seat of the record\'s session is refused', async () => {
+  test('another seat is refused', async () => {
     const sb = makeSandbox();
     try {
-      writeGrant(sb.home, SEAT_GRANT);
+      const iris = registerSeat(sb.home);
+      writeGrant(sb.home, seatGrant(iris));
       teamAt(sb.covered, sb.home);
       const io = seatIo(sb.covered, 'co-worker');
       const code = await runDown(['--dry-run'], io, drySources(sb.home));
@@ -230,7 +250,29 @@ describe('every other seat, session and path still refuses', () => {
   test('the named seat in a session the record does not name is refused', async () => {
     const sb = makeSandbox();
     try {
-      writeGrant(sb.home, ELSEWHERE_GRANT);
+      // The record stands in `floor`; the caller walks the same pane id in `dispatch`. A pane
+      // id means something only in the session that lists it, so the record's session does not
+      // place this caller, and its record is not the caller's.
+      const iris = registerSeat(sb.home);
+      writeGrant(sb.home, seatGrant(iris));
+      teamAt(sb.covered, sb.home);
+      const io = seatIo(sb.covered, 'iris', 'dispatch');
+      const code = await runDown(['--dry-run'], io, drySources(sb.home));
+      expect(io.err).toBe('');
+      expect(io.out).toContain(REFUSAL);
+      expect(code).toBe(1);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('a record naming another agent id is refused', async () => {
+    const sb = makeSandbox();
+    try {
+      // Both seats are placed and live; the record names the one that is not this caller.
+      registerSeat(sb.home);
+      const other = registerSeat(sb.home, 'co-worker', 'w2:p2');
+      writeGrant(sb.home, seatGrant(other));
       teamAt(sb.covered, sb.home);
       const io = seatIo(sb.covered);
       const code = await runDown(['--dry-run'], io, drySources(sb.home));
@@ -245,7 +287,8 @@ describe('every other seat, session and path still refuses', () => {
   test('a root outside the granted paths is refused', async () => {
     const sb = makeSandbox();
     try {
-      writeGrant(sb.home, SEAT_GRANT);
+      const iris = registerSeat(sb.home);
+      writeGrant(sb.home, seatGrant(iris));
       teamAt(sb.outside, sb.home);
       const io = seatIo(sb.outside);
       const code = await runDown(['--dry-run'], io, drySources(sb.home));
@@ -260,7 +303,8 @@ describe('every other seat, session and path still refuses', () => {
   test('the named seat on a record past its expiry is refused', async () => {
     const sb = makeSandbox();
     try {
-      writeGrant(sb.home, PAST_GRANT);
+      const iris = registerSeat(sb.home);
+      writeGrant(sb.home, seatGrant(iris, PAST));
       teamAt(sb.covered, sb.home);
       const io = seatIo(sb.covered);
       const code = await runDown(['--dry-run'], io, drySources(sb.home));

@@ -3,28 +3,32 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { approvedFingerprints, notInForce } from './approve/approval.ts';
 import { compare, describe, fingerprints } from './approve/fingerprint.ts';
-import { anotherPaneRefusal, callerAncestors, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf } from './caller.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf, type Caller } from './caller.ts';
 import { ORDINARY_SECTIONS } from './delegate.ts';
 import { declaredRoots } from './entities.ts';
 import { loadTeamFile } from './file/load.ts';
 import type { GrantScope, LoadResult } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
+import { isAgentId, readAgents, type Agent } from './registry/agents.ts';
 import { approvalStanding, type Standing } from './store/store.ts';
 import { parseYaml, toValue } from './yaml.ts';
 
+/** The registry identity a create-grant names: one agent by its immutable id, or one team by its id. */
+export type CreateGrantGrantee =
+  | { kind: 'agent'; id: string }
+  | { kind: 'team'; id: string };
+
 /**
- * A standing create-grant outside any team file (`~/.config/team/grants/`), naming the agent
- * it is for, the path(s)/entity it covers, and its expiry timestamp.
+ * A standing create-grant outside any team file (`~/.config/team/grants/`), naming its holder by
+ * a registry identity, the path(s)/entity it covers, and its expiry timestamp.
  */
 export type EntityCreateGrant = {
   entity: string | null;
-  agent: string;
-  session: string | null;
+  /** The registry identity the record names; admission matches the caller's registry record only. */
+  grantee: CreateGrantGrantee;
   paths: string[];
   expires: string;
-  /** Process names one of a caller's parent processes may carry for it to be admitted outside herdr; empty when the record names none. */
-  runners: string[];
 };
 
 const UNSAFE_PATH_CHARS = /[*?[\]{}\x00-\x1f\x7f`]/;
@@ -78,35 +82,21 @@ export function readGrantRecords(home: string = homedir()): { stem: string; reco
 /**
  * Reads valid entity create-grant records from `~/.config/team/grants/`. Symbolic links and
  * malformed records are skipped; expiry and path containment are checked when a command asks.
- * A record covers the paths it names itself, or — when it names an entity and omits them — the
- * roots that entity declares under `~/.config/team/entities.yaml`. A record that names an
- * entity with declared roots may narrow them, never widen them: a path outside them is refused
- * ({@link createGrantPathProblem}), and a record left covering nothing is skipped as an empty
- * one is.
+ * A record names its holder by a registry identity only — `agent:` an agent id (`agt_` …) or
+ * `team:` a team id ({@link createGrantGrantee}); a record spelling a name, a seat, a pane, a
+ * session or a runner grants nothing and is skipped. A record covers the paths it names itself,
+ * or — when it names an entity and omits them — the roots that entity declares under
+ * `~/.config/team/entities.yaml`. A record that names an entity with declared roots may narrow
+ * them, never widen them: a path outside them is refused ({@link createGrantPathProblem}), and a
+ * record left covering nothing is skipped as an empty one is.
  */
 export function readEntityCreateGrants(home: string = homedir()): EntityCreateGrant[] {
   const out: EntityCreateGrant[] = [];
   const rootsByName = declaredRoots(home);
   for (const { record } of readGrantRecords(home)) {
+    const named = createGrantGrantee(record);
+    if (!named.ok) continue;
     const entity = typeof record.entity === 'string' && record.entity.trim() !== '' ? record.entity.trim() : null;
-    const rawAgent =
-      typeof record.agent === 'string'
-        ? record.agent.trim()
-        : typeof record.seat === 'string'
-          ? record.seat.trim()
-          : typeof record.pane === 'string'
-            ? record.pane.trim()
-            : '';
-    if (!rawAgent) continue;
-    let session =
-      typeof record.session === 'string' && record.session.trim() !== '' ? record.session.trim() : null;
-    let agent = rawAgent;
-    if (session === null && rawAgent.includes('/')) {
-      const slash = rawAgent.indexOf('/');
-      session = rawAgent.slice(0, slash).trim();
-      agent = rawAgent.slice(slash + 1).trim();
-      if (!session || !agent) continue;
-    }
     let paths: string[] = [];
     if (Array.isArray(record.paths) && record.paths.every((item) => typeof item === 'string' && item.trim() !== '')) {
       paths = (record.paths as string[]).map((item) => item.trim());
@@ -126,42 +116,98 @@ export function readEntityCreateGrants(home: string = homedir()): EntityCreateGr
     if (typeof rawExpires !== 'string' || rawExpires.trim() === '') continue;
     const expires = rawExpires.trim();
     if (!Number.isFinite(Date.parse(expires))) continue;
-    out.push({ entity, agent, session, paths, expires, runners: runnersOf(record) });
+    out.push({ entity, grantee: named.grantee, paths, expires });
   }
   return out;
 }
 
-/** The record's `runner` (one name) or `runners` (a list of names); anything else names none. */
-function runnersOf(record: Record<string, unknown>): string[] {
-  if (typeof record.runner === 'string' && record.runner.trim() !== '') return [record.runner.trim()];
-  if (Array.isArray(record.runners) && record.runners.length > 0 && record.runners.every((item) => typeof item === 'string' && item.trim() !== '')) {
-    return (record.runners as string[]).map((item) => item.trim());
+/** A team id: twelve lowercase hex digits, the registry's own spelling. */
+const TEAM_ID_PATTERN = /^[0-9a-f]{12}$/;
+
+/** The rule every create-grant record obeys, stated once for the reasons below. */
+const REGISTRY_IDENTITY_RULE =
+  'a create-grant names its holder by registry agent id (`agt_` …) or its team by registry team id, never by a name, a seat, a pane, a session or a runner';
+
+/**
+ * The registry identity a record names, or the reason it names none
+ * ({@link EntityCreateGrant}). Exactly one grantee is read: `agent:` a registry agent id, or
+ * `team:` a registry team id. Any older spelling — `seat:`, `pane:`, `session:`, a
+ * `runner`/`runners` entry, or an `agent:` that is a name — is not an identity: the record
+ * grants nothing, and `why` says which spelling it used and what the rule is.
+ */
+export function createGrantGrantee(
+  record: Record<string, unknown>,
+): { ok: true; grantee: CreateGrantGrantee } | { ok: false; why: string } {
+  const spelled = (value: unknown): string => (typeof value === 'string' && value.trim() !== '' ? ` "${value.trim()}"` : '');
+  for (const field of ['seat', 'pane', 'session'] as const) {
+    if (record[field] === undefined) continue;
+    const kind = field === 'session' ? 'a session' : `a ${field}`;
+    return { ok: false, why: `the record names ${kind}${spelled(record[field])} in \`${field}\`: ${REGISTRY_IDENTITY_RULE}` };
   }
-  return [];
+  for (const field of ['runner', 'runners'] as const) {
+    if (record[field] === undefined) continue;
+    return { ok: false, why: `the record names a runner process in \`${field}\`: ${REGISTRY_IDENTITY_RULE}` };
+  }
+  if (record.agent !== undefined && record.team !== undefined) {
+    return { ok: false, why: `the record names both \`agent\` and \`team\`: ${REGISTRY_IDENTITY_RULE}` };
+  }
+  if (record.agent !== undefined) {
+    if (typeof record.agent !== 'string' || !isAgentId(record.agent.trim())) {
+      return { ok: false, why: `the record names${spelled(record.agent)} in \`agent\`, which is not a registry agent id: ${REGISTRY_IDENTITY_RULE}` };
+    }
+    return { ok: true, grantee: { kind: 'agent', id: record.agent.trim() } };
+  }
+  if (record.team !== undefined) {
+    if (typeof record.team !== 'string' || !TEAM_ID_PATTERN.test(record.team.trim())) {
+      return { ok: false, why: `the record names${spelled(record.team)} in \`team\`, which is not a registry team id: ${REGISTRY_IDENTITY_RULE}` };
+    }
+    return { ok: true, grantee: { kind: 'team', id: record.team.trim() } };
+  }
+  return { ok: false, why: `the record names no holder: ${REGISTRY_IDENTITY_RULE}` };
 }
 
+/**
+ * The registry record of the seat this caller is placed as: the running agent whose reach names
+ * the session, pane and seat the walk placed it in, most recently updated when more than one
+ * does. The caller is placed in each record's session, as `delegate.ts`'s `findEntry` places
+ * it, because a pane id only means something inside the session that lists it — a caller of the
+ * same name and pane in another session is not that seat. A caller herdr does not place as a
+ * named seat (the owner, an agentless pane, an unplaced process) has no registry record, and no
+ * grant admits it.
+ */
+function callerRegistryAgent(
+  home: string,
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+): Agent | null {
+  const placed = new Map<string, Caller>();
+  let found: Agent | null = null;
+  for (const agent of readAgents(home)) {
+    if (agent.lifecycle !== 'running') continue;
+    let caller = placed.get(agent.reach.session);
+    if (caller === undefined) {
+      caller = callerOf(io, agent.reach.session);
+      placed.set(agent.reach.session, caller);
+    }
+    if (caller.kind !== 'seat') continue;
+    if (caller.session !== agent.reach.session) continue;
+    if (caller.pane !== agent.reach.pane) continue;
+    if (caller.name !== agent.reach.seat) continue;
+    if (!found || agent.provenance.updated_at >= found.provenance.updated_at) found = agent;
+  }
+  return found;
+}
+
+/** Whether the caller's own registry record is the agent the grant names, or belongs to the team it names. */
 function grantMatchesCaller(
   grant: EntityCreateGrant,
+  home: string,
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
 ): boolean {
-  const caller = grant.session !== null ? callerOf(io, grant.session) : callerOf(io);
-  if (grant.session !== null && 'session' in caller && caller.session !== undefined && caller.session !== grant.session) {
-    return false;
-  }
-  if (caller.kind === 'seat') {
-    if (grant.session !== null && caller.session !== grant.session) return false;
-    return caller.name === grant.agent || caller.pane === grant.agent;
-  }
-  if (caller.kind === 'pane') {
-    return grant.session !== null && caller.session === grant.session && caller.pane === grant.agent;
-  }
-  // Outside herdr: the holder's own runner, named by a parent process. A caller under herdr, and
-  // the owner at a terminal, are never matched this way.
-  const outside = caller.kind === 'owner-no-tty' || (caller.kind === 'unplaced' && caller.reason !== 'it runs under herdr');
-  if (!outside || grant.runners.length === 0) return false;
-  const ancestors = callerAncestors(io);
-  if (!ancestors || ancestors.some((process) => process.name === 'herdr')) return false;
-  return ancestors.some((process) => grant.runners.includes(process.name));
+  const agent = callerRegistryAgent(home, io);
+  if (agent === null) return false;
+  return grant.grantee.kind === 'agent'
+    ? grant.grantee.id === agent.id
+    : grant.grantee.id === agent.reach.team;
 }
 
 function hasDotTraversal(raw: string): boolean {
@@ -302,8 +348,9 @@ function pathUnderGranted(grantedRaw: string, root: string, cwd: string, home: s
 
 /**
  * Whether an active entity create-grant in `~/.config/team/grants/` admits this caller for a
- * team at `root`. Checks agent identity, non-expiry against `now`, and symlink-free containment
- * of both `root` and `cwd` under a granted path.
+ * team at `root`. Checks the caller's own registry record against the grant's registry identity
+ * ({@link grantMatchesCaller}), non-expiry against `now`, and symlink-free containment of both
+ * `root` and `cwd` under a granted path.
  */
 export function entityGrantAdmits(
   root: string,
@@ -318,7 +365,7 @@ export function entityGrantAdmits(
   for (const grant of grants) {
     const expMs = Date.parse(grant.expires);
     if (!Number.isFinite(expMs) || nowMs >= expMs) continue;
-    if (!grantMatchesCaller(grant, io)) continue;
+    if (!grantMatchesCaller(grant, home, io)) continue;
     if (grant.paths.some((entry) => pathUnderGranted(entry, root, cwd, home))) return true;
   }
   return false;

@@ -10,7 +10,7 @@ import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict 
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
-import { findRoot, loadTeamFile } from '../file/load.ts';
+import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { getTeam, noteTeam, teamIdOf } from '../registry/teams.ts';
 import { registerEnd, registerSessionEnd } from '../registry/sync.ts';
@@ -436,20 +436,11 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.invocation
     return 2;
   }
-  // A create-grant's own runner is the one detached caller the record may name: this sentence is
-  // not for it, exactly as `init` asks it. Only the cwd's own repository is known this early,
-  // before any file is read, so this decision answers this refusal alone — the loaded root decides
-  // the caller rule below, and a team outside the granted paths still refuses there.
+  // No create-grant admits a run with no terminal: the record matches the caller's own registry
+  // record, and a caller outside herdr has none. This sentence is answered before any file is
+  // read, as `init` asks it.
   const detached = detachedRefusal(walkCaller(io));
-  // Asked only for the placement that would be refused, and only when a record exists, so a
-  // caller with none is refused without reading a repository or a clock.
-  let runnerGranted = false;
-  if (detached !== undefined && readEntityCreateGrants(sources.home ?? homedir()).length > 0) {
-    const hereRoot = findRoot(io.cwd);
-    runnerGranted = hereRoot !== null
-      && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
-  }
-  if (detached !== undefined && !runnerGranted) {
+  if (detached !== undefined) {
     refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
     // exit: down.detached
     return 1;

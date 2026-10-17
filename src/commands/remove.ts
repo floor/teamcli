@@ -9,7 +9,7 @@ import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
-import { findRoot, loadTeamFile } from '../file/load.ts';
+import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { markStopped, takeOut } from '../file/lines.ts';
 import type { Problem, Seat } from '../file/types.ts';
@@ -149,22 +149,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // exit: remove.invocation
     return 2;
   }
-  // A create-grant's own runner is the one detached caller the record may name: this sentence is
-  // not for it, exactly as `init` asks it. Only the cwd's root is known this early, before any
-  // file is read, so this decision answers this refusal alone — the loaded file's root decides
-  // the caller rule below, and a team outside the granted paths still refuses there.
-  const detached = detachedRefusal(walkCaller(io));
-  // Asked only for the placement that would be refused, and only when a record exists, so a
-  // caller with none is refused without reading a repository or a clock —
+  // No create-grant admits a run with no terminal: the record matches the caller's own registry
+  // record, and a caller outside herdr has none. This sentence is answered before any file is
+  // read, as `down` and `init` ask it —
   // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
-  // order, exactly as `down` and `init` ask it.
-  let runnerGranted = false;
-  if (detached !== undefined && readEntityCreateGrants(sources.home).length > 0) {
-    const hereRoot = findRoot(io.cwd);
-    runnerGranted = hereRoot !== null
-      && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
-  }
-  if (detached !== undefined && !runnerGranted) {
+  // order.
+  const detached = detachedRefusal(walkCaller(io));
+  if (detached !== undefined) {
     refuse(io, json, 'remove', { id: 'remove.detached', message: detached, repair: null });
     // exit: remove.detached
     return 1;

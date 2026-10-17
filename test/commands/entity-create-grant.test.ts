@@ -1,7 +1,9 @@
-// Standing entity create-grants in `~/.config/team/grants/`: `init` and `up` admit the named
-// agent under a covered path before expiry with no team-file grant, and refuse path escapes,
-// other agents, expired records, and paths outside the roots the entity declares in
-// `~/.config/team/entities.yaml`. Every fixture path sits under the sandbox's own temp home.
+// Standing entity create-grants in `~/.config/team/grants/`: `init` and `up` admit the agent or
+// team whose registry id a record names, under a covered path before expiry with no team-file
+// grant, and refuse path escapes, other agents, expired records, and paths outside the roots the
+// entity declares in `~/.config/team/entities.yaml`. A record that spells its holder as a name,
+// seat, pane, session or runner process grants nothing. Every fixture path sits under the
+// sandbox's own temp home.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -11,8 +13,9 @@ import { runInit } from '../../src/commands/init.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { declaredRoots, entitiesPath } from '../../src/entities.ts';
-import { createGrantPathProblem, grantsDir, readEntityCreateGrants } from '../../src/grant.ts';
+import { createGrantGrantee, createGrantPathProblem, grantsDir, readEntityCreateGrants } from '../../src/grant.ts';
 import type { Terminal } from '../../src/launch/terminal.ts';
+import { registerAgent } from '../../src/registry/agents.ts';
 import { readState } from '../../src/state.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
@@ -63,6 +66,37 @@ ${SEAT('orchestrator', 'orchestrator', true)}${SEAT('builder', 'builder-1')}${SE
 const grantedAgent = { kind: 'seat', name: 'orchestrator', pane: 'lead-pane', session: 'dispatch' } as const;
 const otherAgent = { kind: 'seat', name: 'builder-1', pane: 'other-pane', session: 'dispatch' } as const;
 const wrongSessionAgent = { kind: 'seat', name: 'orchestrator', pane: 'lead-pane', session: 'elsewhere' } as const;
+
+const TEAM = 'aaaaaaaaaaaa';
+const OTHER_TEAM = 'bbbbbbbbbbbb';
+
+/** The identity rule every record check ends with: a registry id, nothing else. */
+const RULE =
+  'a create-grant names its holder by registry agent id (`agt_` …) or its team by registry team id, never by a name, a seat, a pane, a session or a runner';
+
+/** The registry record a granted seat has: the immutable id admission matches, and the reach
+ *  (team, seat, session, pane) herdr places the caller by. */
+function registerSeat(
+  home: string,
+  seat: string,
+  pane: string,
+  session = 'dispatch',
+  team = TEAM,
+): string {
+  return registerAgent(home, {
+    name: seat,
+    signing: { model: 'Claude Opus', version: '5.5', role: 'orchestrator' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team, seat, session, pane, address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'owner',
+  }).id;
+}
 
 function initGitRepo(dir: string): void {
   mkdirSync(dir, { recursive: true });
@@ -176,19 +210,18 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
     const sb = makeSandbox();
     try {
       writeEntities(sb.home, 'acme:\n  roots:\n    - ~/Code/acme\n    - ~/Code/acme-lab\n');
+      const orchestrator = registerSeat(sb.home, 'orchestrator', 'lead-pane');
       writeGrant(
         sb.home,
         'acme.yaml',
-        `entity: acme\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme\n  - ~/Code/acme-lab\nexpires: "${FUTURE}"\n`,
+        `entity: acme\nagent: ${orchestrator}\npaths:\n  - ~/Code/acme\n  - ~/Code/acme-lab\nexpires: "${FUTURE}"\n`,
       );
       expect(readEntityCreateGrants(sb.home)).toEqual([
         {
           entity: 'acme',
-          session: 'dispatch',
-          agent: 'orchestrator',
+          grantee: { kind: 'agent', id: orchestrator },
           paths: ['~/Code/acme', '~/Code/acme-lab'],
           expires: FUTURE,
-          runners: [],
         },
       ]);
 
@@ -286,19 +319,18 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
     try {
       writeEntities(sb.home, 'acme: { roots: [~/Code/acme] }\n');
       expect(declaredRoots(sb.home).get('acme')).toEqual(['~/Code/acme']);
+      const orchestrator = registerSeat(sb.home, 'orchestrator', 'lead-pane');
       writeGrant(
         sb.home,
         'acme.yaml',
-        `entity: acme\nsession: dispatch\nagent: orchestrator\nexpires: "${FUTURE}"\n`,
+        `entity: acme\nagent: ${orchestrator}\nexpires: "${FUTURE}"\n`,
       );
       expect(readEntityCreateGrants(sb.home)).toEqual([
         {
           entity: 'acme',
-          session: 'dispatch',
-          agent: 'orchestrator',
+          grantee: { kind: 'agent', id: orchestrator },
           paths: ['~/Code/acme'],
           expires: FUTURE,
-          runners: [],
         },
       ]);
 
@@ -314,10 +346,11 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
     const sb = makeSandbox();
     try {
       // No entities file at all: the record names an entity and no paths, so it covers nothing.
+      const orchestrator = registerSeat(sb.home, 'orchestrator', 'lead-pane');
       writeGrant(
         sb.home,
         'ghost.yaml',
-        `entity: ghost\nsession: dispatch\nagent: orchestrator\nexpires: "${FUTURE}"\n`,
+        `entity: ghost\nagent: ${orchestrator}\nexpires: "${FUTURE}"\n`,
       );
       expect(readEntityCreateGrants(sb.home)).toEqual([]);
 
@@ -338,7 +371,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       writeGrant(
         sb.home,
         'ghost.yaml',
-        `entity: ghost\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme\nexpires: "${FUTURE}"\n`,
+        `entity: ghost\nagent: ${orchestrator}\npaths:\n  - ~/Code/acme\nexpires: "${FUTURE}"\n`,
       );
       expect(readEntityCreateGrants(sb.home).map((grant) => grant.paths)).toEqual([['~/Code/acme']]);
       const explicitInitIo = testIo(v4, grantedAgent);
@@ -368,10 +401,11 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       expect(createGrantPathProblem('Code/acme', roots, sb.home, 'acme')).toContain('neither absolute nor under ~');
 
       // One path inside the roots and one beside them: the record keeps only the inside one.
+      const orchestrator = registerSeat(sb.home, 'orchestrator', 'lead-pane');
       writeGrant(
         sb.home,
         'acme.yaml',
-        `entity: acme\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme\n  - ~/Code/other-repo\nexpires: "${FUTURE}"\n`,
+        `entity: acme\nagent: ${orchestrator}\npaths:\n  - ~/Code/acme\n  - ~/Code/other-repo\nexpires: "${FUTURE}"\n`,
       );
       expect(readEntityCreateGrants(sb.home).map((grant) => grant.paths)).toEqual([['~/Code/acme']]);
 
@@ -379,7 +413,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       writeGrant(
         sb.home,
         'acme.yaml',
-        `entity: acme\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/other-repo\nexpires: "${FUTURE}"\n`,
+        `entity: acme\nagent: ${orchestrator}\npaths:\n  - ~/Code/other-repo\nexpires: "${FUTURE}"\n`,
       );
       expect(readEntityCreateGrants(sb.home)).toEqual([]);
       const outside = join(sb.outside, 'v4');
@@ -398,7 +432,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       writeGrant(
         sb.home,
         'acme.yaml',
-        `entity: acme\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme\nexpires: "${FUTURE}"\n`,
+        `entity: acme\nagent: ${orchestrator}\npaths:\n  - ~/Code/acme\nexpires: "${FUTURE}"\n`,
       );
       const inside = join(sb.code, 'v4');
       initGitRepo(inside);
@@ -425,10 +459,13 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
     const sb = makeSandbox();
     try {
       writeEntities(sb.home, 'acme:\n  roots:\n    - ~/Code/acme\n');
+      const orchestrator = registerSeat(sb.home, 'orchestrator', 'lead-pane');
+      // The other seat is placed and live too, so its refusal is the id mismatch, not a missing record.
+      registerSeat(sb.home, 'builder-1', 'other-pane');
       writeGrant(
         sb.home,
         'acme.yaml',
-        `entity: acme\nsession: dispatch\nagent: orchestrator\nexpires: "${FUTURE}"\n`,
+        `entity: acme\nagent: ${orchestrator}\nexpires: "${FUTURE}"\n`,
       );
       const v4 = join(sb.code, 'v4');
       initGitRepo(v4);
@@ -458,6 +495,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
     const sb = makeSandbox();
     try {
       writeEntities(sb.home, 'acme:\n  roots:\n    - ~/Code/acme\n');
+      const orchestrator = registerSeat(sb.home, 'orchestrator', 'lead-pane');
       const v4 = join(sb.code, 'v4');
       initGitRepo(v4);
 
@@ -465,7 +503,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
         writeGrant(
           sb.home,
           'acme.yaml',
-          `entity: acme\nsession: dispatch\nagent: orchestrator\nexpires: "${expires}"\n`,
+          `entity: acme\nagent: ${orchestrator}\nexpires: "${expires}"\n`,
         );
         const initIo = testIo(v4, grantedAgent);
         expect(await runInit([], initIo, sb.home, undefined, noLogin)).toBe(1);
@@ -480,7 +518,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
         writeGrant(
           sb.home,
           'acme.yaml',
-          `entity: acme\nsession: dispatch\nagent: orchestrator\nexpires: "${expires}"\n`,
+          `entity: acme\nagent: ${orchestrator}\nexpires: "${expires}"\n`,
         );
         const upIo = testIo(v4, grantedAgent);
         expect(await runUp([], upIo, upSources(sb.home, launching(() => {}), terminal()))).toBe(1);
@@ -495,10 +533,11 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
     const sb = makeSandbox();
     try {
       writeEntities(sb.home, 'acme:\n  roots:\n    - ~/Code/acme\n');
+      const orchestrator = registerSeat(sb.home, 'orchestrator', 'lead-pane');
       writeGrant(
         sb.home,
         'acme.yaml',
-        `entity: acme\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme\nexpires: "${FUTURE}"\n`,
+        `entity: acme\nagent: ${orchestrator}\npaths:\n  - ~/Code/acme\nexpires: "${FUTURE}"\n`,
       );
 
       // An outside repository not covered by the record.
@@ -545,7 +584,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       writeGrant(
         sb.home,
         'escaped.yaml',
-        `entity: escaped\nsession: dispatch\nagent: orchestrator\npaths:\n  - ~/Code/acme/../other-repo\nexpires: "${FUTURE}"\n`,
+        `entity: escaped\nagent: ${orchestrator}\npaths:\n  - ~/Code/acme/../other-repo\nexpires: "${FUTURE}"\n`,
       );
       const escapedUpIo = testIo(outside, grantedAgent);
       expect(await runUp([], escapedUpIo, upSources(sb.home, launching(() => {}), terminal()))).toBe(1);
@@ -559,6 +598,106 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       const linkedFileUpIo = testIo(v4, grantedAgent);
       expect(await runUp([], linkedFileUpIo, upSources(sb.home, launching(() => {}), terminal()))).toBe(1);
       expect(linkedFileUpIo.err).toBe('deny\n');
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('a record naming anything but a registry id grants nothing, and the check says why', async () => {
+    const sb = makeSandbox();
+    try {
+      const orchestrator = registerSeat(sb.home, 'orchestrator', 'lead-pane');
+      expect(createGrantGrantee({ agent: orchestrator })).toEqual({
+        ok: true,
+        grantee: { kind: 'agent', id: orchestrator },
+      });
+      expect(createGrantGrantee({ team: TEAM })).toEqual({ ok: true, grantee: { kind: 'team', id: TEAM } });
+
+      const refused: [Record<string, unknown>, string][] = [
+        [{ agent: 'orchestrator' }, 'the record names "orchestrator" in `agent`, which is not a registry agent id'],
+        [{ agent: 'dispatch/orchestrator' }, 'the record names "dispatch/orchestrator" in `agent`, which is not a registry agent id'],
+        [{ team: 'acme' }, 'the record names "acme" in `team`, which is not a registry team id'],
+        [{ seat: 'orchestrator' }, 'the record names a seat "orchestrator" in `seat`'],
+        [{ pane: 'lead-pane' }, 'the record names a pane "lead-pane" in `pane`'],
+        [{ session: 'dispatch' }, 'the record names a session "dispatch" in `session`'],
+        [{ runner: 'gemini' }, 'the record names a runner process in `runner`'],
+        [{ runners: ['gemini'] }, 'the record names a runner process in `runners`'],
+        [{ agent: orchestrator, team: TEAM }, 'the record names both `agent` and `team`'],
+        [{}, 'the record names no holder'],
+      ];
+      for (const [record, why] of refused) {
+        const named = createGrantGrantee(record);
+        expect(named.ok, JSON.stringify(record)).toBe(false);
+        if (named.ok) continue;
+        expect(named.why.startsWith(why), named.why).toBe(true);
+        expect(named.why.endsWith(`: ${RULE}`), named.why).toBe(true);
+      }
+
+      // A record spelled any of those ways grants nothing: the caller it would once have admitted
+      // is refused by both commands, and the record does not even read as a grant.
+      writeEntities(sb.home, 'acme:\n  roots:\n    - ~/Code/acme\n');
+      writeGrant(
+        sb.home,
+        'legacy.yaml',
+        `entity: acme\nagent: orchestrator\nsession: dispatch\nexpires: "${FUTURE}"\n`,
+      );
+      writeGrant(
+        sb.home,
+        'runner.yaml',
+        `entity: acme\nagent: ${orchestrator}\nrunner: gemini\nexpires: "${FUTURE}"\n`,
+      );
+      expect(readEntityCreateGrants(sb.home)).toEqual([]);
+
+      const v4 = join(sb.code, 'v4');
+      initGitRepo(v4);
+      const initIo = testIo(v4, grantedAgent);
+      expect(await runInit([], initIo, sb.home, undefined, noLogin)).toBe(1);
+      expect(initIo.err).toContain('only the owner runs this');
+      expect(existsSync(join(v4, '.agents', 'team.yaml'))).toBe(false);
+
+      mkdirSync(join(v4, '.agents'), { recursive: true });
+      writeFileSync(join(v4, '.agents', 'team.yaml'), fiveSeatTeam('acme-v4', v4, sb.home));
+      const upIo = testIo(v4, grantedAgent);
+      expect(await runUp([], upIo, upSources(sb.home, launching(() => {}), terminal()))).toBe(1);
+      expect(upIo.err).toBe('deny\n');
+      expect(upIo.out).toBe('');
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test("a team-id record admits a seat of that team, and no other team's seat", async () => {
+    const sb = makeSandbox();
+    try {
+      writeEntities(sb.home, 'acme:\n  roots:\n    - ~/Code/acme\n');
+      writeGrant(
+        sb.home,
+        'team.yaml',
+        `team: ${TEAM}\npaths:\n  - ~/Code/acme\nexpires: "${FUTURE}"\n`,
+      );
+      expect(readEntityCreateGrants(sb.home)).toEqual([
+        {
+          entity: null,
+          grantee: { kind: 'team', id: TEAM },
+          paths: ['~/Code/acme'],
+          expires: FUTURE,
+        },
+      ]);
+      registerSeat(sb.home, 'orchestrator', 'lead-pane');
+
+      const v4 = join(sb.code, 'v4');
+      initGitRepo(v4);
+      expect(await runInit([], testIo(v4, grantedAgent), sb.home, undefined, noLogin)).toBe(0);
+
+      // A seat of another team is placed and live in the same home, so its refusal is the team
+      // mismatch, not a missing record.
+      registerSeat(sb.home, 'builder-1', 'other-pane', 'dispatch', OTHER_TEAM);
+      const v5 = join(sb.code, 'v5');
+      initGitRepo(v5);
+      const outsiderIo = testIo(v5, otherAgent);
+      expect(await runInit([], outsiderIo, sb.home, undefined, noLogin)).toBe(1);
+      expect(outsiderIo.err).toContain('only the owner runs this');
+      expect(existsSync(join(v5, '.agents', 'team.yaml'))).toBe(false);
     } finally {
       rmSync(sb.base, { recursive: true, force: true });
     }

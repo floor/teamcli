@@ -27,7 +27,7 @@ into — and its sidebar is rewritten from the file either way.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr |
-| a caller outside herdr whose ancestry names a create-grant's `runner` | run it, on the paths that record covers and before it expires |
+| a seat an active create-grant names by its own registry id | run it, on the paths that record covers and before it expires |
 | a run with no terminal | a real run is refused: `team up: only the owner runs this, from a terminal outside herdr`; `--dry-run` prints the plan and `! up would refuse:` with that sentence, and launches nothing |
 | a seat this team's record marks `leads` — its orchestrator, or a registry roster line that says `leads` | run it on this folder's own team file, and the run does not relaunch or close that seat. `--session` and `--file` are refused before either is read |
 | a caller the run admits | run `--dry-run`, which reaches nothing and changes nothing |
@@ -35,17 +35,17 @@ into — and its sidebar is rewritten from the file either way.
 | the orchestrator's seat, where the row above does not admit it and the approved `grant` lists `up` | run it on this folder's own team file, and the run is audited as the grant's. A lead the map admits is not constrained by a grant, and the grant or delegate path applies only to seats the map does not admit: a grant that names another seat or pane, or leaves `up` out of its scope, refuses this fallback run, and a run the map admitted asks it nothing and is audited only as the row's. A file no approval covers grants nothing. The run does not relaunch or close that seat. `--session` and `--file` are refused before either is read, in the grant's words |
 | a seat of this team the record does not mark `leads`, or a pane of another session | run `--dry-run` only; a real run is refused, unless the live `grant` admits the orchestrator's seat or the live file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
 
-## A create-grant's runner
+## A create-grant's seat
 
-A create-grant — a record in `~/.config/team/grants/` — admits a caller outside herdr without the
-owner's terminal when its `runner` field (or `runners: [<name>, …]` for several) names one of the
-caller's parent processes, the base name of what `ps -o comm=` prints for it. That caller runs
-`up` on the paths the record covers — its own `paths:`/`path:`, or the roots its `entity:`
-declares in `~/.config/team/entities.yaml` when it names none — before it expires. A name that is
-not in the ancestry, an expired record, a folder outside the covered paths or one reached through
-a `..` segment or a symlink, and a record with no `runner` all keep the answer above; a caller
-under herdr is never admitted this way, where the approved file's `grant` decides. The record's
-shape, with one example: [team init](init.md).
+A create-grant — a record in `~/.config/team/grants/` — admits a seat whose own registry record the
+record names, by its registry agent id (`agt_` …) or by its team's registry id, and nothing else.
+That seat runs `up` on the paths the record covers — its own `paths:`/`path:`, or the roots its
+`entity:` declares in `~/.config/team/entities.yaml` when it names none — before it expires. A
+record that spells its holder as a name, a seat, a pane, a session or a runner process grants
+nothing and is skipped, an expired record keeps the answer above, and so does a folder outside the
+covered paths or one reached through a `..` segment or a symlink. A caller outside herdr has no
+registry record and is never admitted; where the team file's approved `grant` decides, that record
+decides instead. The record's shape, with one example: [team init](init.md).
 
 ## Output and exit codes
 
