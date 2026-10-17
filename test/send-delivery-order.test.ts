@@ -444,6 +444,22 @@ describe('a waited send needs the native leg to lead the order', () => {
     expect(io.out).toBe('lead: dry-run: claude-code --wait needs the native leg first, and its delivery order is typed, native; nothing was sent\n');
   });
 
+  test('a dry run of a waited send to a native-CLI seat reports that seat’s refusal, exit 1', async () => {
+    const w = world();
+    const host = walker(w);
+    const io = owner(w.root);
+
+    // The seat runs codex: no run of this build could wait on it, dry or not, so the dry run
+    // reports the refusal the real run would print rather than naming a channel it cannot walk.
+    const code = await runSend(['native', 'hello', '--wait', '--dry-run'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.err).toBe('team send: refused: native runs codex: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent\n');
+    expect(io.out).toBe('');
+    expect(host.typed).toEqual([]);
+    expect(existsSync(dropDir(w.root, 'native'))).toBe(false);
+  });
+
   test('an order that leads with the native leg passes the order check and hits the build’s own refusal', async () => {
     const w = world();
     const host = walker(w, { seat: ['native'] });

@@ -43,9 +43,9 @@ naming the order in force:
     claude-keeper: --wait needs the native leg first, and its delivery order is typed; nothing was sent
 
 `--wait` to any other seat is refused as well, with that seat's own reason, and nothing is
-written; a
-dry run of either prints the refusal without writing anything, except that a native seat's
-`--wait --dry-run` names the drop channel instead, since neither run writes.
+written; a waited Claude Code send's dry run prints its refusal as a `dry-run:` line, and a
+native-CLI seat's `--wait --dry-run` is the real run's refusal itself — the same sentence and
+exit 1 — since neither run writes anything.
 
 The socket frame — the channel the native leg will carry — is a measured observation of Claude Code 2.1.295, not a stable API: JSON
 lines, one frame per line, a first-line deadline of 30,000 ms, and a buffer limit of 1,048,576
@@ -93,7 +93,8 @@ message this command composed and `ids.reply` the reply frame's own, when there 
 `--dry-run` resolves the seat and names the channel its walk would take — the first leg this
 build can actually walk, none it cannot — a drop file and one trigger line for every plain send
 of this build, since the socket write is skipped; a waited Claude Code send is named as the
-refusal it is, and a waited send whose order leads elsewhere as that refusal. It
+refusal it is, and a waited send whose order leads elsewhere as that refusal. A `--wait` to a
+native-CLI seat is refused as the real run is, with the same sentence and exit 1. It
 writes no drop file and types nothing; it appends one line to
 `.agents/team.log`.
 
