@@ -39,7 +39,7 @@ import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
 import { appendHistory, type HistoryEntry } from './history.ts';
-import { bindPane, deliverTrigger } from './deliver.ts';
+import { bindPane, deliverTrigger, TAKEN_REASON } from './deliver.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
@@ -113,7 +113,18 @@ export type DaemonRequest =
   | DaemonSendRequest;
 
 export type DaemonSendResponse =
-  | { v: 1; ok: true; id: string; seat: string; outcome: 'delivered'; status: string; drop_path: string }
+  | {
+      v: 1;
+      ok: true;
+      id: string;
+      seat: string;
+      outcome: 'delivered';
+      status: string;
+      /** `taken` when the box cleared with no status or transcript evidence inside the window:
+       *  a delivery whose confirmation is still to come, and which is never typed again. */
+      evidence?: 'taken';
+      drop_path: string;
+    }
   | { v: 1; ok: true; id: string; seat: string; outcome: 'answered'; reply: string; reply_id: string | null }
   | {
       v: 1;
@@ -1049,12 +1060,13 @@ async function executeQueuedSend(
       };
     }
     const submittedStatus = result.status ?? 'working';
+    const taken = result.evidence === 'taken';
 
     logLine(
       dir,
       'send',
       who,
-      `${seatName}: delivered (drop ${String(body.length)} characters, ${result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${submittedStatus}`})`,
+      `${seatName}: delivered (drop ${String(body.length)} characters, ${taken ? TAKEN_REASON : result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${submittedStatus}`})`,
       host.now(),
     );
     appendHistory(team.project, root, host.home, {
@@ -1065,6 +1077,7 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'delivered',
+      ...(taken ? { note: TAKEN_REASON } : {}),
       ms: Date.now() - startedAt,
       via: 'typed',
       failed: request.failed,
@@ -1076,6 +1089,7 @@ async function executeQueuedSend(
       seat: seatName,
       outcome: 'delivered',
       status: submittedStatus,
+      ...(taken ? { evidence: 'taken' as const } : {}),
       drop_path: dropPath,
     };
   } catch {

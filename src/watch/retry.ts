@@ -22,9 +22,10 @@ import {
   recordPendingTry,
   type PendingDrop,
 } from '../send/pending.ts';
-import { deliverTrigger, type DeliverHost } from '../send/deliver.ts';
+import { deliverTrigger, TAKEN_REASON, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { triggerLine } from '../send/native.ts';
+import { markTaken } from '../send/taken.ts';
 import type { Live } from '../status/compare.ts';
 import { readScreen } from './screen.ts';
 
@@ -113,6 +114,21 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, cli, { submitHeld: true });
     if (result.outcome === 'delivered') {
       clearPending(dropDir, drop.id);
+      // A taken retry is a delivery too: its box cleared with no proof yet, and it is never typed
+      // again — the marker is gone, and the history says how the delivery stands.
+      const taken = result.evidence === 'taken';
+      if (taken) {
+        // The retry itself became a taken delivery: the same marker the send writes, so the
+        // watch's later passes confirm it — and this drops out of the retry records for good.
+        markTaken(dropDir, {
+          id: drop.id,
+          from: drop.from,
+          to: drop.to,
+          body: drop.body,
+          ts: scene.now.toISOString(),
+          before: result.prior ?? 'unknown',
+        });
+      }
       if (scene.home !== undefined) {
         appendHistory(scene.team.project, scene.root, scene.home, {
           ts: scene.now.toISOString(),
@@ -121,10 +137,16 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
           body: drop.body,
           id: drop.id,
           outcome: 'delivered',
+          ...(taken ? { note: TAKEN_REASON } : {}),
           via: 'typed',
         });
       }
-      scene.say(`${drop.to}: ${heldWords(drop)} was delivered on retry`, false);
+      scene.say(
+        taken
+          ? `${drop.to}: ${heldWords(drop)} was delivered on retry (${TAKEN_REASON})`
+          : `${drop.to}: ${heldWords(drop)} was delivered on retry`,
+        false,
+      );
       return;
     }
     if (result.outcome === 'not-submitted') {

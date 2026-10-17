@@ -51,6 +51,10 @@ export type HistoryEntry = {
    *  order they were tried; absent when the walk had none to pass on — the leg that carried the
    *  send was reached without a failure behind it, or there was no walk at all. */
   failed?: string[];
+  /** One short qualifier the outcome word cannot carry alone: `taken, not yet confirmed` on a
+   *  delivered send whose box cleared before herdr's status or the transcript showed the seat act,
+   *  and `taken but never acted on` when the watch's later look found no sign either. */
+  note?: string;
 };
 
 export type HistoryWrite =
@@ -187,6 +191,7 @@ export function appendHistory(project: string, root: string, home: string, entry
   if (entry.ms !== undefined) record.ms = entry.ms;
   if (entry.via !== undefined) record.via = entry.via;
   if (entry.failed !== undefined && entry.failed.length > 0) record.failed = entry.failed;
+  if (entry.note !== undefined) record.note = entry.note;
   return appendStoreLine(project, root, home, HISTORY_FILE, record);
 }
 
@@ -302,7 +307,7 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     id: obj.id,
     outcome: obj.outcome,
   };
-  // `spec`, `resolved`, `ms`, `via` and `failed` are optional: a line with a wrong-typed one keeps its other fields.
+  // `spec`, `resolved`, `ms`, `via`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
   if (typeof obj.spec === 'string' && obj.spec !== '') {
     entry.spec = obj.spec;
   }
@@ -317,6 +322,9 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
   }
   if (Array.isArray(obj.failed) && obj.failed.length > 0 && obj.failed.every((one) => typeof one === 'string')) {
     entry.failed = obj.failed as string[];
+  }
+  if (typeof obj.note === 'string' && obj.note !== '') {
+    entry.note = obj.note;
   }
   return entry;
 }

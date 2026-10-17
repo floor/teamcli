@@ -6,7 +6,7 @@
 // is touched and no real socket is opened.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -19,6 +19,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { updateState } from '../src/state.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
+import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T05:00:00.000Z');
@@ -147,6 +148,18 @@ const HELD_DIALOG = [
 const HELD_WRAPPED = '╭ Held message from\n│ another session\n╰──────────────';
 const QUIET = claudeBox('');
 
+/** The held-message dialog as a live Claude Code 2.1.302 pane drew it (the capture in
+ *  `fixtures/claude-code/2.1.302/held.txt`): the transcript row naming the held message, then the
+ *  dialog with its two choices — and no composer under it. */
+const HELD_REAL = readFileSync(new URL('./fixtures/claude-code/2.1.302/held.txt', import.meta.url), 'utf8');
+
+/** A live composer under a transcript row that quotes the dialog's sentence — our own drops, docs
+ *  and tests print it. The box reader sees the composer, so this screen is not the dialog. */
+const QUOTE_ABOVE_BOX = [
+  "⏺ the seat was told: don't send while 'Held message from another session' is up",
+  claudeBox(''),
+].join('\n');
+
 /** The field report's pane: a seat idle at its prompt, and a "connection lost" line two turns
  *  above it — the sentence the pane has scrolled past, not the newest turn. */
 const OLD_ERROR = [
@@ -189,6 +202,47 @@ describe('a pane the session holds at its cross-session frame is never a deliver
 
     expect(code).toBe(1);
     expect(io.out).not.toContain('delivered');
+    expect(host.dials()).toBe(0);
+    expect(lastOutcome(w, 'lead')).not.toBe('delivered');
+  });
+
+  test('the live capture is the dialog because no composer is under it, and a quote above a box is not', () => {
+    expect(showsHeldFrameDialog(HELD_REAL)).toBe(true);
+    expect(readScreen('claude-code', HELD_REAL).kind).toBe('unknown');
+    // The same sentence quoted in the transcript, with a live composer under it, is not the
+    // dialog: the box reader sees the box.
+    expect(showsHeldFrameDialog(QUOTE_ABOVE_BOX)).toBe(true);
+    expect(readScreen('claude-code', QUOTE_ABOVE_BOX).kind).toBe('idle');
+  });
+
+  test('a send to a live box under a quoted sentence is delivered, not taken for the dialog', async () => {
+    const w = world();
+    const typed = (line: string) => [QUOTE_ABOVE_BOX.split('\n')[0] as string, claudeBox(line)].join('\n');
+    const host = fake(w, { idle: QUOTE_ABOVE_BOX, typed, after: 'working' });
+    const io = owner(w.root);
+
+    const code = await runSend(['lead', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(host.typed).toHaveLength(1);
+    expect(host.typed[0]?.pane).toBe('w1:p1');
+    expect(host.typed[0]?.text).toContain('send-drops');
+    expect(host.enters).toEqual(['w1:p1']);
+    expect(host.dials()).toBe(0);
+  });
+
+  test('the captured held dialog stops the send before anything is typed', async () => {
+    const w = world();
+    const host = fake(w, { idle: HELD_REAL });
+    const io = owner(w.root);
+
+    const code = await runSend(['lead', 'hello'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.out).not.toContain('delivered');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
     expect(host.dials()).toBe(0);
     expect(lastOutcome(w, 'lead')).not.toBe('delivered');
   });

@@ -23,16 +23,19 @@ file](../team-file.md#delivery_order)). A team file that writes a word with no l
 leg, or a leg twice is refused when the file is read. This build carries no `mcp-inbox` leg and makes no socket write — a frame can land at a
 busy session's held-message dialog, where the box is blocked — so a walk that keeps `mcp-inbox`
 records it `unavailable`, and a Claude Code seat's walk records its `native` leg the same way.
-`--wait`, which rides that frame, is refused until the native leg ships. `delivered` means herdr reported the seat `working` — or `done` or `blocked`, and not
-the status read before Enter — after that one line and Enter, or the transcript shows the drop
-being read (a CLI's status can lag while it works), the line had left the seat's input box, and
-the pane was not a dialog this command already classifies: question, permission, trust, vendor notice, provider error, or
-rate limit. A screen that is one of those is not reached. The report names the kind and the
-drop path, and nothing further is pressed. The exit code of the typing commands is not the
-evidence. On herdr 0.7.1 the working status is the pane hint `ctrl+c to stop` for cursor, a
-spinner in the terminal title for codex, and the `esc to cancel` footer for agy. A cursor pane
-narrow enough to wrap the hint can submit while herdr stays idle; that run is `not-submitted`,
-not a silent success.
+`--wait`, which rides that frame, is refused until the native leg ships. `delivered` means the
+line had left the seat's input box after that one line and Enter — either herdr reported the seat
+`working` (or `done` or `blocked`, and not the status read before Enter), or the transcript shows
+the drop being read (a CLI's status can lag while it works) — and the pane was not a dialog this
+command already classifies: question, permission, trust, vendor notice, provider error, or
+rate limit. A box that cleared with no status or transcript evidence inside the window is
+`delivered (taken, not yet confirmed)`: the seat took the line, and the transcript or the status
+is read for the sign that it acted on it — a taken line is never typed again. A screen that is
+one of those dialogs is not reached. The report names the kind and the drop path, and nothing
+further is pressed. The exit code of the typing commands is not the evidence. On herdr 0.7.1 the
+working status is the pane hint `ctrl+c to stop` for cursor, a spinner in the terminal title for
+codex, and the `esc to cancel` footer for agy. A cursor pane narrow enough to wrap the hint can
+submit while herdr stays idle; that run is delivered as taken, never a failed send.
 
 `team send --wait` needs the native leg — the team route that carries the call and the caller's
 own `SendMessage` that carries the reply — and this build does not ship it. A waited send is
@@ -60,7 +63,7 @@ down: a run that ends `delivered`, `answered`, `held`, `not-submitted`, `timeout
 to the project's message history, which [team feed](feed.md) reads. A reply's text is not written
 down — it reaches this terminal and no file. The daily log keeps the seat and the sizes.
 
-The outcome is always confirmed — one of `delivered`, `answered`, `held`, `not-submitted`, `timeout`,
+The outcome is always one of `delivered`, `answered`, `held`, `not-submitted`, `timeout`,
 `unreachable` or `refused` — printed and matched by the exit code, or written as one machine-readable document
 with `--json`. `--list` sends nothing: it prints the addressable seats — the file's own roster,
 each seat's human name as its `@<nickname>` address, and the seats of the other teams of the
@@ -274,7 +277,7 @@ line on stderr and has none.
 
 | Outcome | Exit | Printed |
 | --- | --- | --- |
-| delivered | 0 | `<seat>: delivered` on stdout |
+| delivered | 0 | `<seat>: delivered` on stdout, or `<seat>: delivered (taken, not yet confirmed)` when the box cleared before the seat showed it acted |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
@@ -288,7 +291,12 @@ line on stderr and has none.
 
 A running watch retries a `held`, `not-submitted` or dialog-stopped send once the seat is idle,
 up to three tries in thirty minutes; the line the send printed tells the sender so, and a retry
-that stops says where the message is.
+that stops says where the message is. A `delivered (taken, not yet confirmed)` send is never
+retried: the seat took the line, and a running watch reads the transcript and the status on its
+later passes for the sign that it acted on it. A sign confirms the delivery silently; a seat that
+sits free for a minute past the send, or a record thirty minutes old, with no sign at all, is said
+once — `<seat>: a send from <sender> was taken but never acted on`, with the drop file's path —
+and one more history line keeps it. Even then the line is never typed again.
 
 Under `--json` the same outcomes are one document: the action surface for a send, the roster
 document for `--list`, and the structured error document for an exit 1 or 2 — `error.id` is the
@@ -320,17 +328,22 @@ an Enter. After Enter the run verifies two things: the trigger has left the box,
 the seat working (or a `done` or `blocked` that is new) or the transcript shows the drop being
 read — a row that names the drop's id and is not the echo of the trigger line, such as `Explored 1
 file (<id>)`. herdr's status can lag or stay idle while a CLI works, so a box that has cleared is
-waited on for up to 20 seconds in all before the run gives up. A try that shows neither is followed by a
-re-read, and another Enter goes only to a box that still holds exactly the trigger line — never
-to an empty one, to one that holds something else, or to a dialog — at most three Enters in all,
-waiting 1, 3 and then 9 seconds for the seat to show it. A box that cannot be read keeps the first
-Enter and is judged by herdr's status alone, and no other Enter goes to it. A seat that was already
-working before Enter proves nothing by its status, and a status that moved under a dialog counts
-for nothing: only the transcript can show that seat took this line. An unverified send writes one line to
-`team.log` for the orchestrator.
+waited on for up to 20 seconds in all before the run stops waiting. A try that shows neither is
+followed by a re-read, and another Enter goes only to a box that still holds exactly the trigger
+line — never to an empty one, to one that holds something else, or to a dialog — at most three
+Enters in all, waiting 1, 3 and then 9 seconds for the seat to show it. After the last Enter the
+box itself decides: a trigger still in it was not taken, and the run is `not-submitted`; a box
+that no longer holds the trigger — empty, or holding other text — took the line, and the run is
+delivered as `taken, not yet confirmed`. A box that cannot be read keeps the first Enter and is
+judged by herdr's status alone, and no other Enter goes to it: with no evidence and no box to
+show the line left, that run is `not-submitted`. A seat that was already working before Enter
+proves nothing by its status, and a status that moved under a dialog counts for nothing: only the
+transcript can show that seat took this line. An unverified send writes one line to `team.log`
+for the orchestrator.
 
 `unreachable` is the seat not reached: no live agent of that name, a screen that is one of the
-dialogs listed above, no socket file for a waited Claude Code seat, a connection that would not
+dialogs listed above, the held-message dialog — the sentence on a screen with no live composer to
+read — no socket file for a waited Claude Code seat, a connection that would not
 take that frame, or a pane that would not take the trigger — the socket reasons return with the
 leg — and a walk that ran out of legs is unreachable too, printing `no leg of its delivery order
 took the send` with the legs that failed. `timeout`
@@ -483,7 +496,9 @@ team send: refused: nobody: it is not a declared seat; the file's seats are clau
 exit 1
 ```
 
-A native-CLI seat is a drop file and one trigger. `delivered` is herdr reporting the seat working:
+A native-CLI seat is a drop file and one trigger. `delivered` is the seat taking that trigger:
+herdr reporting the seat working, the transcript showing the drop read, or the trigger having
+left the box with its confirmation still to come (`taken, not yet confirmed`):
 
 ```console
 $ team send gpt-reviewer "hello" ; echo "exit $?"

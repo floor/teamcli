@@ -557,6 +557,7 @@ function eventJson(entry: HistoryEntry): Record<string, unknown> {
   if (entry.ms !== undefined) obj.ms = entry.ms;
   if (entry.via !== undefined) obj.via = entry.via;
   if (entry.failed !== undefined) obj.failed = entry.failed;
+  if (entry.note !== undefined) obj.note = entry.note;
   return obj;
 }
 
