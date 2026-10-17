@@ -3114,13 +3114,13 @@ scene('plan.none', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '[]\n');
   recordLead(place);
-  return show(await planned(place), 'nothing is takeable');
+  return show(await planned(place), '0 task(s)');
 });
 scene('plan.shown', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '- id: m1\n  title: the task title\n');
   recordLead(place);
-  return show(await planned(place), 'm1  the task title');
+  return show(await planned(place), '1     open   -      the task title');
 });
 scene('plan.caller', async (place) => {
   write(place, TASKS);

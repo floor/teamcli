@@ -206,9 +206,9 @@ try {
   console.log(glassA);
   const planSec = section(glassA, '--- plan ---');
   const helpSec = section(glassA, '--- help ---');
-  check(planSec.includes('t1  the urgent title\n  priority: 1\n  deadline: 2020-01-01T00:00:00Z (overdue)'), `plan did not mark t1 overdue:\n${planSec}`);
-  check(planSec.includes('t2  the later title'), `plan did not list t2:\n${planSec}`);
-  check(planSec.indexOf('t1  the urgent title') < planSec.indexOf('t2  the later title'), 'plan did not put the prioritised record first');
+  check(planSec.includes('  1     overdue  -      the urgent title\n'), `plan did not mark t1 overdue:\n${planSec}`);
+  check(planSec.includes('  2     open     -      the later title\n'), `plan did not list t2:\n${planSec}`);
+  check(planSec.indexOf('the urgent title') < planSec.indexOf('the later title'), 'plan did not put the prioritised record first');
   check(planSec.includes('exit:0'), `plan did not exit 0:\n${planSec}`);
   check(/\bplan\b/.test(helpSec), `--help did not list plan:\n${helpSec}`);
   check(helpSec.includes('exit:0'), `--help did not exit 0:\n${helpSec}`);

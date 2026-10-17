@@ -682,6 +682,38 @@ export const ISSUES_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team plan` (`schema/plan.schema.json`). */
+export const PLAN_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.plan',
+  fileName: 'plan.schema.json',
+  title: 'team plan --json output',
+  required: ['format', 'project', 'session', 'tasks'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    tasks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['step', 'state', 'owner', 'id', 'title'],
+        properties: {
+          step: { type: 'integer', minimum: 1 },
+          state: { type: 'string', enum: ['open', 'overdue'] },
+          owner: { type: ['string', 'null'] },
+          id: { type: 'string', minLength: 1 },
+          title: { type: 'string', minLength: 1 },
+          priority: { type: ['string', 'number'] },
+          milestone: { type: 'string' },
+          deadline: { type: 'string' },
+          description: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -698,6 +730,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
   ISSUES_OUTPUT_SCHEMA,
+  PLAN_OUTPUT_SCHEMA,
 ];
 
 

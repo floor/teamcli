@@ -992,6 +992,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -1003,7 +1009,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team plan"
+        "team plan [--json]"
       ]
     },
     {

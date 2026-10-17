@@ -204,7 +204,8 @@ try {
   const planned = await planOf('worker', other.pane, checkout);
   console.log('--- plan ---');
   console.log(JSON.stringify(planned));
-  if (planned.code !== 0 || planned.out !== 'm1  the task title\n' || planned.err !== '') throw new Error(`plan: ${planned.out}${planned.err}`);
+  const plannedOut = 'team acme, session "acme"\n  STEP  STATE  OWNER  TITLE\n  1     open   -      the task title\n1 task(s)\n';
+  if (planned.code !== 0 || planned.out !== plannedOut || planned.err !== '') throw new Error(`plan: ${planned.out}${planned.err}`);
   if (readFileSync(leasePath, 'utf8') !== leaseBefore) throw new Error('the plan wrote the lease');
 
   const second = await claim('worker', other.pane, checkout);
