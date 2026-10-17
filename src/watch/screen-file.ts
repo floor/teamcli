@@ -138,7 +138,10 @@ function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string,
     chrome: chrome ? chromeOf(chrome.value) : [],
     composer: composer ? composerOf(composer.value) : DEFAULT_COMPOSER,
   };
-  if (profile) data.profile = profile;
+  if (profile) {
+    data.profile = profile;
+    data.whole_screen = true;
+  }
 
   for (const name of STAGES) {
     const entry = optional(entries, name);

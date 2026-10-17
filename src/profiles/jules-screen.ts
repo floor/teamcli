@@ -1,13 +1,14 @@
 // The Jules TUI, read by a screen module instead of data patterns. Its session table puts the
-// input line at the very top of the pane and the table under it, so the composer row sits
-// outside the last-20-line window every stage reads: what the window does hold is the table's
-// own footer, and that footer is drawn only while the table — and its input — is on screen.
+// input line at the very top of the pane and the table under it, and its detail card draws at
+// the top above a dozen blank rows: neither sits in the last 20 lines. A screen module reads
+// the whole visible screen — the core's window is the data patterns' — so this reader sees the
+// input line, the table's footer and the card's status wherever the TUI draws them.
 //
 // Captured from jules 0.1.42 (herdr 0.7.1, a 54x23 pane):
 //   * the table's footer wraps at this width as
 //       ` enter: select session | ctrl+r: refresh |` / `ctrl+d: delete | ctrl+c: quit`
 //   * its input line reads ` > Search sessions or type / to use` when empty, and
-//       ` > unsent probe text` once text is typed — the line the window cannot see.
+//       ` > unsent probe text` once text is typed — the first line of the screen.
 //   * a row of the session list at 120 columns (a wider pane, captured locally) ends in its
 //     status cell: `...  4m45s ago                             │` for no status, and
 //       `...  7m16s ago        Awaiting User Feed   │`, `...  18h4m46s ago     Completed            │`.
@@ -44,9 +45,16 @@ const SEPARATOR = /#\s+[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/;
  *  never decides. */
 const WORKING_CELL = /(?:\s{2}Planning|\s{2}Awaiting User(?: Feed(?:back)?)?|^│Feedback)\s*│\s*$/;
 
+/** The detail card's footer, under its actions. Drawn on the card alone; the table's own
+ *  footer reads differently. */
+const CARD_FOOTER = /enter: select action/;
+
+/** The card's finished status, in the same cell as WORKING_CELL. */
+const COMPLETED_CELL = /\s{2}Completed\s*│\s*$/;
+
 /** Screens the compose module walks, and the logged-out table. None of them is a prompt: a
  *  brief typed here would land in whatever the CLI draws next, so each reads unknown. The
- *  markers are the screens' own footers and banners, all inside the last-20-line window. */
+ *  markers are the screens' own footers and banners. */
 const TRANSITIONAL: readonly RegExp[] = [
   /enter: select repo/, // the repo chooser
   /enter: create the session/, // the task box
@@ -66,10 +74,11 @@ export const profile: ScreenProfile = {
 
   /**
    * The seat works while the session the operator has opened is still running, and reads idle
-   * on a `Completed` one. Only the detail card decides, never the list: the list groups sessions
-   * by repo for the whole account, and a run left a `Planning` row and an `Awaiting User F…` row
-   * standing for hours after their sessions had stopped moving — a list row does not say which
-   * session is this seat's. The card holds exactly one session, opened with `enter` on the list.
+   * on a `Completed` one. Only the detail card decides: the list groups sessions by repo for
+   * the whole account, and a run left a `Planning` row and an `Awaiting User F…` row standing
+   * for hours after their sessions had stopped moving — a list row does not say which session
+   * is this seat's. The card holds exactly one session, opened with `enter` on the list, and
+   * the table's footer is never on screen with it.
    */
   working(lines: string[]): boolean {
     if (lines.some((line) => TABLE_FOOTER.test(line))) return false;
@@ -77,14 +86,18 @@ export const profile: ScreenProfile = {
   },
 
   /**
-   * The table's input is ready when the table is. Its input line is the pane's first line and
-   * `classifyLines` sees the last 20, so the footer is the reading: the TUI draws it only on
-   * the table, and the table takes a brief only while its input has the focus. A typed line in
-   * that input cannot be told from the empty one at this window; the compose module reads the
-   * whole screen and refuses a line it finds there.
+   * The table's input is ready when the table is, and a finished card is a free seat: the next
+   * send walks back to the table before it types. A running card is not free — the working
+   * stage runs first, and its match keeps this reading unknown. A typed line in the table's
+   * input cannot be told from the empty one by these marks; the compose module reads it whole
+   * and refuses a line it finds there.
    */
   composer(lines: string[]): ComposerReading {
-    return lines.some((line) => TABLE_FOOTER.test(line)) ? { kind: 'idle' } : { kind: 'unknown' };
+    if (lines.some((line) => TABLE_FOOTER.test(line))) return { kind: 'idle' };
+    if (lines.some((line) => CARD_FOOTER.test(line)) && lines.some((line) => ROW.test(line) && COMPLETED_CELL.test(line))) {
+      return { kind: 'idle' };
+    }
+    return { kind: 'unknown' };
   },
 };
 

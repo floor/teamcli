@@ -56,29 +56,46 @@ export function vendorNoticeRange(cli: string): VersionRange | null {
   return DATA[cli]?.vendor_notice?.tested ?? null;
 }
 
-// The window every pattern sees: the pane's last 20 lines. Styled lines are trimmed only past
-// their last escape; the core trims each line's plain form for matching.
+// The window the data patterns see: the pane's last 20 lines. Styled lines are trimmed only
+// past their last escape; the core trims each line's plain form for matching.
 function windowOf(lines: string[]): string[] {
   return lines.map((line) => line.trimEnd()).slice(-20);
 }
 
+// The whole visible screen, for a CLI read by a screen module. Such a CLI draws where it likes,
+// and jules draws its session card at the very top of the pane, above eighteen blank rows: the
+// last-20 window never holds the card's status. The read ends its last row with a newline, and
+// that newline is not a row, so it is dropped. The module owns the reading and the core still
+// owns the stage order and the floor, which can only add caution.
+function wholeOf(lines: string[]): string[] {
+  const trimmed = lines.map((line) => line.trimEnd());
+  if (trimmed.length > 1 && trimmed[trimmed.length - 1] === '') trimmed.pop();
+  return trimmed;
+}
+
+// What a profile's reading may see: the whole screen for a CLI whose reading is a module, the
+// window for data.
+function linesFor(data: ScreenData, lines: string[]): string[] {
+  return data.whole_screen === true ? wholeOf(lines) : windowOf(lines);
+}
+
 /** The same classification `classify` runs, against a screen that may carry added patterns. */
 export function classifyData(data: ScreenData, lines: string[], options?: ScreenOptions | ReadClock): Screen {
-  return classifyLines(data, windowOf(lines), options);
+  return classifyLines(data, linesFor(data, lines), options);
 }
 
 /** Every stage, in the core's order. The first one that matches wins. */
 export function classify(cli: string | ScreenData, lines: string[], options?: ScreenOptions | ReadClock): Screen {
   const data = typeof cli === 'string' ? DATA[cli] : cli;
   if (!data) return { kind: 'unknown' };
-  return classifyLines(data, windowOf(lines), options);
+  return classifyLines(data, linesFor(data, lines), options);
 }
 
 /** The composer alone. A running turn would otherwise hide an empty input box. */
 export function classifyComposer(cli: string | ScreenData, lines: string[], options?: ScreenOptions | ReadClock): Screen {
   const data = typeof cli === 'string' ? DATA[cli] : cli;
   if (!data) return { kind: 'unknown' };
-  return composeLines(data, windowOf(lines), options);
+  return composeLines(data, linesFor(data, lines), options);
 }
 
 export function readScreen(cli: string | ScreenData, screen: string | undefined, options?: ScreenOptions | ReadClock): Screen {
