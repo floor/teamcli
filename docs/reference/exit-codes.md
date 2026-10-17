@@ -276,6 +276,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `proc.invocation` | `proc` | 2 | the invocation can't be read | `team proc` |
 | `proc.not-yours` | `proc` | 2 | the caller may not read this team | `team proc list` |
 | `projects.listed` | `projects` | 0 | the projects are listed | `team projects` |
+| `projects.unreadable` | `projects` | 1 | the project registry cannot be read | `team projects` |
 | `projects.invocation` | `projects` | 2 | the invocation can't be read | `team projects extra` |
 | `register.already` | `register` | 0 | the seat is already recorded on that pane | `team register worker` |
 | `register.dry-run` | `register` | 0 | the seat would be registered; nothing was written | `team register worker --dry-run` |

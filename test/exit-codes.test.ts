@@ -65,6 +65,7 @@ import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/
 import type { Key, Terminal } from '../src/launch/terminal.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
 import { registerAgent } from '../src/registry/agents.ts';
+import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
@@ -1712,6 +1713,13 @@ scene('projects.listed', async (place) => {
   expect(ran.out).toContain(TEAM_B);
   return show(ran, '4f2a1b7c9d0e');
 });
+scene('projects.unreadable', async (place) => show(
+  await projects(place, [], {
+    ...projectSources(),
+    list: () => { throw new ProjectsError(`${projectsFile(place.home)}: line 2: "projects" must be a map`); },
+  }),
+  'the project registry cannot be read',
+));
 
 async function seats(place: Place, argv: string[], sources: SeatsSources, caller: Caller = owner): Promise<Ran> {
   const io = testIo(place.root, caller);
