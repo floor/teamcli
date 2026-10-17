@@ -33,7 +33,7 @@ import { launchedIdentity } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
-import { refuse, writeJson } from '../output/index.ts';
+import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict, rosterOf } from '../permissions/who.ts';
 import { profileFor } from '../profiles/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
@@ -347,9 +347,8 @@ function sameFile(a: string, b: string): boolean {
 
 export async function runRegister(argv: string[], io: Io, sources: RegisterSources = realSources): Promise<number> {
   // `--json` is read off the raw argv before the parser: an invocation the parser refuses still
-  // owes the `team.error` document rather than the plain usage line. (The shared helper lands
-  // with the output-contract branch; this command switches to it then.)
-  const wantsJson = argv.includes('--json');
+  // owes the `team.error` document rather than the plain usage line.
+  const wantsJson = hasJsonFlag(argv);
   const jsonNotes: string[] = [];
   const collect = (text: string): void => {
     for (const line of text.split('\n')) if (line !== '') jsonNotes.push(plainLine(line));
@@ -358,7 +357,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // document reaches stdout, and stderr stays empty.
   const out = cleanedIo(wantsJson ? { ...io, stdout: collect, stderr: collect } : io);
   const args = readArgs(argv, ['session', 'pane'], ['dry-run', 'json']);
-  const json = wantsJson || args.flags.has('json');
+  const json = wantsJson;
   if (args.error) return usage(io, json, args.error);
   if (args.rest.length !== 1) {
     return usage(io, json, args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : 'a seat name is required');

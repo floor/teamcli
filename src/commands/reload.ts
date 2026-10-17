@@ -29,7 +29,7 @@ import { upPlan } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
-import { refuse, writeJson } from '../output/index.ts';
+import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { modelDiffers } from '../status/statusline.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
@@ -95,10 +95,10 @@ export default reload;
  */
 export async function runReload(argv: string[], io: Io, sources: ReloadSources = realSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['file'], ['json']);
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
-  const json = args.flags.has('json') || argv.includes('--json');
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['file'], ['json']);
   if (args.error) return invocation(io, json, args.error);
   const name = args.rest.length === 1 ? args.rest[0] : undefined;
   if (!name) {

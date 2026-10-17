@@ -61,7 +61,7 @@ import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRules
 import { rulesOf } from '../launch/rules.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
-import { planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
+import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
@@ -152,10 +152,10 @@ export default restart;
 
 export async function runRestart(argv: string[], io: Io, sources: RestartSources = realSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'file'], ['abandon', 'dry-run', 'json']);
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
-  const json = args.flags.has('json') || argv.includes('--json');
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['session', 'file'], ['abandon', 'dry-run', 'json']);
   if (args.error || args.rest.length !== 1) {
     const reason = args.error ?? (args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : 'a seat name is required');
     return usage(out, json, reason);

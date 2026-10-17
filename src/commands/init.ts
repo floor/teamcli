@@ -11,7 +11,7 @@ import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
-import { refuse, writeJson } from '../output/index.ts';
+import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { noteTeam } from '../registry/teams.ts';
 import { LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
@@ -151,10 +151,10 @@ export async function runInit(
   readStanding?: (root: string) => Standing,
   sources: Pick<DoctorSources, 'loggedIn'> & { now?: () => Date; registryHome?: string } = doctorSources,
 ): Promise<number> {
-  const args = readArgs(argv, [], ['restore', 'json']);
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
-  const json = args.flags.has('json') || argv.includes('--json');
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, [], ['restore', 'json']);
   if (args.error || args.rest.length) {
     refuse(io, json, 'init', {
       id: 'init.invocation',

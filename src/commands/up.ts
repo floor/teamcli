@@ -67,7 +67,7 @@ import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts'
 import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
-import { planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
+import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
@@ -654,10 +654,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'serial', 'json']);
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
-  const json = args.flags.has('json') || argv.includes('--json');
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'serial', 'json']);
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];

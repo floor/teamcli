@@ -33,7 +33,7 @@ import { removeRulesFile } from '../launch/rules-file.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { plainText } from '../launch/plain.ts';
-import { refuse, writeJson } from '../output/index.ts';
+import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 
 export type RemoveSources = DownSources & {
   /** Foreground process names in the pane, or null when the pane can't be read. */
@@ -126,10 +126,10 @@ function editProblems(path: string, name: string, keep: boolean): Problem[] | nu
 }
 
 export async function runRemove(argv: string[], io: Io, sources: RemoveSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['session', 'file'], ['keep', 'abandon', 'json']);
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
-  const json = args.flags.has('json') || argv.includes('--json');
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['session', 'file'], ['keep', 'abandon', 'json']);
   // The lines plain output writes while it works (the stop's own lines) ride on the document as
   // notes under `--json`; nothing provisional or working reaches the terminal in that mode.
   const jsonNotes: string[] = [];

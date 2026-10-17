@@ -222,10 +222,14 @@ describe('team add --json', () => {
 
   test('a bad invocation is the add.invocation document and exit 2', async () => {
     const made = world();
-    const io = testIo(project, owner);
-    expect(await runAdd(['--json', '--nope'], io, sources(made))).toBe(2);
-    expect(io.err).toBe('');
-    assertJsonErrorShape(io.out, { id: 'add.invocation' });
+    // `--json` is read off the raw argv, so a bad option before it, and a malformed
+    // `--json=1` the parser refuses, still owe the document rather than the usage line.
+    for (const argv of [['--json', '--nope'], ['--nope', '--json'], ['worker', '--json=1']]) {
+      const io = testIo(project, owner);
+      expect(await runAdd(argv, io, sources(made))).toBe(2);
+      expect(io.err).toBe('');
+      assertJsonErrorShape(io.out, { id: 'add.invocation' });
+    }
     expect(made.creates).toEqual([]);
   });
 

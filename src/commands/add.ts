@@ -46,7 +46,7 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
-import { planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
+import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, shellQuote, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
@@ -158,9 +158,8 @@ export default add;
 
 export async function runAdd(argv: string[], io: Io, sources: AddSources = realSources): Promise<number> {
   // `--json` is read off the raw argv before the parser: an invocation the parser refuses still
-  // owes the `team.error` document rather than the plain usage line. (The shared helper lands
-  // with the output-contract branch; this command switches to it then.)
-  const wantsJson = argv.includes('--json');
+  // owes the `team.error` document rather than the plain usage line.
+  const wantsJson = hasJsonFlag(argv);
   // Under `--json` nothing but the one document reaches stdout: the seat's records (the run's
   // closing line last) and every other line the plain output prints are collected here instead.
   const finalRecords: string[] = [];
@@ -172,7 +171,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(wantsJson ? { ...io, stdout: collectInto(finalRecords), stderr: collectInto(jsonNotes) } : io);
   const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file'], ['temporary', 'dry-run', 'json']);
-  const json = wantsJson || args.flags.has('json');
+  const json = wantsJson;
   if (args.error) {
     refuse(io, json, 'add', { id: 'add.invocation', message: args.error, repair: null, code: 2, usage: USAGE });
     // exit: add.invocation

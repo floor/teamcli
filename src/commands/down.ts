@@ -47,7 +47,7 @@ import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
-import { planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
+import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 
 // What `down` reads from outside the file, so tests can stand in for it.
 export type DownSources = {
@@ -413,10 +413,10 @@ function leftNote(claim: { name: string; close: boolean } | null, pane: string):
 }
 
 export async function runDown(argv: string[], io: Io, sources: DownSources): Promise<number> {
-  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'wait', 'abandon', 'json']);
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
-  const json = args.flags.has('json') || argv.includes('--json');
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'wait', 'abandon', 'json']);
   // The lines plain output writes while it works ride on the document as notes under `--json`.
   const jsonNotes: string[] = [];
   const collect = (text: string): void => {
