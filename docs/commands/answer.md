@@ -70,9 +70,9 @@ Usage: team answer <seat> trust [--session <name>] [--file <path>] [--json]
 Presses the one recorded key of a folder-trust dialog, and only that key. Every check has
 to pass on two fresh reads of the pane, and the folder must be the lobby on three readings
 at once: the path the screen shows, the folder the pane itself reports working in, and the
-lobby's parent directory. <seat> names one seat of the approved copy; trust is the only
+lobby's parent directory. <seat> names one seat of the team file; trust is the only
 dialog word. No option takes a key, a text, or another dialog. The pane is herdr's one agent
-of that name; a pane recorded in the state selects nothing. A name the copy does not carry
+of that name; a pane recorded in the state selects nothing. A name the file does not carry
 is left as it is, and two agents of the name send nothing. --session is the owner's alone,
 and so is --file: each is refused before the flagged session or file is read. The answer
 opens on the team's context line and closes on <seat>: answered trust (<folder>). A refused
