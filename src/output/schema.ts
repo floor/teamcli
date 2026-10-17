@@ -709,11 +709,76 @@ export const TEMPO_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** The `team.proc` action envelope, on `add` and `done`. */
+const PROC_ACTION_BRANCH: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['schema', 'format', 'dry_run', 'status', 'action_summary', 'project', 'session', 'target'],
+  properties: {
+    schema: schemaTagFragment('team.proc', 1),
+    format: { type: 'integer', const: 1 },
+    dry_run: { type: 'boolean' },
+    status: { type: 'string', enum: ['added', 'done'] },
+    action_summary: { type: 'string', minLength: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    target: { type: 'string', minLength: 1 },
+    value: { type: ['string', 'null'] },
+  },
+};
+
+/** The `team.proc` reading document, on `list`. */
+const PROC_LIST_BRANCH: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['schema', 'format', 'project', 'session', 'notice', 'procs', 'summary'],
+  properties: {
+    schema: schemaTagFragment('team.proc', 1),
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    notice: { type: ['string', 'null'] },
+    procs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name', 'by', 'since', 'pid', 'note'],
+        properties: {
+          name: { type: 'string', minLength: 1 },
+          by: { type: 'string', minLength: 1 },
+          since: { type: 'string', minLength: 1 },
+          pid: { type: ['integer', 'null'], minimum: 1 },
+          note: { type: ['string', 'null'] },
+        },
+      },
+    },
+    summary: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['processes'],
+      properties: {
+        processes: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team proc` (`schema/proc.schema.json`). */
+export const PROC_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.proc',
+  fileName: 'proc.schema.json',
+  title: 'team proc --json output',
+  properties: {},
+  oneOf: [PROC_ACTION_BRANCH, PROC_LIST_BRANCH],
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
   TEMPO_OUTPUT_SCHEMA,
+  PROC_OUTPUT_SCHEMA,
   SEATS_OUTPUT_SCHEMA,
   PROJECTS_OUTPUT_SCHEMA,
   DOCTOR_OUTPUT_SCHEMA,

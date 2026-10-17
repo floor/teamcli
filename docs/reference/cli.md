@@ -630,9 +630,9 @@ Hidden: no
 
 Usage:
 
-    team proc add <name> [--pid <pid>] [--note <text>]
+    team proc add <name> [--pid <pid>] [--note <text>] [--json]
     team proc list [--json]
-    team proc done <name>
+    team proc done <name> [--json]
 
 ### Flags
 
@@ -651,13 +651,14 @@ Hidden: no
 
 Usage:
 
-    team proc add <name> [--pid <pid>] [--note <text>]
+    team proc add <name> [--pid <pid>] [--note <text>] [--json]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--note` | yes | no | no |
 | `--pid` | yes | no | no |
 | `-h` | no | no | yes |
@@ -674,13 +675,14 @@ Hidden: no
 
 Usage:
 
-    team proc done <name>
+    team proc done <name> [--json]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals

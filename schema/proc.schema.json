@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/proc.schema.json",
+  "title": "team proc --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "format",
+        "dry_run",
+        "status",
+        "action_summary",
+        "project",
+        "session",
+        "target"
+      ],
+      "properties": {
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "const": "team.proc"
+            },
+            "version": {
+              "type": "integer",
+              "const": 1
+            }
+          }
+        },
+        "format": {
+          "type": "integer",
+          "const": 1
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "added",
+            "done"
+          ]
+        },
+        "action_summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "format",
+        "project",
+        "session",
+        "notice",
+        "procs",
+        "summary"
+      ],
+      "properties": {
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "const": "team.proc"
+            },
+            "version": {
+              "type": "integer",
+              "const": 1
+            }
+          }
+        },
+        "format": {
+          "type": "integer",
+          "const": 1
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "procs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "by",
+              "since",
+              "pid",
+              "note"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "by": {
+                "type": "string",
+                "minLength": 1
+              },
+              "since": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pid": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "processes"
+          ],
+          "properties": {
+            "processes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

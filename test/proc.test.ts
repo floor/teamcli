@@ -10,7 +10,9 @@ import { runProc, type ProcSources } from '../src/commands/proc.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { currentTeam } from '../src/file/current.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { PROC_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { liveProcs, pidAlive, pruneProcs, readState, STATE_FILE, updateState, type State } from '../src/state.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 import { testIo, type TestIo } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -72,6 +74,10 @@ function sources(where: { home: string }, clock: { at: number } = { at: AT }): P
 const owner = (where: { root: string }): TestIo => testIo(where.root, { kind: 'owner' });
 const seat = (where: { root: string }, name: string): TestIo => testIo(where.root, { kind: 'seat', name, pane: 'w1:p1' });
 
+/** What an action prints: the context line, then the line it always printed. */
+const said = (where: { session: string }, line: string): string =>
+  `team acme, session "${where.session}"\n${line}\n`;
+
 /** The state lives beside the team file, in `.agents` — the folder `currentTeam` hands a command. */
 const dirOf = (where: { root: string }): string => join(where.root, '.agents');
 
@@ -91,7 +97,7 @@ describe('team proc add', () => {
     const where = place();
     const io = seat(where, 'claude-keeper');
     expect(await runProc(['add', 'build', '--pid', String(LIVE), '--note', 'the release build'], io, sources(where))).toBe(0);
-    expect(io.out).toBe('proc build: added\n');
+    expect(io.out).toBe(said(where, 'proc build: added'));
     expect(io.err).toBe('');
     expect(procsOf(where)).toEqual({
       build: { by: 'claude-keeper', at: new Date(AT).toISOString(), pid: LIVE, note: 'the release build' },
@@ -147,9 +153,11 @@ describe('team proc add', () => {
     const bad = seat(where, 'lead');
     expect(await runProc(['add', '../build'], bad, sources(where))).toBe(2);
     expect(bad.err).toBe('team proc: "../build" is a name, not a path: lowercase letters, digits and hyphens\n'
-      + 'Usage: team proc add <name> [--pid <pid>] [--note <text>]\n'
+      + 'Usage: team proc add <name> [--pid <pid>] [--note <text>] [--json]\n'
       + '       team proc list [--json]\n'
-      + '       team proc done <name>\n');
+      + '       team proc done <name> [--json]\n'
+      + '\n'
+      + 'Exits 0 when the process is recorded, listed, or cleared, 1 when the operation is refused, 2 when the invocation or team file can\'t be read.\n');
     expect(procsOf(where)).toBeUndefined();
   });
 
@@ -160,15 +168,39 @@ describe('team proc add', () => {
     expect(io.err).toBe('team proc: only the owner runs this, from a terminal outside herdr\n');
   });
 
-  test('a flag another verb takes is refused, never read silently', async () => {
+  test('--json carries the action envelope under the registered schema', async () => {
     const where = place();
     const io = owner(where);
-    expect(await runProc(['add', 'build', '--json'], io, sources(where))).toBe(2);
-    expect(io.err).toContain('team proc: add takes no --json');
-    expect(procsOf(where)).toBeUndefined();
+    expect(await runProc(['add', 'build', '--pid', String(LIVE), '--json'], io, sources(where))).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, PROC_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      schema: { name: 'team.proc', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'added',
+      action_summary: 'proc build: added',
+      project: 'acme',
+      session: where.session,
+      target: 'build',
+      value: String(LIVE),
+    });
     const done = owner(where);
-    expect(await runProc(['done', 'build', '--json'], done, sources(where))).toBe(2);
-    expect(done.err).toContain('team proc: done takes no --json');
+    expect(await runProc(['done', 'build', '--json'], done, sources(where))).toBe(0);
+    const after = assertMatchesOutputSchema<Record<string, unknown>>(done.out, PROC_OUTPUT_SCHEMA);
+    expect(after).toMatchObject({ status: 'done', action_summary: 'proc build: done', target: 'build', value: null });
+  });
+
+  test('--json: a refusal is the team.error document on stdout, stderr empty', async () => {
+    const where = place();
+    const io = owner(where);
+    expect(await runProc(['add', 'build', '--pid', String(GONE), '--json'], io, sources(where))).toBe(1);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, { id: 'proc.pid', messageContains: `pid ${GONE} is not running` });
+    const bad = owner(where);
+    expect(await runProc(['add', '../build', '--json'], bad, sources(where))).toBe(2);
+    expect(bad.err).toBe('');
+    assertJsonErrorShape(bad.out, { id: 'proc.invocation', messageContains: 'is a name, not a path' });
   });
 });
 
@@ -184,21 +216,32 @@ describe('team proc list', () => {
     expect(await runProc(['list'], io, sources(where))).toBe(0);
     expect(io.out).toBe(
       [
-        `build  claude-keeper  since ${new Date(AT).toISOString()}  pid ${LIVE}  the release build`,
-        `flaky-job  owner  since ${new Date(AT).toISOString()}`,
+        `team acme, session "${where.session}"`,
+        '  NAME       BY             SINCE                     PID   NOTE',
+        `  build      claude-keeper  ${new Date(AT).toISOString()}  4243  the release build`,
+        `  flaky-job  owner          ${new Date(AT).toISOString()}  -     -`,
+        '2 process(es)',
         '',
       ].join('\n'),
     );
   });
 
-  test('an empty registry says so, in the text and in the document', async () => {
+  test('an empty registry is an empty table and a zero count', async () => {
     const where = place();
     const io = owner(where);
     expect(await runProc(['list'], io, sources(where))).toBe(0);
-    expect(io.out).toBe('no processes recorded\n');
+    expect(io.out).toBe(
+      [
+        `team acme, session "${where.session}"`,
+        '  NAME  BY  SINCE  PID  NOTE',
+        '0 process(es)',
+        '',
+      ].join('\n'),
+    );
     const json = owner(where);
     expect(await runProc(['list', '--json'], json, sources(where))).toBe(0);
-    expect(JSON.parse(json.out)).toEqual({ format: 1, procs: [] });
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(json.out, PROC_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({ procs: [], summary: { processes: 0 }, notice: null });
   });
 
   test('--json is the records, as they were read', async () => {
@@ -206,9 +249,16 @@ describe('team proc list', () => {
     seed(where, { build: { by: 'claude-keeper', at: new Date(AT).toISOString(), pid: LIVE, note: 'the release build' } });
     const io = owner(where);
     expect(await runProc(['list', '--json'], io, sources(where))).toBe(0);
-    expect(JSON.parse(io.out)).toEqual({
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, PROC_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      schema: { name: 'team.proc', version: 1 },
       format: 1,
-      procs: [{ name: 'build', by: 'claude-keeper', at: new Date(AT).toISOString(), pid: LIVE, note: 'the release build' }],
+      project: 'acme',
+      session: where.session,
+      notice: null,
+      procs: [{ name: 'build', by: 'claude-keeper', since: new Date(AT).toISOString(), pid: LIVE, note: 'the release build' }],
+      summary: { processes: 1 },
     });
   });
 
@@ -217,6 +267,10 @@ describe('team proc list', () => {
     const io = testIo(where.root, { kind: 'unplaced', reason: 'no seat holds this pane' });
     expect(await runProc(['list'], io, sources(where))).toBe(2);
     expect(io.err).toBe('team proc: this team is not yours to read\n');
+    const json = testIo(where.root, { kind: 'unplaced', reason: 'no seat holds this pane' });
+    expect(await runProc(['list', '--json'], json, sources(where))).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, { id: 'proc.not-yours', messageContains: 'not yours to read' });
   });
 
   test('an extra word, and the flags of the other verbs, are invocation errors', async () => {
@@ -236,7 +290,7 @@ describe('team proc done', () => {
     seed(where, { build: { by: 'claude-keeper', at: new Date(AT).toISOString(), pid: LIVE } });
     const io = seat(where, 'claude-keeper');
     expect(await runProc(['done', 'build'], io, sources(where, { at: LATER }))).toBe(0);
-    expect(io.out).toBe('proc build: done\n');
+    expect(io.out).toBe(said(where, 'proc build: done'));
     expect(procsOf(where)).toEqual({});
   });
 

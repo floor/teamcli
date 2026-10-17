@@ -1088,6 +1088,12 @@
             },
             {
               "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--note",
               "repeatable": false,
               "takesValue": true
@@ -1116,7 +1122,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team proc add <name> [--pid <pid>] [--note <text>]"
+            "team proc add <name> [--pid <pid>] [--note <text>] [--json]"
           ]
         },
         {
@@ -1124,6 +1130,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -1145,7 +1157,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team proc done <name>"
+            "team proc done <name> [--json]"
           ]
         },
         {
@@ -1179,9 +1191,9 @@
         }
       ],
       "usage": [
-        "team proc add <name> [--pid <pid>] [--note <text>]",
+        "team proc add <name> [--pid <pid>] [--note <text>] [--json]",
         "team proc list [--json]",
-        "team proc done <name>"
+        "team proc done <name> [--json]"
       ]
     },
     {
