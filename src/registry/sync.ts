@@ -61,22 +61,28 @@ function ensureTeam(input: RegistryTeam): string | null {
   return noteTeam(home, root, seed, 'running', by);
 }
 
-/** One roster entry set (an agent) or taken out (null). Every line's `leads` and `assistant` are
- *  re-resolved to the file's own marks — the lead seat `team.orchestrator`, whatever `leads: true`
- *  or `coordinator:` it was spelled with, and the seat the file marks `assistant: true` — the
- *  capabilities, never a role name. So a mark that moved between launches does not linger on a
- *  line that no longer holds it. */
+/** One roster entry set (an agent) or taken out (null). Every line's `nickname`, `leads` and
+ *  `assistant` are re-resolved to the file's own word — the human name the file writes on that
+ *  seat, the lead seat `team.orchestrator`, whatever `leads: true` or `coordinator:` it was
+ *  spelled with, and the seat the file marks `assistant: true` — the capabilities and the name,
+ *  never a role name. So a mark that moved between launches does not linger on a line that no
+ *  longer holds it. */
 function writeRoster(input: RegistryTeam, teamId: string, seat: string, entry: { agent: string; role: string } | null): void {
   const leadSeat = input.team.orchestrator;
   const assistantSeat = input.team.seats.find((candidate) => candidate.assistant === true)?.name ?? null;
-  const mark = (line: { agent: string; seat: string; role: string }): { agent: string; seat: string; role: string; leads?: boolean; assistant?: boolean } => ({
-    ...line,
-    ...(line.seat === leadSeat ? { leads: true } : {}),
-    ...(line.seat === assistantSeat ? { assistant: true } : {}),
-  });
+  const nicknames = new Map(input.team.seats.flatMap((candidate) => candidate.nickname === undefined ? [] : [[candidate.name, candidate.nickname] as const]));
+  const mark = (line: { agent: string; seat: string; role: string }): { agent: string; seat: string; role: string; nickname?: string; leads?: boolean; assistant?: boolean } => {
+    const nickname = nicknames.get(line.seat);
+    return {
+      ...line,
+      ...(nickname !== undefined ? { nickname } : {}),
+      ...(line.seat === leadSeat ? { leads: true } : {}),
+      ...(line.seat === assistantSeat ? { assistant: true } : {}),
+    };
+  };
   const roster = (getTeam(input.home, teamId)?.roster ?? [])
     .filter((item) => item.seat !== seat)
-    .map(({ leads: _stale, assistant: _staleAssistant, ...item }) => mark(item));
+    .map(({ leads: _stale, assistant: _staleAssistant, nickname: _staleNickname, ...item }) => mark(item));
   if (entry) roster.push(mark({ agent: entry.agent, seat, role: entry.role }));
   setRoster(input.home, teamId, roster);
 }

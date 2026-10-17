@@ -96,6 +96,9 @@ export default seats;
 
 export type SeatRegistryRow = {
   name: string;
+  /** The seat's human name from the file, or null when it writes none. Shown beside the seat,
+   *  never used to identify a row: the name is the identity. */
+  nickname?: string | null;
   id: string | null;
   role: string;
   cli: string;
@@ -126,6 +129,8 @@ export interface SeatsJson {
   notice?: string | null;
   seats: Array<{
     name: string;
+    /** The seat's human name from the file, or null when it writes none. */
+    nickname: string | null;
     id: string | null;
     role: string;
     cli: string;
@@ -193,6 +198,7 @@ export function seatRegistryRows(
     const id = candidateId && isSeatId(candidateId) && !seenIds.has(candidateId) ? candidateId : null;
     if (id) seenIds.add(id);
     const role = declared?.role ?? likeSeat?.role ?? 'temporary';
+    const nickname = declared?.nickname ?? likeSeat?.nickname ?? null;
     const cli = recorded?.cli ?? declared?.cli ?? likeSeat?.cli ?? '-';
     const effort = recorded?.effort ?? declared?.effort ?? likeSeat?.effort ?? null;
     // The seat's agent: the one herdr names for it, or — an agent renamed or left unnamed, which
@@ -275,6 +281,7 @@ export function seatRegistryRows(
       : findAgent(traceSources.home, { team: teamIdOf(traceSources.root), seat: row.name });
     rows.push({
       name: row.name,
+      nickname,
       id,
       role,
       cli,
@@ -326,9 +333,10 @@ export function blindDifferences(
 
 export function renderSeatsTable(rows: SeatRegistryRow[], indent = '', style: TtyStyle = ttyStyle(false)): string {
   const lines = renderTable({
-    headers: ['SEAT', 'ID', 'ROLE', 'CLI', 'MODEL', 'EFFORT', 'STATUS', 'STATE', 'SOURCE', 'LAST ACTIVE', 'PANE'],
+    headers: ['SEAT', 'NICKNAME', 'ID', 'ROLE', 'CLI', 'MODEL', 'EFFORT', 'STATUS', 'STATE', 'SOURCE', 'LAST ACTIVE', 'PANE'],
     rows: rows.map((row) => [
       row.name,
+      row.nickname ?? '-',
       // The id cell carries the record's one mark: `(dev)` says a registration dev mode admitted
       // wrote the seat's registry record.
       row.dev_mode === true ? `${row.id ?? '-'} (dev)` : row.id ?? '-',
@@ -346,7 +354,7 @@ export function renderSeatsTable(rows: SeatRegistryRow[], indent = '', style: Tt
     ]),
     indent,
     style,
-    styleCell: (padded, _raw, _r, col, s) => (col === 6 || col === 7 ? s.styleState(padded) : padded),
+    styleCell: (padded, _raw, _r, col, s) => (col === 7 || col === 8 ? s.styleState(padded) : padded),
   });
   return `${lines.join('\n')}\n`;
 }
@@ -467,6 +475,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
         ...(current.notice !== undefined ? { notice: current.notice } : {}),
         seats: rows.map((row) => ({
           name: row.name,
+          nickname: row.nickname ?? null,
           id: row.id,
           role: row.role,
           cli: row.cli,

@@ -22,8 +22,10 @@ export const TEAM_LIFECYCLES: readonly TeamLifecycle[] = ['defined', 'running', 
  *  capabilities the team file marks on the seat `leads: true` grants — readable without knowing
  *  any role name. `leads: true` is the seat the team file marks as its lead; `assistant: true` is
  *  the seat whose place in the chain is the entity's assistant (src/send/admit.ts). Absent means
- *  the seat is not known to hold it, so a registry written before the field reads unchanged. */
-export type RosterEntry = { agent: string; seat: string; role: string; leads?: boolean; assistant?: boolean };
+ *  the seat is not known to hold it, so a registry written before the field reads unchanged.
+ *  `nickname` is the seat's human name as the file writes it: projected here so another team can
+ *  resolve `<nickname>@<team>` without loading this team's file. It confers nothing. */
+export type RosterEntry = { agent: string; seat: string; role: string; nickname?: string; leads?: boolean; assistant?: boolean };
 
 export type TeamProvenance = { registered_by: string; registered_at: string; updated_at: string };
 
@@ -362,10 +364,14 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
     // The same reading for the assistant capability: an absent field is a line written before it.
     const assistant = entry.assistant;
     if (assistant !== undefined && typeof assistant !== 'boolean') bad(`roster line ${i + 1}: "assistant" must be true or false`);
+    // A line written before the field existed carries none: no human name is known here.
+    const nickname = entry.nickname;
+    if (nickname !== undefined && typeof nickname !== 'string') bad(`roster line ${i + 1}: "nickname" must be text`);
     return {
       agent: entry.agent as string,
       seat: entry.seat as string,
       role: entry.role as string,
+      ...(typeof nickname === 'string' ? { nickname } : {}),
       ...(typeof leads === 'boolean' ? { leads } : {}),
       ...(typeof assistant === 'boolean' ? { assistant } : {}),
     };
@@ -447,9 +453,11 @@ function emit(teams: Record<string, TeamRecord>): string {
       lines.push('    roster:');
       for (const entry of team.roster) {
         // Only the line that holds a capability says so: `false` and an absent field mean the same.
+        // A nickname is written where the file writes one, before the capabilities.
+        const nickname = entry.nickname !== undefined ? `, nickname: ${scalar(entry.nickname)}` : '';
         const leads = entry.leads === true ? ', leads: true' : '';
         const assistant = entry.assistant === true ? ', assistant: true' : '';
-        lines.push(`      - { agent: ${scalar(entry.agent)}, seat: ${scalar(entry.seat)}, role: ${scalar(entry.role)}${leads}${assistant} }`);
+        lines.push(`      - { agent: ${scalar(entry.agent)}, seat: ${scalar(entry.seat)}, role: ${scalar(entry.role)}${nickname}${leads}${assistant} }`);
       }
     } else {
       lines.push('    roster: []');

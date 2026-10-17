@@ -1,8 +1,8 @@
 # team seats
 
 Shows the seat registry for the team: one row per seat whose STATUS is not `stopped`, or every seat
-when `--all` is given, with its stable seat handle (`seat_<12 hex>`), role, CLI, model, effort, status, state, last
-active time, and pane.
+when `--all` is given, with its human name when the file writes one, its stable seat handle
+(`seat_<12 hex>`), role, CLI, model, effort, status, state, last active time, and pane.
 
 ## Synopsis
 
@@ -24,6 +24,7 @@ active time, and pane.
 | Column | Meaning |
 | --- | --- |
 | SEAT | the seat name |
+| NICKNAME | the seat's human name from the file ([`nickname`](../team-file.md#seats)), or `-` when it writes none |
 | ID | the stable seat handle (`seat_<12 hex>`), or `-` before first launch |
 | ROLE | the seat's role (`temporary` when no declared seat matches) |
 | CLI | the CLI profile (`claude-code`, `codex`, `cursor`, `antigravity`, `grok`) |
@@ -66,6 +67,7 @@ workspace:
 seats:
   - role: coordinator
     name: claude-keeper
+    nickname: agamemnon
     leads: true
     label: coordinator
     cli: claude-code
@@ -104,8 +106,8 @@ Without `--all`, stopped seats are omitted:
 ```console
 $ team seats ; echo "exit $?"
 team beacon, session "beacon"
-SEAT           ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
-claude-keeper  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
+SEAT           NICKNAME   ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
+claude-keeper  agamemnon  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
 1 seat(s)
 exit 0
 ```
@@ -115,9 +117,9 @@ With `--all`, stopped seats are included:
 ```console
 $ team seats --all ; echo "exit $?"
 team beacon, session "beacon"
-SEAT           ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
-claude-keeper  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
-claude-beacon  seat_fedcba987654  implementer  claude-code  Claude Opus 5.5  -       stopped  done   process  1h ago       -
+SEAT           NICKNAME   ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
+claude-keeper  agamemnon  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
+claude-beacon  -          seat_fedcba987654  implementer  claude-code  Claude Opus 5.5  -       stopped  done   process  1h ago       -
 2 seat(s)
 exit 0
 ```
@@ -139,6 +141,7 @@ $ team seats --json ; echo "exit $?"
   "seats": [
     {
       "name": "claude-keeper",
+      "nickname": "agamemnon",
       "id": "seat_0123456789ab",
       "role": "coordinator",
       "cli": "claude-code",

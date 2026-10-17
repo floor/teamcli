@@ -908,9 +908,10 @@ function dryRun(io: Io, dir: string, who: string, seat: string, what: string, ho
   return 0; // exit: send.dry-run
 }
 
-/** One `--list` row: the name to type, its CLI, its role, the project its team sits in, and
+/** One `--list` row: the name to type, the seat's human name as an address (bare in this team,
+ *  `<nickname>@<team>` in another), its CLI, its role, the project its team sits in, and
  *  whether its seat is stopped. A seat of another team reads `<seat>@<team>` in the name. */
-type SeatRow = { name: string; cli: string; role: string; stopped: boolean; project: string; reach: 'socket' | 'typed' };
+type SeatRow = { name: string; nickname: string | null; cli: string; role: string; stopped: boolean; project: string; reach: 'socket' | 'typed' };
 
 /** `--list`: the file's seats and its entity's other teams' seats, nothing sent and no caller
  *  check. Exit 0, always. */
@@ -934,6 +935,7 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
   // dials nothing, so it claims no live address; a stopped seat renders `stopped` in its place.
   const seats: SeatRow[] = loaded.team.seats.map((seat) => ({
     name: seat.name,
+    nickname: seat.nickname ?? null,
     cli: seat.cli,
     role: seat.role,
     project,
@@ -963,8 +965,8 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
     });
   } else {
     io.stdout(`${contextLine(loaded.team.project, loaded.team.session)}\n`);
-    const rows = seats.map((seat) => [seat.name, seat.role, seat.project, seat.stopped ? 'stopped' : seat.reach]);
-    for (const line of renderTable({ headers: ['SEAT', 'ROLE', 'PROJECT', 'REACH'], rows })) io.stdout(`${line}\n`);
+    const rows = seats.map((seat) => [seat.name, seat.nickname ?? '-', seat.role, seat.project, seat.stopped ? 'stopped' : seat.reach]);
+    for (const line of renderTable({ headers: ['SEAT', 'NICKNAME', 'ROLE', 'PROJECT', 'REACH'], rows })) io.stdout(`${line}\n`);
     io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.listed
@@ -992,6 +994,7 @@ function crossTeamRows(host: SendHost, teams: Record<string, TeamRecord>, ownId:
       if (!agent || agent.lifecycle === 'retired') continue;
       rows.push({
         name: `${entry.seat}@${record.project}`,
+        nickname: entry.nickname === undefined ? null : `${entry.nickname}@${record.project}`,
         cli: agent.cli,
         role: entry.role,
         stopped: agent.lifecycle === 'stopped' || record.lifecycle === 'stopped' || record.lifecycle === 'archived',

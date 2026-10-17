@@ -28,7 +28,7 @@ import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
-type SeatSpec = { name: string; role: string; leads?: boolean };
+type SeatSpec = { name: string; role: string; leads?: boolean; nickname?: string };
 type TeamSpec = { project: string; entity: string; session: string; seats: SeatSpec[] };
 
 /** Two entities. `acme` is three teams: the entity's own team (its project is the entity's name)
@@ -51,7 +51,7 @@ const TEAMS: Record<string, TeamSpec> = {
     session: 'web',
     seats: [
       { name: 'web-lead', role: 'guide', leads: true },
-      { name: 'web-helper', role: 'lead' },
+      { name: 'web-helper', role: 'lead', nickname: 'hephaestus' },
     ],
   },
   api: {
@@ -59,7 +59,7 @@ const TEAMS: Record<string, TeamSpec> = {
     entity: 'acme',
     session: 'api',
     seats: [
-      { name: 'api-lead', role: 'guide', leads: true },
+      { name: 'api-lead', role: 'guide', leads: true, nickname: 'zeus' },
       { name: 'api-helper', role: 'coordinator' },
     ],
   },
@@ -95,7 +95,7 @@ function teamText(spec: TeamSpec): string {
     model: Test
     version: "1"
     launch: claude --model test
-${seat.leads === true ? '    leads: true\n' : ''}`,
+${seat.nickname === undefined ? '' : `    nickname: ${seat.nickname}\n`}${seat.leads === true ? '    leads: true\n' : ''}`,
     )
     .join('');
   return `format: 1
@@ -256,16 +256,25 @@ describe('cross-team --list', () => {
     // never show; every name in the name column is a spec the resolver takes as it stands.
     expect(reading.out).toBe(
       [
-        'api-lead  claude-code  guide  api',
+        'api-lead  claude-code  guide  api  zeus',
         'api-helper  claude-code  coordinator  api',
         'coord@acme  claude-code  facilitator  acme',
         'acme-helper@acme  claude-code  builder  acme',
         'web-lead@web  claude-code  guide  web',
-        'web-helper@web  claude-code  lead  web',
+        'web-helper@web  claude-code  lead  web  hephaestus@web',
       ].join('\n') + '\n',
     );
     expect(reading.out).not.toContain('@beta');
     expect(reading.out).not.toContain('@data');
+  });
+
+  test('the launch projects a seat\'s nickname into its team\'s registry roster', () => {
+    const teams = readTeams(world.home);
+    const api = teams[teamIdOf(world.roots.api as string)];
+    expect(api?.roster.find((line) => line.seat === 'api-lead')?.nickname).toBe('zeus');
+    const web = teams[teamIdOf(world.roots.web as string)];
+    expect(web?.roster.find((line) => line.seat === 'web-helper')?.nickname).toBe('hephaestus');
+    expect(web?.roster.find((line) => line.seat === 'web-lead')?.nickname).toBeUndefined();
   });
 
   test('--json carries the same rows, and a stopped or retired seat is marked as it is', async () => {
@@ -278,13 +287,13 @@ describe('cross-team --list', () => {
     const reading = await list({ team: 'api', seat: 'api-helper' }, ['--json']);
 
     expect(reading.code).toBe(0);
-    const doc = JSON.parse(reading.out) as { status: string; seats: { name: string; cli: string; role: string; stopped: boolean; project: string }[] };
+    const doc = JSON.parse(reading.out) as { status: string; seats: { name: string; nickname: string | null; cli: string; role: string; stopped: boolean; project: string }[] };
     expect(doc.status).toBe('listed');
     const byName = new Map(doc.seats.map((row) => [row.name, row]));
     expect(doc.seats.length).toBe(6);
-    expect(byName.get('acme-helper@acme')).toEqual({ name: 'acme-helper@acme', cli: 'claude-code', role: 'builder', stopped: true, project: 'acme' });
-    expect(byName.get('web-lead@web')).toEqual({ name: 'web-lead@web', cli: 'claude-code', role: 'guide', stopped: false, project: 'web' });
-    expect(byName.get('api-lead')).toEqual({ name: 'api-lead', cli: 'claude-code', role: 'guide', stopped: false, project: 'api' });
+    expect(byName.get('acme-helper@acme')).toEqual({ name: 'acme-helper@acme', nickname: null, cli: 'claude-code', role: 'builder', stopped: true, project: 'acme' });
+    expect(byName.get('web-lead@web')).toEqual({ name: 'web-lead@web', nickname: null, cli: 'claude-code', role: 'guide', stopped: false, project: 'web' });
+    expect(byName.get('api-lead')).toEqual({ name: 'api-lead', nickname: 'zeus', cli: 'claude-code', role: 'guide', stopped: false, project: 'api' });
     expect(byName.has('data-lead@data')).toBe(false);
   });
 });

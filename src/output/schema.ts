@@ -1136,9 +1136,10 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['name', 'cli', 'role', 'project', 'reach', 'stopped'],
+            required: ['name', 'nickname', 'cli', 'role', 'project', 'reach', 'stopped'],
             properties: {
               name: { type: 'string', minLength: 1 },
+              nickname: { type: ['string', 'null'] },
               cli: { type: 'string', minLength: 1 },
               role: { type: 'string' },
               project: { type: 'string', minLength: 1 },

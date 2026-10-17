@@ -246,6 +246,47 @@ describe('the assistant is one seat the file marks', () => {
   });
 });
 
+// The nickname: a human name for one seat (OD-20261017-15), unique in its team and never
+// another seat's name. It confers nothing — the role keeps the grants — and it rides the built
+// seat, so the seat's digest changes when the file writes one.
+describe('a nickname is one seat\'s human name', () => {
+  const named = (text: string, nickname: string, at = '    launch: claude --model claude-opus-5-5\n'): string =>
+    change(text, at, `${at}    nickname: ${nickname}\n`);
+
+  test('rides the seat, and a file that writes none carries no field', () => {
+    const { team } = valid(named(marked, 'zeus'));
+    expect(team.seats.map((seat) => [seat.name, seat.nickname])).toEqual([['lead', 'zeus'], ['worker', undefined]]);
+  });
+
+  test('two seats may not share it', () => {
+    // `marked`: the lead's item is line 7, the worker's line 15. The first nickname is line 14,
+    // the second line 22; both items stay where they were.
+    const twice = named(named(marked, 'zeus'), 'zeus', '    launch: codex\n');
+    expect(errors(twice)).toEqual(['16: seat "worker": two seats have the nickname "zeus" (the other is "lead" on line 7)']);
+  });
+
+  test('it may not be another seat\'s name', () => {
+    const shadow = named(marked, 'lead', '    launch: codex\n');
+    expect(errors(shadow)).toEqual(['15: seat "worker": the nickname "lead" is the name of another seat (line 7)']);
+  });
+
+  test('a seat may carry its own name as its nickname', () => {
+    const own = named(marked, 'lead');
+    expect(valid(own).team.seats[0]?.nickname).toBe('lead');
+  });
+
+  test('a seat with a count carries none', () => {
+    // The operator moves to the lead's seat so the count's own refusal is the only one.
+    const moved = change(marked, 'operator: worker', 'operator: lead');
+    const counted = change(moved, '    launch: codex\n', '    launch: codex\n    count: 2\n    nickname: zeus\n');
+    expect(errors(counted)).toEqual(['23: `nickname` on "worker" can\'t be a seat with count']);
+  });
+
+  test('the name rule is the name\'s own', () => {
+    expect(errors(named(marked, 'zeus@acme'))).toEqual(['14: seat "lead": the nickname takes letters, digits, ".", "_" and "-"']);
+  });
+});
+
 const refusals: [string, string, RegExp][] = [
   ['no format', change(minimal, 'format: 1\n', ''), /format is required/],
   ['another format', change(minimal, 'format: 1', 'format: 2'), /format must be 1/],
