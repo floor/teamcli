@@ -165,6 +165,28 @@ test('a run in force writes the record again and the mark comes off', async () =
   expect(readFileSync(join(w.home, '.config', 'team', 'agents', `${record?.id}.yaml`), 'utf8')).not.toContain('dev_mode');
 });
 
+test('a dev-mode re-registration by another caller keeps the registrant and names that caller', async () => {
+  const w = world();
+  // The owner registers first: `registered_by` is the owner's from here on, in every write.
+  expect((await register(w, ['lead'], { caller: OWNER })).code).toBe(0);
+  const before = readAgents(w.home)[0];
+  expect(before?.provenance.registered_by).toBe('owner');
+
+  // A dev-mode run by a caller the gate folds writes the same record again. The mark is kept
+  // beside the registrant, and the caller that run admitted is recorded with it — not the owner
+  // the record still names, which is the difference `team check` must not point at.
+  const again = await register(w, ['lead'], { caller: UNPLACED, dev: true });
+  expect(again.code).toBe(0);
+  const record = readAgents(w.home)[0];
+  expect(record?.id).toBe(before?.id);
+  expect(record?.provenance.registered_by).toBe('owner');
+  expect(record?.provenance.dev_mode).toBe(true);
+  expect(record?.provenance.dev_mode_by).toBe(describeCaller(UNPLACED));
+  expect(record?.provenance.dev_mode_at).toBeDefined();
+  const file = readFileSync(join(w.home, '.config', 'team', 'agents', `${record?.id}.yaml`), 'utf8');
+  expect(file).toContain(`  dev_mode_by: ${JSON.stringify(describeCaller(UNPLACED))}\n`);
+});
+
 test('unset, and the same call is refused with the bare sentence', async () => {
   const w = world();
   const r = await register(w, ['lead'], { caller: UNPLACED });

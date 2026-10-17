@@ -78,9 +78,11 @@ function recordProjectLead(input: RegistryTeam, teamId: string): void {
  * re-pointed (same id, new pane, running). The signing triple, the lab, the cli and the launch
  * line are the launch's own, so a reload that changes the model rewrites them on the same agent.
  * The run's provenance is stated too: `register` and `up` say with the write whether they ran
- * under dev mode, and the writers that have none to state (`add`, `restart`, `reload` have no dev
- * mode) carry no `devMode`, which takes a mark an earlier run left off the record: the record
- * speaks for the last write of it.
+ * under dev mode — and, when they did, the `by` caller they were run by, so a record the owner
+ * registered and a folded run re-wrote names the caller that run admitted, not the owner — and
+ * the writers that have none to state (`add`, `restart`, `reload` have no dev mode) carry no
+ * `devMode`, which takes a mark an earlier run left off the record: the record speaks for the
+ * last write of it.
  * Returns the agent's id, or the note to log.
  */
 export function registerLaunch(
@@ -104,7 +106,7 @@ export function registerLaunch(
     const agent = known
       ? updateAgent(home, known.id, {
         signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
-        provenance: { dev_mode: devMode }, ...seatHandle,
+        provenance: { dev_mode: devMode, ...(devMode ? { dev_mode_by: by } : {}) }, ...seatHandle,
       })
       : registerAgent(home, {
         name: seat.name, signing, lab: seat.vendor, cli: seat.cli, launcher: null, launch: seat.launch,

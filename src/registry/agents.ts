@@ -45,7 +45,13 @@ export type AgentProvenance = {
   registered_by: string;
   registered_at: string;
   updated_at: string;
+  /** The mark of a record a dev-mode run wrote. `registered_by` is the registrant's and never
+   *  changes, so the caller that run admitted — and when it wrote — is kept beside the mark: a
+   *  record registered by the owner and re-written under dev mode by another caller names that
+   *  caller, not the owner. An older record carries the mark without them. */
   dev_mode?: boolean;
+  dev_mode_by?: string;
+  dev_mode_at?: string;
 };
 
 export type Agent = {
@@ -73,8 +79,9 @@ export type AgentInit = Omit<Agent, 'id' | 'provenance'> & { by: string; devMode
 
 /** What `updateAgent` accepts. The nested records merge field by field, so a relaunch can re-point
  *  `reach.pane` alone; `id`, `provenance.registered_by` and `provenance.registered_at` are never
- *  changed. `provenance.dev_mode` is the one provenance field a writer may state: true marks the
- *  record as one a dev-mode run wrote, false takes the mark off. */
+ *  changed. `provenance.dev_mode` is the mark a writer may state — true marks the record as one a
+ *  dev-mode run wrote, false takes the mark off — and `provenance.dev_mode_by`, with it, names
+ *  the caller that run admitted: the writer states who, `updateAgent` stamps when. */
 export type AgentPatch = Partial<Omit<Agent, 'id' | 'signing' | 'reach' | 'provenance'>> & {
   signing?: Partial<AgentSigning>;
   reach?: Partial<AgentReach>;
@@ -131,7 +138,12 @@ export function registerAgent(home: string, init: AgentInit): Agent {
       id,
       mcp: [...fields.mcp],
       skills: [...fields.skills],
-      provenance: { registered_by: by, registered_at: now, updated_at: now, ...(devMode === true ? { dev_mode: true } : {}) },
+      provenance: {
+        registered_by: by,
+        registered_at: now,
+        updated_at: now,
+        ...(devMode === true ? { dev_mode: true, dev_mode_by: by, dev_mode_at: now } : {}),
+      },
     };
     const problem = invalid(agent);
     if (problem) throw new Error(`cannot register the agent: ${problem}`);
@@ -151,8 +163,18 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
     if (!current) throw new Error(`no agent ${id} in ${agentsDir(home)}`);
     const { signing, reach, provenance, ...rest } = patch;
     const nextProvenance: AgentProvenance = { ...current.provenance, updated_at: new Date().toISOString() };
-    if (provenance?.dev_mode === true) nextProvenance.dev_mode = true;
-    else if (provenance?.dev_mode === false) delete nextProvenance.dev_mode;
+    if (provenance?.dev_mode === true) {
+      nextProvenance.dev_mode = true;
+      // Who wrote it under dev mode, and when: a record the owner registered and a later folded
+      // run wrote again keeps `registered_by` the owner's, so the caller that run admitted is
+      // recorded beside the mark. A state with no caller keeps the one an earlier dev write named.
+      if (provenance.dev_mode_by !== undefined) nextProvenance.dev_mode_by = provenance.dev_mode_by;
+      nextProvenance.dev_mode_at = nextProvenance.updated_at;
+    } else if (provenance?.dev_mode === false) {
+      delete nextProvenance.dev_mode;
+      delete nextProvenance.dev_mode_by;
+      delete nextProvenance.dev_mode_at;
+    }
     const next: Agent = {
       ...current,
       ...definedOnly(rest),
@@ -322,8 +344,15 @@ function fromValue(value: YamlValue): Agent | null {
       registered_by: registeredBy,
       registered_at: registeredAt,
       updated_at: updatedAt,
-      // Only the writer's own `true` counts: any other value reads as no mark at all.
-      ...(provenance.dev_mode === true ? { dev_mode: true } : {}),
+      // Only the writer's own `true` counts: any other value reads as no mark at all, and the
+      // caller and time are the mark's own — a file without them is an older record.
+      ...(provenance.dev_mode === true
+        ? {
+            dev_mode: true,
+            ...(typeof provenance.dev_mode_by === 'string' ? { dev_mode_by: provenance.dev_mode_by } : {}),
+            ...(typeof provenance.dev_mode_at === 'string' ? { dev_mode_at: provenance.dev_mode_at } : {}),
+          }
+        : {}),
     },
   };
   if (handle !== null) agent.seat_handle = handle;
@@ -387,8 +416,13 @@ function emit(agent: Agent): string {
     `  updated_at: ${quote(agent.provenance.updated_at)}`,
   ];
   // Written only when it holds: a record with no mark does not carry a `dev_mode: false` line,
-  // so the files an ordinary launch writes read exactly as they always did.
-  if (agent.provenance.dev_mode === true) lines.push('  dev_mode: true');
+  // so the files an ordinary launch writes read exactly as they always did. The caller the
+  // dev-mode run admitted, and when, sit under the mark.
+  if (agent.provenance.dev_mode === true) {
+    lines.push('  dev_mode: true');
+    if (agent.provenance.dev_mode_by !== undefined) lines.push(`  dev_mode_by: ${quote(agent.provenance.dev_mode_by)}`);
+    if (agent.provenance.dev_mode_at !== undefined) lines.push(`  dev_mode_at: ${quote(agent.provenance.dev_mode_at)}`);
+  }
   if (agent.seat_handle != null) lines.push(`seat_handle: ${quote(agent.seat_handle)}`);
   return `${lines.join('\n')}\n`;
 }
