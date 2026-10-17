@@ -8,9 +8,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProjects, type ProjectSources, type ProjectView } from '../src/commands/projects.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
+import { PROJECTS_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { ProjectsError, upsertProject } from '../src/registry/projects.ts';
 import { upsertTeam } from '../src/registry/teams.ts';
 import { testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 // Two teams of one project, by team ID — the ID a team record is stored under and the ID a
 // project's own `teams` list names.
@@ -63,7 +65,11 @@ test('team projects lists each project: id, name, entity, lead and teams', async
   const code = await runProjects([], io, sourcesOf([project()]));
   expect(code).toBe(0);
   expect(io.err).toBe('');
-  expect(io.out).toBe(`  4f2a1b7c9d0e  TeamCLI  floor  agt_2b9f  ${TEAM_A}, ${TEAM_B}\n`);
+  expect(io.out).toBe(
+    'ID            NAME     ENTITY  LEAD      TEAMS\n'
+    + `4f2a1b7c9d0e  TeamCLI  floor   agt_2b9f  ${TEAM_A}, ${TEAM_B}\n`
+    + '1 project(s)\n',
+  );
 });
 
 test('a project with no entity or lead prints a dash, and a wider id widens every row', async () => {
@@ -73,7 +79,12 @@ test('a project with no entity or lead prints a dash, and a wider id widens ever
     project({ id: 'aaaa', name: 'Alpha', entity: 'x', lead: 'l', teams: ['t'] }),
   ]));
   expect(code).toBe(0);
-  expect(io.out).toBe('  b     Beta   -  -  \n  aaaa  Alpha  x  l  t\n');
+  expect(io.out).toBe(
+    'ID    NAME   ENTITY  LEAD  TEAMS\n'
+    + 'b     Beta   -       -     -\n'
+    + 'aaaa  Alpha  x       l     t\n'
+    + '2 project(s)\n',
+  );
 });
 
 test('a registry with no projects says so', async () => {
@@ -83,11 +94,16 @@ test('a registry with no projects says so', async () => {
   expect(io.out).toBe('(no projects)\n');
 });
 
-test('--json carries the records, ids and provenance included', async () => {
+test('--json carries the records, ids and provenance included, and matches PROJECTS_OUTPUT_SCHEMA', async () => {
   const io = testIo('/anywhere');
   const code = await runProjects(['--json'], io, sourcesOf([project()]));
   expect(code).toBe(0);
-  expect(JSON.parse(io.out)).toEqual({ format: 1, projects: [project()] });
+  const parsed = assertMatchesOutputSchema(io.out, PROJECTS_OUTPUT_SCHEMA);
+  expect(parsed).toEqual({
+    schema: { name: 'team.projects', version: 1 },
+    format: 1,
+    projects: [project()],
+  });
 });
 
 test('an argument a project view does not take is refused', async () => {
@@ -96,6 +112,11 @@ test('an argument a project view does not take is refused', async () => {
   expect(code).toBe(2);
   expect(io.err).toContain('team projects: unexpected "extra"');
   expect(io.err).toContain('Usage: team projects [--json]');
+
+  const ioJson = testIo('/anywhere');
+  expect(await runProjects(['--json', 'extra'], ioJson, sourcesOf([project()]))).toBe(2);
+  expect(ioJson.err).toBe('');
+  assertJsonErrorShape(ioJson.out, { id: 'projects.invocation', messageContains: 'unexpected "extra"' });
 });
 
 test('a registry that cannot be read is the command\'s own line, exit 1', async () => {
@@ -108,6 +129,14 @@ test('a registry that cannot be read is the command\'s own line, exit 1', async 
   expect(code).toBe(1);
   expect(io.out).toBe('');
   expect(io.err).toBe(`team projects: the project registry cannot be read: ${path}: line 2: "projects" must be a map\n`);
+
+  const ioJson = testIo('/anywhere');
+  expect(await runProjects(['--json'], ioJson, {
+    ...sourcesOf([]),
+    list: () => { throw new ProjectsError(`${path}: line 2: "projects" must be a map`); },
+  })).toBe(1);
+  expect(ioJson.err).toBe('');
+  assertJsonErrorShape(ioJson.out, { id: 'projects.unreadable', messageContains: 'the project registry cannot be read' });
 });
 
 test('team status --project covers every team of the project, registered or not', async () => {

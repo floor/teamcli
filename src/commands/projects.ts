@@ -9,6 +9,13 @@ import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
+import {
+  renderTable,
+  ttyStyle,
+  writeJson,
+  writeJsonError,
+  type OutputSchemaTag,
+} from '../output/index.ts';
 import * as projectRegistry from '../registry/projects.ts';
 
 export const USAGE = `Usage: team projects [--json]
@@ -16,6 +23,8 @@ export const USAGE = `Usage: team projects [--json]
 Run from any folder. Lists the projects this machine's registry holds: each project's id, name,
 entity, lead and teams. The lead is the seat whose role holds the leads capability. Reads the
 registry and changes nothing.
+
+Exits 0 when the projects are listed, 1 when the project registry cannot be read, 2 when the invocation can't be read.
 `;
 
 /** One project, as the views read it: the registry record's own fields. */
@@ -37,15 +46,23 @@ export const realSources: ProjectSources = {
   ofTeam: (team) => projectRegistry.ofTeam(homedir(), team),
 };
 
-export type ProjectsJson = { format: 1; projects: ProjectView[] };
+export type ProjectsJson = {
+  schema: OutputSchemaTag;
+  format: 1;
+  projects: ProjectView[];
+};
 
 export const projects: Command = (argv, io) => runProjects(argv, io, realSources);
 export default projects;
 
 /** The registry's own sentence, in this command's words: the top-level catch would say `team:`
  *  and leave the reader without the command that failed. */
-function unreadable(io: Io, reason: string): number {
-  io.stderr(`team projects: the project registry cannot be read: ${reason}\n`);
+function unreadable(io: Io, out: Io, reason: string, json: boolean): number {
+  if (json) {
+    writeJsonError(io, 'projects.unreadable', `the project registry cannot be read: ${plainText(reason)}`, null);
+  } else {
+    out.stderr(`team projects: the project registry cannot be read: ${reason}\n`);
+  }
   // exit: projects.unreadable
   return 1;
 }
@@ -53,8 +70,14 @@ function unreadable(io: Io, reason: string): number {
 export async function runProjects(argv: string[], io: Io, sources: ProjectSources): Promise<number> {
   const out = cleanedIo(io);
   const args = readArgs(argv, [], ['json']);
+  const json = args.flags.has('json');
   if (args.error || args.rest.length) {
-    out.stderr(`team projects: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
+    const why = plainText(args.error ?? `unexpected "${args.rest[0]}"`);
+    if (json) {
+      writeJsonError(io, 'projects.invocation', why, null);
+    } else {
+      out.stderr(`team projects: ${why}\n${USAGE}`);
+    }
     // exit: projects.invocation
     return 2;
   }
@@ -63,31 +86,28 @@ export async function runProjects(argv: string[], io: Io, sources: ProjectSource
     listed = sources.list();
   } catch (error) {
     if (!(error instanceof projectRegistry.ProjectsError)) throw error;
-    return unreadable(out, error.message);
+    return unreadable(io, out, error.message, json);
   }
-  if (args.flags.has('json')) {
-    const doc: ProjectsJson = { format: 1, projects: listed };
-    io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
+  if (json) {
+    writeJson(io, 'team.projects', { format: 1 as const, projects: listed });
   } else if (listed.length === 0) {
     out.stdout('(no projects)\n');
   } else {
-    const rows = listed.map((project) => ({
-      id: plainLine(project.id ?? '-'),
-      name: plainLine(project.name),
-      entity: project.entity === null ? '-' : plainLine(project.entity),
-      lead: plainLine(project.lead ?? '-'),
-      teams: project.teams.map(plainLine).join(', '),
-    }));
-    const widths = [0, 0, 0, 0];
-    for (const row of rows) {
-      widths[0] = Math.max(widths[0] as number, row.id.length);
-      widths[1] = Math.max(widths[1] as number, row.name.length);
-      widths[2] = Math.max(widths[2] as number, row.entity.length);
-      widths[3] = Math.max(widths[3] as number, row.lead.length);
-    }
-    for (const row of rows) {
-      out.stdout(`  ${row.id.padEnd(widths[0] as number)}  ${row.name.padEnd(widths[1] as number)}  ${row.entity.padEnd(widths[2] as number)}  ${row.lead.padEnd(widths[3] as number)}  ${row.teams}\n`);
-    }
+    const style = ttyStyle(io, { json: false });
+    const lines = renderTable({
+      headers: ['ID', 'NAME', 'ENTITY', 'LEAD', 'TEAMS'],
+      rows: listed.map((project) => [
+        project.id ?? '-',
+        project.name,
+        project.entity,
+        project.lead ?? '-',
+        project.teams.length > 0 ? project.teams.map(plainLine).join(', ') : '-',
+      ]),
+      indent: '',
+      style,
+    });
+    lines.push(`${listed.length} project(s)`);
+    out.stdout(`${lines.join('\n')}\n`);
   }
   // exit: projects.listed
   return 0;
