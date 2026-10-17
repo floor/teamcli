@@ -24,6 +24,7 @@ import {
   type QuotaObservation,
 } from '../src/information/quota.ts';
 import {
+  ageByReset,
   labeledFigures,
   observeQuota,
   parseUsageOutput,
@@ -297,6 +298,29 @@ describe('the live sources', () => {
     ]);
   });
 
+  test('bars counting down to one reset age from the freshest bar of their own account and window', () => {
+    // A status row is frozen at its last render, and every bar of one account and window counts
+    // to the same reset instant: the smallest countdown is the freshest reading, and the others
+    // were read that much earlier — unless the bar carries no countdown, which ages nothing.
+    const bar = (seat: string, account: string, window: 'session' | 'weekly', resetsAt: number | null) =>
+      observed({ account, window, seat, used: 8, left: 92, resetsAt, observedAt: NOW });
+    const bars = [
+      bar('a', 'anthropic', 'session', NOW + 2 * HOUR),
+      bar('b', 'anthropic', 'session', NOW + HOUR + 59 * 60_000),
+      bar('c', 'anthropic', 'session', NOW + 3 * HOUR),
+      bar('d', 'anthropic', 'weekly', NOW + 10 * DAY),
+      bar('e', 'openai', 'session', null),
+    ];
+    const aged = ageByReset(bars, NOW);
+    expect(aged.map((one) => one.observedAt)).toEqual([
+      NOW - 60_000, // a: one minute behind the freshest session bar
+      NOW, // b: the freshest of its group
+      NOW - 61 * 60_000, // c: an hour and a minute behind
+      NOW, // d: alone in its window, so its own freshest
+      NOW, // e: no countdown to compare, untouched
+    ]);
+  });
+
   test('the observer reads only the caller’s own team, and one note per problem however many seats hit it', () => {
     const seat = (name: string, cli: string, account: string, pane?: string) => ({
       seat: name, cli, account, ...(pane === undefined ? {} : { pane }),
@@ -452,5 +476,43 @@ seats:
       accountsFile: '~/.config/team/accounts.yaml',
       advice: 'no readings yet: no seat status line and no CLI usage command has answered',
     });
+  });
+
+  test('a live read of an undeclared account lands under its own lab; a machine-wide one only where the caller pays', async () => {
+    // Zero-config: the file declares anthropic and openai, and a live seat's own screen names
+    // `zai` — an account no file names. It lands under its own lab, with its seats and figures,
+    // and the closing counts grow by the lab and the account it made.
+    const read = observed({ account: 'zai', window: 'weekly', used: 12, left: 88, resetsAt: NOW + 125 * HOUR + 26 * 60_000, seat: 'lead' });
+    const seat = testIo(root, SEAT);
+    expect(await runUsage([], seat, { home, now: () => new Date(NOW), observe: () => ({ observations: [read], notes: [] }) })).toBe(0);
+    expect(seat.out).toMatch(/^zai\s+weekly\s+88%\s+12%\s+in 125h26m/m);
+    expect(seat.out).toContain([
+      '  zai  ok',
+      '    zai  ok  seats: lead',
+      '      weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)',
+    ].join('\n'));
+    expect(seat.out).toContain('advice: headroom on zai (weekly used 12%, margin +13.3%)\n');
+    expect(seat.out).toContain('usage on this machine, 1 team, 3 labs, 3 accounts\n');
+    const json = testIo(root, SEAT);
+    expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), observe: () => ({ observations: [read], notes: [] }) })).toBe(0);
+    const doc = JSON.parse(json.out) as { counts: Record<string, number>; labs: { lab: string; accounts: unknown[] }[] };
+    expect(doc.counts).toEqual({ teams: 1, labs: 3, accounts: 3 });
+    expect(doc.labs.map((one) => one.lab)).toEqual(['anthropic', 'openai', 'zai']);
+    expect(doc.labs.find((one) => one.lab === 'zai')?.accounts).toMatchObject([
+      { account: 'zai', kind: 'subscription', machine: { window: 'weekly', left: 88, used: 12, source: 'status_line' } },
+    ]);
+
+    // The same figure as a machine-wide reading (a CLI usage print names no seat) is another
+    // team's material under the restricted view: the caller pays no `zai` account, so it is no
+    // reading of theirs and names nothing — the full view, whose own read it is, reads it.
+    const wide = { ...read, seat: null };
+    const hidden = testIo(root, SEAT);
+    expect(await runUsage([], hidden, { home, now: () => new Date(NOW), observe: () => ({ observations: [wide], notes: [] }) })).toBe(0);
+    expect(hidden.out).not.toContain('zai');
+    expect(hidden.out).toContain('usage on this machine, 1 team, 2 labs, 2 accounts\n');
+    const owner = testIo(root, { kind: 'owner' });
+    expect(await runUsage([], owner, { home, now: () => new Date(NOW), observe: () => ({ observations: [wide], notes: [] }) })).toBe(0);
+    expect(owner.out).toMatch(/^zai\s+weekly\s+88%/m);
+    expect(owner.out).toContain('usage on this machine, 1 team, 3 labs, 3 accounts\n');
   });
 });

@@ -72,14 +72,17 @@ test('a watch persists a Grok zero without team budgets; usage counts machine su
   expect(readMachineReadings(home)).toEqual([{ ...zero, resets: undefined, observedAt: NOW, resetsAt: null }].map(({ resets, ...one }) => one));
   const usage = testIo(root, { kind: 'owner' });
   expect(await runUsage([], usage, { home, now: () => new Date(NOW + 120000) })).toBe(0);
-  expect(usage.out).toContain('2 accounts');
+  expect(usage.out).toContain('3 labs, 3 accounts');
   expect(usage.out).toMatch(/xai\s+weekly\s+0%\s+100%\s+unknown/);
   expect(usage.out).toContain('2m ago');
   expect(usage.out).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+not readable from a CLI screen/);
   expect(usage.out).toContain('lead  grok  xai');
-  // The seat's own vendor forms a lab with no account under it, and says so; the machine's
-  // readings are counted, so the "nothing is counted" sentence never prints.
-  expect(usage.out).toContain('wrong-vendor  not known: no account declared; declare it in ~/.config/team/accounts.yaml');
+  // The seat's own vendor forms a lab with no declared account: zero-config makes its seats one
+  // account named after the lab, unknown before its first reading. The machine's readings are
+  // counted, so the "nothing is counted" sentence never prints.
+  expect(usage.out).toMatch(/wrong-vendor\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown/);
+  expect(usage.out).toContain('  wrong-vendor  unknown\n');
+  expect(usage.out).toContain('    wrong-vendor  unknown  seats: lead\n');
   expect(usage.out).not.toContain('nothing is counted');
   // The persisted zero is a wall in the quota view: the reading the watch wrote is the one the
   // block reads, it names no reset so the margin has no clock to read, and the advice names the

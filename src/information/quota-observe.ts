@@ -25,6 +25,10 @@ export type QuotaObserverSources = {
   pane?: (pane: string, lines: number, session: string) => string | null;
   /** The CLI's own usage command, injectable for tests. Null means it did not answer. */
   usage?: (cli: string) => string | null;
+  /** Whether a team's herdr session still runs, injectable for tests. False skips the team's
+   *  panes: a dead session leaves a record, not a seat, and nothing behind it can answer.
+   *  Omitted means no filtering; null (herdr unreachable) is not evidence either way. */
+  session?: (name: string) => boolean | null;
 };
 
 /** The seat-shaped input a read needs: the seat's name, paying account and pool. */
@@ -54,6 +58,9 @@ export function observeQuota(machine: MachineUsage, view: UsageView, sources: Qu
   for (const team of teams) {
     const session = team.usage.session;
     if (session === null) continue;
+    // A team whose session is gone or stopped is a record: its panes cannot answer, and a seat
+    // row left behind is exactly the stale name the report must not show.
+    if (sources.session !== undefined && sources.session(session) === false) continue;
     for (const seat of team.usage.seatAccounts) {
       if (seat.cli === 'antigravity' || seat.cli === 'agy') wantsUsage = true;
       if (seat.pane === undefined || seat.pane === null) continue;
@@ -73,7 +80,31 @@ export function observeQuota(machine: MachineUsage, view: UsageView, sources: Qu
     if (text === null) addNote(notes, USAGE_UNANSWERED);
     else observations.push(...parseUsageOutput(text, now));
   }
-  return { observations, notes: [...notes.entries()].map(([why, count]) => ({ why, count })) };
+  return { observations: ageByReset(observations, now), notes: [...notes.entries()].map(([why, count]) => ({ why, count })) };
+}
+
+/**
+ * Ages the bars that print a countdown rather than a clock time. A status row is frozen at its
+ * last render, and every bar of one account and window counts down to the same reset instant:
+ * the smallest countdown is the freshest reading, and any other bar was read that much earlier.
+ * A live run on 2026-10-17 found every visible claude-family row counting to one shared reset,
+ * and the freshest matched the owner's own pane.
+ */
+export function ageByReset(observations: QuotaObservation[], now: number): QuotaObservation[] {
+  const keyOf = (one: QuotaObservation): string => `${one.account}\0${one.pool ?? ''}\0${one.window ?? ''}`;
+  const freshest = new Map<string, number>();
+  for (const one of observations) {
+    if (one.resetsAt === null || one.window === null) continue;
+    const key = keyOf(one);
+    const seen = freshest.get(key);
+    if (seen === undefined || one.resetsAt < seen) freshest.set(key, one.resetsAt);
+  }
+  return observations.map((one) => {
+    if (one.resetsAt === null || one.window === null) return one;
+    const min = freshest.get(keyOf(one));
+    const age = min === undefined ? 0 : Math.max(0, one.resetsAt - min);
+    return age === 0 ? one : { ...one, observedAt: now - age };
+  });
 }
 
 /** A reset duration in the profile's own grammar (`114h4m`, `44m`) as milliseconds. */
@@ -115,7 +146,11 @@ export function labeledFigures(row: string | null, target: SeatTarget, now: numb
     // The real row carries two fields — `W: 12% (+13.3%) (125h26m)` — so both are read.
     const { resetsMs, margin } = parenOf([match[3], match[4]].filter((part) => part !== undefined).join(','));
     found.push({
-      account: target.account,
+      // `L:`/`W:` are the CLI's own subscription labels, and that subscription is Anthropic's
+      // whatever launcher pays the seat: on 2026-10-17 a seat paid through zai and one paid
+      // through deepseek printed the same bars as the owner's own pane. The shipped patterns
+      // name the account too, so an undeclared account still lands on the right lab.
+      account: 'anthropic',
       ...(target.pool ? { pool: target.pool } : {}),
       window: match[1] === 'L' ? 'session' : 'weekly',
       used,
@@ -261,7 +296,14 @@ export function setUsageExec(exec: ((cli: string) => string | null) | null): voi
   usageExec = exec ?? runUsageCommand;
 }
 
-/** The real observer for the shipped command: the shipped pane read and the real usage call. */
-export function realQuotaObservations(machine: MachineUsage, view: UsageView, now: number): QuotaLive {
-  return observeQuota(machine, view, { now, usage: (cli) => usageExec(cli) });
+/** The real observer for the shipped command: the shipped pane read and the real usage call. The
+ *  session filter is the command's own (`realSources.sessions`, memoized over one run); omitted,
+ *  no team is skipped, which is what a caller that holds its machine as a fixture expects. */
+export function realQuotaObservations(
+  machine: MachineUsage,
+  view: UsageView,
+  now: number,
+  sessions?: (name: string) => boolean | null,
+): QuotaLive {
+  return observeQuota(machine, view, { now, usage: (cli) => usageExec(cli), ...(sessions === undefined ? {} : { session: sessions }) });
 }

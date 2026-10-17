@@ -76,8 +76,10 @@ export function budgetLine(row: BudgetRow): string {
 
 /** The word a figure's moment takes in a line: a stale row with no known reset is the room last
  *  seen, not a reading aged out. Exported so the machine view's own line for a seat's row writes
- *  the same word this line does, and the two can never disagree. */
-export function whenWord(row: Pick<BudgetRow, 'state' | 'resetsIn' | 'source'>): 'last seen' | 'read' | 'changed' {
+ *  the same word this line does, and the two can never disagree. The source is any word: a machine
+ *  row the machine view synthesizes from a live reading names its own source, and takes this
+ *  line's default word, which is what every source but a check's already reads. */
+export function whenWord(row: Pick<BudgetRow, 'state' | 'resetsIn'> & { source: string | null }): 'last seen' | 'read' | 'changed' {
   return row.state === 'stale' && row.resetsIn === null ? 'last seen' : row.source === 'check' ? 'read' : 'changed';
 }
 

@@ -43,7 +43,11 @@ under the team that spends it, so the closing summary count does not change. A t
 `entity:` names the team's own
 entity; a file that names none borrows every keyed account its seats spend.
 
-These accounts appear even outside a project, with no teams or budgets configured. A team's `budgets.accounts` entry of the same name supplies
+These accounts appear even outside a project, with no teams or budgets configured. The file is
+optional: a lab no entry here declares is one account named after the lab, read from the status
+rows and usage prints of the seats that draw on it, so a machine with no `accounts.yaml` still
+shows what every lab has left. Listing an account names it, and listing some of a lab's accounts
+splits the lab into those accounts. A team's `budgets.accounts` entry of the same name supplies
 its sources and reserve. The watch stores observations in `~/.config/team/usage/readings.json`,
 including their observation time and reset when known. It records screen figures even
 without a team budget; listing an account does not grant permission to launch seats. A seat's
@@ -63,7 +67,7 @@ no screen parser and no recorded figure say `not readable from a CLI screen`.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the report printed, whatever its figures, and whether or not this folder holds a project | the account table headed `ACCOUNT  WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE`, then one line per account with no screen reading and per lab with no account declared, the caller's own team rows, the quota view, one `SEAT  CLI  ACCOUNT` table per team, the collapsed notes, and the closing summary line (`usage on this machine, 1 team, 2 labs, 1 account`); in the restricted view — every caller but the owner at a terminal — a caller outside every project also reads shared machine subscriptions | 0 |
+| the report printed, whatever its figures, and whether or not this folder holds a project | the account table headed `ACCOUNT  WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE`, then one line per account with no screen reading and per lab no file declares — that lab's seats as one account named after the lab — the caller's own team rows, the quota view, one `SEAT  CLI  ACCOUNT` table per team, the collapsed notes, and the closing summary line (`usage on this machine, 1 team, 2 labs, 2 accounts`); in the restricted view — every caller but the owner at a terminal — a caller outside every project also reads shared machine subscriptions | 0 |
 | the invocation can't be read, or the stores folder can't be read | `team usage: <problem>`, with the usage for the invocation; the stores folder alone gets `team usage: the store folder cannot be read: the owner reads the reason` for every caller but the owner, who reads the read's own message, the folder among it | 2 |
 
 ## Example
@@ -123,18 +127,21 @@ state:
 
 The state holds one reading for the `session` window, taken from the check two minutes before the
 read, and the watch for this session is alive, so no watch clause follows the line. The seat
-`claude-keeper` spends `anthropic`, which no budget here declares: that lab is in use with no
-account for it yet, and the seat breakdown names it all the same. Run from the seat's own pane,
-the report is the restricted view:
+`claude-keeper` spends `anthropic`, which no budget here declares: the zero-config rule makes that
+lab one account named after the lab, unknown until its first reading, and the seat breakdown names
+it all the same. Run from the seat's own pane, the report is the restricted view:
 
 ```console
 $ team usage ; echo "exit $?"
-ACCOUNT  WINDOW   LEFT  USED  RESETS  RESERVE  READ            SOURCE  STATE
-openai   session  40%   60%   in 44m  -        -  read 2m ago  check   fresh  pace not known
-anthropic  not known: no account declared; declare it in ~/.config/team/accounts.yaml
+ACCOUNT    WINDOW   LEFT  USED  RESETS  RESERVE  READ            SOURCE  STATE
+anthropic  -        -     -     -       -        -               -       unknown
+openai     session  40%   60%   in 44m  -        -  read 2m ago  check   fresh  pace not known
   openai  beacon  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known
 
 quota
+  anthropic  unknown
+    anthropic  unknown  seats: claude-keeper
+      not known: no reading yet
   openai  unknown
     openai  unknown
       not known: no reading yet
@@ -144,14 +151,15 @@ beacon
   SEAT           CLI          ACCOUNT
   claude-keeper  claude-code  anthropic
 
-usage on this machine, 1 team, 2 labs, 1 account
+usage on this machine, 1 team, 2 labs, 2 accounts
 exit 0
 ```
 
-The quota block has nothing to show here: this fixture holds a checked session reading in the
-team's own state, and the block reads the watch's machine-wide observations and the live sources,
-neither of which is present in an example run. On a machine where the watch has recorded a status
-row, the same account prints its windows, margin and state there.
+Both quota blocks read unknown here: this fixture holds a checked session reading in the team's
+own state, and the block reads the watch's machine-wide observations and the live sources, neither
+of which is present in an example run. On a machine where the watch has recorded a status row —
+or a seat's own screen has an `L:`/`W:` row, or a CLI's usage print answers — the same accounts
+print their windows, margin and state there.
 
 ## The quota view
 
@@ -186,10 +194,14 @@ The sources are all observable, and the block reads none of them from a credenti
 CLI session file: the watch's machine-wide readings
 (`~/.config/team/usage/readings.json`), the status row of each seat's pane through herdr, the
 CLI's own usage command where it has one (`agy --print /usage`, bounded by a 15-second timeout),
-and the quota screens above. A lab no account is declared for prints one line — `not known: no
-account declared; declare it in ~/.config/team/accounts.yaml` — and the block stays silent for it.
-An unreadable seat pane or an unanswered usage command is one counted note, however many seats
-hit it. In `--json` the block is the `quota` key: `format`, `accountsFile`, one entry per lab
-with its accounts, seats, states and windows, and `advice`.
+and the quota screens above. A lab no account is declared for is one account named after the lab,
+drawn from the seats that pay into it; before its first reading it prints `unknown` with those
+seats behind it, and its windows appear as soon as a status row or a usage print answers. A figure
+an undeclared account's own read names lands under that account's lab the same way, and only a
+reading this caller may make can name it: under the restricted view a machine-wide reading lands
+only on a lab the caller's own seats pay. An unreadable seat pane or an unanswered usage command
+is one counted note, however many seats hit it. In `--json` the block is the `quota` key:
+`format`, `accountsFile`, one entry per lab with its accounts, seats, states and windows, and
+`advice`.
 
 Rationale, behaviour, refusals and known limits: [docs/internal/usage.md](../internal/usage.md).

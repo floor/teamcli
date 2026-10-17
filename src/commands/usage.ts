@@ -8,11 +8,14 @@ import {
   reportOf,
   reportText,
   StoreUnreadable,
+  tildify,
   viewFor,
   type MachineUsage,
+  type SessionLiveness,
   type UsageView,
 } from '../information/usage.ts';
 import { realQuotaObservations, type QuotaLive } from '../information/quota-observe.ts';
+import { sessionRunning } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { writeJson, writeJsonError } from '../output/index.ts';
 
@@ -32,14 +35,28 @@ export type UsageSources = {
   /** The home whose approval store is read. Required, so no test can reach the owner's own. */
   home: string;
   now(): Date;
-  observe?(machine: MachineUsage, view: UsageView, now: number): QuotaLive;
+  observe?(machine: MachineUsage, view: UsageView, now: number, sessions?: SessionLiveness): QuotaLive;
+  /** Whether a team's herdr session still runs (false: gone or stopped). Absent from a test's own
+   *  sources, which then count every fixture team as live; the real one asks herdr, once per
+   *  session name per run below. */
+  sessions?(name: string): boolean | null;
 };
 
 export const realSources: UsageSources = {
   home: homedir(),
   now: () => new Date(),
-  observe: (machine, view, now) => realQuotaObservations(machine, view, now),
+  observe: (machine, view, now, sessions) => realQuotaObservations(machine, view, now, sessions),
+  sessions: (name) => sessionRunning(name),
 };
+
+/** One answer per session name for the whole run: every team asks, herdr is listed once. */
+function memoized(ask: (name: string) => boolean | null): SessionLiveness {
+  const seen = new Map<string, boolean | null>();
+  return (name) => {
+    if (!seen.has(name)) seen.set(name, ask(name));
+    return seen.get(name) ?? null;
+  };
+}
 
 export const usage: Command = (argv, io) => runUsage(argv, io, realSources);
 export default usage;
@@ -95,10 +112,11 @@ export async function runUsage(argv: string[], io: Io, sources: UsageSources): P
   // and `--json` alike — comes from the one report the filter builds under this view.
   const view = viewFor(io, mine);
   const restricted = !view.full;
-  const mineNotes = mineNotesOf(loaded, loadError, restricted);
+  const sessions = sources.sessions === undefined ? undefined : memoized(sources.sessions);
+  const mineNotes = mineNotesOf(loaded, loadError, restricted, sources.home);
   let machine: MachineUsage;
   try {
-    machine = machineUsage(sources.home, now.getTime(), view);
+    machine = machineUsage(sources.home, now.getTime(), view, sessions);
   } catch (error) {
     if (!(error instanceof StoreUnreadable)) throw error;
     // The stores folder itself could not be read: the one refusal beside the invocation (§ 2.4).
@@ -115,7 +133,7 @@ export async function runUsage(argv: string[], io: Io, sources: UsageSources): P
     // exit: usage.store
     return 2;
   }
-  const report = reportOf(machine, view, now.getTime(), mineNotes, allTeams, sources.observe === undefined ? null : sources.observe(machine, view, now.getTime()));
+  const report = reportOf(machine, view, now.getTime(), mineNotes, allTeams, sources.observe === undefined ? null : sources.observe(machine, view, now.getTime(), sessions));
   if (json) {
     // The shared envelope: `schema: { name: 'team.usage', version: 1 }` first, then the report's
     // own keys unchanged — one document, registered under `schema/usage.schema.json`.
@@ -132,12 +150,12 @@ export async function runUsage(argv: string[], io: Io, sources: UsageSources): P
  *  (`noticeOf`), and the one outside sentence for a folder with no team file at all. All but the
  *  last are the reason a member of this machine cannot be read, so the caller's view decides the
  *  face they print in. */
-function mineNotesOf(loaded: LoadResult | null, error: unknown, restricted: boolean): string[] {
-  if (error !== null) return [errorNote(error, restricted)];
+function mineNotesOf(loaded: LoadResult | null, error: unknown, restricted: boolean, home: string): string[] {
+  if (error !== null) return [errorNote(error, restricted, home)];
   if (loaded === null || loaded.ok) return [];
   const path = loaded.path;
   if (path === undefined || !existsSync(path)) return [NO_PROJECT];
-  return notesOf(path, loaded.errors, restricted);
+  return notesOf(path, loaded.errors, restricted, home);
 }
 
 /** One note for a file that exists and does not load. The owner reads the loader's own message:
@@ -149,16 +167,16 @@ function mineNotesOf(loaded: LoadResult | null, error: unknown, restricted: bool
  *  `team status` does not print those bodies for this caller: the caller rule answers with one
  *  sentence and no reason, so this note names the owner, the same way a file that cannot be read
  *  does. */
-function noticeOf(path: string, problem: Problem, restricted: boolean): string {
+function noticeOf(path: string, problem: Problem, restricted: boolean, home: string): string {
   if (restricted) return `${TEAM_FILE} does not load${problem.line ? ` (line ${problem.line})` : ''}: the owner reads the reason`;
-  return `${path}${problem.line ? ` line ${problem.line}` : ''}: ${problem.message}`;
+  return `${tildify(path, home)}${problem.line ? ` line ${problem.line}` : ''}: ${tildify(problem.message, home)}`;
 }
 
 /** The notes for a file that exists and does not load: one per problem for the owner, and one per
  *  distinct line for a caller who is not the owner — the fixed sentences carry nothing else, so
  *  three problems on one line are one note. */
-function notesOf(path: string, errors: Problem[], restricted: boolean): string[] {
-  const notes = errors.map((problem) => noticeOf(path, problem, restricted));
+function notesOf(path: string, errors: Problem[], restricted: boolean, home: string): string[] {
+  const notes = errors.map((problem) => noticeOf(path, problem, restricted, home));
   return restricted ? [...new Set(notes)] : notes;
 }
 
@@ -167,7 +185,7 @@ function notesOf(path: string, errors: Problem[], restricted: boolean): string[]
  *  error can name the path it failed on) and so does not pass through. The sentence names the
  *  owner as the reader of the reason: `team status` is no pointer here — a run showed it throws on
  *  this same fixture instead of printing anything. */
-function errorNote(error: unknown, restricted: boolean): string {
+function errorNote(error: unknown, restricted: boolean, home: string): string {
   if (restricted) return `${TEAM_FILE} cannot be read: the owner reads the reason`;
-  return error instanceof Error ? error.message : String(error);
+  return tildify(error instanceof Error ? error.message : String(error), home);
 }

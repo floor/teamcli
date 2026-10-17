@@ -7,7 +7,8 @@ still hides other teams' names, paths and seat rows from agents.
 
 ## Machine subscriptions
 
-`~/.config/team/accounts.yaml` lists subscriptions once:
+`~/.config/team/accounts.yaml` is optional: a lab no entry declares is one account named after
+the lab (below). When present it lists subscriptions once:
 
 ```yaml
 accounts:
@@ -77,9 +78,19 @@ transcript or input box is not a reading. The supported screen grammars are:
 
 Antigravity's screen fixtures do not provide a quota percentage. Accounts without a supported
 screen grammar or a recorded figure print `not readable from a CLI screen`. Readable accounts
-without an observation print `unknown`. A lab no account is declared for prints one line —
-`not known: no account declared; declare it in ~/.config/team/accounts.yaml` — and the quota
-block below stays silent for it, so the sentence appears once.
+without an observation print `unknown`.
+
+An undeclared lab is never a hole in the report: its paying seats synthesize one account named
+after the lab, printed `unknown` with no window until its first reading, and the quota block
+carries that account with the seats behind it. The account's line is readable by the same rule a
+declared account's is — it has a seat whose CLI this machine can print a figure for. The file is
+therefore only for naming accounts, or for splitting one lab into several. A live reading of an
+account no file declares lands the same way: the account takes the lab of that name, else the lab
+whose name it starts with when several vendors pay it (`google-antigravity` → `google`), else the
+single lab whose paying seats' vendor names it, else its own name. A machine-wide reading (no
+seat behind it) lands only on a lab the caller's own seats pay; the owner's view lands it
+everywhere. A lab with seats and no declared account and no reading prints its synthesized
+account in the quota block with `not known: no reading yet`.
 
 The watch merges observations into `~/.config/team/usage/readings.json` under a machine lock and
 replaces the file atomically. Each record contains account, optional pool, window, left/used
@@ -152,6 +163,12 @@ The full view belongs to the owner at a terminal. Every other caller receives th
 view: its approved team names and rows, shared machine subscriptions, and anonymized counts or
 fixed notes for other teams. Raw state errors and unbound state strings do not cross that
 boundary. `--all` does not elevate an agent's permissions.
+
+Seat records are filtered by what is running. A team whose recorded session herdr reports as not
+running contributes no seats and no accounts — not even a synthesized one — while a session whose
+state cannot be asked leaves the record as it stands; a stopped seat never prints, in either
+case. The closing summary counts a synthesized account exactly as a declared one, so a machine
+with no `accounts.yaml` counts one account per lab its seats draw on.
 
 `usage` itself is read-only: it runs no check, writes no state, and opens no credential, key or
 CLI session file. It reads the seat panes herdr records, and it starts the CLI's own usage print
