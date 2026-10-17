@@ -977,13 +977,16 @@ describe('a pane that no longer holds the process team launched', () => {
     );
     expect(out).not.toContain('difference: codex-acme: the process in its pane is not the one team launched');
     const doc = JSON.parse((await status('--json')).out);
-    // A replaced pane is not the seat's process, but the word is not 'done': nothing ties the
-    // row to a launched process, so the reading is herdr's own idle word about the listed agent.
+    // A pane `team` did not launch is not the seat's process, and its word is not 'done' either —
+    // nor is herdr's idle word about whatever runs there the seat's. It is untrusted: the reading
+    // is TeamCLI's own records or nothing, and this record carries no trace — unknown, and past
+    // the blind threshold the stale record is blind, which counts as not working.
     expect(doc.rows.find((row: { name: string }) => row.name === 'codex-acme')).toEqual({
       name: 'codex-acme',
       state: 'restored, not launched by team',
-      seat_state: 'idle',
-      seat_state_source: 'herdr',
+      seat_state: 'unknown',
+      seat_state_source: 'none',
+      blind: true,
       model: '-',
       pane: 'w2:p1',
     });

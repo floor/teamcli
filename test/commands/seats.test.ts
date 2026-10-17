@@ -337,6 +337,93 @@ describe('team seats', () => {
   });
 });
 
+describe('the reading against a live herdr', () => {
+  test("a live agent outranks the file's stopped word", async () => {
+    // The file marks codex-acme stopped while herdr lists a working agent for it. The comparison
+    // says so as a difference of its own (`marked stopped in the file and is running`) and keeps
+    // its working row; the reading is the observation, never done/process from the file's word.
+    const stoppedFile = example.replace('    parked: true\n', '    parked: true\n    stopped: true\n');
+    if (stoppedFile === example) throw new Error('the fixture no longer carries the parked line');
+    writeFileSync(file, stoppedFile);
+    live!.agents.find((listed) => listed.name === 'codex-acme')!.status = 'working';
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], io, statusSources)).toBe(0);
+    const doc = JSON.parse(io.out) as SeatsJson;
+    const row = doc.seats.find((s) => s.name === 'codex-acme')!;
+    expect(row.status).toBe('working, parked');
+    expect(row.state).toBe('working');
+    expect(row.state_source).toBe('herdr');
+  });
+
+  test('a retained record beside a live agent is still the observation', async () => {
+    // A stale retained record outliving its seat: while herdr lists an agent for the name, the
+    // reading is that agent's, not the retained record's done/process.
+    updateState(join(dir, '.agents'), (state) => {
+      const session = state.sessions['acme-web']!;
+      session.retained_seats ??= {};
+      session.retained_seats['codex-acme'] = { id: 'seat_666666666666', last_active: '2026-10-02T14:10:00Z' };
+    });
+    live!.agents.find((listed) => listed.name === 'codex-acme')!.status = 'working';
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], io, statusSources)).toBe(0);
+    const doc = JSON.parse(io.out) as SeatsJson;
+    const row = doc.seats.find((s) => s.name === 'codex-acme')!;
+    expect(row.state).toBe('working');
+    expect(row.state_source).toBe('herdr');
+  });
+
+  test("another seat's agent on a stale recorded pane is never this seat's reading", async () => {
+    // deepseek-acme-2's record still names pane-2 — now codex-acme's pane, whose agent is named
+    // codex-acme and working. herdr lists no agent for deepseek-acme-2, the comparison calls the
+    // seat missing, and the reading is that: done/process, never another seat's working word and
+    // never `LAST ACTIVE: now` borrowed from its pane.
+    updateState(join(dir, '.agents'), (state) => {
+      state.sessions['acme-web']!.seats['deepseek-acme-2']!.pane = 'pane-2';
+    });
+    live!.agents = live!.agents.filter((listed) => listed.name !== 'deepseek-acme-2');
+    live!.agents.find((listed) => listed.name === 'codex-acme')!.status = 'working';
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], io, statusSources)).toBe(0);
+    const doc = JSON.parse(io.out) as SeatsJson;
+    const row = doc.seats.find((s) => s.name === 'deepseek-acme-2')!;
+    expect(row.state).toBe('done');
+    expect(row.state_source).toBe('process');
+    expect(row.last_active).not.toBe(NOW.toISOString());
+  });
+
+  test('an unnamed agent on the recorded pane is still the seat', async () => {
+    // The fallback keeps what the comparison flags as a rename: an agent left unnamed on the
+    // pane the state records for the seat is the seat, and its idle word is read.
+    live!.agents.find((listed) => listed.name === 'deepseek-acme-2')!.name = null;
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], io, statusSources)).toBe(0);
+    const doc = JSON.parse(io.out) as SeatsJson;
+    const row = doc.seats.find((s) => s.name === 'deepseek-acme-2')!;
+    expect(row.state).toBe('idle');
+    expect(row.state_source).toBe('herdr');
+  });
+
+  test('a process team did not launch is untrusted: no observed state', async () => {
+    // The comparison calls deepseek-acme `restored, not launched by team`: the process in its
+    // pane is not the one the launch recorded. Its screen and herdr's working word are not the
+    // seat's — the reading is TeamCLI's own records, and nothing else: unknown, blind by age.
+    updateState(join(dir, '.agents'), (state) => {
+      state.sessions['acme-web']!.seats['deepseek-acme']!.launched = { shell: 100, cli: [200] };
+    });
+    live!.processes = { 'pane-3': { shell: 1, foreground: [2, 3] } };
+    live!.agents.find((listed) => listed.name === 'deepseek-acme')!.status = 'working';
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], io, statusSources)).toBe(0);
+    const doc = JSON.parse(io.out) as SeatsJson;
+    const row = doc.seats.find((s) => s.name === 'deepseek-acme')!;
+    expect(row.status).toBe('restored, not launched by team');
+    expect(row.state).toBe('unknown');
+    expect(row.state_source).toBe('none');
+    expect(row.blind).toBe(true);
+    expect(row.last_active).not.toBe(NOW.toISOString());
+  });
+});
+
 describe('team status --all', () => {
   test('renders the 11-column registry table while preserving difference footer and notes', async () => {
     const io = testIo(dir, { kind: 'owner' });

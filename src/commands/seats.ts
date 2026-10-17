@@ -137,15 +137,32 @@ export function seatRegistryRows(
     const effort = recorded?.effort ?? declared?.effort ?? likeSeat?.effort ?? null;
     // The seat's agent: the one herdr names for it, or — an agent renamed or left unnamed, which
     // the comparison flags on its own — the one standing in the pane the state records for the
-    // seat. Its screen is the seat's screen either way, and it is not read as blind.
+    // seat. An agent named as another seat is that seat's, never this one's: a stale pane record
+    // must not report this seat's state from another seat's pane. Its screen is the seat's
+    // screen either way, and it is not read as blind.
     const recordedPane = recorded?.pane;
     const agent = live.agents.find((candidate) => candidate.name === row.name)
-      ?? (recordedPane !== undefined ? live.agents.find((candidate) => candidate.pane === recordedPane) : undefined);
-    const screenText = agent && live.screens[agent.pane] !== undefined ? live.screens[agent.pane] : undefined;
+      ?? (recordedPane !== undefined
+        ? live.agents.find((candidate) =>
+            candidate.pane === recordedPane
+            && !team.seats.some((other) => other.name === candidate.name))
+        : undefined);
+    // A pane `team` did not launch is not this seat's process: the comparison says `restored, not
+    // launched by team`, and neither that process's screen nor herdr's word for it is the seat's.
+    // Its reading is what TeamCLI's own records say and nothing else — unknown, untrusted.
+    const untrusted = row.state === 'restored, not launched by team';
+    const screenText = agent && !untrusted && live.screens[agent.pane] !== undefined ? live.screens[agent.pane] : undefined;
     // The seat-state reading: the CLI's own screen first, then herdr, then the traces (a fresh
-    // one even over an idle word) — and the certainties the comparison already judged: a seat
-    // the file stops, or one its own process has left, is done and not judged blind. The trace is
-    // TeamCLI's own (src/labels/traces.ts) beside the record's carried-forward `last_active`.
+    // one even over an idle word) — and the certainties the comparison already judged. The
+    // comparison's own 'missing'/'stopped' is such a certainty — it read the pane's processes —
+    // and is done, not judged blind. The file's `stopped` and a retained record say the same,
+    // but only while herdr names no agent there: a live agent is the observation, and the file's
+    // `stopped` beside it is a difference of its own (src/status/compare.ts), never the state.
+    // The trace is TeamCLI's own (src/labels/traces.ts) beside the record's carried-forward
+    // `last_active`.
+    const goneByFile = declared?.stopped === true || retained !== undefined;
+    const goneOnPurpose = row.state === 'missing' || row.state === 'stopped'
+      || (goneByFile && agent === undefined);
     const trace = traceSources === undefined
       ? recorded?.last_active ?? retained?.last_active ?? null
       : newestTraceAt(
@@ -162,19 +179,15 @@ export function seatRegistryRows(
         );
     const reading = observedSeatState({
       cli,
-      ...(agent ? { agent: { pane: agent.pane, status: agent.status } } : {}),
+      ...(agent !== undefined && !untrusted ? { agent: { pane: agent.pane, status: agent.status } } : {}),
       ...(screenText !== undefined ? { screenText } : {}),
       trace,
-      // Gone on purpose — stopped by the file, kept only as a retained record, or the
-      // comparison's own 'missing'/'stopped' — is done, not judged blind.
-      ...(declared?.stopped === true || retained !== undefined || row.state === 'missing' || row.state === 'stopped'
-        ? { stopped: true }
-        : {}),
+      ...(goneOnPurpose ? { stopped: true } : {}),
       ...(held ? { held: true } : {}),
       reachable: live.running,
       now,
     });
-    const workingNow = Boolean(agent && (agent.status === 'working' || row.state.startsWith('working')));
+    const workingNow = Boolean(agent !== undefined && !untrusted && (agent.status === 'working' || row.state.startsWith('working')));
     const lastActive = workingNow ? now.toISOString() : (recorded?.last_active ?? retained?.last_active ?? null);
     const lastActiveDisplay = workingNow ? 'now' : formatRelativeTime(lastActive, now);
     const pane = row.pane === '-' ? null : row.pane;
