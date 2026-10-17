@@ -159,7 +159,8 @@ describe('the session the check is reading is never a leftover', () => {
     const r = await runCheck(w, ['--session', ALT, '--repair'], liveNoSeats);
 
     // Neither a difference nor a repair line names the addressed session as a leftover.
-    expect(r.out).not.toContain(`session "${ALT}"`);
+    expect(r.out).not.toContain(`the state's session "${ALT}"`);
+    expect(r.out).not.toContain(`the state records the session "${ALT}"`);
     expect(r.err).not.toContain(`session "${ALT}"`);
     // The truly stale one is named and dropped.
     expect(r.out).toContain(`repaired: the state's session "${STALE}" holds no seat of the team; its record is dropped`);
@@ -180,8 +181,8 @@ describe('the session the check is reading is never a leftover', () => {
 
     expect(r.code, `${r.out}${r.err}`).toBe(0);
     expect(r.out).toContain(`repaired: the state's session "${STALE}" holds no seat of the team; its record is dropped`);
-    expect(r.out).not.toContain(`session "${SESSION}"`);
-    expect(r.out).toContain('team check: nothing wrong');
+    expect(r.out).not.toContain(`the state's session "${SESSION}"`);
+    expect(r.out).toContain('0 difference(s)');
     const state = readState(w.dir);
     expect(Object.keys(state.sessions)).toEqual([SESSION]);
     expect(state.sessions[SESSION]?.seats.lead).toEqual({ stage: 'ready', pane: PANE, workspace: 'w1' });

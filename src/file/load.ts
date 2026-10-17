@@ -17,6 +17,15 @@ export const NOT_A_REPO = 'not inside a git repository: run team from a project,
 // `--file` still opens the path it names.
 export const LINK_NOT_FOLLOWED = `${NOT_A_REPO}: a link was found and not followed`;
 
+/**
+ * Whether a `loadTeamFile` / `currentTeam` problem is a line-attributed parse/validation error
+ * (`problem.line > 0`, mapped to `*.file-invalid`) rather than an unparsed file-locate/read
+ * problem (`problem.line === 0`, mapped to `*.not-a-repo` or `*.file`).
+ */
+export function isParseError(problem: Problem): boolean {
+  return problem.line > 0;
+}
+
 // The team file in a folder that is not a git repository. The folder the process was given is
 // resolved first: when that path is itself a link, the real directory is the folder (the shell
 // chose it). Inside it, `.agents` must be a real directory and `team.yaml` a real file. A link at

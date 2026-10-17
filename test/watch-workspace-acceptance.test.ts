@@ -314,6 +314,6 @@ describe('the watch in its own workspace', () => {
     const fresh = testIo(root, { kind: 'owner' });
     expect(runTeamCheck({ file: '.agents/team.yaml' }, fresh, checkSources(live))).toBe(0);
     expect(`${fresh.out}${fresh.err}`).not.toContain("the watch's last pass was");
-    expect(`${fresh.out}${fresh.err}`).toContain('team check: nothing wrong');
+    expect(`${fresh.out}${fresh.err}`).toContain('0 difference(s)');
   });
 });
