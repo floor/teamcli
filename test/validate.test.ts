@@ -266,13 +266,13 @@ describe('a nickname is one seat\'s human name', () => {
   });
 
   test('it may not be another seat\'s name', () => {
-    const shadow = named(marked, 'lead', '    launch: codex\n');
-    expect(errors(shadow)).toEqual(['15: seat "worker": the nickname "lead" is the name of another seat (line 7)']);
+    const shadow = named(marked, 'worker');
+    expect(errors(shadow)).toEqual(['7: seat "lead": the nickname "worker" is the name of another seat (line 16)']);
   });
 
   test('a seat may carry its own name as its nickname', () => {
-    const own = named(marked, 'lead');
-    expect(valid(own).team.seats[0]?.nickname).toBe('lead');
+    const own = named(marked, 'worker', '    launch: codex\n');
+    expect(valid(own).team.seats[1]?.nickname).toBe('worker');
   });
 
   test('a seat with a count carries none', () => {
