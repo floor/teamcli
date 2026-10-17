@@ -113,6 +113,7 @@ export function buildActionSchemaSpec(spec: ActionSchemaSpec): CommandSchemaSpec
         type: 'array',
         items: PLAN_STEP_SCHEMA_FRAGMENT,
       },
+      notice: { type: ['string', 'null'] },
       ...(spec.properties ?? {}),
     },
   };

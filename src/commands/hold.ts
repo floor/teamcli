@@ -101,7 +101,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
   if (verdict.kind !== 'ok') {
     const msg = refusalOf(verdict, caller);
     if (json) {
-      const rule = verdict.kind === 'no-pane' || verdict.kind === 'another-pane' ? 'pane-authority' : 'owner-or-leads';
+      const rule = verdict.kind === 'no-pane' || verdict.kind === 'another-pane' ? 'unplaced' : 'owner-or-leads';
       const repair = verdict.kind === 'no-pane' ? 'team up' : verdict.kind === 'another-pane' ? 'team down && team up' : null;
       writeJsonError(out, 'hold.caller', msg, repair, 1, rule);
     } else {
@@ -136,6 +136,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
     // exit: hold.io
     return 1;
   }
+  const notice = current.notice ? plainText(current.notice) : undefined;
   if (op.kind === 'placed') {
     const summary = holdText(op.hold);
     if (json) {
@@ -149,6 +150,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
         target: 'hold',
         value: op.hold.reason,
         hold: op.hold,
+        ...(notice !== undefined ? { notice } : {}),
       });
     } else {
       out.stdout(`${summary}\n`);
@@ -168,6 +170,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
         session,
         target: 'hold',
         value: null,
+        ...(notice !== undefined ? { notice } : {}),
       });
     } else {
       out.stdout(`${summary}\n`);

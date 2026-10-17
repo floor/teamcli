@@ -395,6 +395,74 @@ describe('team hold', () => {
       repair: null,
     });
   });
+
+  test('--json caller refusal branches: non-lead seat (owner-or-leads), unplaced pane (unplaced), and detached (unplaced)', async () => {
+    const where = place();
+    const bystander: Caller = { kind: 'seat', name: 'builder', pane: 'w2:p1', session: 'acme' };
+    const wrongCaller = await hold(['freeze deploys', '--json'], where, bystander);
+    expect(wrongCaller.code).toBe(1);
+    expect(wrongCaller.err).toBe('');
+    const wrongCallerDoc = assertJsonErrorShape(wrongCaller.out, {
+      id: 'hold.caller',
+      messageContains: 'only the owner, the orchestrator or the operator holds the team; this call is builder',
+      repair: null,
+    });
+    expect(wrongCallerDoc.error).toMatchObject({ rule: 'owner-or-leads' });
+
+    const noPane = await hold(['freeze deploys', '--json'], where, ORCHESTRATOR);
+    expect(noPane.code).toBe(1);
+    expect(noPane.err).toBe('');
+    const noPaneDoc = assertJsonErrorShape(noPane.out, {
+      id: 'hold.caller',
+      messageContains: 'no pane is recorded for seat lead in this session',
+      repair: 'team up',
+    });
+    expect(noPaneDoc.error).toMatchObject({ rule: 'unplaced' });
+
+    recordPane(where, 'lead', 'w1:p1');
+    const moved: Caller = { kind: 'seat', name: 'lead', pane: 'w2:p2', session: 'acme' };
+    const anotherPane = await hold(['freeze deploys', '--json'], where, moved);
+    expect(anotherPane.code).toBe(1);
+    expect(anotherPane.err).toBe('');
+    const anotherPaneDoc = assertJsonErrorShape(anotherPane.out, {
+      id: 'hold.caller',
+      messageContains: 'the state records pane w1:p1 for seat lead in this session',
+      repair: 'team down && team up',
+    });
+    expect(anotherPaneDoc.error).toMatchObject({ rule: 'unplaced' });
+
+    const detached = await hold(['freeze deploys', '--json'], where, { kind: 'owner-no-tty' });
+    expect(detached.code).toBe(1);
+    expect(detached.err).toBe('');
+    const detachedDoc = assertJsonErrorShape(detached.out, {
+      id: 'hold.detached',
+      messageContains: DETACHED_REFUSAL,
+      repair: null,
+    });
+    expect(detachedDoc.error).toMatchObject({ rule: 'unplaced' });
+  });
+
+  test('--json carries notice when team.yaml is invalid and falls back to the stored copy', async () => {
+    const where = place();
+    expect((await hold(['freeze deploys'], where)).code).toBe(0);
+    writeFileSync(where.file, 'format: 2\n');
+
+    const released = await hold(['--release', '--json'], where);
+    expect(released.code).toBe(0);
+    expect(released.err).toBe('');
+    const releasedDoc = assertMatchesOutputSchema(released.out, HOLD_OUTPUT_SCHEMA);
+    expect(typeof releasedDoc.notice).toBe('string');
+    expect(String(releasedDoc.notice)).toContain('team.yaml is invalid');
+    expect(String(releasedDoc.notice)).toContain('using the copy of');
+
+    const placed = await hold(['freeze deploys', '--json'], where);
+    expect(placed.code).toBe(0);
+    expect(placed.err).toBe('');
+    const placedDoc = assertMatchesOutputSchema(placed.out, HOLD_OUTPUT_SCHEMA);
+    expect(typeof placedDoc.notice).toBe('string');
+    expect(String(placedDoc.notice)).toContain('team.yaml is invalid');
+    expect(String(placedDoc.notice)).toContain('using the copy of');
+  });
 });
 
 describe('the doctor line', () => {

@@ -101,6 +101,12 @@
         }
       }
     },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "target": {
       "type": "string",
       "minLength": 1

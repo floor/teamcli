@@ -46,6 +46,7 @@ export interface ActionResultBase {
   project?: string | null;
   session?: string | null;
   plan?: readonly PlanStep[];
+  notice?: string | null;
 }
 
 export type ActionEnvelope<T extends Record<string, unknown> = Record<string, never>> = JsonEnvelope<
