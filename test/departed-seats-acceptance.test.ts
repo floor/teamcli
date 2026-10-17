@@ -184,12 +184,12 @@ describe('team check names the records the file no longer declares', () => {
 
     const blocks = findings(out);
     const named = (name: string, pane: string): boolean =>
-      blocks.some((block) => block.includes(name) && block.includes(pane) && block.includes('state seat not in the file'));
+      blocks.some((block) => block.includes(name) && block.includes(pane) && block.includes('left the team file'));
     expect(named('clerk', PANE), out).toBe(true);
     expect(named('porter', SECOND), out).toBe(true);
     // The declared lead stands on the same pane as the departed record, and is the file's: it is
     // never named as a state seat the file does not declare.
-    expect(blocks.some((block) => block.includes('state seat not in the file') && block.includes('lead'))).toBe(false);
+    expect(blocks.some((block) => block.includes('left the team file') && block.includes('lead'))).toBe(false);
     expect(code).toBe(1);
   });
 

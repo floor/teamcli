@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/policy.schema.json",
+  "title": "team policy --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "format",
+        "status",
+        "project",
+        "session",
+        "dev_mode_governed",
+        "policies"
+      ],
+      "properties": {
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "const": "team.policy"
+            },
+            "version": {
+              "type": "integer",
+              "const": 1
+            }
+          }
+        },
+        "format": {
+          "type": "integer",
+          "const": 1
+        },
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "in_project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seat": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dev_mode_governed": {
+          "type": "boolean"
+        },
+        "policies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "value",
+              "level",
+              "setter",
+              "date",
+              "expiry",
+              "kind"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {},
+              "level": {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "entity",
+                  "project",
+                  "team",
+                  "seat"
+                ]
+              },
+              "setter": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "date": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expiry": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "enforced",
+                  "advised"
+                ]
+              }
+            }
+          }
+        },
+        "notice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "format",
+        "dry_run",
+        "status",
+        "action_summary",
+        "level",
+        "target",
+        "policy"
+      ],
+      "properties": {
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "const": "team.policy"
+            },
+            "version": {
+              "type": "integer",
+              "const": 1
+            }
+          }
+        },
+        "format": {
+          "type": "integer",
+          "const": 1
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "updated",
+            "unchanged",
+            "dry-run"
+          ]
+        },
+        "action_summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "type": "string",
+          "enum": [
+            "entity",
+            "project",
+            "team",
+            "seat"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {},
+        "expiry": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "enforced",
+            "advised"
+          ]
+        },
+        "plan": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "step",
+              "detail"
+            ],
+            "properties": {
+              "step": {
+                "type": "string",
+                "minLength": 1
+              },
+              "detail": {
+                "type": "string",
+                "minLength": 1
+              },
+              "seat": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "prefix": {
+                "type": "string",
+                "enum": [
+                  "+",
+                  "!",
+                  "skip"
+                ]
+              }
+            }
+          }
+        },
+        "notice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  ]
+}

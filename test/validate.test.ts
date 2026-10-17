@@ -27,7 +27,10 @@ seats:
 
 // The notice a file spelled with the legacy `coordinator:` key carries, at line 3 of `minimal`.
 // Files keep the old spelling on purpose — it is still read — so they warn.
-const notice = { line: 3, message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read' };
+const notice = {
+  line: 3,
+  message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
+};
 
 // Replaces one piece of a valid file, and fails loudly if the piece isn't there.
 function change(text: string, from: string, to: string): string {

@@ -3,7 +3,7 @@ import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { processNameMatches } from '../clis.ts';
-import { devMode, logDevMode } from '../dev_mode.ts';
+import { devModeExpiryNote, devModeLevelNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
@@ -433,8 +433,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     return 1;
   }
   const dry = args.flags.has('dry-run');
-  // Set to exactly `1`. Anything else, including unset, leaves the caller refusal where it is.
-  const dev = devMode(io);
+  // Dev mode is resolved from the run's file below, once its chain is known.
   const refusals: string[] = [];
 
   // --- the delegate branch -----------------------------------------------------------------
@@ -536,9 +535,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // load carries no delegate: today's path, with today's fallback and today's words, decides.
   const owner = isOwner(walkCaller(io));
   const liveNow = owner ? undefined : liveFile();
-  const current: Current = liveNow !== undefined && liveNow.team.delegates !== null
-    ? { ok: true, team: liveNow.team, root: liveNow.root, dir: liveNow.dir, warnings: [] }
-    : currentTeam(io.cwd, file, sources.now(), sources.home, false);
+  const liveCurrent: Current | undefined =
+    liveNow !== undefined && liveNow.team.delegates !== null
+      ? { ok: true, team: liveNow.team, root: liveNow.root, dir: liveNow.dir, warnings: [] }
+      : undefined;
+  // One clock reading serves the run's own file and the policy chain read beside it; the
+  // remembering below keeps its own, later reading.
+  const loadedAt = liveCurrent === undefined ? sources.now() : undefined;
+  const current: Current = liveCurrent ?? currentTeam(io.cwd, file, loadedAt!, sources.home, false);
   if (!current.ok) {
     for (const problem of current.errors) {
       io.stderr(`team down: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
@@ -550,6 +554,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
   if (current.notice) io.stdout(`${current.notice}\n`);
   const { team, dir, root } = current;
+  // Dev mode, from the file this run stops: a `dev-mode` value anywhere in the caller's chain
+  // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value, the variable set to
+  // exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  const devNow = loadedAt ?? sources.now();
+  const dev = resolveDevMode('down', io, {
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+    team,
+    root,
+    now: devNow,
+  });
   // With no `--session` the session this run judges and stops is the caller's own placement: the
   // file's session first, then a session the state records this caller's pane in (`team up
   // --session <other>`) — never one a non-owner chose, and the plan then names that session. The
@@ -698,7 +712,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         refusals.push(anotherPaneRefusal(rule.name, rule.recordedPane));
       } else {
         refusals.push(
-          `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}`,
+          `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}${devModeExpiryNote(dev)}`,
         );
       }
     } else if (said.kind === 'refused') {
@@ -719,17 +733,20 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // an approval, a key, or a grant.
   const placement = `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}`;
   let warning = '';
-  if (dev) {
+  if (dev.on) {
     const kept: string[] = [];
     for (const line of refusals) {
-      if (line === placement) warning = line;
+      if (line === placement) warning = line + devModeLevelNote(dev);
       else kept.push(line);
     }
     if (warning) refusals.splice(0, refusals.length, ...kept);
     // The audit line the fold owes: written where the gate is used, on a real run, whether a
     // later refusal stops the stop or the stop goes on. A dry run decides nothing and logs none.
-    if (warning && !dry) logDevMode(dir, 'down', describeCaller(caller), `warning: ${warning}`, sources.now());
+    if (warning && !dry) logDevMode(dir, 'down', describeCaller(caller), `warning: ${warning}`, devNow);
   }
+  // The configuration lines the run owes once: the variable ignored under a governing policy,
+  // and a policy source that would not load. A dry run writes none.
+  if (!dry) logDevModeState(dir, 'down', describeCaller(caller), dev, devNow);
 
   const state = readState(dir).sessions[session];
   const home = sources.home ?? homedir();

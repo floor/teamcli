@@ -168,7 +168,10 @@ function hasDotTraversal(raw: string): boolean {
   return raw.split(/[\\/]/).some((segment) => segment === '.' || segment === '..');
 }
 
-function isSameOrInside(parent: string, child: string): boolean {
+/** Whether `child` is `parent` or lies under it, compared by resolved spelling. Shared with the
+ *  readers that ask whether a declared root holds a place (`init`'s entity, before any team
+ *  file exists). */
+export function isSameOrInside(parent: string, child: string): boolean {
   return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 }
 

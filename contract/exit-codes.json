@@ -1753,6 +1753,34 @@
     },
     {
       "code": 0,
+      "command": "policy",
+      "id": "policy.done",
+      "meaning": "the effective policies were listed, updated, or planned",
+      "trigger": "team policy"
+    },
+    {
+      "code": 1,
+      "command": "policy",
+      "id": "policy.refused",
+      "meaning": "a non-owner attempted set or unset, a lower level loosened a higher level, or a source failed verification",
+      "trigger": "team policy set team dev-mode on"
+    },
+    {
+      "code": 2,
+      "command": "policy",
+      "id": "policy.invalid",
+      "meaning": "the team file, policy name, or value is invalid",
+      "trigger": "team policy set team dev-mode maybe"
+    },
+    {
+      "code": 2,
+      "command": "policy",
+      "id": "policy.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team policy set"
+    },
+    {
+      "code": 0,
       "command": "pr",
       "id": "pr.passed",
       "meaning": "the pull request body passed",

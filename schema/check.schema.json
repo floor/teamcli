@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/check.schema.json",
+  "title": "team check --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "project",
+    "session",
+    "warnings",
+    "repaired",
+    "notes",
+    "differences",
+    "summary"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.check"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session": {
+      "type": "string",
+      "minLength": 1
+    },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "repaired": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "differences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "what",
+          "repair",
+          "who"
+        ],
+        "properties": {
+          "what": {
+            "type": "string",
+            "minLength": 1
+          },
+          "repair": {
+            "type": "string",
+            "minLength": 1
+          },
+          "who": {
+            "type": "string",
+            "enum": [
+              "the owner",
+              "the team's lead",
+              "a grant holder",
+              "any seat"
+            ]
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "differences",
+        "owner_differences"
+      ],
+      "properties": {
+        "differences": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "owner_differences": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

@@ -250,6 +250,7 @@ Everything here is as it should be:
 
 ```console
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
@@ -260,6 +261,12 @@ ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 2 warnings
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
 exit 0
 ```
 
@@ -282,6 +289,7 @@ later `up` can meet a different one:
 
 ```console machine="small-swap"
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
@@ -293,6 +301,12 @@ ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 warn  the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
 team doctor: nothing missing, 3 warnings
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
 exit 0
 ```
 
@@ -310,6 +324,7 @@ herdr's own version line says only where it sits, for the same reason:
 
 ```console tools="claude-code=old"
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
@@ -320,6 +335,12 @@ ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 3 warnings
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
 exit 0
 ```
 
@@ -328,6 +349,7 @@ everything else is as the owner's:
 
 ```console caller=claude-beacon
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 --    the budget checks were not run: only the owner runs them
@@ -338,6 +360,12 @@ ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 2 warnings
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
 exit 0
 ```
 
@@ -392,6 +420,7 @@ seats:
 
 ```console
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
@@ -403,6 +432,12 @@ MISS  install `codex`: it is not on the PATH (codex: codex-scribe)
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: 1 missing, 2 warnings: 1 of them block `up` and `add`
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
 exit 1
 ```
 
@@ -457,6 +492,7 @@ seats:
 
 ```console
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
@@ -469,6 +505,12 @@ MISS  install `codex`: it is not on the PATH (codex: codex-scribe)
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: 1 missing, 3 warnings: 1 of them block `up` and `add`
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
 exit 1
 ```
 
@@ -535,6 +577,7 @@ seats:
 
 ```console tools="codex=fine"
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
@@ -548,6 +591,12 @@ warn  codex-scribe: the launch runs team-codex, not codex, and names no model: i
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 3 warnings
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
 exit 0
 ```
 
@@ -614,6 +663,7 @@ seats:
 
 ```console tools="codex=fine"
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
@@ -627,6 +677,12 @@ ok    codex: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 2 warnings
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
 exit 0
 ```
 
@@ -739,6 +795,7 @@ echo "weekly 99% used"
 
 ```console
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 warn  the check for openai changed after approval and was not run; that account reads unknown
@@ -749,6 +806,12 @@ ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 3 warnings
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
 exit 0
 ```
 
@@ -757,6 +820,7 @@ An option it doesn't know stops it before it reads anything:
 ```console
 $ team doctor --nope ; echo "exit $?"
 team doctor: unknown option --nope
-Usage: team doctor [--session <name>] [--file <path>] [--login]
+Usage: team doctor [--session <name>] [--file <path>] [--login] [--json]
+Exits 0 when nothing is missing, 1 when something is missing, 2 when the invocation or team file can't be read.
 exit 2
 ```

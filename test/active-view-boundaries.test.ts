@@ -49,7 +49,7 @@ test('a launch line on the source rows reaches neither the table nor the json', 
   const ioJson = testIo(join(tmpdir(), 'x'), { kind: 'owner' });
   expect(await runList(['--seats', '--json'], ioJson, sourcesOf(leaky))).toBe(0);
   expect(ioJson.out).not.toContain(SENTINEL);
-  const rows = JSON.parse(ioJson.out) as ListSeatsRow[];
+  const rows = (JSON.parse(ioJson.out) as { rows: ListSeatsRow[] }).rows;
   expect(rows[0]?.roster).toHaveLength(2);
   expect(Object.keys(rows[0]?.roster[0] ?? {}).sort()).toEqual([
     'cli', 'effort', 'id', 'last_active', 'model', 'name', 'pane', 'role', 'status',
@@ -67,7 +67,7 @@ test('an id that is not a seat id prints as nothing; a seat id prints', async ()
 
   const ioJson = testIo(join(tmpdir(), 'x'), { kind: 'owner' });
   expect(await runList(['--seats', '--json'], ioJson, sourcesOf(roster))).toBe(0);
-  const rows = JSON.parse(ioJson.out) as ListSeatsRow[];
+  const rows = (JSON.parse(ioJson.out) as { rows: ListSeatsRow[] }).rows;
   expect(rows[0]?.roster.map((seat) => seat.id)).toEqual([null, 'seat_222222222222']);
 });
 
@@ -105,7 +105,7 @@ test('a roster that cannot be read degrades to ? without failing the listing', a
 
   const ioJson = testIo(join(tmpdir(), 'x'), { kind: 'owner' });
   expect(await runList(['--seats', '--json'], ioJson, broken)).toBe(0);
-  const rows = JSON.parse(ioJson.out) as ListSeatsRow[];
+  const rows = (JSON.parse(ioJson.out) as { rows: ListSeatsRow[] }).rows;
   expect(rows[0]).toMatchObject({ activity: '?', active: null, roster: [], seats: '?' });
 });
 

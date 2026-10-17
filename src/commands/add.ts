@@ -10,7 +10,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
-import { devMode, devModeCallerGate, logDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
@@ -257,6 +257,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     : judgeCallerIn(io, dir, team);
   const { caller, shown } = judged;
   const session = judged.session;
+  // Dev mode, from the file this run edits: a `dev-mode` value anywhere in the caller's chain
+  // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the variable set to
+  // exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  const dev = resolveDevMode('add', io, { home: sources.home, team, root, now: sources.now() });
+  if (!dry) logDevModeState(dir, 'add', describeCaller(shown), dev, sources.now());
+  let devFolded = false;
   // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
   // speak: the `add` row is the owner's alone in 0.5.0, so every seat is refused here whatever
   // pane it sits on, and the delegate gate below is the one standing grant that opens a seat's
@@ -308,11 +314,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // trust. The warning is logged where this call runs; a dry run says it beside the dry answer
   // and decides nothing.
   const mayRun = mayChange.kind === 'refused' && delegatePane === null && !createGranted
-    ? `only the owner or a standing grant (delegate) runs it; this call is ${plainLine(describeCaller(shown))}`
+    ? `only the owner or a standing grant (delegate) runs it; this call is ${plainLine(describeCaller(shown))}${devModeExpiryNote(dev)}`
     : null;
   if (mayRun !== null) {
-    const folded = devModeCallerGate('add', io, mayRun);
+    const folded = devModeCallerGate(dev, mayRun);
     if (folded !== null) {
+      devFolded = true;
       if (dry) out.stdout(`! ${folded}\n`);
       else {
         out.stderr(`team add: ${plainText(folded)}\n`);
@@ -801,7 +808,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     resetCliHookState(dir, session, [planSeat.name]);
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
-      caller: who, owner: caller.kind === 'owner', devMode: devMode(io), now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
+      caller: who, owner: caller.kind === 'owner', devMode: devModeMark(dev, devFolded), now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
       ...(delegatePane === null ? {} : { delegated: { actor: delegatePane, command: 'add' as const } }),
       verifiedLobby, startCwd: planSeat.cwd, inLobby: planSeat.lobby === true, records, teamFile: path,
       doctor: sources.doctor,

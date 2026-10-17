@@ -86,6 +86,7 @@ describe('team doctor on a file of every model shape', () => {
     expect(run.err).toBe('');
     expect(run.out).toBe(
       [
+        'team pilot, session "pilot"',
         // The fixture still spells the lead `coordinator:`, on line 4: doctor prints the file's
         // notice before the seats' own warnings, and counts it.
         'warn  the file, line 4: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
@@ -112,6 +113,12 @@ describe('team doctor on a file of every model shape', () => {
         `  - ${root}`,
         `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root`,
         'team doctor: nothing missing, 6 warnings',
+        'what 0.5.0 must not pretend:',
+        '  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt',
+        '  Standing grants with an expiry, not leases',
+        '  No two-granter agreement, no `agree`, no `create` bounds',
+        '  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating',
+        '  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)',
         '',
       ].join('\n'),
     );
@@ -142,7 +149,7 @@ describe('team doctor on a file of every model shape', () => {
     expect(run.out).not.toContain('script-seat: the launch');
     // the three message seats' rules files count with the one model warning, and the file's
     // notice counts too
-    expect(run.out).toEndWith('team doctor: nothing missing, 5 warnings\n');
+    expect(run.out).toContain('team doctor: nothing missing, 5 warnings\nwhat 0.5.0 must not pretend:\n');
   });
 
   test('model_from edited after the record is not a doctor miss', async () => {
@@ -171,7 +178,7 @@ describe('team doctor on a file of every model shape', () => {
       'warn  script-seat: the launch runs zsh, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
     ]);
     expect(run.out).toContain('ok    the watch is running\n');
-    expect(run.out).toEndWith('team doctor: nothing missing, 6 warnings\n');
+    expect(run.out).toContain('team doctor: nothing missing, 6 warnings\nwhat 0.5.0 must not pretend:\n');
     expect(run.code).toBe(0);
   });
 });

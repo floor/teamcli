@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { saveReadings, saveSpendReadings, type Seen } from '../src/budgets/readings.ts';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runStatus } from '../src/commands/status.ts';
 import type { StatusSources } from '../src/commands/status.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Seat, TeamFile } from '../src/file/types.ts';
 import { rulesOf } from '../src/launch/rules.ts';
 import { rulesFileHash, rulesFilePathOf, writeRulesFile } from '../src/launch/rules-file.ts';
+import { overridesPath } from '../src/profiles/overrides.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Standing } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
@@ -17,6 +19,7 @@ import type { Live } from '../src/status/compare.ts';
 import { runningModel } from '../src/status/statusline.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { testIo, withWas } from './helpers.ts';
+import { assertJsonErrorShape } from './helpers/output.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 const NOW = new Date('2026-10-03T14:10:00Z');
@@ -103,12 +106,15 @@ function approveOnDisk() {
 }
 
 describe('team status', () => {
-  test('a team that matches its file reads clean and exits 0', async () => {
+  test('a team that matches its file reads clean, hides stopped seats by default, shows them under --all, and exits 0', async () => {
     const { code, out } = await status();
     expect(out).toContain('team acme-web, session "acme-web"');
+    expect(out).toContain('  SEAT                     STATE                                 MODEL                         PANE   REACH');
     expect(out).toMatch(/claude-coordinator-acme\s+working\s+Claude Opus 5\.5\s+w1:p1/);
     expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
-    expect(out).toMatch(/grok-acme\s+stopped/);
+    expect(out).not.toMatch(/grok-acme\s+stopped/);
+    const all = await status('--all');
+    expect(all.out).toMatch(/grok-acme\s+-\s+reviewer\s+grok\s+Grok 4\.7\s+-\s+stopped/);
     // The suffix is a reading, not a difference: a team that matches its file still reads clean.
     expect(out).toContain('0 difference(s)');
     expect(code).toBe(0);
@@ -572,19 +578,58 @@ describe('team status', () => {
     expect(await status()).toMatchObject({ code: 2, err: expect.stringContaining('herdr doesn\'t answer') });
     expect(await status('--fix')).toMatchObject({ code: 2, err: expect.stringContaining('unknown option --fix') });
     expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]\n');
+
+    const badAfter = await status('--nope', '--json');
+    expect(badAfter.code).toBe(2);
+    expect(badAfter.err).toBe('');
+    assertJsonErrorShape(badAfter.out, {
+      id: 'status.invocation',
+      messageContains: 'unknown option --nope',
+      repair: null,
+    });
+
+    const badEquals = await status('--json=1');
+    expect(badEquals.code).toBe(2);
+    expect(badEquals.err).toBe('');
+    assertJsonErrorShape(badEquals.out, {
+      id: 'status.invocation',
+      messageContains: 'unknown option --json',
+      repair: null,
+    });
+
+    const herdrJson = await status('--json');
+    expect(herdrJson.code).toBe(2);
+    expect(herdrJson.err).toBe('');
+    assertJsonErrorShape(herdrJson.out, {
+      id: 'status.herdr',
+      messageContains: "herdr doesn't answer",
+      repair: 'start herdr and run `team status` again',
+    });
   });
 
   test('--json: pins the stable format 1 shape on a clean team', async () => {
     const { code, out, err } = await status('--json');
     expect(code).toBe(0);
-    expect(err).toBe(WARNING);
+    expect(err).toBe('');
     const doc = JSON.parse(out);
-    expect(Object.keys(doc).sort()).toEqual(['differences', 'format', 'notes', 'notice', 'project', 'rows', 'session']);
+    expect(Object.keys(doc).sort()).toEqual([
+      'differences',
+      'format',
+      'notes',
+      'notice',
+      'project',
+      'rows',
+      'schema',
+      'session',
+      'summary',
+    ]);
+    expect(doc.schema).toEqual({ name: 'team.status', version: 1 });
     expect(doc.format).toBe(1);
     expect(doc.project).toBe('acme-web');
     expect(doc.session).toBe('acme-web');
     expect(doc.notice).toBeNull();
     expect(doc.differences).toEqual([]);
+    expect(doc.summary).toEqual({ differences: 0, owner_differences: 0 });
     expect(doc.notes).toEqual([
       'codex-acme: version unread (its screen doesn\'t show the model)',
       'deepseek-acme: version unread (its screen doesn\'t show the model)',
@@ -600,7 +645,6 @@ describe('team status', () => {
       { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', model: 'GPT-6 Sol (unread)', pane: 'w2:p1' },
       { name: 'deepseek-acme', state: 'done (screen not recognised)', seat_state: 'done', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w3:p1' },
       { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', seat_state: 'idle', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w4:p1' },
-      { name: 'grok-acme', state: 'stopped', seat_state: 'done', seat_state_source: 'process', model: 'Grok 4.7', pane: '-' },
     ]);
   });
 
@@ -629,8 +673,9 @@ describe('team status', () => {
     const doc = JSON.parse(out);
     expect(doc.format).toBe(1);
     expect(doc.differences).toEqual([
-      { what: 'deepseek-acme-2 is in the file and is not running', repair: 'team restart deepseek-acme-2' },
+      { what: 'deepseek-acme-2 is in the file and is not running', repair: 'team restart deepseek-acme-2', who: "the team's lead" },
     ]);
+    expect(doc.summary).toEqual({ differences: 1, owner_differences: 0 });
   });
 
   test('--json: includes notice when falling back to last valid copy', async () => {
@@ -1282,5 +1327,87 @@ describe('the rules files of message seats', () => {
     const wide = await status();
     expect(wide.out).toContain('codex-acme: its rules file has mode 0644, not 0600');
     expect(wide.code).toBe(1);
+  });
+});
+
+describe('dev mode: the approval and override state lines are quiet notes', () => {
+  // A home, because the overrides live in the approval store and the policy chain is signed
+  // there: no home is a test that stands in for no store at all, and neither is read.
+  let home: string;
+  beforeEach(() => {
+    home = join(dir, 'home');
+    mkdirSync(join(home, '.config', 'team'), { recursive: true, mode: 0o700 });
+    sources.home = home;
+  });
+  afterEach(() => {
+    delete sources.home;
+  });
+
+  /** The chain value the quiet count reads: a signed team-level `dev-mode`, the shape `team
+   *  policy set` writes. Once it governs, `TEAMCLI_DEV_MODE` is ignored — the variable alone is
+   *  not the reading. */
+  function setDevMode(value: 'on' | 'off'): void {
+    const written = writePolicySet(home, { level: 'team', target: dir, teamRoot: dir, name: 'dev-mode', value }, { now: NOW });
+    if (!written.ok) throw new Error(written.why);
+  }
+
+  async function statusDev() {
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runStatus(['--file', file], io, sources);
+    return { code, out: io.out, err: io.err };
+  }
+
+  test('a refused record is one quiet note under a governing on, and no repair waits on an approval', async () => {
+    // One seat not running: a `team add` repair `orderAndAnnotateDifferences` would mark
+    // `(after: …)` while the refused record stands.
+    live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme') };
+    standing = { kind: 'refused', why: REFUSED_WHY };
+
+    const forced = await status();
+    expect(forced.out).toContain(`difference: ${REFUSED_WHY}`);
+    expect(forced.out).toContain('  repair: the live file is what the commands read');
+    expect(forced.out).toContain('repair: team restart deepseek-acme (after: the live file is what the commands read)');
+
+    setDevMode('on');
+    const dev = await statusDev();
+    expect(dev.out).toContain(`note: ${REFUSED_WHY}; dev mode does not compare it`);
+    expect(dev.out).not.toContain(`difference: ${REFUSED_WHY}`);
+    // No approval row, so nothing waits on one: the annotation goes with it.
+    expect(dev.out).toContain('repair: team restart deepseek-acme\n');
+    expect(dev.out).not.toContain('(after: the live file is what the commands read)');
+  });
+
+  test('overrides drift is one counted note under dev mode, and its rows are not differences', async () => {
+    const parsed = validateTeamFile(example);
+    if (!parsed.ok) throw new Error('the example fixture does not validate');
+    const path = overridesPath(parsed.team.project, dir, home);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, `format: 1
+profiles:
+  claude-code:
+    screen:
+      permission:
+        - any: ['Owner dialog']
+`);
+
+    const forced = await status();
+    expect(forced.out).toContain('difference: the overrides differ from the approved copy: `overrides` changed');
+    expect(forced.out).toContain('  who: the owner');
+
+    setDevMode('on');
+    const dev = await statusDev();
+    expect(dev.out).toContain('note: 1 override difference(s); dev mode does not compare them');
+    expect(dev.out).not.toContain('difference: the overrides differ from the approved copy');
+  });
+
+  test('a governing off retires the variable: the state row stays a difference under TEAMCLI_DEV_MODE=1', async () => {
+    standing = { kind: 'refused', why: REFUSED_WHY };
+    setDevMode('off');
+    const io = testIo(dir, { kind: 'owner' });
+    io.env.TEAMCLI_DEV_MODE = '1';
+    const code = await runStatus(['--file', file], io, sources);
+    expect(io.out).toContain(`difference: ${REFUSED_WHY}`);
+    expect(io.out).not.toContain('dev mode does not compare it');
+    expect(code).toBe(1);
   });
 });

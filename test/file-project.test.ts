@@ -110,7 +110,10 @@ describe('a team file written before the project level', () => {
     expect(result.team.orchestrator).toBe('lead');
     expect(result.team.project).toBe('acme');
     expect(result.warnings).toEqual([
-      { line: 3, message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read' },
+      {
+        line: 3,
+        message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
+      },
     ]);
   });
 });

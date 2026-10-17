@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/doctor.schema.json",
+  "title": "team doctor --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "project",
+    "session",
+    "findings",
+    "summary"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.doctor"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session": {
+      "type": "string",
+      "minLength": 1
+    },
+    "login_only": {
+      "type": "boolean"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "level",
+          "text",
+          "blocks_launch"
+        ],
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warn",
+              "miss",
+              "note"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blocks_launch": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "missing",
+        "warnings",
+        "blockers"
+      ],
+      "properties": {
+        "missing": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warnings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "blockers": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

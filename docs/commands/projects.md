@@ -53,7 +53,8 @@ five minutes to the lead, fifteen to the owner, five to blind. The levels above 
 their own surfaces: the machine's `~/.config/team/settings.yaml` and the entity's `entities.yaml`
 entry, each under `liveness`.
 
-A missing file is no projects — every team is its own project — and prints `(no projects)`. A
+A missing file is no projects — every team is its own project — and prints the table header and
+`0 project(s)`. A
 file that does not read as a project registry (not a map with a `projects` key, a project without
 a name, a provenance that is not a map of three instants) is refused with the file's path and what
 is wrong; nothing is listed. Reads no team file and needs no caller. Writes nothing.
@@ -71,8 +72,8 @@ Anyone may run it, from any folder.
 
 | Outcome | Exit | Printed |
 | --- | --- | --- |
-| listed | 0 | one line per project — id, name, entity, lead and teams — or `(no projects)` when the file names none; `--json` prints one document instead |
-| unreadable | 1 | `team: <path>: <what is wrong>` on stderr |
+| listed | 0 | the `ID  NAME  ENTITY  LEAD  TEAMS` table and `<n> project(s)` (or `0 project(s)` when the file names none); `--json` prints one document instead |
+| unreadable | 1 | `team projects: the project registry cannot be read: <what is wrong>` on stderr |
 | usage | 2 | `team projects: <message>` and the usage on stderr |
 
 ## Examples
@@ -81,10 +82,15 @@ On a machine that has never registered a project, there is nothing to list:
 
 ```console
 $ team projects ; echo "exit $?"
-(no projects)
+ID  NAME  ENTITY  LEAD  TEAMS
+0 project(s)
 exit 0
 $ team projects --json ; echo "exit $?"
 {
+  "schema": {
+    "name": "team.projects",
+    "version": 1
+  },
   "format": 1,
   "projects": []
 }
@@ -112,8 +118,10 @@ projects:
 
 ```console
 $ team projects ; echo "exit $?"
-  beacon   Beacon   acme   -         7a8b9c0d1e2f
-  teamcli  TeamCLI  floor  agt_2b9f  1a2b3c4d5e6f, 6f5e4d3c2b1a
+ID       NAME     ENTITY  LEAD      TEAMS
+beacon   Beacon   acme    -         7a8b9c0d1e2f
+teamcli  TeamCLI  floor   agt_2b9f  1a2b3c4d5e6f, 6f5e4d3c2b1a
+2 project(s)
 exit 0
 ```
 
@@ -122,6 +130,10 @@ exit 0
 ```console
 $ team projects --json ; echo "exit $?"
 {
+  "schema": {
+    "name": "team.projects",
+    "version": 1
+  },
   "format": 1,
   "projects": [
     {
@@ -168,5 +180,7 @@ Usage: team projects [--json]
 Run from any folder. Lists the projects this machine's registry holds: each project's id, name,
 entity, lead and teams. The lead is the seat whose role holds the leads capability. Reads the
 registry and changes nothing.
+
+Exits 0 when the projects are listed, 1 when the project registry cannot be read, 2 when the invocation can't be read.
 exit 2
 ```

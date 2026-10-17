@@ -20,7 +20,7 @@ import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerLabel, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { devMode, logDevMode } from '../dev_mode.ts';
+import { devModeExpiryNote, devModeLevelNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -152,8 +152,8 @@ function notOwnerLine(caller: Caller): string {
   return `only the owner or a seat of this team registers a running seat; this call is ${plainLine(describeCaller(caller))}`;
 }
 
-function notOwnerRefused(out: Io, caller: Caller, dry = false, unblock?: string): number {
-  const line = notOwnerLine(caller);
+function notOwnerRefused(out: Io, caller: Caller, dry = false, unblock?: string, note = ''): number {
+  const line = `${notOwnerLine(caller)}${note}`;
   if (dry) {
     out.stdout(`! register would refuse: ${plainText(line)}\n`);
     if (unblock !== undefined) out.stdout(`! to unblock: ${plainText(unblock)}\n`);
@@ -300,7 +300,6 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // screen and every write stay enforced. The record the run writes says so: its provenance
   // carries `dev_mode: true` — `team check` shows it as a difference — until a run in force
   // writes the seat's record again.
-  const dev = devMode(io);
   const warning: string[] = [];
   // The caller gate is the one refusal with a command of its own behind it: nothing in the file
   // changes who may run this, the owner's own run does. `up`'s sentence, for this command.
@@ -322,6 +321,11 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   }
   const { team, root, path } = loaded;
   const dir = dirname(path);
+  // Dev mode, from the file this run records against: a `dev-mode` value anywhere in the
+  // caller's chain governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the
+  // variable set to exactly `1` keeps its behaviour. Only the caller gate is ever folded.
+  const dev = resolveDevMode('register', io, { home: sources.home, team, root, now: sources.now() });
+  if (!dry) logDevModeState(dir, 'register', callerLabel(walked), dev, sources.now());
 
   // The one detached caller a record write may be made by: the entity runner with an active
   // create-grant, the carve-out `up` and `add` honour. Every other run without a terminal is
@@ -339,12 +343,12 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   if (args.values.session !== undefined && !mayLaunchSeats(walked) && !createGranted) {
     const said = team.grant !== null ? (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home }) : null;
     if (said?.kind === 'passed') return grantFlagRefused(out);
-    const line = sessionOwnerRefusal(walked);
-    if (dev) {
+    const line = `${sessionOwnerRefusal(walked)}${devModeExpiryNote(dev)}`;
+    if (dev.on) {
       warning.push(line);
       // The audit line the fold owes, written where the gate is used: the refusal's words, on
-      // a real run. A dry run decides nothing and writes none.
-      if (!dry) logDevMode(dir, 'register', callerLabel(walked), `warning: ${line}`, sources.now());
+      // a real run, and the policy level that set it. A dry run decides nothing and writes none.
+      if (!dry) logDevMode(dir, 'register', callerLabel(walked), `warning: ${line}${devModeLevelNote(dev)}`, sources.now());
     } else return callerRefused(out, line, dry, unblock(args.values));
   }
 
@@ -394,15 +398,15 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // the owner's own command beside it. The grant's and the delegate's own refusals stay
     // refusals either way, as they do for `up`.
     const line = notOwnerLine(caller);
-    if (dev) {
+    if (dev.on) {
       warning.push(line);
-      if (!dry) logDevMode(dir, 'register', callerLabel(walked), `warning: ${line}`, sources.now());
-    } else return notOwnerRefused(out, caller, dry, unblock(args.values));
+      if (!dry) logDevMode(dir, 'register', callerLabel(walked), `warning: ${line}${devModeLevelNote(dev)}`, sources.now());
+    } else return notOwnerRefused(out, caller, dry, unblock(args.values), devModeExpiryNote(dev));
   }
   if (warning.length > 0) {
     const line = [...new Set(warning)].join('; ');
     if (dry) out.stdout(`! warning: ${plainText(line)}\n`);
-    else out.stderr(`team register: warning: ${plainText(line)}\n`);
+    else out.stderr(`team register: warning: ${plainText(line)}${devModeLevelNote(dev)}\n`);
   }
 
   const session = args.values.session ?? team.session;
@@ -526,7 +530,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // writes below: this path is that act too, and its early return must not skip them.
       if (delegated !== null) logDelegated(dir, delegated, 'up', refreshedAt, 'register');
       if (grantedSeat !== null) logGranted(dir, grantedSeat, 'up', refreshedAt, 'register');
-      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev, owner: walked.kind === 'owner' }, seat, pane, held.id);
+      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, held.id);
       if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
       else {
         refreshed = true;
@@ -604,7 +608,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // now. The seat's next prompt writes the file again.
   resetCliHookState(dir, session, [name]);
 
-  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev, owner: walked.kind === 'owner' }, seat, pane, id);
+  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, id);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);
   else {
     // The address: the live session socket this seat answers at, recorded on the agent the way a

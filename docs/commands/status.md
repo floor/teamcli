@@ -89,16 +89,15 @@ invocation refusal, exit 2.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| no difference | the seats table, the `budgets:` table when the file names an account or a reading is stored, one `note:` line per note, then `0 difference(s)`, and the footer `Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt` | 0 |
-| at least one difference | the same, then one `difference:` line with its `  repair:` line under it per difference, and the count: `1 difference(s)`, or `2 difference(s), 1 for the owner` when a repair is the owner's; the footer stands under this answer too | 1 |
+| no difference | the seats table, the `budgets:` table when the file names an account or a reading is stored, one `note:` line per note, then `0 difference(s)` | 0 |
+| at least one difference | the same, then one `difference:` line with its `  repair:` and `  who:` lines under it per difference, and the count: `1 difference(s)`, or `2 difference(s), 1 for the owner` when a repair is the owner's | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | `--project` with a name no project holds | `team status: no project named "<name>"; nothing to show` | 1 |
 | `--project` covering a project | the project's name, id, entity and lead, then one line per team: its session, lifecycle and seat count, or `not registered` for a team no record holds | 0 |
 | the invocation or the team file can't be read, herdr doesn't answer, or the caller may not read this team | `team status: <problem>`, `team status: herdr doesn't answer; is it installed and running?`, or the one fixed sentence | 2 |
 
-`--json` prints the reading as one document and nothing else, with the same exit code — the
-footer below is the plain reading's, not the document's; a caller who may not read the team gets
-the fixed sentence and no document.
+`--json` prints the reading as one document and nothing else, with the same exit code; a caller
+who may not read the team gets the fixed sentence and no document.
 
 A hold on the team ([team hold](hold.md)) is the first `note:` the reading prints — `hold: <reason>`,
 or `hold until <instant>: <reason>` — and `--json` carries the same record as the document's
@@ -211,9 +210,9 @@ never reported — that one too comes from the status line, so its row marks it 
 
 ```console
 $ team status ; echo "exit $?"
-team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 team beacon, session "beacon"
-  claude-keeper  missing  Claude Opus 5.5  -     typed
+  SEAT           STATE    MODEL            PANE   REACH
+  claude-keeper  missing  Claude Opus 5.5  -      typed
   claude-beacon  working  Claude Opus 5.5  w1:p1  typed
 budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
@@ -222,15 +221,14 @@ budgets:
 note: watch: pane w9:p1, pid 4242, last heartbeat 0s ago
 difference: claude-keeper is in the file and is not running
   repair: team restart claude-keeper
+  who: the team's lead
 1 difference(s)
-Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 1
 ```
 
-The last line is the grants decision record's own, in its words
-(`decided-grants-minimum-2026-10-17`, "every record and view says so"): this reading is a view of
-records, not an authority. `team check` prints the same line, first under its block of the limits
-0.5.0 does not close.
+Each difference names both the repair command (`repair:`) and the role that runs it (`who:`).
+The `what 0.5.0 must not pretend:` block and its `Integrity, not authority` line live on
+`team --about`, [`team check`](check.md), and [`team doctor`](doctor.md), not on every status read.
 
 `--project` covers the teams the registry lists under a project, wherever they run. A team no
 record holds reads as `not registered`; `--json` prints the project record and each team's

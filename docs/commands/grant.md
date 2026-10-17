@@ -8,8 +8,8 @@ identity, an agent id for a seat or a team id for `@team`.
 
 ## Synopsis
 
-    team grant <seat> --scope <act,...> [--dry-run]
-    team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run]
+    team grant <seat> --scope <act,...> [--dry-run] [--json]
+    team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
 
 In the first form `<seat>` must name the file's orchestrator. The grant uses the file's session.
 `--scope` is a nonempty comma-separated list of distinct words: `up`, `down`, `init`, `reload`,

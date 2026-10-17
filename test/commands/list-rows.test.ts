@@ -46,7 +46,7 @@ test('orphan rows, an unreadable seat count, and the neighbour stay in one list'
   const json = await listed(['--all', '--json'], sources);
   expect(json.code).toBe(0);
   expect(json.err).toBe('');
-  expect(json.out).toBe(`${JSON.stringify(expected, null, 2)}\n`);
+  expect((JSON.parse(json.out) as { rows: ListRow[] }).rows).toEqual(expected);
   const table = await listed(['--all'], sources);
   expect(table.code).toBe(0);
   expect(table.err).toBe('');
@@ -82,5 +82,5 @@ test('activity counts known statuses first, then other names, and an empty roste
   ];
   expect(run.code).toBe(0);
   expect(run.err).toBe('');
-  expect(run.out).toBe(`${JSON.stringify(expected, null, 2)}\n`);
+  expect((JSON.parse(run.out) as { rows: ListRow[] }).rows).toEqual(expected);
 });

@@ -9,8 +9,10 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { DETACHED_REFUSAL, type Caller } from '../src/caller.ts';
 import { runDoctor, holdFindings, type DoctorSources } from '../src/commands/doctor.ts';
 import { runHold, type HoldSources } from '../src/commands/hold.ts';
+import { HOLD_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { emptySession, holdText, liveHold, readState, updateState, type HoldRecord } from '../src/state.ts';
 import { testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -324,6 +326,178 @@ describe('team hold', () => {
     expect(code).toBe(1);
     expect(err).toBe(`team hold: ${DETACHED_REFUSAL}\n`);
     expect(stored(where)).toBeUndefined();
+  });
+
+  test('--json emits team.hold on placed and released and team.error on refusals', async () => {
+    const where = place();
+    const placed = await hold(['freeze deploys', '--until', '2026-10-04T12:00:00Z', '--json'], where);
+    expect(placed.code).toBe(0);
+    expect(placed.err).toBe('');
+    const placedDoc = assertMatchesOutputSchema(placed.out, HOLD_OUTPUT_SCHEMA);
+    expect(placedDoc).toEqual({
+      schema: { name: 'team.hold', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'placed',
+      action_summary: 'hold until 2026-10-04T12:00:00.000Z: freeze deploys',
+      project: 'acme',
+      session: 'acme',
+      target: 'hold',
+      value: 'freeze deploys',
+      hold: {
+        reason: 'freeze deploys',
+        by: 'owner',
+        at: NOW.toISOString(),
+        until: '2026-10-04T12:00:00.000Z',
+      },
+    });
+
+    const dup = await hold(['other', '--json'], where);
+    expect(dup.code).toBe(1);
+    expect(dup.err).toBe('');
+    assertJsonErrorShape(dup.out, {
+      id: 'hold.held',
+      messageContains: 'already held until 2026-10-04T12:00:00.000Z: freeze deploys',
+      repair: 'team hold --release',
+    });
+
+    const released = await hold(['--release', '--json'], where);
+    expect(released.code).toBe(0);
+    expect(released.err).toBe('');
+    const releasedDoc = assertMatchesOutputSchema(released.out, HOLD_OUTPUT_SCHEMA);
+    expect(releasedDoc).toEqual({
+      schema: { name: 'team.hold', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'released',
+      action_summary: 'hold: released',
+      project: 'acme',
+      session: 'acme',
+      target: 'hold',
+      value: null,
+    });
+
+    const notHeld = await hold(['--release', '--json'], where);
+    expect(notHeld.code).toBe(1);
+    expect(notHeld.err).toBe('');
+    assertJsonErrorShape(notHeld.out, {
+      id: 'hold.not-held',
+      messageContains: 'not held',
+      repair: null,
+    });
+
+    const badArg = await hold(['--nope', '--json'], where);
+    expect(badArg.code).toBe(2);
+    expect(badArg.err).toBe('');
+    assertJsonErrorShape(badArg.out, {
+      id: 'hold.invocation',
+      messageContains: 'unknown option --nope',
+      repair: null,
+    });
+  });
+
+  test('--json caller refusal branches: non-lead seat (owner-or-leads), unplaced pane (unplaced), and detached (unplaced)', async () => {
+    const where = place();
+    const bystander: Caller = { kind: 'seat', name: 'builder', pane: 'w2:p1', session: 'acme' };
+    const wrongCaller = await hold(['freeze deploys', '--json'], where, bystander);
+    expect(wrongCaller.code).toBe(1);
+    expect(wrongCaller.err).toBe('');
+    const wrongCallerDoc = assertJsonErrorShape(wrongCaller.out, {
+      id: 'hold.caller',
+      messageContains: 'only the owner, the orchestrator or the operator holds the team; this call is builder',
+      repair: null,
+    });
+    expect(wrongCallerDoc.error).toMatchObject({ rule: 'owner-or-leads' });
+
+    const noPane = await hold(['freeze deploys', '--json'], where, ORCHESTRATOR);
+    expect(noPane.code).toBe(1);
+    expect(noPane.err).toBe('');
+    const noPaneDoc = assertJsonErrorShape(noPane.out, {
+      id: 'hold.caller',
+      messageContains: 'no pane is recorded for seat lead in this session',
+      repair: 'team up',
+    });
+    expect(noPaneDoc.error).toMatchObject({ rule: 'unplaced' });
+
+    recordPane(where, 'lead', 'w1:p1');
+    const moved: Caller = { kind: 'seat', name: 'lead', pane: 'w2:p2', session: 'acme' };
+    const anotherPane = await hold(['freeze deploys', '--json'], where, moved);
+    expect(anotherPane.code).toBe(1);
+    expect(anotherPane.err).toBe('');
+    const anotherPaneDoc = assertJsonErrorShape(anotherPane.out, {
+      id: 'hold.caller',
+      messageContains: 'the state records pane w1:p1 for seat lead in this session',
+      repair: 'team down && team up',
+    });
+    expect(anotherPaneDoc.error).toMatchObject({ rule: 'unplaced' });
+
+    const detached = await hold(['freeze deploys', '--json'], where, { kind: 'owner-no-tty' });
+    expect(detached.code).toBe(1);
+    expect(detached.err).toBe('');
+    const detachedDoc = assertJsonErrorShape(detached.out, {
+      id: 'hold.detached',
+      messageContains: DETACHED_REFUSAL,
+      repair: null,
+    });
+    expect(detachedDoc.error).toMatchObject({ rule: 'unplaced' });
+  });
+
+  test('--json carries notice on both team.hold and team.error when team.yaml is invalid and falls back to the stored copy', async () => {
+    const where = place();
+    expect((await hold(['freeze deploys'], where)).code).toBe(0);
+    writeFileSync(where.file, 'format: 2\n');
+
+    const released = await hold(['--release', '--json'], where);
+    expect(released.code).toBe(0);
+    expect(released.err).toBe('');
+    const releasedDoc = assertMatchesOutputSchema(released.out, HOLD_OUTPUT_SCHEMA);
+    expect(typeof releasedDoc.notice).toBe('string');
+    expect(String(releasedDoc.notice)).toContain('team.yaml is invalid');
+    expect(String(releasedDoc.notice)).toContain('using the copy of');
+
+    const notHeld = await hold(['--release', '--json'], where);
+    expect(notHeld.code).toBe(1);
+    expect(notHeld.err).toBe('');
+    const notHeldDoc = assertJsonErrorShape(notHeld.out, {
+      id: 'hold.not-held',
+      messageContains: 'not held',
+      repair: null,
+    });
+    expect(typeof notHeldDoc.notice).toBe('string');
+    expect(String(notHeldDoc.notice)).toContain('team.yaml is invalid');
+    expect(String(notHeldDoc.notice)).toContain('using the copy of');
+
+    const placed = await hold(['freeze deploys', '--json'], where);
+    expect(placed.code).toBe(0);
+    expect(placed.err).toBe('');
+    const placedDoc = assertMatchesOutputSchema(placed.out, HOLD_OUTPUT_SCHEMA);
+    expect(typeof placedDoc.notice).toBe('string');
+    expect(String(placedDoc.notice)).toContain('team.yaml is invalid');
+    expect(String(placedDoc.notice)).toContain('using the copy of');
+
+    const alreadyHeld = await hold(['second', '--json'], where);
+    expect(alreadyHeld.code).toBe(1);
+    expect(alreadyHeld.err).toBe('');
+    const alreadyHeldDoc = assertJsonErrorShape(alreadyHeld.out, {
+      id: 'hold.held',
+      messageContains: 'already held: freeze deploys',
+      repair: 'team hold --release',
+    });
+    expect(typeof alreadyHeldDoc.notice).toBe('string');
+    expect(String(alreadyHeldDoc.notice)).toContain('team.yaml is invalid');
+    expect(String(alreadyHeldDoc.notice)).toContain('using the copy of');
+
+    const bystander: Caller = { kind: 'seat', name: 'builder', pane: 'w2:p1', session: 'acme' };
+    const refusedCaller = await hold(['--release', '--json'], where, bystander);
+    expect(refusedCaller.code).toBe(1);
+    expect(refusedCaller.err).toBe('');
+    const refusedCallerDoc = assertJsonErrorShape(refusedCaller.out, {
+      id: 'hold.caller',
+      messageContains: 'only the owner, the orchestrator or the operator holds the team; this call is builder',
+      repair: null,
+    });
+    expect(typeof refusedCallerDoc.notice).toBe('string');
+    expect(String(refusedCallerDoc.notice)).toContain('team.yaml is invalid');
   });
 });
 

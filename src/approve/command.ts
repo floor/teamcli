@@ -225,7 +225,16 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   const { team } = checked;
   const { root, path } = loaded;
   const text = loaded.text;
-  for (const warning of checked.warnings) io.stderr(`team approve: warning, line ${warning.line}: ${warning.message}\n`);
+  for (const warning of checked.warnings) {
+    if (
+      warning.message.startsWith('`coordinator:` is now `leads: true`') ||
+      warning.message.startsWith('watch.quota_marks is now budgets.marks') ||
+      warning.message.startsWith('budgets.marks replaces watch.quota_marks')
+    ) {
+      continue;
+    }
+    io.stderr(`team approve: warning, line ${warning.line}: ${warning.message}\n`);
+  }
 
   const store = storePath(team.project, root, sources.home);
   const live = overrideFile(team.project, root, sources.home);

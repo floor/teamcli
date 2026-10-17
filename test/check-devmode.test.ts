@@ -1,6 +1,6 @@
 // The provenance a dev-mode registration leaves: the record `team register` writes with dev
 // mode on carries `dev_mode: true` beside the caller, and `team check` says so as a difference —
-// `registered under dev mode (by <caller>)`, repaired by the owner's own `team register`, the
+// `registered by an agent, not by the owner`, repaired by `team register <seat>`, the
 // same write with the caller gate in force. The check writes nothing, a record written in force
 // is no finding, and a check with no home reads no registry at all — the same boundary every
 // other registry read keeps. Fake herdr throughout: no live session is read.
@@ -10,8 +10,10 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
+import { realSeatsSources, runSeats } from '../src/commands/seats.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { readAgents, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { updateState } from '../src/state.ts';
@@ -127,6 +129,28 @@ function check(root: string, home: string | undefined, session: Live = live()): 
   return { code, out: `${io.out}${io.err}` };
 }
 
+/** The signed team-level value the quiet count reads: once a value governs, the variable is
+ *  ignored — the reading is the policy's, not `TEAMCLI_DEV_MODE`'s. */
+function setDevMode(home: string, root: string, value: 'on' | 'off'): void {
+  const written = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'dev-mode', value }, { now: NOW });
+  if (!written.ok) throw new Error(written.why);
+}
+
+/** The check with an environment of its own: the variable's compat path is a scene, and a
+ *  governing policy's is another. */
+function checkWithEnv(root: string, home: string | undefined, env: Record<string, string>): { code: number; out: string } {
+  const io = testIo(root, { kind: 'owner' });
+  io.env = { ...env };
+  const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+    live: () => live(),
+    branch: () => 'main',
+    standing: (at) => approvalStanding(at, home ?? join(root, 'nowhere')),
+    now: () => NOW,
+    ...(home === undefined ? {} : { home }),
+  });
+  return { code, out: `${io.out}${io.err}` };
+}
+
 /** The registry as it stands on disk: every agent file's bytes, for the scene that proves the
  *  check read it and wrote nothing. */
 function registryOnDisk(home: string): Record<string, string> {
@@ -142,44 +166,92 @@ describe('the dev-mode mark on a record', () => {
     record(home, root, { by: DEV_CALLER, dev: true });
     const before = registryOnDisk(home);
     const { code, out } = check(root, home);
-    expect(out).toContain(`difference: lead: registered under dev mode (by ${DEV_CALLER})`);
+    expect(out).toContain('difference: lead: registered by an agent, not by the owner');
+    expect(out).not.toContain(DEV_CALLER);
     expect(out).toContain('  repair: re-record the seat with the caller gate in force (team register lead)');
     expect(code).toBe(1);
     // The record is the finding's evidence, read only: the check writes nothing.
     expect(registryOnDisk(home)).toEqual(before);
   });
 
+  test('before any policy the variable still quiets the reading', () => {
+    const { root, home } = place();
+    record(home, root, { by: DEV_CALLER, dev: true });
+    const { code, out } = checkWithEnv(root, home, { TEAMCLI_DEV_MODE: '1' });
+    expect(out).toContain('note: 1 seat(s) recorded under dev mode');
+    expect(out).not.toContain('registered by an agent, not by the owner');
+    expect(code).toBe(0);
+  });
+
+  test('under a governing on policy the marked seats are one quiet note, not a difference each', () => {
+    const { root, home } = place();
+    record(home, root, { by: DEV_CALLER, dev: true });
+    setDevMode(home, root, 'on');
+    // The variable is not set: the policy alone quiets the reading.
+    const { code, out } = check(root, home);
+    expect(out).toContain('note: 1 seat(s) recorded under dev mode');
+    expect(out).not.toContain('registered by an agent, not by the owner');
+    expect(code).toBe(0);
+  });
+
+  test('a governing off retires the variable: the mark stays a difference under TEAMCLI_DEV_MODE=1', () => {
+    const { root, home } = place();
+    record(home, root, { by: DEV_CALLER, dev: true });
+    setDevMode(home, root, 'off');
+    const { code, out } = checkWithEnv(root, home, { TEAMCLI_DEV_MODE: '1' });
+    expect(out).toContain('difference: lead: registered by an agent, not by the owner');
+    expect(out).not.toContain('seat(s) recorded under dev mode');
+    expect(code).toBe(1);
+  });
+
+  test('under a governing on policy a refused record is a quiet note in the check too', () => {
+    const { root, home } = place();
+    setDevMode(home, root, 'on');
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+      live: () => live(),
+      branch: () => 'main',
+      standing: () => ({ kind: 'refused', why: 'the record is signed, but its key is missing' }),
+      now: () => NOW,
+      home,
+    });
+    const out = `${io.out}${io.err}`;
+    expect(out).toContain('note: the record is signed, but its key is missing; dev mode does not compare it');
+    expect(out).not.toContain('difference: the record is signed, but its key is missing');
+    expect(code).toBe(0);
+  });
+
   test('a record a run in force wrote is no finding at all', () => {
     const { root, home } = place();
     record(home, root, { by: 'owner' });
     const { code, out } = check(root, home);
-    expect(out).not.toContain('registered under dev mode');
+    expect(out).not.toContain('registered by an agent, not by the owner');
     expect(code).toBe(0);
-    expect(out).toContain('team check: nothing wrong');
+    expect(out).toContain('0 difference(s)');
   });
 
   test('a record written again in force takes the mark off, and the finding with it', () => {
     const { root, home } = place();
     const id = record(home, root, { by: DEV_CALLER, dev: true });
-    expect(check(root, home).out).toContain('registered under dev mode');
+    expect(check(root, home).out).toContain('registered by an agent, not by the owner');
     // The repair itself, as `team register` makes it: the same record, written again with the
     // caller gate in force.
     updateAgent(home, id, { provenance: { dev_mode: false } });
     const { code, out } = check(root, home);
-    expect(out).not.toContain('registered under dev mode');
+    expect(out).not.toContain('registered by an agent, not by the owner');
     expect(code).toBe(0);
   });
 
-  test('a re-registration under dev mode names that run\'s caller, not the original registrant', () => {
+  test('a re-registration under dev mode states the plain finding without the raw caller label', () => {
     const { root, home } = place();
     // The owner registered the seat first; a later run under dev mode, by a caller the gate did
     // not admit, wrote the record again. `registered_by` is still the owner's, and the finding
-    // names the run that made the record without the gate behind it.
+    // states plainly that the seat was registered by an agent, not by the owner.
     const id = record(home, root, { by: 'owner' });
     updateAgent(home, id, { provenance: { dev_mode: true, dev_mode_by: DEV_CALLER } });
     const { code, out } = check(root, home);
-    expect(out).toContain(`difference: lead: registered under dev mode (by ${DEV_CALLER})`);
-    expect(out).not.toContain('registered under dev mode (by owner)');
+    expect(out).toContain('difference: lead: registered by an agent, not by the owner');
+    expect(out).not.toContain(DEV_CALLER);
     expect(code).toBe(1);
   });
 
@@ -207,18 +279,53 @@ describe('the dev-mode mark on a record', () => {
     expect(read?.provenance.dev_mode_at).toBeDefined();
   });
 
-  test('a record a dev-mode run registered first names that run\'s caller too', () => {
+  test('a record a dev-mode run registered first states the plain finding too', () => {
     const { root, home } = place();
     record(home, root, { by: DEV_CALLER, dev: true });
     const { out } = check(root, home);
-    expect(out).toContain(`difference: lead: registered under dev mode (by ${DEV_CALLER})`);
+    expect(out).toContain('difference: lead: registered by an agent, not by the owner');
+    expect(out).not.toContain(DEV_CALLER);
   });
 
   test('a check with no home reads no registry: the mark is invisible to it', () => {
     const { root, home } = place();
     record(home, root, { by: DEV_CALLER, dev: true });
     const { code, out } = check(root, undefined);
-    expect(out).not.toContain('registered under dev mode');
+    expect(out).not.toContain('registered by an agent, not by the owner');
     expect(code).toBe(0);
+  });
+
+  test('realSeatsSources carries home so team seats shows the dev mark in the table and --json', async () => {
+    expect(typeof realSeatsSources.home).toBe('string');
+    expect(realSeatsSources.home!.length).toBeGreaterThan(0);
+    const { root, home } = place();
+    record(home, root, { by: DEV_CALLER, dev: true });
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions.acme!.seats.lead!.id = 'seat_111111111111';
+    });
+    const tableIo = testIo(root, { kind: 'owner' });
+    const tableCode = await runSeats(['--file', '.agents/team.yaml'], tableIo, {
+      ...realSeatsSources,
+      live: () => live(),
+      branch: () => 'main',
+      standing: (at) => approvalStanding(at, home),
+      now: () => NOW,
+      home,
+    });
+    expect(tableCode).toBe(0);
+    expect(tableIo.out).toContain('seat_111111111111 (dev)');
+
+    const jsonIo = testIo(root, { kind: 'owner' });
+    const jsonCode = await runSeats(['--file', '.agents/team.yaml', '--json'], jsonIo, {
+      ...realSeatsSources,
+      live: () => live(),
+      branch: () => 'main',
+      standing: (at) => approvalStanding(at, home),
+      now: () => NOW,
+      home,
+    });
+    expect(jsonCode).toBe(0);
+    const parsed = JSON.parse(jsonIo.out) as { seats: Array<{ name: string; dev_mode?: boolean }> };
+    expect(parsed.seats[0]?.dev_mode).toBe(true);
   });
 });

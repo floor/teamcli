@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test';
 import { runList, type ListRow, type ListSources } from '../../src/commands/list.ts';
+import { LIST_OUTPUT_SCHEMA } from '../../src/output/index.ts';
 import { testIo } from '../helpers.ts';
+import { assertMatchesOutputSchema } from '../helpers/output.ts';
 
 async function listed(argv: string[], sources: ListSources): Promise<{ code: number; out: string; err: string }> {
   const io = testIo('/anywhere');
@@ -30,18 +32,21 @@ test('--all --json prints one object per session, stopped rows included, keys in
   ];
   expect(run.code).toBe(0);
   expect(run.err).toBe('');
-  expect(run.out).toBe(`${JSON.stringify(expected, null, 2)}\n`);
-  const rows = JSON.parse(run.out) as ListRow[];
-  expect(Object.keys(rows[0] ?? {})).toEqual(['team', 'project', 'status', 'seats', 'activity', 'note']);
-  expect(Object.keys(rows[1] ?? {})).toEqual(['team', 'project', 'status', 'seats', 'activity', 'note']);
+  const doc = assertMatchesOutputSchema<{ rows: ListRow[] }>(run.out, LIST_OUTPUT_SCHEMA);
+  expect(doc.rows).toEqual(expected);
+  expect(Object.keys(doc.rows[0] ?? {})).toEqual(['team', 'project', 'status', 'seats', 'activity', 'note']);
+  expect(Object.keys(doc.rows[1] ?? {})).toEqual(['team', 'project', 'status', 'seats', 'activity', 'note']);
 });
 
-test('json is an empty array when every session is stopped', async () => {
+test('json is an empty rows array when every session is stopped', async () => {
   const run = await listed(['--json'], {
     sessions: () => [{ name: 'beacon-old', running: false }],
     roster: () => [],
     team: () => ({ project: 'beacon-old', root: '/work/beacon-old', seats: 2, unreadable: false }),
   });
-  expect(run).toEqual({ code: 0, out: '[]\n', err: '' });
-  expect(JSON.parse(run.out)).toEqual([]);
+  expect(run.code).toBe(0);
+  expect(run.err).toBe('');
+  const doc = assertMatchesOutputSchema<{ rows: ListRow[] }>(run.out, LIST_OUTPUT_SCHEMA);
+  expect(doc.rows).toEqual([]);
 });
+

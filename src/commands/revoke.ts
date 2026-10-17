@@ -2,11 +2,15 @@ import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { runAuthorityEdit, type AuthorityEdit, type AuthorityEditOptions } from '../authority-edit.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
+import { plainText } from '../launch/plain.ts';
+import { hasJsonFlag, writeJsonError } from '../output/index.ts';
 import { runStandingRevoke, standingGrantNamed } from '../permissions/manage.ts';
 
-export const USAGE = `Usage: team revoke grant [--dry-run]
-       team revoke delegate <session/pane> [--dry-run]
-       team revoke <name> [--dry-run]
+export const USAGE = `Usage: team revoke grant [--dry-run] [--json]
+       team revoke delegate <session/pane> [--dry-run] [--json]
+       team revoke <name> [--dry-run] [--json]
+
+Exits 0 when the grant or delegate is revoked or the dry-run plan is printed, 1 when it is refused, 2 when the invocation or team file is invalid.
 `;
 export const revoke: Command = (argv, io) => runRevoke(argv, io);
 export default revoke;
@@ -18,7 +22,8 @@ export default revoke;
  */
 export async function runRevoke(argv: string[], rawIo: Io, options: AuthorityEditOptions = {}): Promise<number> {
   const io = cleanedIo(rawIo);
-  const args = readArgs(argv, [], ['dry-run']);
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, [], ['dry-run', 'json']);
   const target = args.rest[0];
   const home = options.home ?? homedir();
   let edit: AuthorityEdit | undefined;
@@ -28,13 +33,18 @@ export async function runRevoke(argv: string[], rawIo: Io, options: AuthorityEdi
     ? standingGrantNamed(home, target)
     : null;
   if (args.error !== undefined || (edit === undefined && standing === null)) {
-    io.stderr(`team revoke: ${args.error ?? 'name grant, or delegate and its session/pane'}\n${USAGE}`);
+    const why = args.error ?? 'name grant, or delegate and its session/pane';
+    if (json) {
+      writeJsonError(rawIo, 'revoke.invocation', plainText(why), null);
+    } else {
+      io.stderr(`team revoke: ${why}\n${USAGE}`);
+    }
     return 2; // exit: revoke.invocation
   }
   const dryRun = args.flags.has('dry-run');
   const result = edit !== undefined
-    ? await runAuthorityEdit('revoke', edit, io, { ...options, dryRun })
-    : runStandingRevoke(io, { name: standing!.name }, { ...options, dryRun });
+    ? await runAuthorityEdit('revoke', edit, rawIo, { ...options, dryRun, json })
+    : runStandingRevoke(rawIo, { name: standing!.name }, { ...options, dryRun, json });
   if (result === 'refused') {
     return 1; // exit: revoke.refused
   }

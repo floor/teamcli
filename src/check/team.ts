@@ -15,11 +15,12 @@ import { join, isAbsolute, relative } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { blindDifferences } from '../commands/seats.ts';
-import { approvalCaseRow, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
+import { approvalAndOverrideRows, emptyOverrides, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
+import { devModeActive } from '../dev_mode.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
-import { loadTeamFile, TEAM_FILE } from '../file/load.ts';
+import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
@@ -27,25 +28,41 @@ import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, worksp
 import type { Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
+import {
+  collapseNotes,
+  contextLine,
+  renderDeprecationWarnings,
+  renderDifferences,
+  renderNotes,
+  renderSummary,
+  summaryCounts,
+  toJsonDifference,
+  ttyStyle,
+  writeJson,
+  writeJsonError,
+  type DeprecationWarning,
+} from '../output/index.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
-import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
 import { rosterOf } from '../permissions/who.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
+import { loadAndResolvePolicyChain, type PolicyLoadRefusal } from '../policy/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
-import { byName, ofTeam, ProjectsError } from '../registry/projects.ts';
+import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
+import { DELIVERY_ORDER, orderDeclarationsOf, resolveOrderSetting, type DeliveryLeg } from '../settings/inherit.ts';
 import { emptySession, liveHold, readState, seatOfFile, updateState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
 import { modelDiffers, seatModel } from '../status/statusline.ts';
 import type { Standing } from '../store/store.ts';
+import { plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen } from '../watch/screen.ts';
 
-/** The team check's own arguments: all three flags are the owner's, and all are optional. */
-export type TeamCheckArgs = { session?: string; file?: string; repair?: boolean };
+/** The team check's own arguments: the owner's aimed/repair flags and optional `--json`. */
+export type TeamCheckArgs = { session?: string; file?: string; repair?: boolean; json?: boolean };
 
 // What the check reads from outside the file and the state, so tests and the docs harness can
 // stand in for it: the same reads `status` makes, except that the live read is narrowed to the
@@ -123,7 +140,16 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const current = currentTeam(io.cwd, owner ? args.file : undefined, sources.now(), sources.home, false, owner ? args.session : undefined);
   if (owner) {
     if (!current.ok) {
-      printProblems(io, current.errors);
+      if (args.json) {
+        const id = current.errors.some((e) => e.message.startsWith('not inside a git repository'))
+          ? 'check.not-a-repo'
+          : current.errors.some(isParseError)
+            ? 'check.file-invalid'
+            : 'check.file';
+        writeJsonError(io, id, current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${p.message}`).join('; '));
+      } else {
+        printProblems(io, current.errors);
+      }
       // exit: check.not-a-repo
       // exit: check.file
       // exit: check.file-invalid
@@ -131,29 +157,47 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     }
   } else {
     if (!current.ok || !mayReadTeam(current, io, sources)) {
-      return notYours(io);
+      return notYours(io, args.json);
     }
+    const fallbackNotice = current.notice ? plainText(current.notice) : undefined;
     // The caller passes and is not the owner: the flags aim nothing, and one aimed meets the
     // refusal every other command gives it — after the gate, never before it.
     if (args.file !== undefined) {
-      io.stderr(`team check: ${fileOwnerRefusal(io, args.file)}\n`);
+      const msg = fileOwnerRefusal(io, args.file) ?? "--file is the owner's";
+      if (args.json) {
+        writeJsonError(io, 'check.file-owner', msg, null, 1, undefined, fallbackNotice);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
       // exit: check.file-owner
       return 1;
     }
     if (args.session !== undefined) {
-      io.stderr(`team check: ${sessionOwnerRefusal(walked)}\n`);
+      const msg = sessionOwnerRefusal(walked);
+      if (args.json) {
+        writeJsonError(io, 'check.session-owner', msg, null, 1, undefined, fallbackNotice);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
       // exit: check.session-owner
       return 1;
     }
     // `--repair` writes the state: the one act the check has, and the owner's alone, as the two
     // aimed flags are.
     if (args.repair === true) {
-      io.stderr("team check: --repair is the owner's\n");
+      const msg = "--repair is the owner's";
+      if (args.json) {
+        writeJsonError(io, 'check.repair-owner', msg, null, 1, undefined, fallbackNotice);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
       // exit: check.repair-owner
       return 1;
     }
   }
   const { team, root, dir } = current;
+  const notice = current.notice ? plainText(current.notice) : undefined;
+  if (!args.json && notice !== undefined) io.stdout(`${notice}\n`);
   const session = owner ? (args.session ?? team.session) : team.session;
   // The one read of the approval store: the drift, and the values in force, all derive from it.
   const standing = sources.standing(root);
@@ -162,7 +206,12 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   try {
     whole = readState(dir);
   } catch (error) {
-    io.stderr(`team check: ${error instanceof Error ? error.message : String(error)}\n`);
+    const msg = error instanceof Error ? error.message : String(error);
+    if (args.json) {
+      writeJsonError(io, 'check.state', msg, null, 1, undefined, notice);
+    } else {
+      io.stderr(`team check: ${msg}\n`);
+    }
     // exit: check.state
     return 2;
   }
@@ -173,7 +222,12 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const recorded = whole.sessions[session] ?? emptySession();
   const live = sources.live(session, team, recorded);
   if (!live) {
-    io.stderr('team check: herdr doesn\'t answer; is it installed and running?\n');
+    const msg = "herdr doesn't answer; is it installed and running?";
+    if (args.json) {
+      writeJsonError(io, 'check.herdr', msg, null, 1, undefined, notice);
+    } else {
+      io.stderr(`team check: ${msg}\n`);
+    }
     // exit: check.herdr
     return 2;
   }
@@ -189,29 +243,49 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // `team.command-threw`'s, not a second reading of the state.
     repaired.push(...dropStale(dir, session, stale));
     for (const line of repaired) {
-      io.stdout(`repaired: ${line}\n`);
       logLine(dir, 'check', callerLabel(walked), `repaired: ${line}`, sources.now());
     }
     whole = readState(dir);
     stale = staleState(team, session, whole);
   }
   const state = whole.sessions[session] ?? emptySession();
+  const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked));
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
   // at all: the setting is one record, never a file key and never a stale approval.
   const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team), undefined, dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()));
+  // Dev mode is the local override, read from the caller's place: under it the approval and
+  // overrides state rows fold into quiet notes, and a seat recorded under it is counted rather
+  // than named seat by seat — `team seats` keeps the mark, and `team status --all --json` keeps
+  // the field. Outside dev mode every row stands. The effective policy, not the variable, decides
+  // once a value governs.
+  const quiet = devModeActive(io, {
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+    entity: team.entity,
+    team,
+    root,
+    now: sources.now(),
+  });
+  const record = approvalAndOverrideRows(
+    standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null,
+    overrides,
+    quiet,
+  );
+  const provenance = devModeDifferences(team, root, sources.home, quiet);
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...signingDifferences(team, state, live, root, sources.home),
-    ...devModeDifferences(team, root, sources.home),
+    ...provenance.differences,
     ...attentionDifferences(team, state, live),
     ...labelDifferences(team, state, live),
     ...rosterDifferences(team, state, live, root, sources.home),
     ...registryDifferences(team, root, sources.home),
+    ...deliveryOrderDifferences(team, root, sources.home),
+    ...policyChecked.differences,
     ...protectedCheckouts(team, root, { branch: sources.branch }),
-    // The same row `status` prints: a legacy record or one the verification refused still says what
-    // it is; a machine that never approved the file is the ordinary file now, and nothing to repair.
-    ...approvalCaseRow(standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null),
-    ...overrideDrift(overrides),
+    // The same rows `status` prints: a legacy record or one the verification refused still says
+    // what it is; a machine that never approved the file is the ordinary file now, and nothing to
+    // repair. Under dev mode both fold into the quiet notes above.
+    ...record.differences,
     ...rulesFileDifferences(standing, team, root, sources.home),
     ...staleDifferences(stale),
     // A blind seat — unknown past the blind threshold — counts as not working, and is
@@ -223,29 +297,50 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // the repair its record carries. It is not a difference and does not change the exit — the
   // file works, it just carries a key this build no longer acts on.
   const shown = shownTeamFile(current.path, root);
-  for (const deprecation of current.deprecations ?? []) {
-    io.stdout(`warning: team.yaml line ${deprecation.line}: ${deprecation.message}; repair: ${deprecation.repair.replace('{file}', shown)}\n`);
-  }
+  const deprecationWarnings: DeprecationWarning[] = [
+    ...current.warnings.flatMap((w): DeprecationWarning[] => {
+      const repair = deprecationRepairOf(w.message, shown);
+      if (repair === undefined) return [];
+      return [{ line: w.line || undefined, message: w.message, repair }];
+    }),
+    ...(current.deprecations ?? []).map((deprecation) => ({
+      line: deprecation.line || undefined,
+      message: deprecation.message,
+      repair: deprecation.repair.replace('{file}', shown),
+    })),
+  ];
+  const warnings = renderDeprecationWarnings(deprecationWarnings);
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
-  for (const note of delegateNotes(team)) io.stdout(`note: ${note}\n`);
-  for (const note of lobbyNotes(team, root, sources.home, session)) io.stdout(`note: ${note}\n`);
-  for (const difference of differences) {
-    io.stdout(`difference: ${difference.what}\n  repair: ${difference.repair}\n`);
-  }
-  const ownerCount = differences.filter((difference) => difference.owner === true).length;
-  if (differences.length === 0) {
-    io.stdout('team check: nothing wrong\n');
+  const notes = collapseNotes([
+    ...delegateNotes(team),
+    ...lobbyNotes(team, root, sources.home, session),
+    ...policyChecked.notes,
+    ...unknownStatusNotes(team, state, live),
+    ...record.notes,
+    ...provenance.notes,
+  ]);
+  if (args.json) {
+    writeJson(io, 'team.check', {
+      format: 1,
+      project: team.project,
+      session,
+      ...(notice !== undefined ? { notice } : {}),
+      warnings,
+      repaired,
+      notes,
+      differences: differences.map(toJsonDifference),
+      summary: summaryCounts(differences),
+    });
   } else {
-    io.stdout(`team check: ${differences.length} difference(s)${ownerCount > 0 ? `, ${ownerCount} for the owner` : ''}\n`);
+    const style = ttyStyle(io);
+    io.stdout(`${contextLine(team.project, session)}\n`);
+    for (const warning of warnings) io.stdout(`${warning}\n`);
+    for (const line of repaired) io.stdout(`repaired: ${line}\n`);
+    for (const line of renderNotes(notes)) io.stdout(`${line}\n`);
+    for (const line of renderDifferences(differences, style)) io.stdout(`${line}\n`);
+    io.stdout(`${renderSummary(differences)}\n`);
   }
-  // What the check cannot see is not silently implied to be fine (§3.4, decision 2): the one line
-  // that names it stands under both answers.
-  io.stdout('not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n');
-  // Under both answers too, the decision record's own limits, in its words: the gaps this release
-  // does not close are named here, never left to be discovered
-  // (decided-grants-minimum-2026-10-17, "What 0.5.0 must not pretend").
-  for (const line of NOT_PRETENDED) io.stdout(`${line}\n`);
   if (differences.length > 0) {
     // exit: check.findings
     return 1;
@@ -262,8 +357,13 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
 
 // The one sentence a caller that does not pass gets, whatever failed underneath it: it names no
 // seat, no session and no path, and it is the only output such a caller can get (§3.4, §4).
-function notYours(io: Io): number {
-  io.stderr('team check: this team is not yours to check\n');
+function notYours(io: Io, json?: boolean): number {
+  const msg = 'this team is not yours to check';
+  if (json) {
+    writeJsonError(io, 'check.not-yours', msg);
+  } else {
+    io.stderr(`team check: ${msg}\n`);
+  }
   // exit: check.not-yours
   return 2;
 }
@@ -318,8 +418,8 @@ function staleDifferences(stale: Stale): Difference[] {
   for (const seat of stale.seats) {
     out.push({
       what: seat.pane === undefined
-        ? `${seat.name}: a state seat not in the file`
-        : `${seat.name}: a state seat not in the file claims pane ${seat.pane}`,
+        ? `${seat.name}: left the team file but its record is still in the state`
+        : `${seat.name}: left the team file but its record still claims pane ${seat.pane}`,
       repair,
       owner: true,
     });
@@ -356,8 +456,8 @@ function dropStale(dir: string, session: string, stale: Stale): string[] {
         if (held === undefined || held.temporary !== undefined) continue;
         delete current.seats[seat.name];
         lines.push(seat.pane === undefined
-          ? `${seat.name}: a state seat not in the file; its record is dropped`
-          : `${seat.name}: a state seat not in the file claimed pane ${seat.pane}; its record is dropped`);
+          ? `${seat.name}: left the team file; its record is dropped`
+          : `${seat.name}: left the team file and its record claimed pane ${seat.pane}; its record is dropped`);
       }
     }
     return lines;
@@ -368,25 +468,36 @@ function dropStale(dir: string, session: string, stale: Stale): string[] {
  * A seat whose record carries the dev mark: its registration was written by a run whose caller
  * gate was folded into a warning (`src/registry/agents.ts`, `src/registry/sync.ts`), so the
  * record that says what the seat is was made without the ordinary gate behind it. The difference
- * names the caller the record itself kept — the dev-mode run's own `dev_mode_by`, and the
- * `registered_by` of an older record that kept only the mark — and the one repair that takes the
- * mark off: the owner's own `team register`, the same write with nothing folded — a clean launch
- * of the seat does it too. A seat the file no longer names, and one whose record the registry
- * holds none for, is not this finding's.
+ * states plainly that the seat was registered by an agent rather than by the owner, and names the
+ * one repair that takes the mark off: the owner's own `team register`, the same write with nothing
+ * folded — a clean launch of the seat does it too. A seat the file no longer names, and one whose
+ * record the registry holds none for, is not this finding's.
  */
-function devModeDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
-  if (home === undefined) return [];
+function devModeDifferences(
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+  quiet: boolean,
+): { differences: Difference[]; notes: string[] } {
+  if (home === undefined) return { differences: [], notes: [] };
   const out: Difference[] = [];
+  let marked = 0;
   const teamId = teamIdOf(root);
   for (const seat of team.seats) {
     const record = findAgent(home, { team: teamId, seat: seat.name });
     if (record?.provenance.dev_mode !== true) continue;
+    // Under dev mode the mark is the expected record, not a finding: one quiet note counts the
+    // seats instead of one row per seat.
+    if (quiet) {
+      marked += 1;
+      continue;
+    }
     out.push({
-      what: `${seat.name}: registered under dev mode (by ${record.provenance.dev_mode_by ?? record.provenance.registered_by})`,
+      what: `${seat.name}: registered by an agent, not by the owner`,
       repair: `re-record the seat with the caller gate in force (team register ${seat.name})`,
     });
   }
-  return out;
+  return { differences: out, notes: marked > 0 ? [`${marked} seat(s) recorded under dev mode`] : [] };
 }
 
 /**
@@ -676,10 +787,65 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
 }
 
 /**
+ * A `delivery_order` declaration in `.agents/team.yaml` (at the team or seat level) that
+ * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have, leaving
+ * the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
+ */
+function deliveryOrderDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
+  let projectOrder: readonly DeliveryLeg[] | undefined;
+  if (home !== undefined) {
+    try {
+      projectOrder = ofTeam(home, teamIdOf(root))?.deliveryOrder;
+    } catch {
+      projectOrder = undefined;
+    }
+  }
+  const out: Difference[] = [];
+  if (team.deliveryOrder !== null) {
+    const res = resolveOrderSetting(
+      DELIVERY_ORDER,
+      orderDeclarationsOf<DeliveryLeg>({
+        ...(projectOrder !== undefined ? { project: projectOrder } : {}),
+        team: team.deliveryOrder,
+      }),
+    );
+    if (res.refused.some((r) => r.level === 'team')) {
+      out.push({
+        what: `delivery_order [${team.deliveryOrder.join(', ')}] in .agents/team.yaml is set aside; [${res.value.join(', ')}] stands`,
+        repair: 'drop the leg(s) not in the inherited delivery_order in .agents/team.yaml',
+        owner: true,
+      });
+    }
+  }
+  for (const seat of team.seats) {
+    if (seat.deliveryOrder === undefined) continue;
+    const res = resolveOrderSetting(
+      DELIVERY_ORDER,
+      orderDeclarationsOf<DeliveryLeg>({
+        ...(projectOrder !== undefined ? { project: projectOrder } : {}),
+        ...(team.deliveryOrder ? { team: team.deliveryOrder } : {}),
+        seat: seat.deliveryOrder,
+      }),
+    );
+    if (res.refused.some((r) => r.level === 'seat')) {
+      out.push({
+        what: `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in .agents/team.yaml is set aside; [${res.value.join(', ')}] stands`,
+        repair: `drop the leg(s) not in the inherited delivery_order for ${seat.name} in .agents/team.yaml`,
+        owner: true,
+      });
+    }
+  }
+  return out;
+}
+
+/**
  * One difference per attention, in the watch's own words (`src/watch/checks/attention.ts`): the
  * repair is the one act the report names, and `owner` is the watch's `to`, an owner's report only.
+ * A seat that is idle or done on an unrecognised screen (`attention === 'unknown'`) is a normal
+ * state, never a difference; an unrecognised herdr status word is surfaced as a note by
+ * `unknownStatusNotes` instead.
  */
-function viewOf(attention: Attention, name: string, status: string): Difference | null {
+function viewOf(attention: Attention, name: string, _status: string): Difference | null {
   switch (attention) {
     // `compare()` already emits the permission-prompt difference for `status` and `check`.
     case 'question':
@@ -688,11 +854,35 @@ function viewOf(attention: Attention, name: string, status: string): Difference 
       return { what: `${name} shows a vendor notice: its owner's to act on`, repair: 'the owner acts in the pane', owner: true };
     case 'blocked':
       return { what: `${name} is blocked, and its screen is not one the watch recognises`, repair: 'the owner looks at the pane', owner: true };
-    case 'unknown':
-      return { what: `${name}: herdr reports the status "${status}"`, repair: 'the operator looks at the pane' };
     default:
       return null;
   }
+}
+
+/**
+ * A note for any seat on its recorded pane whose herdr status is not one of the known words
+ * (`idle`, `done`, `working`, `blocked`). An `idle` or `done` seat is a normal state even when its
+ * screen is unrecognised, and an unknown herdr status word is reported as a note so it does not
+ * count as a difference or change the exit code.
+ */
+function unknownStatusNotes(team: TeamFile, state: SessionState, live: Live): string[] {
+  const out: string[] = [];
+  for (const seat of team.seats) {
+    const recorded = state.seats[seat.name]?.pane;
+    if (recorded === undefined) continue;
+    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    if (!agent || agent.pane !== recorded) continue;
+    if (
+      agent.status !== '' &&
+      agent.status !== 'idle' &&
+      agent.status !== 'done' &&
+      agent.status !== 'working' &&
+      agent.status !== 'blocked'
+    ) {
+      out.push(`${seat.name}: herdr reports the status "${agent.status}"`);
+    }
+  }
+  return out;
 }
 
 // `status`'s own problem lines, in the check's name.
@@ -701,3 +891,168 @@ function printProblems(io: Io, problems: Problem[]): void {
     io.stderr(`team check: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${problem.message}\n`);
   }
 }
+
+/**
+ * The repair command for a deprecated field warning in `current.warnings` (`coordinator:`,
+ * `watch.quota_marks`, `budgets.marks`). Non-deprecation warnings (such as `effort`) return
+ * `undefined` so `team check` emits only deprecation warnings.
+ */
+function deprecationRepairOf(message: string, shownFile: string): string | undefined {
+  if (message.startsWith('`coordinator:` is now `leads: true`')) {
+    return `set \`leads: true\` on the lead's seat and remove \`coordinator:\` from ${shownFile}`;
+  }
+  if (message.startsWith('watch.quota_marks is now budgets.marks')) {
+    return `move \`watch.quota_marks\` to \`budgets.marks\` in ${shownFile}`;
+  }
+  if (message.startsWith('budgets.marks replaces watch.quota_marks')) {
+    return `remove \`watch.quota_marks\` from ${shownFile} and keep \`budgets.marks\``;
+  }
+  return undefined;
+}
+
+function policyRefusalRepair(refusal: PolicyLoadRefusal, seatName?: string): string {
+  const seatFlag = seatName ? ` --seat ${seatName}` : '';
+  if (refusal.kind === 'loosening') {
+    return `team policy unset ${refusal.lowerLevel} ${refusal.policy}${seatFlag}`;
+  }
+  if (refusal.kind === 'invalid-policy') {
+    return `team policy unset ${refusal.level} ${refusal.policy}${seatFlag}`;
+  }
+  const match = /policy "([^"]+)"/.exec(refusal.why);
+  if (match?.[1]) {
+    return `team policy unset ${refusal.level} ${match[1]}${seatFlag}`;
+  }
+  return `team policy unset ${refusal.level} <name>${seatFlag}`;
+}
+
+/**
+ * Policy chain verification and `dev-mode` migration notice (Kernel Amendment 02, Gap 6 & Gap 7):
+ * - Reads and resolves the policy chain (`entity → project → team`, plus each registered `seat`).
+ * - Any unreadable/unverified source, invalid policy, or load-time loosening refusal is reported
+ *   as an owner difference with a `team policy unset` repair.
+ * - While no `dev-mode` policy is set in the chain (`devModeGoverned === false`) and
+ *   `TEAMCLI_DEV_MODE=1` is set in the environment, emits the one migration note.
+ */
+function policyCheck(
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+  now: Date,
+  env: Record<string, string | undefined>,
+  stateDir: string,
+  caller: string,
+): { differences: Difference[]; notes: string[] } {
+  if (home === undefined) {
+    const notes =
+      env.TEAMCLI_DEV_MODE === '1'
+        ? ['dev-mode: no policy is set yet for this entity; TEAMCLI_DEV_MODE=1 still applies until the owner sets dev-mode']
+        : [];
+    return { differences: [], notes };
+  }
+
+  let projectId: string | null = null;
+  try {
+    const byTeam = ofTeam(home, teamIdOf(root));
+    if (byTeam) {
+      projectId = byTeam.id ?? null;
+    } else if (team.inProject) {
+      projectId = byName(home, team.inProject)?.id ?? projectIdOf(team.inProject);
+    } else {
+      projectId = projectIdOf(team.project);
+    }
+  } catch {
+    projectId = null;
+  }
+
+  const legacyDeliveryDiffs = deliveryOrderDifferences(team, root, home);
+  const differences: Difference[] = [];
+  const teamChain = loadAndResolvePolicyChain(
+    {
+      home,
+      entity: team.entity ?? null,
+      projectId,
+      teamRoot: root,
+      team,
+    },
+    { now, upToLevel: 'team' },
+  );
+
+  if (!teamChain.ok) {
+    for (const refusal of teamChain.refusals) {
+      if (
+        refusal.kind === 'loosening' &&
+        refusal.policy === 'delivery-order' &&
+        refusal.lowerLevel === 'team' &&
+        legacyDeliveryDiffs.some((d) => d.what.startsWith('delivery_order '))
+      ) {
+        continue;
+      }
+      differences.push({
+        what: refusal.message,
+        repair: policyRefusalRepair(refusal),
+        owner: true,
+      });
+    }
+  }
+
+  const teamId = teamIdOf(root);
+  for (const seat of team.seats) {
+    let agentId: string | null = null;
+    try {
+      agentId = findAgent(home, { team: teamId, seat: seat.name })?.id ?? null;
+    } catch {
+      agentId = null;
+    }
+    if (!agentId) continue;
+    const seatChain = loadAndResolvePolicyChain(
+      {
+        home,
+        entity: team.entity ?? null,
+        projectId,
+        teamRoot: root,
+        team,
+        agentId,
+        seat,
+      },
+      { now, upToLevel: 'seat' },
+    );
+    if (!seatChain.ok) {
+      for (const refusal of seatChain.refusals) {
+        const isSeatRefusal =
+          (refusal.kind === 'loosening' && refusal.lowerLevel === 'seat') ||
+          ((refusal.kind === 'unreadable-source' || refusal.kind === 'invalid-policy') && refusal.level === 'seat');
+        if (!isSeatRefusal) continue;
+        if (
+          refusal.kind === 'loosening' &&
+          refusal.policy === 'delivery-order' &&
+          legacyDeliveryDiffs.some((d) => d.what.startsWith(`${seat.name}: delivery_order `))
+        ) {
+          continue;
+        }
+        differences.push({
+          what: `${seat.name}: ${refusal.message}`,
+          repair: policyRefusalRepair(refusal, seat.name),
+          owner: true,
+        });
+      }
+    }
+  }
+
+  const notes: string[] = [];
+  const expiredDevMode = teamChain.expired.filter((exp) => exp.name === 'dev-mode').at(-1);
+  if (expiredDevMode && (!teamChain.ok || teamChain.policies['dev-mode']?.value === 'off')) {
+    notes.push(`dev-mode expired at ${expiredDevMode.expiry ?? 'now'} for ${expiredDevMode.level}; off since`);
+  }
+  if (env.TEAMCLI_DEV_MODE === '1') {
+    if (!teamChain.devModeGoverned) {
+      notes.push(
+        'dev-mode: no policy is set yet for this entity; TEAMCLI_DEV_MODE=1 still applies until the owner sets dev-mode',
+      );
+    } else if (teamChain.ok && teamChain.policies['dev-mode']?.value === 'off') {
+      logLine(stateDir, 'check', caller, 'dev-mode: TEAMCLI_DEV_MODE=1 ignored because dev-mode policy is off', now);
+    }
+  }
+
+  return { differences, notes };
+}
+

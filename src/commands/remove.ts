@@ -6,7 +6,7 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, logDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { findRoot, loadTeamFile } from '../file/load.ts';
@@ -217,6 +217,16 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     : judgeCallerIn(io, dir, team, verdictOf);
   const { caller, shown } = judged;
   const session = judged.session;
+  // Dev mode, from the file this run edits: a `dev-mode` value anywhere in the caller's chain
+  // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the variable set to
+  // exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  const dev = resolveDevMode('remove', io, {
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+    team,
+    root,
+    now: sources.now(),
+  });
+  logDevModeState(dir, 'remove', describeCaller(shown), dev, sources.now());
   const verdict = verdictOf(caller, standingOf(dir, session, caller));
   // The delegate branch, tried only when the ordinary rule just refused and the file names a
   // delegate at all: with no `delegates` section every refusal below stays exactly today's, and
@@ -268,8 +278,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // refusal's own words print as a warning, the run goes on, and the audit log records the
     // caller it admitted. Every later gate — the owner-only abandon, the lead's seat, the
     // placement in the session — still refuses.
-    const said = `only the owner or \`leads\` removes a seat; this call is ${describeCaller(shown)}`;
-    const folded = devModeCallerGate('remove', io, said);
+    const said = `only the owner or \`leads\` removes a seat; this call is ${describeCaller(shown)}${devModeExpiryNote(dev)}`;
+    const folded = devModeCallerGate(dev, said);
     if (folded === null) {
       io.stderr(`team remove: ${said}\n`);
       // exit: remove.caller
