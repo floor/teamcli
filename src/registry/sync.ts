@@ -65,12 +65,25 @@ function writeRoster(input: RegistryTeam, teamId: string, seat: string, entry: {
  *  file marks as the team's lead — the `leads: true` seat, or the older `coordinator:` key, both
  *  resolved to `team.orchestrator`; the capability, never a role name. Re-resolved on every
  *  launch, from the roster just written, so it follows the mark when the file moves it. A lead
- *  seat with no agent yet leaves the project with none, which teams read as ordinary. */
+ *  seat with no agent yet leaves the project with none, which teams read as ordinary. A file that
+ *  drops `project_lead` clears the lead this team set, so no reader keeps admitting a seat the
+ *  team no longer leads with: only an agent of this team's roster, so another team's lead is
+ *  that team's to move. A team that leaves the project clears its lead in `projectLeave`
+ *  (src/registry/teams.ts), with the project it left. */
 function recordProjectLead(input: RegistryTeam, teamId: string): void {
   const { team, home } = input;
-  if (!team.projectLead || team.inProject === null) return;
-  const lead = getTeam(home, teamId)?.roster.find((item) => item.seat === team.orchestrator)?.agent ?? null;
-  projects.upsertProject(home, projects.projectIdOf(team.inProject), { lead });
+  if (team.inProject === null) return;
+  const projectId = projects.projectIdOf(team.inProject);
+  const roster = getTeam(home, teamId)?.roster ?? [];
+  if (!team.projectLead) {
+    const held = projects.get(home, projectId);
+    if (held !== null && held.lead !== null && roster.some((line) => line.agent === held.lead)) {
+      projects.upsertProject(home, projectId, { lead: null });
+    }
+    return;
+  }
+  const lead = roster.find((item) => item.seat === team.orchestrator)?.agent ?? null;
+  projects.upsertProject(home, projectId, { lead });
 }
 
 /**

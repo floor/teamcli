@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -10,9 +10,10 @@ import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import type { Launch } from '../src/commands/up.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
-import { findAgent, getAgent, readAgents } from '../src/registry/agents.ts';
-import { getTeam, teamIdOf } from '../src/registry/teams.ts';
-import { get as getProject, projectIdOf, projectsFile } from '../src/registry/projects.ts';
+import { findAgent, getAgent, readAgents, registerAgent } from '../src/registry/agents.ts';
+import { getTeam, readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { get as getProject, projectIdOf, projectsFile, readProjects, upsertProject } from '../src/registry/projects.ts';
+import { admitSend, PROJECT_RULES } from '../src/send/admit.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
@@ -280,6 +281,40 @@ describe('the project a team leads, read through the launch', () => {
     return { fixture, input: { home: fixture.home, team: parsed.team, root: fixture.root, by: 'owner' } };
   }
 
+  /** A second team in the fixture's project, with one lead seat: the other lead the admission
+   *  scene names, and the lead a leave must not clear. */
+  function addOtherLeadTeam(fixture: Fixture): { teamId: string; leadId: string } {
+    const root = join(fixture.root, 'other');
+    mkdirSync(root, { recursive: true });
+    const teamId = teamIdOf(root);
+    const leadId = registerAgent(fixture.home, {
+      name: 'lead',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude --model claude-opus-5-5',
+      reach: { team: teamId, seat: 'lead', session: 'other', pane: 'w2:p1', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'owner',
+    }).id;
+    upsertTeam(fixture.home, teamId, {
+      project: 'other',
+      session: 'other',
+      root,
+      roster: [{ agent: leadId, seat: 'lead', role: 'coordinator', leads: true }],
+      lifecycle: 'running',
+      by: 'owner',
+    });
+    const projectId = projectIdOf('TeamCLI');
+    const held = getProject(fixture.home, projectId);
+    if (held === null) throw new Error('the second team joins a project the scene must already have written');
+    upsertProject(fixture.home, projectId, { teams: [...held.teams, teamId] });
+    return { teamId, leadId };
+  }
+
   test("a launch writes the project's lead as the lead seat's agent", () => {
     const { fixture, input } = leadFixture();
     const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
@@ -311,6 +346,81 @@ describe('the project a team leads, read through the launch', () => {
     const moved = { ...input, team: { ...input.team, orchestrator: 'worker' } };
     registerLaunch(moved, worker, 'pane-w2');
     expect(getProject(fixture.home, projectIdOf('TeamCLI'))?.lead).toBe(workerId);
+  });
+
+  test('a file that drops project_lead clears the lead it set, and admission refuses the old lead afterwards', () => {
+    const { fixture, input } = leadFixture();
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const ops = input.team.seats.find((seat) => seat.name === 'ops')!;
+    const projectId = projectIdOf('TeamCLI');
+    const leadId = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
+    expect(getProject(fixture.home, projectId)?.lead).toBe(leadId);
+    const other = addOtherLeadTeam(fixture);
+
+    // The file stops leading the project and hands the coordinator mark to `ops`, one edit.
+    const yaml = readFileSync(fixture.file, 'utf8')
+      .replace('project_lead: true\n', '')
+      .replace('coordinator: lead\n', 'coordinator: ops\n');
+    writeFileSync(fixture.file, yaml);
+    const parsed = validateTeamFile(yaml, { home: fixture.home, root: fixture.root });
+    if (!parsed.ok) throw new Error('the edited fixture does not validate');
+    registerLaunch({ ...input, team: parsed.team }, ops, 'pane-ops');
+
+    // The record no longer names the old agent as the project's lead...
+    expect(getProject(fixture.home, projectId)?.lead).toBeNull();
+    // ...and admission reads the record: the pair a stale lead admits is refused now. The stale
+    // record is hand-built so the scene shows it was the record, not another rule, doing the work.
+    const teams = readTeams(fixture.home);
+    const stored = readProjects(fixture.home);
+    const oldLead = getAgent(fixture.home, leadId)!;
+    const otherLead = getAgent(fixture.home, other.leadId)!;
+    const stale = { [projectId]: { ...stored[projectId]!, lead: leadId } };
+    expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stale })).toEqual({ ok: true, rule: PROJECT_RULES[0] });
+    expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stored }).ok).toBe(false);
+  });
+
+  test('a team that leaves the project takes its lead out of the record, and the other teams stay', () => {
+    const { fixture, input } = leadFixture();
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    const projectId = projectIdOf('TeamCLI');
+    const leadId = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
+    const other = addOtherLeadTeam(fixture);
+    expect(getProject(fixture.home, projectId)?.lead).toBe(leadId);
+
+    // The file stops naming the project; `project_lead` cannot stay without it.
+    const yaml = readFileSync(fixture.file, 'utf8')
+      .replace('in_project: TeamCLI\n', '')
+      .replace('project_lead: true\n', '');
+    writeFileSync(fixture.file, yaml);
+    const parsed = validateTeamFile(yaml, { home: fixture.home, root: fixture.root });
+    if (!parsed.ok) throw new Error('the edited fixture does not validate');
+    registerLaunch({ ...input, team: parsed.team }, worker, 'pane-w');
+
+    const project = getProject(fixture.home, projectId);
+    expect(project?.lead).toBeNull();
+    expect(project?.teams).toEqual([other.teamId]);
+  });
+
+  test("a leave clears only the leaving team's lead: another team's lead stays on record", () => {
+    const { fixture, input } = leadFixture();
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    const projectId = projectIdOf('TeamCLI');
+    registerLaunch(input, lead, 'pane-l');
+    const other = addOtherLeadTeam(fixture);
+    // The project leads with the other team's agent when this team's file stops naming it.
+    upsertProject(fixture.home, projectId, { lead: other.leadId });
+
+    const yaml = readFileSync(fixture.file, 'utf8')
+      .replace('in_project: TeamCLI\n', '')
+      .replace('project_lead: true\n', '');
+    writeFileSync(fixture.file, yaml);
+    const parsed = validateTeamFile(yaml, { home: fixture.home, root: fixture.root });
+    if (!parsed.ok) throw new Error('the edited fixture does not validate');
+    registerLaunch({ ...input, team: parsed.team }, worker, 'pane-w');
+
+    expect(getProject(fixture.home, projectId)?.lead).toBe(other.leadId);
   });
 
   test('a file that leads no project writes no lead', () => {
