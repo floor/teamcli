@@ -4287,7 +4287,12 @@ describe('team up, the pause', () => {
       const [first = '', ...rest] = typed.split('\n');
       return shown.replace('  → Plan, search, build anything', [`  → ${first}`, ...rest.map((line) => `    ${line}`)].join('\n'));
     };
-    made.launch.agentStatus = () => status;
+    // Herdr's own status is the last word on a screen the profile cannot read
+    // (`src/launch/unread.ts`): the two screens the grammar refuses report the pane working, so
+    // the wait itself reads them as unknown and times out, as this scene pins. Every other case
+    // reads its own screen, where the status makes no difference.
+    const unread = screen === 'unknown-family' || screen === 'spoof';
+    made.launch.agentStatus = () => (unread ? 'working' : status);
     // The order the run's host calls are made in, recorded so the unreadable case can pin it.
     const calls: string[] = [];
     const makeWorkspace = made.launch.createWorkspace;
