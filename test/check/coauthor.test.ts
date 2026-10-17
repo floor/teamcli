@@ -15,7 +15,6 @@ const TEAM_FILE = fileURLToPath(new URL('../../.github/team.yaml', import.meta.u
 const RULE = 'forbidden pattern ^[Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:';
 
 /** The notice this repository's own team file carries: it still spells the lead `coordinator:`. */
-const WARNING = 'team commits check: warning: line 7: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read\n';
 
 /** A signature of the file's coordinator seat, which passes the signature rule. */
 const SIGNATURE = 'Agent: Claude Opus 5.5 · coordinator';
@@ -94,13 +93,15 @@ describe('a Co-authored-by trailer in this repository', () => {
       expect(result).toEqual({
         code: 1,
         stdout: [
-          `${hash[name].slice(0, 10)} ${subject}`,
-          `  line 4: ${RULE}`,
-          `    ${coauthor(spelling)}`,
+          'COMMIT      STATUS   DETAIL',
+          `${hash[name].slice(0, 10)}  refused  ${subject}`,
+          `difference: commit ${hash[name].slice(0, 10)} "${subject}", line 4: ${RULE} — "${coauthor(spelling)}"`,
+          '  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)',
+          '  who: any seat',
           'team commits check: 1 commit checked: 1 commit refused',
           '',
         ].join('\n'),
-        stderr: WARNING,
+        stderr: '',
       });
     });
   }
@@ -118,12 +119,30 @@ describe('a Co-authored-by trailer in this repository', () => {
 
   test('the words mid-sentence, even at the start of a line, are not a trailer', async () => {
     const result = await runOne('mention');
-    expect(result).toEqual({ code: 0, stdout: 'team commits check: 1 commit checked: ok\n', stderr: WARNING });
+    expect(result).toEqual({
+      code: 0,
+      stdout: [
+        'COMMIT      STATUS  DETAIL',
+        `${hash.mention.slice(0, 10)}  ok      feat: the words in a sentence`,
+        'team commits check: 1 commit checked: ok',
+        '',
+      ].join('\n'),
+      stderr: '',
+    });
   });
 
   test('a clean commit passes', async () => {
     const result = await runOne('normal');
-    expect(result).toEqual({ code: 0, stdout: 'team commits check: 1 commit checked: ok\n', stderr: WARNING });
+    expect(result).toEqual({
+      code: 0,
+      stdout: [
+        'COMMIT      STATUS  DETAIL',
+        `${hash.normal.slice(0, 10)}  ok      feat: a clean one`,
+        'team commits check: 1 commit checked: ok',
+        '',
+      ].join('\n'),
+      stderr: '',
+    });
   });
 
   test('a merge carrying the trailer is refused too, though a merge needs no signature', async () => {
@@ -131,13 +150,15 @@ describe('a Co-authored-by trailer in this repository', () => {
     expect(result).toEqual({
       code: 1,
       stdout: [
-        `${hash.merge.slice(0, 10)} Merge side`,
-        `  line 3: ${RULE}`,
-        '    Co-authored-by: Someone <someone@example.com>',
+        'COMMIT      STATUS   DETAIL',
+        `${hash.merge.slice(0, 10)}  refused  Merge side`,
+        `difference: commit ${hash.merge.slice(0, 10)} "Merge side", line 3: ${RULE} — "Co-authored-by: Someone <someone@example.com>"`,
+        '  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)',
+        '  who: any seat',
         'team commits check: 1 commit checked, 1 by a human or a merge: 1 commit refused',
         '',
       ].join('\n'),
-      stderr: WARNING,
+      stderr: '',
     });
   });
 });

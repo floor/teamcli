@@ -305,6 +305,12 @@
             },
             {
               "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--since",
               "repeatable": false,
               "takesValue": true
@@ -327,12 +333,12 @@
           ],
           "subcommands": [],
           "usage": [
-            "team commits check <ref> [--since <ref>] [--file <path>]"
+            "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
           ]
         }
       ],
       "usage": [
-        "team commits check <ref> [--since <ref>] [--file <path>]"
+        "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
       ]
     },
     {

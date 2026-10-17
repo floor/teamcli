@@ -846,11 +846,110 @@ export const WORKTREE_OUTPUT_SCHEMA: CommandSchemaSpec = {
   oneOf: [WORKTREE_ACTION_BRANCH, WORKTREE_LIST_BRANCH],
 };
 
+/** Reusable JSON Schema fragment for a check finding (`{ kind, message, line?, text? }`). */
+export const FINDING_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['kind', 'message'],
+  properties: {
+    kind: {
+      type: 'string',
+      enum: ['forbidden', 'signature-missing', 'signature-misplaced', 'signature-in-prose', 'signature-unknown'],
+    },
+    message: { type: 'string', minLength: 1 },
+    line: { type: 'integer', minimum: 1 },
+    text: { type: 'string' },
+  },
+};
+
+/** The commit a `team.commits` document reports on. */
+const COMMIT_REPORT_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['hash', 'subject', 'status', 'exempt', 'findings'],
+  properties: {
+    hash: { type: 'string', minLength: 1 },
+    subject: { type: 'string' },
+    status: { type: 'string', enum: ['ok', 'refused', 'exempt'] },
+    exempt: { type: ['string', 'null'], enum: ['merge', 'human', null] },
+    findings: {
+      type: 'array',
+      items: FINDING_SCHEMA_FRAGMENT,
+    },
+  },
+};
+
+/** Published `--json` output schema for `team commits check` (`schema/commits.schema.json`). */
+export const COMMITS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.commits',
+  fileName: 'commits.schema.json',
+  title: 'team commits check --json output',
+  required: ['format', 'ref', 'since', 'commits', 'skipped', 'pull_request', 'differences', 'notes', 'summary', 'notice'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    ref: { type: 'string', minLength: 1 },
+    since: { type: ['string', 'null'] },
+    commits: {
+      type: 'array',
+      items: COMMIT_REPORT_SCHEMA_FRAGMENT,
+    },
+    skipped: { type: 'integer', minimum: 0 },
+    pull_request: {
+      type: ['array', 'null'],
+      items: FINDING_SCHEMA_FRAGMENT,
+    },
+    differences: {
+      type: 'array',
+      items: DIFFERENCE_SCHEMA_FRAGMENT,
+    },
+    notes: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    summary: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['commits', 'refused', 'exempt', 'skipped', 'ok'],
+      properties: {
+        commits: { type: 'integer', minimum: 0 },
+        refused: { type: 'integer', minimum: 0 },
+        exempt: { type: 'integer', minimum: 0 },
+        skipped: { type: 'integer', minimum: 0 },
+        ok: { type: 'boolean' },
+      },
+    },
+    notice: { type: ['string', 'null'] },
+  },
+};
+
+/** Published `--json` output schema for `team pr check` (`schema/pr.schema.json`). */
+export const PR_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.pr',
+  fileName: 'pr.schema.json',
+  title: 'team pr check --json output',
+  required: ['format', 'differences', 'notes', 'summary', 'notice'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    differences: {
+      type: 'array',
+      items: DIFFERENCE_SCHEMA_FRAGMENT,
+    },
+    notes: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    summary: SUMMARY_SCHEMA_FRAGMENT,
+    notice: { type: ['string', 'null'] },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
   TEMPO_OUTPUT_SCHEMA,
+  COMMITS_OUTPUT_SCHEMA,
+  PR_OUTPUT_SCHEMA,
   PROC_OUTPUT_SCHEMA,
   WORKTREE_OUTPUT_SCHEMA,
   SEATS_OUTPUT_SCHEMA,

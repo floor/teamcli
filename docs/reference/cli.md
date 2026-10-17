@@ -160,7 +160,7 @@ Hidden: no
 
 Usage:
 
-    team commits check <ref> [--since <ref>] [--file <path>]
+    team commits check <ref> [--since <ref>] [--file <path>] [--json]
 
 ### Flags
 
@@ -179,7 +179,7 @@ Hidden: no
 
 Usage:
 
-    team commits check <ref> [--since <ref>] [--file <path>]
+    team commits check <ref> [--since <ref>] [--file <path>] [--json]
 
 #### Flags
 
@@ -187,6 +187,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--since` | yes | no | no |
 | `-h` | no | no | yes |
 

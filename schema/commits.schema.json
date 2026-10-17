@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/commits.schema.json",
+  "title": "team commits check --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "ref",
+    "since",
+    "commits",
+    "skipped",
+    "pull_request",
+    "differences",
+    "notes",
+    "summary",
+    "notice"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.commits"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "since": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "hash",
+          "subject",
+          "status",
+          "exempt",
+          "findings"
+        ],
+        "properties": {
+          "hash": {
+            "type": "string",
+            "minLength": 1
+          },
+          "subject": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "refused",
+              "exempt"
+            ]
+          },
+          "exempt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "merge",
+              "human",
+              null
+            ]
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "message"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "forbidden",
+                    "signature-missing",
+                    "signature-misplaced",
+                    "signature-in-prose",
+                    "signature-unknown"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "line": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "skipped": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pull_request": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "message"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "forbidden",
+              "signature-missing",
+              "signature-misplaced",
+              "signature-in-prose",
+              "signature-unknown"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "differences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "what",
+          "repair",
+          "who"
+        ],
+        "properties": {
+          "what": {
+            "type": "string",
+            "minLength": 1
+          },
+          "repair": {
+            "type": "string",
+            "minLength": 1
+          },
+          "who": {
+            "type": "string",
+            "enum": [
+              "the owner",
+              "the team's lead",
+              "a grant holder",
+              "any seat"
+            ]
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commits",
+        "refused",
+        "exempt",
+        "skipped",
+        "ok"
+      ],
+      "properties": {
+        "commits": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "refused": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}
