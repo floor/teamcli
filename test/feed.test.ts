@@ -366,12 +366,15 @@ describe('team send history log & team feed', () => {
     });
   });
 
-  test('--follow and --json are refused: plain stderr and the usage', async () => {
+  test('--follow and --json are refused: the error document --json asks for', async () => {
     const { root, home } = world();
     const io = testIo(root);
     expect(await runFeed(['--follow', '--json'], io, { home })).toBe(2);
-    expect(io.out).toBe('');
-    expect(io.err).toBe(`team feed: --follow and --json can't be used together\n${USAGE}`);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, {
+      id: 'feed.usage',
+      messageContains: "--follow and --json can't be used together",
+    });
   });
 
   test('--json writes one team.feed document, names no team outside a checkout, and every refusal is a team.error', async () => {

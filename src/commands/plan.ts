@@ -158,7 +158,9 @@ async function planFromBroker(
   // This build's broker answers records for a linear source; any other read kind is an answer
   // the seat fails safe on, exactly like an unparseable line.
   if (outcome.read.kind !== 'records') return broker(io, WRONG_ANSWER, json);
-  if (outcome.notice !== undefined) io.stderr(`team plan: ${outcome.notice}\n`);
+  // A notice about the read is for a person reading the table; a `--json` run's stderr stays
+  // empty, the document on stdout being the whole answer.
+  if (outcome.notice !== undefined && !json) io.stderr(`team plan: ${outcome.notice}\n`);
   return show(io, outcome.read, placed.seat, tasks.pull ?? 'self', tasks.fallback ?? 'file', sources.now ?? Date.now, loaded.team, json);
 }
 
@@ -186,7 +188,9 @@ function show(
     else for (const line of named) io.stderr(`team plan: ${line}\n`);
     return shape();
   }
-  for (const line of named) io.stderr(`team plan: ${line}\n`);
+  // A read refusal beside a candidate is a note to a person reading the table: under `--json`
+  // the document on stdout is the whole answer, and stderr stays empty.
+  if (!json) for (const line of named) io.stderr(`team plan: ${line}\n`);
   if (json) {
     writeJson(io, 'team.plan', {
       format: 1 as const,
@@ -198,7 +202,7 @@ function show(
   const out = cleanedIo(io);
   const context = contextLine(team.project, team.session);
   if (candidates.length === 0) {
-    if (!json) out.stdout(`${context}\n0 task(s)\n`);
+    if (!json) io.stdout(`${context}\n0 task(s)\n`);
     // exit: plan.none
     return 0;
   }
@@ -213,7 +217,9 @@ function show(
       }),
       `${candidates.length} task(s)`,
     ];
-    out.stdout(`${lines.join('\n')}\n`);
+    // Through `io`, not the cleaned view: the style above is this io's TTY style, and the
+    // cleaned view would strip the very bold the table was rendered with.
+    io.stdout(`${lines.join('\n')}\n`);
   }
   // exit: plan.shown
   return 0;

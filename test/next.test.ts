@@ -608,12 +608,13 @@ describe('team next --wait', () => {
     expect(leaseNames()).toEqual([]);
   });
 
-  test('--wait and --json together are refused: plain stderr and the usage', async () => {
+  test('--wait and --json together are refused: the error document --json asks for', async () => {
     ready(`${WITH}  cadence: 10m\n`, '[]\n');
-    expect(await run(['--wait', '--json'])).toEqual({
-      code: 2,
-      out: '',
-      err: `team next: --wait and --json can't be used together\n${USAGE}`,
+    const result = await run(['--wait', '--json']);
+    expect(result).toMatchObject({ code: 2, err: '' });
+    assertJsonErrorShape(result.out, {
+      id: 'next.invocation',
+      messageContains: "--wait and --json can't be used together",
     });
     expect(leaseNames()).toEqual([]);
   });

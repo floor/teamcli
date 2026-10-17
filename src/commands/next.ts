@@ -84,7 +84,7 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
   // A wait prints its events as they happen; that stream is not one document, so the two are
   // refused together, the same way `team seats` refuses --watch with --json.
   if (args.flags.has('wait') && json) {
-    return invocation(io, '--wait and --json can\'t be used together', true);
+    return invocation(io, '--wait and --json can\'t be used together', true, json);
   }
   if (args.flags.has('mine') && args.flags.has('release')) {
     return invocation(io, '--mine and --release are not used together', false, json);
@@ -237,7 +237,9 @@ async function nextFromBroker(
   // This build's broker answers records for a linear source; any other read kind is an answer
   // the seat fails safe on, exactly like an unparseable line.
   if (outcome.read.kind !== 'records') return broker(io, WRONG_ANSWER, emit.json);
-  if (outcome.notice !== undefined) io.stderr(`team next: ${outcome.notice}\n`);
+  // A notice about the read is for a person reading the table; a `--json` run's stderr stays
+  // empty, the document on stdout being the whole answer.
+  if (outcome.notice !== undefined && !emit.json) io.stderr(`team next: ${outcome.notice}\n`);
   return take(io, loaded.root, outcome.read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, undefined, speak, emit, hold);
 }
 

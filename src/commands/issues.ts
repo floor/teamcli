@@ -151,9 +151,11 @@ export async function runIssues(argv: string[], io: Io, sources: IssuesSources =
         }),
         `${read.records.length} issue(s)`,
       ];
-      out.stdout(`${lines.join('\n')}\n`);
+      // Through `io`, not the cleaned view: the style above is this io's TTY style, and the
+      // cleaned view would strip the very bold the table was rendered with.
+      io.stdout(`${lines.join('\n')}\n`);
     } else if (empty) {
-      out.stdout(`${context}\n0 issue(s)\n`);
+      io.stdout(`${context}\n0 issue(s)\n`);
     }
   }
   if (read.refusals.length) {

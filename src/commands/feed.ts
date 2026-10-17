@@ -610,11 +610,13 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
   // must still route the refusal through the `team.feed` error document on stdout.
   const json = hasJsonFlag(argv);
   const follow = args.flags.has('follow');
-  // A follow is a stream of tables, not one document: `--json` prints one object per run.
+  // A follow is a stream of tables, not one document: `--json` prints one object per run. The
+  // refusal for asking for both is still the `--json` error document — the flag decides the
+  // output, never whether an envelope exists.
   if (args.error || args.rest.length || (follow && json)) {
     const why = args.error
       ?? (args.rest.length ? `unexpected "${args.rest[0] ?? ''}"` : "--follow and --json can't be used together");
-    return usage(io, why, json && !follow);
+    return usage(io, why, json);
   }
 
   const seatFilter = args.values.seat;
