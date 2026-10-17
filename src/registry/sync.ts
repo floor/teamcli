@@ -5,9 +5,10 @@
 //
 // A registry that cannot be written is a note for the command's log, never a refusal: the launch
 // or the stop is done, and the next launch writes the record again. Every function here catches.
-import { findAgent, readAgents, registerAgent, updateAgent } from '../registry/agents.ts';
+import { findAgent, readAgents, registerAgent, updateAgent, type AgentDelegation, type AgentProvenancePatch } from '../registry/agents.ts';
 import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf } from '../registry/teams.ts';
 import * as projects from '../registry/projects.ts';
+import type { ActingCommand } from '../delegate-types.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 
 /** What every writer here is told about the team it writes for. */
@@ -27,6 +28,11 @@ export type RegistryTeam = {
    *  earlier dev-mode mark off the record; a seat's, a lead's or a delegate's write in force
    *  leaves the mark where it is, for the owner's own register or relaunch. */
   owner?: boolean;
+  /** The delegation a delegated run was admitted by: the pane the gate passed, and the one
+   *  command the mark speaks for. The file's `delegates` section is the authority, so the record
+   *  names the owner as signer and this pane as actor; a delegate authorizes nothing by itself.
+   *  Absent: this write ran under no delegation. */
+  delegated?: { actor: string; command: ActingCommand };
 };
 
 /** How a seat's agent ends: `stopped` comes back to the same agent, `retired` never does. */
@@ -101,7 +107,9 @@ function recordProjectLead(input: RegistryTeam, teamId: string): void {
  * names the caller that run admitted, not the owner — and `reload`, the launch-command writer
  * with no dev mode to state, writes one in force. A write in force takes an earlier mark off
  * the record only when the owner makes it; anyone else's leaves the mark for the owner's own
- * register or relaunch to answer.
+ * register or relaunch to answer. A delegated run states its delegation beside the mark — the
+ * owner as signer, the pane as actor, the one command it speaks for — and the owner's own write
+ * in force takes that off too; another caller's routine write leaves it.
  * Returns the agent's id, or the note to log.
  */
 export function registerLaunch(
@@ -126,17 +134,29 @@ export function registerLaunch(
     // force takes an earlier mark off only when the owner makes it. Another caller's write in
     // force changes nothing about the mark — a seat's `reload` or a lead's `restart` is routine,
     // and it does not answer the finding the mark raises.
-    const provenance = devMode
-      ? { dev_mode: true, dev_mode_by: by }
-      : input.owner === true ? { dev_mode: false } : undefined;
+    //
+    // The delegation is stated beside it: a delegated run records the owner as the signer (the
+    // approved `delegates` section is the authority) and the pane the gate passed as the actor,
+    // bounded to the command it names. The owner's own write in force takes an earlier mark off —
+    // the last write was not a delegate's; another caller's routine write leaves it, as it leaves
+    // the dev-mode mark.
+    const delegation: AgentDelegation | null | undefined = input.delegated === undefined
+      ? input.owner === true ? null : undefined
+      : { signer: 'owner', actor: input.delegated.actor, command: input.delegated.command };
+    const provenance: AgentProvenancePatch = {
+      ...(devMode ? { dev_mode: true, dev_mode_by: by } : input.owner === true ? { dev_mode: false } : {}),
+      ...(delegation === undefined ? {} : { delegated: delegation }),
+    };
+    const stated = Object.keys(provenance).length === 0 ? undefined : provenance;
     const agent = known
       ? updateAgent(home, known.id, {
         signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
-        ...(provenance === undefined ? {} : { provenance }), ...seatHandle,
+        ...(stated === undefined ? {} : { provenance: stated }), ...seatHandle,
       })
       : registerAgent(home, {
         name: seat.name, signing, lab: seat.vendor, cli: seat.cli, launcher: null, launch: seat.launch,
-        reach, mcp: [], skills: [], lifecycle: 'running', by, devMode, ...seatHandle,
+        reach, mcp: [], skills: [], lifecycle: 'running', by, devMode,
+        ...(delegation === undefined || delegation === null ? {} : { delegated: delegation }), ...seatHandle,
       });
     writeRoster(input, teamId, seat.name, { agent: agent.id, role: seat.role });
     recordProjectLead(input, teamId);

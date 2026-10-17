@@ -1601,7 +1601,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // — and the owner's run in force, stating it false, takes any earlier mark off; anyone
     // else's write in force leaves the mark for the owner.
     for (const note of registerRun(
-      { home: sources.home, team, root, by: callerLabel(caller), session, devMode: dev, owner: caller.kind === 'owner' },
+      {
+        home: sources.home, team, root, by: callerLabel(caller), session, devMode: dev, owner: caller.kind === 'owner',
+        // The delegation this run was admitted by, on the record it writes: the owner as signer,
+        // the gate's pane as actor, the one command `up` — never the pane as signer.
+        ...(delegated === null ? {} : { delegated: { actor: delegated, command: 'up' as const } }),
+      },
       team.seats.map((seat) => ({
         seat,
         pane: afterwards[seat.name]?.stage === 'ready' ? (afterwards[seat.name]?.pane ?? null) : null,

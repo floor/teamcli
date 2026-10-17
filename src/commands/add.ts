@@ -10,6 +10,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
+import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
@@ -784,6 +785,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
       caller: who, owner: caller.kind === 'owner', devMode: io.env.TEAMCLI_DEV_MODE === '1', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
+      ...(delegatePane === null ? {} : { delegated: { actor: delegatePane, command: 'add' as const } }),
       verifiedLobby, startCwd: planSeat.cwd, inLobby: planSeat.lobby === true, records, teamFile: path,
       doctor: sources.doctor,
       // The lobby is read again directly before the workspace this run makes in it, with nothing
@@ -997,6 +999,9 @@ function alreadyRunningLine(name: string, owner: boolean, unknown: boolean): str
 function hostOf(input: {
   dir: string; session: string; team: TeamFile; root: string; home: string; ceilings: Ceilings; running: Running[];
   seat: Seat; temporary?: SeatState['temporary']; caller: string; owner: boolean; devMode: boolean; now(): Date; launch: Launch;
+  /** The delegation this add ran under, when it is the approved delegate's: the owner as signer,
+   *  this pane as actor, the one command `add`. Absent: no delegation. */
+  delegated?: { actor: string; command: ActingCommand };
   readMachine?: (root: string) => Machine; samples: SwapSample[]; limits: TeamFile['machine']; io: Io;
   standing: Standing;
   teamFile: string;
@@ -1164,7 +1169,10 @@ function hostOf(input: {
         // The registry: the seat's agent is registered at its first launch, re-pointed after.
         if (name === seat.name) {
           const made = registerLaunch(
-            { home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner },
+            {
+              home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner,
+              ...(input.delegated === undefined ? {} : { delegated: input.delegated }),
+            },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[name]?.id,
