@@ -4,7 +4,9 @@
 // repair. A team no project names is its own project, a machine with no registry has no projects,
 // and a check with no home answers for no registry at all: none of those is a difference. A
 // project is led by one team: when this team declares `project_lead: true`, the project's other
-// teams are read through the team registry, and one more declaring team is a difference.
+// teams are read through the team registry, and one more declaring team is a difference. The team
+// registry is read for every team, not only a lead's: an unreadable registry is a difference
+// wherever the check runs.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -162,6 +164,20 @@ describe('a team and its projects', () => {
     // and the overrides are already read.
     const { out } = check(root, undefined);
     expect(out).not.toContain('the project registry');
+    expect(out).not.toContain('the team registry');
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  test('a team registry that does not read is a difference for a team that declares no lead', () => {
+    const { base, root, home } = place();
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(teamsFile(home), 'not a map\n');
+    const { code, out } = check(root, home);
+    // The roster bridge reads this file for every seat, a lead team's or not: an unreadable one
+    // leaves every team unserved, and the check names it wherever it runs.
+    expect(out).toContain(`difference: the team registry cannot be read: ${teamsFile(home)}`);
+    expect(out).toContain('  repair: fix the team registry (~/.config/team/teams.yaml)');
+    expect(code).toBe(1);
     rmSync(base, { recursive: true, force: true });
   });
 });
@@ -224,7 +240,7 @@ describe('a project and its lead teams', () => {
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(teamsFile(home), 'not a map\n');
     const { code, out } = check(root, home);
-    expect(out).toContain(`difference: the team registry: ${teamsFile(home)}`);
+    expect(out).toContain(`difference: the team registry cannot be read: ${teamsFile(home)}`);
     expect(out).toContain('  repair: fix the team registry (~/.config/team/teams.yaml)');
     expect(code).toBe(1);
     rmSync(base, { recursive: true, force: true });
