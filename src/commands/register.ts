@@ -18,7 +18,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
-import { callerLabel, describeCaller, detachedRefusal, mayLaunchSeats, sessionOwnerRefusal, walkCaller, type Caller } from '../caller.ts';
+import { callerLabel, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -31,7 +31,7 @@ import { reportedLiveAgent } from '../launch/agent.ts';
 import { launchedIdentity } from '../launch/identity.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
-import { rosterOf } from '../permissions/who.ts';
+import { gateVerdict, rosterOf } from '../permissions/who.ts';
 import { profileFor } from '../profiles/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { registerLaunch } from '../registry/sync.ts';
@@ -144,9 +144,10 @@ function grantFlagRefused(out: Io): number {
   return 1;
 }
 
-/** The caller gate's sentence: who may run it, and what this call is. */
+/** The caller gate's sentence: who may run it, and what this call is. The rule is the map's
+ *  `register` row (`owner-or-own-team`): the owner, or a seat the team's own record lists. */
 function notOwnerLine(caller: Caller): string {
-  return `only the owner, a delegate this file names for \`up\`, or the seat a grant names for it registers a running seat; this call is ${plainLine(describeCaller(caller))}`;
+  return `only the owner or a seat of this team registers a running seat; this call is ${plainLine(describeCaller(caller))}`;
 }
 
 function notOwnerRefused(out: Io, caller: Caller, dry = false, unblock?: string): number {
@@ -326,13 +327,14 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
   if (detached !== undefined && !createGranted) return detachedExit(out, detached);
 
-  // The gate, `up`'s own: the owner, a delegate this file names for `up` — the act that
-  // would have written this record in the first place — the seat the file's `grant` names for
-  // `up`, or the create-granted runner. The run launches nothing, so no launch is granted; but
-  // the record is what lets `team send` type into the pane, so it is the owner's authority,
-  // judged by the same gate and in the same order: the ordinary rule first, the delegate gate
-  // only where it refused and the file has a delegates section to read, and the grant only
-  // where no delegate took the run and the file has a `grant` at all.
+  // The gate, `up`'s own: the map's `register` row (`owner-or-own-team` — the owner, or a seat
+  // this team's record lists), a delegate this file names for `up` — the act that would have
+  // written this record in the first place — the seat the file's `grant` names for `up`, or the
+  // create-granted runner. The run launches nothing, so no launch is granted; but the record is
+  // what lets `team send` type into the pane, so it is the owner's authority, judged by the
+  // same gate and in the same order: the ordinary rule first, the delegate gate only where it
+  // refused and the file has a delegates section to read, and the grant only where no delegate
+  // took the run and the file has a `grant` at all.
   const verdict =
     mayLaunchSeats(walked) || detached !== undefined || !team.delegates
       ? null
@@ -354,7 +356,26 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       ? (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home })
       : null;
   const grantedSeat = grantSaid?.kind === 'passed' ? grantSaid.grant.seat : null;
-  const named = mayLaunchSeats(walked) || delegated !== null || createGranted || grantedSeat !== null;
+  // The caller rule is the map's row (`owner-or-own-team`): the owner, or a seat this team's
+  // record lists — the registry's roster line, or the file's own declaration where the registry
+  // holds no record of the team. The decision is made where the caller stands, by the same
+  // search `up` and `down` make, and the pane proof stays the standing's. A file's `grant` is
+  // the orchestrator's own authority and, where the map has admitted it, its constraint: a
+  // verified grant outside its scope refuses the orchestrator's run. A file no approval covers
+  // grants nothing, not even a constraint, so its refusal does not stop the map's admission.
+  const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, sources.home, 'register', at, sources.now);
+  const judged = mayLaunchSeats(walked) || detached !== undefined ? null : judgeCallerIn(io, dir, team, verdictOf);
+  const rule = judged !== null ? verdictOf(judged.caller, standingOf(dir, judged.session, judged.caller)) : null;
+  const caller = judged?.caller ?? walked;
+  const ordinaryAdmitted = mayLaunchSeats(walked) || rule?.kind === 'ok';
+  const grantBlocked =
+    ordinaryAdmitted &&
+    grantSaid?.kind === 'refused' &&
+    grantSaid.id !== 'grant.approval' &&
+    caller.kind === 'seat' &&
+    caller.name === team.orchestrator;
+  const named = (ordinaryAdmitted && !grantBlocked) || delegated !== null || createGranted || grantedSeat !== null;
   // `--session` picks the herdr session the pane is verified in: where the record it writes will
   // point `send`, `watch` and `down`. It is the owner's: a granted seat is refused in the grant's
   // own words, and everyone else — a delegate that aimed it included — before the named session
@@ -371,9 +392,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // The caller gate, the one dev mode lifts; a dry run keeps it as the refusal it is, with
     // the owner's own command beside it. The grant's and the delegate's own refusals stay
     // refusals either way, as they do for `up`.
-    const line = notOwnerLine(walked);
+    const line = notOwnerLine(caller);
     if (dev) warning.push(line);
-    else return notOwnerRefused(out, walked, dry, unblock(args.values));
+    else return notOwnerRefused(out, caller, dry, unblock(args.values));
   }
   if (warning.length > 0) {
     const line = [...new Set(warning)].join('; ');

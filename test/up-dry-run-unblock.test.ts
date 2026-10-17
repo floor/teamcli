@@ -243,7 +243,7 @@ describe("up's dry run: the refusal, the owner's command, the plan", () => {
     expect(code).toBe(1);
     expect(io.err).toBe('');
     expect(io.out).toContain(
-      '! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs in a herdr pane without an agent)\n',
+      '! up would refuse: only the owner or `leads` starts the team; this call is pilot\n',
     );
     // The one spelling: the refusal is printed once, and the plan follows it.
     expect(io.out.split('! up would refuse:').length - 1, 'refusal printed once').toBe(1);

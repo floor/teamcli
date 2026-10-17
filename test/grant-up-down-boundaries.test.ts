@@ -432,15 +432,22 @@ describe('the scope the approval signed', () => {
     expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
   });
 
-  test('up with no grant section denies a seat', async () => {
+  test('up with no grant section is the lead\'s own run', async () => {
     setup({ grant: false });
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runUp([], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toBe('deny\n');
-    expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
+    // The map's row admits the orchestrator: no grant section means no grant to constrain it,
+    // and the run is the lead's, with no audit line behind it.
+    expect(code, io.err + io.out).toBe(0);
+    expect(trace.workspaces).toEqual([
+      { label: 'lead', cwd: root },
+      { label: 'pilot', cwd: root },
+      { label: 'worker', cwd: lobby },
+    ]);
+    expect(trace.closed).toEqual([]);
+    expect(trace.audits).toEqual([]);
   });
 
   test('down with no grant section stays the seat\'s own run', async () => {

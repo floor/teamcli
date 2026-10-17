@@ -264,7 +264,7 @@ describe('the deny answer on the up page', () => {
     expect(
       page.includes(
         'team up --dry-run --file other.yaml ; echo "exit $?"\n' +
-          '! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it is run by an agent (claude) outside herdr)\n' +
+          '! up would refuse: only the owner or `leads` starts the team; this call is unplaced (it is run by an agent (claude) outside herdr)\n' +
           '! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\nexit 1',
       ),
       'up.md lost the dry-run example',
@@ -286,7 +286,7 @@ describe('the deny answer on the up page', () => {
       expect(io.out, `stdout for [${argv.join(' ')}]`).toBe('');
     }
     const refusal =
-      '! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs in a herdr pane without an agent)\n';
+      '! up would refuse: only the owner or `leads` starts the team; this call is pilot\n';
     const unblock = '! to unblock: the owner runs `team up';
     for (const argv of [['--dry-run'], ['--dry-run', '--file', 'other.yaml']]) {
       const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);

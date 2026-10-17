@@ -266,7 +266,7 @@ describe('the project lead changes nothing outside its own team', () => {
     const io = leadIo(bravoRoot);
     const code = await runUp(['--dry-run'], io, upSources());
     expect(code).toBe(1);
-    expect(io.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is lead\n');
+    expect(io.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is lead\n');
   });
 
   test('down refuses the project lead on another team of its project', async () => {

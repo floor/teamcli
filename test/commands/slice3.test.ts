@@ -700,7 +700,7 @@ describe('team up', () => {
     });
     expect(run.code).toBe(1);
     expect(run.err).toBe('');
-    expect(run.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is deepseek-acme\n');
+    expect(run.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is deepseek-acme\n');
     expect(run.out).toContain('! to unblock: the owner runs `team up --file .agents/team.yaml` from this folder, at a terminal outside herdr\n');
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });

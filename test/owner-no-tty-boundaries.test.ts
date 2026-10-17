@@ -606,7 +606,7 @@ describe('the one sentence is the no-terminal placement\'s alone', () => {
     const code = await runUp(['--dry-run'], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW });
     expect(code).toBe(1);
     expect(io.err).toBe('');
-    expect(io.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
+    expect(io.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
     expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
     expect(io.out).toEndWith('dry run: nothing was run\n');
     expect(io.out + io.err).not.toContain(DETACHED_REFUSAL);
@@ -617,7 +617,7 @@ describe('the one sentence is the no-terminal placement\'s alone', () => {
     const code = await runUp(['--dry-run'], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW });
     expect(code).toBe(1);
     expect(io.err).toBe('');
-    expect(io.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
+    expect(io.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
     expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
     expect(io.out).toEndWith('dry run: nothing was run\n');
     expect(io.out + io.err).not.toContain(DETACHED_REFUSAL);
