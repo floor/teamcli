@@ -950,9 +950,12 @@ describe('team send: native drop', () => {
     expect(pane.enters).toBe(1);
     expect(pane.typed.length).toBe(1);
     const drops = join(dir, 'send-drops', 'acme', 'native');
-    const name = readdirSync(drops)[0] as string;
+    const names = readdirSync(drops);
+    const name = names.filter((entry) => !entry.endsWith('.pending'))[0] as string;
     expect(io.err).toContain(join(drops, name));
     expect(readFileSync(join(drops, name), 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    // A not-submitted drop is marked pending so a running watch retries it.
+    expect(names.filter((entry) => entry.endsWith('.pending'))).toHaveLength(1);
   });
 
   test('a codex seat already at done is not delivered until the status changes', async () => {
@@ -1122,10 +1125,12 @@ describe('team send: native drop', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toContain('not reached');
-    expect(io.err).toContain('the screen reads question');
+    expect(io.err).toContain('unreachable now (the screen reads question); a running watch retries it when the seat is idle');
     const leadDrops = join(dir, 'send-drops', 'acme', 'lead');
-    expect(io.err).toContain(join(leadDrops, readdirSync(leadDrops)[0] as string));
+    const leadFiles = readdirSync(leadDrops);
+    // The drop and the record beside it: the watch reads the record, the seat reads the drop.
+    expect(leadFiles.filter((name) => name.endsWith('.pending'))).toHaveLength(1);
+    expect(io.err).toContain(join(leadDrops, leadFiles.filter((name) => !name.endsWith('.pending'))[0] as string));
     expect(asked.enters).toBe(0);
     expect(asked.typed).toEqual([]);
     expect(lead.frames).toEqual([]);
@@ -1138,8 +1143,7 @@ describe('team send: native drop', () => {
     });
     const again = owner(root);
     expect(await runSend(['native', 'hello'], again, host)).toBe(1);
-    expect(again.err).toContain('not reached');
-    expect(again.err).toContain('the screen reads permission');
+    expect(again.err).toContain('unreachable now (the screen reads permission); a running watch retries it when the seat is idle');
     expect(held.enters).toBe(0);
     expect(held.typed).toEqual([]);
   });

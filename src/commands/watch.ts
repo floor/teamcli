@@ -28,6 +28,7 @@ import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
 import { labelSweep } from '../watch/label-tick.ts';
 import { newMemory, ownUnsent, pass, type MailboxWaiting } from '../watch/pass.ts';
+import { retryHeldDrops } from '../watch/retry.ts';
 import { readScreen } from '../watch/screen.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
 import { readEnd, type EndView } from '../watch/end.ts';
@@ -604,6 +605,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             cli: result.ring.cli,
             ring: { to: result.ring.to },
           }, team, session, sources, memory, say, tell, told);
+        }
+        // A send held while a pane was busy leaves its drop and a record beside it: the pass
+        // delivers one per seat once the box is free, bounded, and says the drop's path when it
+        // gives up. `--no-nudge` is the watch that types nothing, and this types too.
+        if (!foreign && !args.flags.has('no-nudge')) {
+          await retryHeldDrops({
+            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+          });
         }
         if (result.fallback) tell(result.fallback, true);
         if (result.mailboxNote) tell(result.mailboxNote, true);

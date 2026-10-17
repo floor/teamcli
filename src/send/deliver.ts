@@ -157,6 +157,14 @@ function boxOf(seen: Look, line: string): string | undefined {
   return undefined;
 }
 
+/** What a caller knows about the box its line is going into. */
+export type DeliverOptions = {
+  /** A box already holding exactly this line is the caller's own: a record says a send typed the
+   *  trigger and left it unsent (a `not-submitted` send). That line gets the Enter and is never
+   *  typed over. Without the record the line is someone else's, and the outcome is `held`. */
+  submitHeld?: boolean;
+};
+
 /**
  * Types `line` into the pane's box and presses Enter until the seat is seen to take it.
  *
@@ -168,30 +176,42 @@ function boxOf(seen: Look, line: string): string | undefined {
  * most `MAX_TRIES` Enters, each waiting longer than the last (`BACKOFF_MS`). Evidence has to come
  * from this line: a status that moved after Enter (never the one a seat already had), or the drop
  * in the transcript. A box that cannot be read keeps the first Enter and is judged by the status
- * alone, and never gets a second.
+ * alone, and never gets a second. A `submitHeld` caller's own unsent trigger, found in the box, is
+ * submitted and never typed over.
  */
-export async function deliverTrigger(host: DeliverHost, pane: string, line: string, profile: string): Promise<DeliverResult> {
+export async function deliverTrigger(
+  host: DeliverHost, pane: string, line: string, profile: string, options: DeliverOptions = {},
+): Promise<DeliverResult> {
   const before = host.status(pane);
   if (before === null) return { outcome: 'unreachable', tries: 0, reason: "the seat's status could not be read" };
 
   const start = look(host, pane, line, profile);
   if (start.state === 'dialog') return dialogStop(start.kind, 0);
-  if (start.state === 'trigger' || start.state === 'other') {
-    const text = start.state === 'other' ? start.text : line;
-    return { outcome: 'held', box: text, tries: 0, reason: 'the composer already holds unsent text' };
+  if (start.state === 'other') {
+    return { outcome: 'held', box: start.text, tries: 0, reason: 'the composer already holds unsent text' };
+  }
+  if (start.state === 'trigger' && options.submitHeld !== true) {
+    return { outcome: 'held', box: line, tries: 0, reason: 'the composer already holds unsent text' };
   }
 
-  if (!host.typeText(pane, line)) return { outcome: 'unreachable', tries: 0, reason: 'the pane did not take the trigger' };
-  await host.wait(SETTLE_MS);
+  let seen: Look;
+  if (start.state === 'trigger') {
+    // The line is already in the box and a record says it is this delivery's own unsent trigger:
+    // the Enter below submits it, and nothing is typed over it.
+    seen = start;
+  } else {
+    if (!host.typeText(pane, line)) return { outcome: 'unreachable', tries: 0, reason: 'the pane did not take the trigger' };
+    await host.wait(SETTLE_MS);
 
-  const typed = look(host, pane, line, profile);
-  if (typed.state === 'dialog') return dialogStop(typed.kind, 0);
-  if (typed.state === 'other') {
-    return { outcome: 'held', box: typed.text, tries: 0, reason: 'the composer read-back did not match the trigger' };
+    const typed = look(host, pane, line, profile);
+    if (typed.state === 'dialog') return dialogStop(typed.kind, 0);
+    if (typed.state === 'other') {
+      return { outcome: 'held', box: typed.text, tries: 0, reason: 'the composer read-back did not match the trigger' };
+    }
+    seen = typed;
   }
 
   let tries = 0;
-  let seen: Look = typed;
   for (let round = 0; round < MAX_TRIES; round++) {
     // The first Enter goes, read or not. Later ones go only where a fresh read shows the box still
     // holds exactly the trigger; an empty or unreadable box waits another window, and gets no key.

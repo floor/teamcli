@@ -34,6 +34,7 @@ import {
 } from '../src/send/daemon.ts';
 import { readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
+import { readPending } from '../src/send/pending.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { filed } from './send-native-fixtures.ts';
@@ -598,8 +599,15 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const io = ownerIo(w.root);
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     expect(io.err).toContain('held: the screen reads question');
+    // The daemon's drop folder is not the one a watch scans, so its line promises no retry.
+    expect(io.err).not.toContain('a running watch retries it');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
+
+    // The drop is on disk in the daemon's own folder, with no pending record beside it.
+    const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'lead');
+    expect(readPending(drops)).toHaveLength(0);
+    expect(readdirSync(drops).filter((name) => !name.endsWith('.pending'))).toHaveLength(1);
   });
 
   test('single-Enter discipline: does not press a second Enter when screen is unknown and trigger is not in box', async () => {

@@ -29,6 +29,7 @@ import {
 } from '../src/send/daemon.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
+import { readPending } from '../src/send/pending.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { filed } from './send-native-fixtures.ts';
 import { testIo } from './helpers.ts';
@@ -220,8 +221,18 @@ describe('the send daemon\'s boundaries', () => {
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'blocked by a dialog mid-delivery'], io, host)).toBe(1);
     expect(io.err).toContain('held: the screen reads question');
+    // The daemon's drop folder is not the one a watch scans: its line promises no retry.
+    expect(io.err).not.toContain('a running watch retries it');
     expect(host.typed.length).toBe(1);
     expect(host.enters).toEqual([]);
+
+    // Held by the dialog: the drop is on disk in the daemon's own folder, and no pending
+    // record sits beside it.
+    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'lead');
+    expect(readPending(drops)).toHaveLength(0);
+    const files = readdirSync(drops).filter((name) => !name.endsWith('.pending'));
+    expect(files).toHaveLength(1);
+    expect(readFileSync(join(drops, files[0]!), 'utf8')).toBe(filed('blocked by a dialog mid-delivery'));
 
     const history = readHistory('acme', world.root, world.home);
     expect(history.ok && history.entries.map((entry) => entry.outcome)).toEqual(['held']);
@@ -250,9 +261,11 @@ describe('the send daemon\'s boundaries', () => {
     expect(host.typed.length).toBe(1);
     expect(host.enters).toEqual([]);
     const directDrops = join(world.dir, 'send-drops', 'acme', 'lead');
-    const directFiles = readdirSync(directDrops);
+    // The drop, and the retry record a held send leaves beside it.
+    const directFiles = readdirSync(directDrops).filter((name) => !name.endsWith('.pending'));
     expect(directFiles.length).toBe(1);
     expect(readFileSync(join(directDrops, directFiles[0]!), 'utf8')).toBe(filed(longBrief));
+    expect(readdirSync(directDrops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
 
     // 2. Direct send when composer shows a paste chip instead of the trigger
     typedOnce = false;

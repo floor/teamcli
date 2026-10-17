@@ -883,6 +883,9 @@ async function executeQueuedSend(
     };
   }
   const stateDropDir = dropLadder.leaf;
+  // This is the store's drop folder, not the project's `.agents/send-drops/<session>/<seat>`
+  // that a running watch scans, so no pending record is written beside it and these lines
+  // promise no retry. When the daemon is wired in, write the record where the watch reads.
   const candidateDropPath = join(stateDropDir, msgId);
   const trigger = triggerLine(candidateDropPath);
   if (trigger === null) {
@@ -925,6 +928,8 @@ async function executeQueuedSend(
     // The path is named only once the trigger had been typed, never for a refusal before it.
     if (via !== undefined) entry.via = via;
     appendHistory(team.project, root, host.home, entry);
+    // No pending record: the store's drop folder is not where a watch reads, so the line says
+    // what happened and promises no retry.
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail, drop_path: dropPath };
   };
 
@@ -1028,6 +1033,8 @@ async function executeQueuedSend(
         via: 'typed',
         failed: request.failed,
       });
+      // The trigger was typed and not taken: the drop is still the message, but nothing in
+      // this folder is what a watch scans, so the line promises no retry.
       return {
         v: 1,
         ok: false,

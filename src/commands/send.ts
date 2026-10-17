@@ -27,6 +27,7 @@ import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendRespon
 import { deliveryChainOf } from '../send/delivery.ts';
 import { bindPane, deliverTrigger, showsHeldFrameDialog, type DeliverResult } from '../send/deliver.ts';
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { markPending } from '../send/pending.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
@@ -827,6 +828,8 @@ function finishDaemonSend(
   if (res.outcome === 'unreachable') return unreachable(io, dir, who, seatName, res.detail, host, report);
   if (res.outcome === 'not-submitted') {
     const result: DeliverResult = { outcome: 'not-submitted', tries: res.tries, ...(res.box === null ? {} : { box: res.box }) };
+    // The daemon keeps no pending record in the folder a watch scans, so this line promises no
+    // retry: it names the drop and stops there.
     return notSubmitted(io, dir, who, seatName, result, `the drop file is at ${res.drop_path}`, host, report);
   }
   return refuse(io, dir, who, res.detail, host, report);
@@ -1024,18 +1027,29 @@ async function deliverNative(
     }
     const result = await deliverTrigger(bindPane(host.native, session), pane, trigger, cli);
     const where = `the drop file is at ${path}`;
+    // A held drop gets a record beside it, for the watch to deliver once the seat is free. The
+    // line names that retry, so a sender does not have to guess whether the drop still travels.
+    const retry = 'a running watch retries it when the seat is idle';
     const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId };
     if (result.outcome === 'held') {
       appendHistory(project, root, host.home, { ...entry, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
-      return held(io, dir, who, seatName, `${result.reason ?? 'the composer holds text'}; ${where}`, host, report);
+      markPending(dropDir, entry);
+      return held(io, dir, who, seatName, `${result.reason ?? 'the composer holds text'}; ${where}; ${retry}`, host, report);
     }
     if (result.outcome === 'unreachable') {
       appendHistory(project, root, host.home, { ...entry, outcome: 'unreachable', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
+      // A dialog is not a missing channel: the drop is on disk and the seat will be free once the
+      // prompt is answered, so the watch gets the same record a held send leaves.
+      if (result.dialog !== undefined) {
+        markPending(dropDir, entry);
+        return unreachable(io, dir, who, seatName, `${retry}; ${where}`, host, report, result.dialog);
+      }
       return unreachable(io, dir, who, seatName, `${result.reason ?? 'the seat was not reached'}; ${where}`, host, report);
     }
     if (result.outcome === 'not-submitted') {
       appendHistory(project, root, host.home, { ...entry, outcome: 'not-submitted', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
-      return notSubmitted(io, dir, who, seatName, result, where, host, report);
+      markPending(dropDir, entry);
+      return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}`, host, report);
     }
     logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
     appendHistory(project, root, host.home, { ...entry, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
@@ -1718,9 +1732,21 @@ function refuse(io: Io, dir: string | null, who: string, reason: string, host: S
   return 1; // exit: send.refused
 }
 
-/** The seat's channel was not open, and nothing was sent. Exit 1, always. */
-function unreachable(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
-  const message = `${seat}: unreachable: ${reason}`;
+/** The seat's channel was not open, and nothing was sent. A dialog is the one unreachable the
+ *  watch can still deliver: the drop's record says so, and the line says when. Exit 1, always. */
+function unreachable(
+  io: Io,
+  dir: string,
+  who: string,
+  seat: string,
+  reason: string,
+  host: SendHost,
+  report: Report,
+  /** The dialog in the way, when the send was stopped by one rather than by a missing channel. */
+  dialog?: string,
+): number {
+  const words = dialog === undefined ? `unreachable: ${reason}` : `unreachable now (the screen reads ${dialog}); ${reason}`;
+  const message = `${seat}: ${words}`;
   logLine(dir, 'send', who, message, host.now());
   if (report.json) writeJsonError(io, 'send.unreachable', message);
   else io.stderr(`team send: ${message}\n`);
