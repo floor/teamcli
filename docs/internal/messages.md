@@ -42,6 +42,17 @@ not verify leaves the message waiting.
 The second run, once every waiting record has a receipt, prints the zero-message reading: the
 table's headers and no rows, `note: nothing is waiting`, and `0 message(s)`.
 
+Under `--json` the reading is one `team.messages` v1 document on stdout, its `schema` tag first:
+`format`, `project`, `session`, every row as `{ id, from, to, sent, sent_display, status, body? }`
+— `sent` the exact ISO string `SENT` renders as an age, `body` only on a row that verified — then
+`notes`, `differences` (each `{ what, repair, who }`), `summary` (the `differences` and
+`owner_differences` counts every reading envelope carries) and `counts` (`messages`, `shown`,
+`refused`, the table's own closing figures). An empty mailbox's document carries no rows, the note
+`nothing is waiting`, and three zero counts. An invocation, checkout, team-file or key refusal
+under `--json` writes a `team.error` v1 document on stdout instead — `messages.invocation`,
+`messages.not-a-repo`, `messages.file` or `messages.key`, its `message` and a null `repair` — and
+stderr stays empty. The exit code is the same as without `--json`.
+
 `team init` lists `.agents/messages/` in `.git/info/exclude`, the same way it lists the team file.
 
 ## Who may run it
