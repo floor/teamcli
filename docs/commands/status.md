@@ -98,9 +98,12 @@ are padded on the cleaned text, so a value can never move the cursor, paint the 
 second line. `--json` is the one text not cleaned: the document carries each string as it was read,
 escaped where JSON requires it, for a parser rather than a terminal.
 
-Every row of the seats table ends with the word a send would use to reach that seat: `socket` while
-the file declares the seat `cli: claude-code` and the pane's own processes carry a live session
-socket, and `typed` otherwise — another CLI, a pane that is gone, one herdr could not read. The word
+Every row of the seats table ends with the word for the channel a send would take to reach that
+seat: `socket` while the file declares the seat `cli: claude-code` and the pane's own processes
+carry a live session socket, and `typed` otherwise — another CLI, a pane that is gone, one herdr
+could not read. A plain send is typed for every seat, Claude Code's included: the body travels
+whole in a mode-0600 drop file and one short trigger line is typed into the pane. The socket is the
+channel `--wait` takes, and `--wait` is refused for any seat but a Claude Code one. The word
 is read from the processes the comparison already holds, so no extra herdr call is made; only the
 socket file itself is looked up on disk. `--json` rows keep the shape they published: the document
 carries no such word.

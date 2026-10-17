@@ -59,10 +59,12 @@ not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim
       claude-keeper  missing  Claude Opus 5.5  -     typed
       claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 
-The columns are the seat, its state, the model, the pane, and the word a send would use to reach
-the seat: `socket` when the file declares it `cli: claude-code` and the pane's own processes carry a
-live session socket, `typed` otherwise — another CLI, a pane that is gone, one herdr could not
-read. The word is read from the processes the comparison already holds, so no extra herdr call is
+The columns are the seat, its state, the model, the pane, and the word for the channel a send would
+take to reach the seat: `socket` when the file declares it `cli: claude-code` and the pane's own
+processes carry a live session socket, `typed` otherwise — another CLI, a pane that is gone, one
+herdr could not read. A plain send is typed for every seat, Claude Code's included; the socket is
+the channel `--wait` takes, and `--wait` is refused for any seat but a Claude Code one. The word is
+read from the processes the comparison already holds, so no extra herdr call is
 made. The state is what herdr says (`idle`, `working`, `blocked`…), with `, parked` added for a seat
 the file parks and `, temporary`
 for a temporary one; or `<state> (unsent text)` when an idle or done seat — the two states `team`
