@@ -127,7 +127,7 @@ describe('workspacePanes', () => {
     expect(workspacePanes('w1')).toBeNull();
   });
 
-  test('ownWatchPane finds the watch workspace pane from captured herdr 0.7.1 responses', async () => {
+  test('ownWatchPane finds the watchdog pane from captured herdr 0.7.1 responses', async () => {
     const { ownWatchPane } = await import('../src/watch/pane.ts');
     const watchPane = ['w9', 'p1'].join(':');
     const watchWorkspace = {
@@ -136,7 +136,7 @@ describe('workspacePanes', () => {
       cwd: '/private/tmp',
       focused: true,
       Focused: true,
-      label: 'Watch · acme',
+      label: 'watchdog',
       pane_count: 1,
       tab_count: 1,
       workspace_id: 'w9',

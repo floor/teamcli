@@ -31,7 +31,6 @@ import { logLine } from '../log.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
-import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import type { Launch } from './up.ts';
 
@@ -224,7 +223,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       seats: [planned],
       sessionRunning: true,
       startWatch: false,
-      watchLabel: watchLabel(team.project),
     });
     const launch = sources.launch;
     const now = sources.now ?? (() => new Date());

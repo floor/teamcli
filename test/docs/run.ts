@@ -131,14 +131,7 @@ async function setup(page: Page): Promise<void> {
   if (page.spec.watch === 'alive' || page.spec.watch === 'stale') {
     const interval = page.team?.watch.interval ?? 120;
     const ago = page.spec.watch === 'stale' ? 3 * interval : 0;
-    // A watch `up` started runs in its own workspace, and its pass records that pane; a page's
-    // seeded watch is that shape, so `team status` reads the pane it runs in.
-    session.watch = {
-      pid: WATCH_PID,
-      heartbeat: new Date(Date.parse(page.spec.now) - ago * 1000).toISOString(),
-      pane: 'w9:p1',
-      workspace: 'w9',
-    };
+    session.watch = { pid: WATCH_PID, heartbeat: new Date(Date.parse(page.spec.now) - ago * 1000).toISOString() };
   }
   for (const [key, value] of Object.entries(page.spec.state)) {
     const current = (session[key] ?? {}) as Record<string, unknown>;
@@ -475,9 +468,6 @@ async function consoleBlock(page: Page, block: Block, failures: Failure[]): Prom
         failures.push({ page: page.name, line: step.line, message: (error as Error).message });
         continue;
       }
-      // The next `$ ` line is typed after the watch a run just started has reached its first
-      // pass, so the record it reads holds that pass's pid, as a reader's own would.
-      (page.world as World).settle();
       if (step.showsExit) parts.push(`exit ${code}\n`);
       const produced = normalize(parts.join(''), page);
       const expected = normalize(step.expected, page);

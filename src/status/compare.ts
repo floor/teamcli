@@ -10,7 +10,6 @@ import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
 import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
 import type { SeatState, SessionState } from '../state.ts';
-import { watchLabel } from '../watch/pane.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
 
@@ -63,6 +62,8 @@ export type Difference = {
 };
 
 export type Comparison = { rows: Row[]; differences: Difference[]; notes: string[] };
+
+export const WATCH_LABEL = 'watchdog';
 
 /** The one row a seat shows while it waits, ahead of the ordinary launch-stopped and unnamed rows. */
 function waitingView(
@@ -460,7 +461,7 @@ export function compare(
   }
 
   for (const agent of live.agents) {
-    if (claimed.has(agent.pane) || labels.get(agent.workspace) === watchLabel(team.project)) continue;
+    if (claimed.has(agent.pane) || labels.get(agent.workspace) === WATCH_LABEL) continue;
     differences.push({
       what: `${agent.name ?? `an unnamed ${agent.agent ?? 'agent'}`} (${agent.pane}) is running and is not in the file`,
       repair: 'add the seat to the file, or close it',
@@ -471,20 +472,6 @@ export function compare(
     if (worktree.setup === 'failed') {
       differences.push({ what: `worktree ${task}: its setup failed`, repair: `team worktree remove ${task}`, needs: 'approve' });
     }
-  }
-
-  // The watch the state records, as one line: where it runs, whose process it is once a pass has
-  // recorded one, and how old its last heartbeat is. The difference below says when that is too
-  // old; this note is what stands either way.
-  if (state.watch) {
-    const beat = Date.parse(state.watch.heartbeat);
-    const seconds = Number.isFinite(beat) ? Math.max(0, Math.round((now.getTime() - beat) / 1000)) : null;
-    const age = seconds === null
-      ? 'never recorded'
-      : seconds < 120 ? `${seconds}s ago` : `${Math.round(seconds / 60)} min ago`;
-    const where = state.watch.pane ? `pane ${state.watch.pane}` : 'pane not recorded';
-    const whose = state.watch.pid !== undefined ? `pid ${state.watch.pid}` : 'pid not recorded yet';
-    notes.push(`watch: ${where}, ${whose}, last heartbeat ${age}`);
   }
 
   if (live.running && anyRunning) {

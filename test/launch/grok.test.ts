@@ -233,7 +233,6 @@ describe('the plan launches grok with its rules on the line', () => {
       session: 'scratch',
       sessionRunning: true,
       watchAlive: true,
-      watchLabel: 'Watch · scratch',
       seats: [{
         name: 'grok',
         cli: 'grok',

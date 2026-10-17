@@ -15,7 +15,6 @@ import { usesLauncher } from '../src/launch/line.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
 import { testIo } from './helpers.ts';
 
@@ -254,7 +253,7 @@ describe('status names the whole-team restart for a lead outside its launcher', 
         ],
         workspaces: [
           { id: 'w1', label: 'claude opus 5.5' }, { id: 'w2', label: 'gpt sol 6' },
-          { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: watchLabel('acme-web') },
+          { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: 'watchdog' },
         ],
         screens: { 'w1:p1': claudeScreen('Opus 5.5') },
         processes: { 'w1:p1': { shell: 500, foreground: [501] } },

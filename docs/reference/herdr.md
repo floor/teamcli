@@ -139,7 +139,7 @@ Text can also be typed without being run:
 where a key must be pressed and the text is not a shell command — the launch, `down` and `remove`
 for a seat's exit and for a box that holds text an earlier run left, the watch's nudge, and
 `team answer <seat> trust`, which presses the one recorded key and nothing else. `pane run` is the
-other extreme: a whole command, sent. It is what starts a seat and the watch alike. A seat's
+other extreme: a whole command, sent. It is what starts a seat and the watchdog alike. A seat's
 exit is not one: a plan prints that step as a `pane run` line, but the live move types the exit
 into the seat's idle prompt and reads the screen again before the key — `/exit` has to reach the
 prompt, not the line the screen held before (`src/launch/plan.ts`).
@@ -201,14 +201,14 @@ The launch below is `up`, `add` and the seat-launching module behind them.
 | `session list` | `team list`, `doctor`, and every command that asks whether the session runs | the machine's sessions, and whether this one runs |
 | `session stop` | `down`, once its seats are stopped | to stop the session |
 | `session delete` | `down` (the session it has just stopped), `up` (a stopped one this state records) | to clear it |
-| `workspace create --cwd --label --no-focus` | the launch | one workspace per seat, started in the seat's folder; `up` makes the watch's too |
+| `workspace create --cwd --label --no-focus` | the launch | one workspace per seat, started in the seat's folder; `up` makes the watchdog's too |
 | `workspace rename` | the launch (a seat already ready), the watch | the seat's label, and the label a file edit moved |
 | `workspace close` | the launch, on `down`'s, `remove`'s, `up`'s and `add`'s behalf | a workspace a run is finished with |
 | `workspace list`, `pane list --workspace` | `doctor`, `status`, `check`, the launch, the watch | the session's workspaces, and the panes in one |
 | `pane process-info` | the caller gate, and the seat checks behind the launch, `down`, `remove`, `answer`, `status`, `check`, `send`, the watch | the pane's shell and foreground processes: the seat `team` launched, or not |
 | `pane get` | `down`, `remove`, `answer` | the folder a pane's foreground program works in, matched against the line the shell's prompt prints |
 | `pane read --source visible` | the launch's idle wait, the watch, `doctor`, `status`, `check`, `down`, `answer`, `send` | the screen: an idle prompt, a dialog, a seat's exit question |
-| `pane run` | the launch (a seat's launch line, and the watch's own line) | a whole command, typed and sent |
+| `pane run` | the launch (a seat's launch line, and the watchdog's own line) | a whole command, typed and sent |
 | `pane send-text`, `pane send-keys` | the launch, `down`, `remove`, the watch, `answer`, `send` | one key, or text with no Enter of its own |
 | `pane report-metadata --source team --display-agent` | the launch, the watch | the seat's display line |
 | `agent list` | the caller gate, the launch, `down`, `status`, `check`, `doctor`, `answer`, `send`, `team list`, the watch | which panes report an agent, and each one's status |

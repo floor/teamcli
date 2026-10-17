@@ -10,7 +10,6 @@ import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { setHerdrRun, type HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { watchLabel } from '../../src/watch/pane.ts';
 import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8');
@@ -97,7 +96,7 @@ describe('doctor names a watch whose pane is gone', () => {
     const whileAlive = testIo(root, { kind: 'owner' });
     const heldCode = await runUp(FILE, whileAlive, upSources(held, () => true));
     expect({ code: heldCode, err: whileAlive.err, out: whileAlive.out }).toMatchObject({ code: 0 });
-    expect(held.creates).not.toContain(watchLabel('acme-web'));
+    expect(held.creates).not.toContain('watchdog');
 
     const stopped = sleeper;
     const exited = new Promise((resolve) => stopped?.once('exit', resolve));
@@ -114,7 +113,7 @@ describe('doctor names a watch whose pane is gone', () => {
     const after = testIo(root, { kind: 'owner' });
     const afterCode = await runUp(FILE, after, upSources(repaired, () => false));
     expect({ code: afterCode, err: after.err, out: after.out }).toMatchObject({ code: 0 });
-    expect(repaired.creates).toContain(watchLabel('acme-web'));
+    expect(repaired.creates).not.toContain('watchdog');
     expect(after.err).toContain('watch: started\n');
   });
 });

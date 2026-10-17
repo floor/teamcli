@@ -23,7 +23,6 @@ import { defaultFs, findRepoRoot, lobbyDir, recheckLobby, verifyLobby, type FsRe
 import { shippedStartupReads } from '../../src/profiles/index.ts';
 import { seatStart } from '../../src/worktree/place.ts';
 import { readState, updateState } from '../../src/state.ts';
-import { watchLabel } from '../../src/watch/pane.ts';
 import { approvalStanding, LEGACY_LINE, storePath, writeApproval } from '../../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
 
@@ -3228,7 +3227,7 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
       seatBudget: () => ({ kind: 'refuse', why: 'the account is spent' }),
     });
     expect(existsSync(lobby)).toBe(false);
-    expect(made.workspaces.some((workspace) => workspace.label !== watchLabel('acme'))).toBe(false);
+    expect(made.workspaces.some((workspace) => workspace.label !== 'watchdog')).toBe(false);
     expect(run.out).toContain('the account is spent');
   });
 });
