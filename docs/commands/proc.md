@@ -16,9 +16,9 @@ heavy run at a time. `team proc` names no lock and takes nothing.
 
 ## Synopsis
 
-    team proc add <name> [--pid <pid>] [--note <text>]
+    team proc add <name> [--pid <pid>] [--note <text>] [--json]
     team proc list [--json]
-    team proc done <name>
+    team proc done <name> [--json]
 
 ## What it reads and writes
 
@@ -56,7 +56,7 @@ is not yours to read.
 | `<name>` | the record's name: lowercase letters, digits and hyphens, at most 64 characters |
 | `--pid <pid>` | the process to watch: a whole number above zero, naming a process that is running |
 | `--note <text>` | one line about what the process is; a line break in it is folded to a space |
-| `--json` | `list` prints the records as a document instead of rows; `add` and `done` refuse it |
+| `--json` | `list` prints the records as a document instead of the table; `add` and `done` print their action envelope |
 | `--help`, `-h` | the usage, and exit 0 |
 
 ## Refusals
@@ -70,7 +70,6 @@ is not yours to read.
 | `team proc: --pid is a whole number above zero, the process to watch` (with the usage) | 2 |
 | `team proc: --pid needs a value` (with the usage) | 2 |
 | `team proc: unknown option --<name>` (with the usage) | 2 |
-| `team proc: add takes no --json`, and the same for `done` (with the usage) | 2 |
 | `team proc: list takes no --pid or --note` (with the usage) | 2 |
 | `team proc: only the owner runs this, from a terminal outside herdr` | 1 |
 | `team proc: only a seat of this team or the owner records a process; this call is <caller>` | 1 |
@@ -137,18 +136,23 @@ stands for a process of your own here, and it must be running (`--pid 4244` woul
 
 ```console
 $ team proc add release-watch --note "the release CI run"
+team beacon, session "beacon"
 proc release-watch: added
 ```
 
 ```console caller=claude-desk
 $ team proc add release-build --pid 4243 --note "the release build"
+team beacon, session "beacon"
 proc release-build: added
 ```
 
 ```console
 $ team proc list
-release-build  claude-desk  since 2026-10-04T09:00:00.000Z  pid 4243  the release build
-release-watch  owner  since 2026-10-04T09:00:00.000Z  the release CI run
+team beacon, session "beacon"
+  NAME           BY           SINCE                     PID   NOTE
+  release-build  claude-desk  2026-10-04T09:00:00.000Z  4243  the release build
+  release-watch  owner        2026-10-04T09:00:00.000Z  -     the release CI run
+2 process(es)
 ```
 
 `--json` is the same records as a document, in the order the rows are printed:
@@ -156,22 +160,33 @@ release-watch  owner  since 2026-10-04T09:00:00.000Z  the release CI run
 ```console
 $ team proc list --json
 {
+  "schema": {
+    "name": "team.proc",
+    "version": 1
+  },
   "format": 1,
+  "project": "beacon",
+  "session": "beacon",
+  "notice": null,
   "procs": [
     {
       "name": "release-build",
       "by": "claude-desk",
-      "at": "2026-10-04T09:00:00.000Z",
+      "since": "2026-10-04T09:00:00.000Z",
       "pid": 4243,
       "note": "the release build"
     },
     {
       "name": "release-watch",
       "by": "owner",
-      "at": "2026-10-04T09:00:00.000Z",
+      "since": "2026-10-04T09:00:00.000Z",
+      "pid": null,
       "note": "the release CI run"
     }
-  ]
+  ],
+  "summary": {
+    "processes": 2
+  }
 }
 ```
 
@@ -204,6 +219,7 @@ record is not the caller's to clear:
 
 ```console caller=claude-desk
 $ team proc done release-build
+team beacon, session "beacon"
 proc release-build: done
 $ team proc done release-build ; echo "exit $?"
 team proc: no process named "release-build"
@@ -218,13 +234,18 @@ state is read:
 
 ```console
 $ team proc done release-watch
+team beacon, session "beacon"
 proc release-watch: done
 $ team proc list
-no processes recorded
+team beacon, session "beacon"
+  NAME  BY  SINCE  PID  NOTE
+0 process(es)
 $ team proc add build/step ; echo "exit $?"
 team proc: "build/step" is a name, not a path: lowercase letters, digits and hyphens
-Usage: team proc add <name> [--pid <pid>] [--note <text>]
+Usage: team proc add <name> [--pid <pid>] [--note <text>] [--json]
        team proc list [--json]
-       team proc done <name>
+       team proc done <name> [--json]
+
+Exits 0 when the process is recorded, listed, or cleared, 1 when the operation is refused, 2 when the invocation or team file can't be read.
 exit 2
 ```

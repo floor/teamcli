@@ -311,26 +311,37 @@ describe('the command', () => {
 
   test('exits 0 and prints the summary', async () => {
     const result = await run([`${hash.spaces}..main`]);
-    expect(result).toEqual({ code: 0, stdout: 'team commits check: 2 commits checked: ok\n', stderr: '' });
+    expect(result).toEqual({
+      code: 0,
+      stdout:
+        'COMMIT      STATUS  DETAIL\n' +
+        `${hash.clean2.slice(0, 10)}  ok      feat: clean two\n` +
+        `${hash.clean1.slice(0, 10)}  ok      feat: clean one\n` +
+        'team commits check: 2 commits checked: ok\n',
+      stderr: '',
+    });
   });
 
   test('exits 1 with each offending commit and line', async () => {
+    const REWRITE = '  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)\n';
+    const WHO = '  who: any seat\n';
     const result = await run([`${hash.human}..${hash.link}`]);
     expect(result.code).toBe(1);
     expect(result.stdout).toBe(
-      [
-        `${hash.link.slice(0, 10)} feat: session link`,
-        '  line 3: forbidden pattern https?://claude\\.ai/code/session',
-        '    See https://claude.ai/code/session_01ab',
-        `${hash.session.slice(0, 10)} feat: session line`,
-        '  line 3: forbidden pattern ^Claude-Session:',
-        '    Claude-Session: 1234',
-        `${hash['human-forbidden'].slice(0, 10)} docs: by a human`,
-        '  line 3: forbidden pattern ^Claude-Session:',
-        '    Claude-Session: 1234',
-        'team commits check: 3 commits checked, 1 by a human or a merge: 3 commits refused',
-        '',
-      ].join('\n'),
+      'COMMIT      STATUS   DETAIL\n' +
+        `${hash.link.slice(0, 10)}  refused  feat: session link\n` +
+        `${hash.session.slice(0, 10)}  refused  feat: session line\n` +
+        `${hash['human-forbidden'].slice(0, 10)}  refused  docs: by a human\n` +
+        `difference: commit ${hash.link.slice(0, 10)} "feat: session link", line 3: forbidden pattern https?://claude\\.ai/code/session — "See https://claude.ai/code/session_01ab"\n` +
+        REWRITE +
+        WHO +
+        `difference: commit ${hash.session.slice(0, 10)} "feat: session line", line 3: forbidden pattern ^Claude-Session: — "Claude-Session: 1234"\n` +
+        REWRITE +
+        WHO +
+        `difference: commit ${hash['human-forbidden'].slice(0, 10)} "docs: by a human", line 3: forbidden pattern ^Claude-Session: — "Claude-Session: 1234"\n` +
+        REWRITE +
+        WHO +
+        'team commits check: 3 commits checked, 1 by a human or a merge: 3 commits refused\n',
     );
   });
 
@@ -338,7 +349,7 @@ describe('the command', () => {
     const prose = await run([hash.prose]);
     expect(prose.stdout).toContain('line 4: the signature shares its paragraph with prose ("Refs #3")');
     const missing = await run([hash.unsigned]);
-    expect(missing.stdout).toContain('  no signature: expected "Agent: {display} · {role}" in the final trailer block');
+    expect(missing.stdout).toContain('no signature: expected "Agent: {display} · {role}" in the final trailer block');
   });
 
   test('pr check reads the body from its own file', async () => {
@@ -350,7 +361,7 @@ describe('the command', () => {
     const refused = await runPr(['body.md']);
     expect(refused.code).toBe(1);
     expect(refused.stdout).toContain(
-      'pull request body\n  no signature: expected "**Agent:** {display} · {role}" in the last line',
+      'difference: pull request body: no signature: expected "**Agent:** {display} · {role}" in the last line',
     );
     expect(refused.stdout).toContain('the pull request body refused');
   });
@@ -366,7 +377,9 @@ describe('the command', () => {
   });
 
   test('exits 2 on a usage error', async () => {
-    expect((await run([])).stderr).toStartWith('team commits check: a <ref> is required\n\nUsage: team commits check <ref>');
+    expect((await run([])).stderr).toStartWith(
+      'team commits check: a <ref> is required\nUsage: team commits check <ref> [--since <ref>] [--file <path>] [--json]',
+    );
     expect((await run(['a', 'b'])).code).toBe(2);
     expect((await run(['main', '--force'])).stderr).toStartWith('team commits check: unknown option --force');
     expect((await run(['main', '--since'])).stderr).toStartWith('team commits check: --since needs a value');
@@ -399,8 +412,12 @@ describe('the command', () => {
     const passed = await run([`${hash.old}..main`], 'file');
     expect(passed).toEqual({
       code: 0,
-      stdout: `team commits check: 2 commits checked, 17 skipped (since ${hash.spaces.slice(0, 10)}): ok\n`,
-      stderr: 'team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read\n',
+      stdout:
+        'COMMIT      STATUS  DETAIL\n' +
+        `${hash.clean2.slice(0, 10)}  ok      feat: clean two\n` +
+        `${hash.clean1.slice(0, 10)}  ok      feat: clean one\n` +
+        `team commits check: 2 commits checked, 17 skipped (since ${hash.spaces.slice(0, 10)}): ok\n`,
+      stderr: '',
     });
     expect((await run([hash.unsigned, '--since', hash.old], 'file')).code).toBe(1);
 

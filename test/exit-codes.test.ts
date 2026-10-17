@@ -2259,7 +2259,7 @@ scene('worktree.created', async (place) => {
 });
 scene('worktree.listed', async (place) => {
   approve(place, worktreeText());
-  return show(await worktree(place, ['list']), '0 open, limit');
+  return show(await worktree(place, ['list']), '0 worktree(s)');
 });
 scene('worktree.remove-task', async (place) => {
   approve(place, worktreeText());
@@ -2814,7 +2814,7 @@ scene('proc.done', async (place) => {
 });
 scene('proc.listed', async (place) => {
   write(place, TEAM);
-  return show(await proced(place, ['list']), 'no processes recorded');
+  return show(await proced(place, ['list']), '0 process(es)');
 });
 scene('proc.caller', async (place) => {
   write(place, TEAM);

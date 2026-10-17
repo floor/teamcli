@@ -7,7 +7,7 @@ The commits are a separate run, [`team commits check`](commits.md).
 
 ## Synopsis
 
-    team pr check <file> [--file <path>]
+    team pr check <file> [--file <path>] [--json]
 
 ## Flags
 
@@ -15,6 +15,7 @@ The commits are a separate run, [`team commits check`](commits.md).
 | --- | --- | --- |
 | `<file>` | a path, or `-` | the pull request's body; `-` reads standard input |
 | `--file <path>` | a team file | the team file to read, instead of `.agents/team.yaml` |
+| `--json` | — | the report as the `team.pr` document (`schema/pr.schema.json`); a refusal as the `team.error` document on stdout |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -29,8 +30,12 @@ The commits are a separate run, [`team commits check`](commits.md).
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | the body passes | `team pr check: 1 pull request body checked: ok` | 0 |
-| the body was refused | the body as one section, `pull request body`, with one line per finding under it, then `team pr check: 1 pull request body checked: the pull request body refused` | 1 |
+| the body was refused | one `difference:` block per finding — what, `repair:`, `who:` — then `team pr check: 1 pull request body checked: the pull request body refused` | 1 |
 | the check can't run: a bad invocation, a team file that can't be read, or a body file that can't be read | `team pr check: <reason>`, with the usage for a bad invocation | 2 |
+
+Under `--json` the report is the `team.pr` document (`schema/pr.schema.json`), and a refusal
+writes the `team.error` document on stdout with its `contract/exit-codes.json` id; stderr stays
+empty.
 
 ## Example
 
@@ -80,9 +85,54 @@ The metrics page is ready for review.
 
 ```console
 $ team pr check pr.md ; echo "exit $?"
-team pr check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 team pr check: 1 pull request body checked: ok
 exit 0
+```
+
+This one forgot the signature:
+
+```file file=body.md
+Bump the retry window to thirty seconds.
+
+The old one timed out on the flaky test.
+```
+
+```console
+$ team pr check body.md ; echo "exit $?"
+difference: pull request body: no signature: expected "**Agent:** {display} · {role}" in the last line
+  repair: end the pull request body with a seat's signature (its author can edit it on the pull request)
+  who: any seat
+team pr check: 1 pull request body checked: the pull request body refused
+exit 1
+```
+
+The same run under `--json`:
+
+```console
+$ team pr check body.md --json ; echo "exit $?"
+{
+  "schema": {
+    "name": "team.pr",
+    "version": 1
+  },
+  "format": 1,
+  "differences": [
+    {
+      "what": "pull request body: no signature: expected \"**Agent:** {display} · {role}\" in the last line",
+      "repair": "end the pull request body with a seat's signature (its author can edit it on the pull request)",
+      "who": "any seat"
+    }
+  ],
+  "notes": [
+    "line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read"
+  ],
+  "summary": {
+    "differences": 1,
+    "owner_differences": 0
+  },
+  "notice": null
+}
+exit 1
 ```
 
 Rationale, behaviour, refusals and known limits: [docs/internal/pr.md](../internal/pr.md).

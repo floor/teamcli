@@ -317,6 +317,12 @@
             },
             {
               "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--since",
               "repeatable": false,
               "takesValue": true
@@ -339,12 +345,12 @@
           ],
           "subcommands": [],
           "usage": [
-            "team commits check <ref> [--since <ref>] [--file <path>]"
+            "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
           ]
         }
       ],
       "usage": [
-        "team commits check <ref> [--since <ref>] [--file <path>]"
+        "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
       ]
     },
     {
@@ -1082,6 +1088,12 @@
               "takesValue": false
             },
             {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -1099,12 +1111,12 @@
           ],
           "subcommands": [],
           "usage": [
-            "team pr check <file> [--file <path>]"
+            "team pr check <file> [--file <path>] [--json]"
           ]
         }
       ],
       "usage": [
-        "team pr check <file> [--file <path>]"
+        "team pr check <file> [--file <path>] [--json]"
       ]
     },
     {
@@ -1131,6 +1143,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -1164,7 +1182,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team proc add <name> [--pid <pid>] [--note <text>]"
+            "team proc add <name> [--pid <pid>] [--note <text>] [--json]"
           ]
         },
         {
@@ -1172,6 +1190,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -1193,7 +1217,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team proc done <name>"
+            "team proc done <name> [--json]"
           ]
         },
         {
@@ -1227,9 +1251,9 @@
         }
       ],
       "usage": [
-        "team proc add <name> [--pid <pid>] [--note <text>]",
+        "team proc add <name> [--pid <pid>] [--note <text>] [--json]",
         "team proc list [--json]",
-        "team proc done <name>"
+        "team proc done <name> [--json]"
       ]
     },
     {
@@ -1906,6 +1930,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -1923,7 +1953,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team tempo <word>"
+        "team tempo <word> [--json]"
       ]
     },
     {
@@ -2131,6 +2161,12 @@
             },
             {
               "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--session",
               "repeatable": false,
               "takesValue": true
@@ -2147,7 +2183,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team worktree list [--session <name>] [--file <path>]"
+            "team worktree list [--session <name>] [--file <path>] [--json]"
           ]
         },
         {
@@ -2161,6 +2197,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -2200,7 +2242,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]"
+            "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]"
           ]
         },
         {
@@ -2220,6 +2262,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -2247,14 +2295,14 @@
           ],
           "subcommands": [],
           "usage": [
-            "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]"
+            "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
           ]
         }
       ],
       "usage": [
-        "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]",
-        "team worktree list [--session <name>] [--file <path>]",
-        "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]"
+        "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]",
+        "team worktree list [--session <name>] [--file <path>] [--json]",
+        "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
       ]
     }
   ],

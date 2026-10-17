@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/pr.schema.json",
+  "title": "team pr check --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "differences",
+    "notes",
+    "summary",
+    "notice"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.pr"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "differences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "what",
+          "repair",
+          "who"
+        ],
+        "properties": {
+          "what": {
+            "type": "string",
+            "minLength": 1
+          },
+          "repair": {
+            "type": "string",
+            "minLength": 1
+          },
+          "who": {
+            "type": "string",
+            "enum": [
+              "the owner",
+              "the team's lead",
+              "a grant holder",
+              "any seat"
+            ]
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "differences",
+        "owner_differences"
+      ],
+      "properties": {
+        "differences": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "owner_differences": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

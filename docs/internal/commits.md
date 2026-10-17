@@ -25,11 +25,18 @@ own branch and CI runs it on a push.
 
 ## What it finds
 
-Every offending commit is printed with its hash and subject, then one block per finding:
+Every commit checked gets a row in a column-0 table, and every finding becomes a `difference:`
+block under it:
 
-    <sha> Tidy the logs
-      line 5: forbidden pattern ^Claude-Session:
-        Claude-Session: 8f21c4a9
+    COMMIT      STATUS   DETAIL
+    <sha>  refused  Tidy the logs
+    difference: commit <sha> "Tidy the logs", line 5: forbidden pattern ^Claude-Session: — "Claude-Session: 8f21c4a9"
+      repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)
+      who: any seat
+
+`STATUS` is `ok`, `refused`, or `exempt` (a human's commit, or a merge, where the file exempts
+them). `DETAIL` is the commit's subject. Each `repair:` names what fixes that commit — the
+`who:` is `any seat`, because any seat may reword the offending commit.
 
 | Finding | Meaning |
 | --- | --- |
@@ -41,6 +48,13 @@ Every offending commit is printed with its hash and subject, then one block per 
 
 The summary says what was read — `<n> commits checked`, `<n> by a human or a merge`, `<n> skipped
 (since <ref>)` — and then `ok`, or `1 commit refused`, or `2 commits refused`.
+
+Under `--json` the same report is the `team.commits` document (`schema/commits.schema.json`):
+one entry per commit with its `status`, `exempt` and `findings`, the `differences` with their
+`repair` and `who`, the loader's warnings as `notes` (the plain report prints none: a file
+deprecation warning is `team check`'s to print), and a `summary` of the counts. A refusal is
+the `team.error` document on stdout, with the `contract/exit-codes.json` row id, and stderr stays
+empty.
 
 ## Refusals
 
@@ -63,9 +77,10 @@ runs all of this, one notice line first: [`team check`](check.md).
 
 ## Examples, moved here whole
 
-The examples below are the page's own, moved here whole, in the order they stood in. The
-first console is also on [the `team commits check` page](../commands/commits.md); the rest stand
-only in this note and are not executed by any test — `test/docs.test.ts` reads `docs/commands/`
+The examples below are the page's own, moved here whole, in the order they stood in. The two
+single-commit consoles (no `HEAD~2` and `HEAD`) also stand on [the `team commits check`
+page](../commands/commits.md), where `test/docs.test.ts` executes them; the range and `--since`
+runs stand only in this note and are not executed — `test/docs.test.ts` reads `docs/commands/`
 alone.
 
 ```yaml file=.agents/team.yaml
@@ -139,7 +154,8 @@ The commit a person wrote needs no signature:
 
 ```console
 $ team commits check HEAD~2 ; echo "exit $?"
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
+COMMIT      STATUS  DETAIL
+<sha>  exempt  Review the copy
 team commits check: 1 commit checked, 1 by a human or a merge: ok
 exit 0
 ```
@@ -148,10 +164,11 @@ The newest commit signs, but leaks the forbidden line:
 
 ```console
 $ team commits check HEAD ; echo "exit $?"
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-<sha> Tidy the logs
-  line 5: forbidden pattern ^Claude-Session:
-    Claude-Session: 8f21c4a9
+COMMIT      STATUS   DETAIL
+<sha>  refused  Tidy the logs
+difference: commit <sha> "Tidy the logs", line 5: forbidden pattern ^Claude-Session: — "Claude-Session: 8f21c4a9"
+  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)
+  who: any seat
 team commits check: 1 commit checked: 1 commit refused
 exit 1
 ```
@@ -160,12 +177,16 @@ A range reads newest first and reports every commit with findings:
 
 ```console
 $ team commits check HEAD~3..HEAD ; echo "exit $?"
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-<sha> Tidy the logs
-  line 5: forbidden pattern ^Claude-Session:
-    Claude-Session: 8f21c4a9
-<sha> Add the metrics page
-  no signature: expected "Agent: {display} · {role}" in the final trailer block
+COMMIT      STATUS   DETAIL
+<sha>  refused  Tidy the logs
+<sha>  exempt   Review the copy
+<sha>  refused  Add the metrics page
+difference: commit <sha> "Tidy the logs", line 5: forbidden pattern ^Claude-Session: — "Claude-Session: 8f21c4a9"
+  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)
+  who: any seat
+difference: commit <sha> "Add the metrics page": no signature: expected "Agent: {display} · {role}" in the final trailer block
+  repair: sign the commit message in a final trailer block of its own (git commit --amend)
+  who: any seat
 team commits check: 3 commits checked, 1 by a human or a merge: 2 commits refused
 exit 1
 ```
@@ -174,10 +195,11 @@ exit 1
 
 ```console
 $ team commits check HEAD~3..HEAD --since HEAD~1 ; echo "exit $?"
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-<sha> Tidy the logs
-  line 5: forbidden pattern ^Claude-Session:
-    Claude-Session: 8f21c4a9
+COMMIT      STATUS   DETAIL
+<sha>  refused  Tidy the logs
+difference: commit <sha> "Tidy the logs", line 5: forbidden pattern ^Claude-Session: — "Claude-Session: 8f21c4a9"
+  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)
+  who: any seat
 team commits check: 1 commit checked, 2 skipped (since <sha>): 1 commit refused
 exit 1
 ```
@@ -186,7 +208,6 @@ A ref that names nothing can't be checked:
 
 ```console
 $ team commits check origin/main ; echo "exit $?"
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 team commits check: "origin/main" doesn't name a commit
 exit 2
 ```

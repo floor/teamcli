@@ -162,7 +162,7 @@ Hidden: no
 
 Usage:
 
-    team commits check <ref> [--since <ref>] [--file <path>]
+    team commits check <ref> [--since <ref>] [--file <path>] [--json]
 
 ### Flags
 
@@ -181,7 +181,7 @@ Hidden: no
 
 Usage:
 
-    team commits check <ref> [--since <ref>] [--file <path>]
+    team commits check <ref> [--since <ref>] [--file <path>] [--json]
 
 #### Flags
 
@@ -189,6 +189,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--since` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -597,7 +598,7 @@ Hidden: no
 
 Usage:
 
-    team pr check <file> [--file <path>]
+    team pr check <file> [--file <path>] [--json]
 
 ### Flags
 
@@ -616,7 +617,7 @@ Hidden: no
 
 Usage:
 
-    team pr check <file> [--file <path>]
+    team pr check <file> [--file <path>] [--json]
 
 #### Flags
 
@@ -624,6 +625,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -638,9 +640,9 @@ Hidden: no
 
 Usage:
 
-    team proc add <name> [--pid <pid>] [--note <text>]
+    team proc add <name> [--pid <pid>] [--note <text>] [--json]
     team proc list [--json]
-    team proc done <name>
+    team proc done <name> [--json]
 
 ### Flags
 
@@ -659,13 +661,14 @@ Hidden: no
 
 Usage:
 
-    team proc add <name> [--pid <pid>] [--note <text>]
+    team proc add <name> [--pid <pid>] [--note <text>] [--json]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--note` | yes | no | no |
 | `--pid` | yes | no | no |
 | `-h` | no | no | yes |
@@ -682,13 +685,14 @@ Hidden: no
 
 Usage:
 
-    team proc done <name>
+    team proc done <name> [--json]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1060,13 +1064,14 @@ Hidden: no
 
 Usage:
 
-    team tempo <word>
+    team tempo <word> [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -1171,9 +1176,9 @@ Hidden: no
 
 Usage:
 
-    team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]
-    team worktree list [--session <name>] [--file <path>]
-    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]
+    team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
+    team worktree list [--session <name>] [--file <path>] [--json]
+    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
 
 ### Flags
 
@@ -1192,7 +1197,7 @@ Hidden: no
 
 Usage:
 
-    team worktree list [--session <name>] [--file <path>]
+    team worktree list [--session <name>] [--file <path>] [--json]
 
 #### Flags
 
@@ -1200,6 +1205,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -1213,7 +1219,7 @@ Hidden: no
 
 Usage:
 
-    team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]
+    team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
 
 #### Flags
 
@@ -1221,6 +1227,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--kind` | yes | no | no |
 | `--seat` | yes | no | no |
 | `--session` | yes | no | no |
@@ -1238,7 +1245,7 @@ Hidden: no
 
 Usage:
 
-    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]
+    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
 
 #### Flags
 
@@ -1247,6 +1254,7 @@ Usage:
 | `--branch` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
