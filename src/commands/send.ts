@@ -43,9 +43,9 @@ left the seat's input box, and the pane is not a dialog this command already cla
 (question, permission, trust, vendor notice, provider error, rate limit). A screen that
 is one of those is not reached: the kind and the drop path are named, and nothing
 further is pressed. Who may call it is the registry's decision, default deny: the
-owner; an orchestrator to an orchestrator, in any teams; an assistant seat to its
-entity's coordinator; any seat to its own team's orchestrator; or an owner-signed
-grant naming send. The drop file's first line
+owner; an orchestrator to an orchestrator of its own team or entity; an assistant
+seat to its entity's coordinator; any seat to its own team's orchestrator; or an
+owner-signed grant naming send. The drop file's first line
 names the sender and the rule that admitted it. --list sends nothing: it prints
 the file's seats, each with the project its team sits in, and needs no caller
 check. --dry-run resolves the seat and the

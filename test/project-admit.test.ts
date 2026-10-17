@@ -190,7 +190,7 @@ describe('project admission: the project decides its own pairs', () => {
     const verdict = admitSend(builder1, builder2, teams);
     expect(verdict.ok).toBe(false);
     expect((verdict as { why: string }).why).not.toContain('project');
-    // The team rules read the same capability: two leads, in any teams, are the orchestrator pair.
+    // The team rules read the same capability: two leads of one entity are the orchestrator pair.
     expect(admitSend(helios, odysseus, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
     expect(admitSend(agamemnon, builder1, teams)).toEqual({ ok: true, rule: 'an orchestrator or operator to a seat of its own team' });
   });

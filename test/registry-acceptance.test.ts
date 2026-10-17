@@ -67,8 +67,11 @@ function seatBlock(role: string, name: string, cli: string, vendor: string): str
 `;
 }
 
-/** One root with `.agents/team.yaml`, and a home: the shape `team send` reads. */
-function sendWorld(teams: Record<string, { project: string; session: string; coordinator: string; seats: string[] }>): SendWorld {
+/** One root with `.agents/team.yaml`, and a home: the shape `team send` reads. `entity` is the
+ *  file's own `entity:` key, which a send judges the caller's team by; a team that gives one also
+ *  names its lobby outright, as the live floor team does, and trust lists it. A team that gives
+ *  none carries neither. */
+function sendWorld(teams: Record<string, { project: string; entity?: string; session: string; coordinator: string; seats: string[] }>): SendWorld {
   const base = tempBase('r5-acc-');
   const home = join(base, 'h');
   mkdirSync(lobbyDir(home), { recursive: true });
@@ -77,14 +80,21 @@ function sendWorld(teams: Record<string, { project: string; session: string; coo
     const root = join(base, name);
     mkdirSync(join(root, '.agents'), { recursive: true });
     execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+    const trust = [`  - ${lobbyDir(home)}`, `  - ${root}`];
+    let entity = '';
+    if (team.entity !== undefined) {
+      const lobby = join(home, '.config', 'team', 'lobbies', team.entity.toLowerCase());
+      mkdirSync(lobby, { recursive: true });
+      trust.push(`  - ${lobby}`);
+      entity = `entity: ${team.entity}\nlobby: ${lobby}\n`;
+    }
     writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1
 project: ${team.project}
-coordinator: ${team.coordinator}
+${entity}coordinator: ${team.coordinator}
 operator: ${team.coordinator}
 session: ${team.session}
 trust:
-  - ${lobbyDir(home)}
-  - ${root}
+${trust.join('\n')}
 workspace:
   mode: shared
 seats:
@@ -332,19 +342,20 @@ describe('an agy seat sends to the main coordinator', () => {
 describe('an orchestrator reaches another team by name', () => {
   test('lead@beta resolves to beta\'s lead, and the drop lands there, never on alpha\'s own lead', async () => {
     const world = sendWorld({
-      a: { project: 'alpha', session: 'alpha', coordinator: 'lead', seats: [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')] },
-      b: { project: 'beta', session: 'beta', coordinator: 'lead', seats: [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')] },
+      a: { project: 'alpha', entity: 'alpha-ent', session: 'alpha', coordinator: 'lead', seats: [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')] },
+      b: { project: 'beta', entity: 'alpha-ent', session: 'beta', coordinator: 'lead', seats: [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')] },
     });
     const alphaRoot = world.roots.a as string;
     const betaRoot = world.roots.b as string;
     const alphaId = teamIdOf(alphaRoot);
     const betaId = teamIdOf(betaRoot);
-    // Two teams, one seat name: a resolver that guesses within the caller's own team is caught
-    // by the pane the trigger lands on.
+    // Two teams of one entity, one seat name: a resolver that guesses within the caller's own
+    // team is caught by the pane the trigger lands on.
     const alpha = registered(world.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', lab: 'anthropic', team: alphaId, seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
     const beta = registered(world.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', lab: 'anthropic', team: betaId, seat: 'lead', session: 'beta', pane: 'pane-beta-lead' });
     teamRecord(world.home, alphaId, { project: 'alpha', entity: 'alpha-ent', session: 'alpha', root: alphaRoot, roster: [{ agent: alpha.id, seat: 'lead', role: 'coordinator', leads: true }] });
-    teamRecord(world.home, betaId, { project: 'beta', entity: 'beta-ent', session: 'beta', root: betaRoot, roster: [{ agent: beta.id, seat: 'lead', role: 'coordinator', leads: true }] });
+    // The same entity: the lead pair the send rule reaches. Another entity's lead is refused.
+    teamRecord(world.home, betaId, { project: 'beta', entity: 'alpha-ent', session: 'beta', root: betaRoot, roster: [{ agent: beta.id, seat: 'lead', role: 'coordinator', leads: true }] });
     const caller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-alpha-lead', session: 'alpha' };
     place(alphaRoot, 'alpha', 'lead', 'pane-alpha-lead');
     const io = testIo(alphaRoot, caller);
