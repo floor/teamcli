@@ -386,7 +386,18 @@
         },
         "idle_first": {
           "type": "string",
-          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$"
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long an idle seat waits before its lead is told; a team may tighten it, never loosen it"
+        },
+        "idle_owner": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long after that the owner is told, once per idle period; a team may tighten it, never loosen it"
+        },
+        "blind_after": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long a seat no source has heard from reads unknown before it is blind; a team may tighten it, never loosen it"
         },
         "idle_repeat": {
           "type": "string",

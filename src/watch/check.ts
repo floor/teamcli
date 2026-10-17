@@ -10,6 +10,7 @@ import type { TeamFile } from '../file/types.ts';
 import type { HerdrAgent } from '../herdr.ts';
 import type { ReplacedContinuity, SeatProcessVerdict } from '../launch/identity.ts';
 import type { QuotaFigure } from '../profiles/quota.ts';
+import type { LivenessThresholds } from '../settings/inherit.ts';
 import type { Live } from '../status/compare.ts';
 import type { SessionState } from '../state.ts';
 import type { Machine } from './machine.ts';
@@ -116,6 +117,10 @@ export type CheckContext = {
   now: number;
   // The `watch` section in force: the thresholds the checks report against.
   watch: TeamFile['watch'];
+  // The liveness defaults as the chain in force resolves them: the idle-to-lead and
+  // idle-to-owner windows the idle check reports against, and the blind window it carries
+  // for the readers that name it.
+  liveness: LivenessThresholds;
   // The `budgets` section in force: the accounts, marks and thresholds the checks read against.
   budgets: TeamFile['budgets'];
   // The report-once rule. The key goes into this pass's active set; the report comes back the

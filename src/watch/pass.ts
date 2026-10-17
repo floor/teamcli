@@ -14,6 +14,7 @@ import { replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { usesLauncher } from '../launch/line.ts';
 import { profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
+import { livenessThresholds, type LivenessThresholds, type SettingLevel, type ThresholdRefusal } from '../settings/inherit.ts';
 import type { SessionState } from '../state.ts';
 import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
@@ -137,6 +138,9 @@ export type PassResult = {
   // does, and records `title` and `line` only after the call returns true. A seat with neither
   // half changed is absent.
   labels: { name: string; pane: string; workspace: string; title?: string; displayAgent?: string }[];
+  // Liveness words the chain set aside, each with the rule it broke. Not reports: they are
+  // configuration facts, said once by the command, never nudged into a seat.
+  refusals: ThresholdRefusal[];
 };
 
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
@@ -201,6 +205,10 @@ export type PassInput = {
   // watch says it itself, once; the pass's approval check reads it and adds nothing.
   approvalReason?: string | null;
   watch: TeamFile['watch'];
+  // The liveness words of the levels above the team, already read: the project's record, and an
+  // entity's or a seat's when a caller has one. The team's own words come from `watch` — its
+  // `idle_first`, `idle_owner` and `blind_after` — and a caller never repeats them here.
+  liveness?: Partial<Record<SettingLevel, Partial<LivenessThresholds> | undefined>>;
   outcomes?: readonly CheckOutcome[];
   budgets?: TeamFile['budgets'];
   readings?: readonly Seen[];
@@ -234,6 +242,7 @@ export function pass({
   approval,
   approvalReason,
   watch,
+  liveness: declaredLiveness,
   outcomes = [],
   budgets = team.budgets,
   readings: stored = [],
@@ -434,9 +443,22 @@ export function pass({
     outcomes,
   };
 
+  // The liveness defaults: the levels above the team as the caller read them, and the team's own
+  // word from the `watch` section in force. A word that would loosen a default is set aside —
+  // the value in force stands — and comes back in `refusals` for the command to say once.
+  const liveness = livenessThresholds({
+    ...(declaredLiveness ?? {}),
+    team: {
+      idle_lead_seconds: watch.idleFirst,
+      idle_owner_seconds: watch.idleOwner,
+      blind_after_seconds: watch.blindAfter,
+    },
+  });
+
   const ctx: CheckContext = {
     now,
     watch,
+    liveness: liveness.thresholds,
     budgets,
     once,
     keep,
@@ -537,7 +559,7 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  return { reports, nudge, work: workDrops(team, live, observations, watch, now, memory, read), fallback, ring, mailboxNote, readings, machineReadings, labels };
+  return { reports, nudge, work: workDrops(team, live, observations, watch, liveness.thresholds.idle_lead_seconds, now, memory, read), fallback, ring, mailboxNote, readings, machineReadings, labels, refusals: liveness.refused };
 }
 
 /** Idle workers due a work drop this pass. Leads, parked and stopped seats, a dialog and a
@@ -549,6 +571,7 @@ function workDrops(
   live: Live,
   observations: SeatObservation[],
   watch: TeamFile['watch'],
+  idleLeadSeconds: number,
   now: number,
   memory: Memory,
   read: (cli: string, screen: string | undefined) => Screen,
@@ -572,7 +595,7 @@ function workDrops(
     }
     const since = now - (obs.history.lastWorking ?? obs.history.idleSince ?? now);
     const at = sent[obs.name];
-    const waiting = since >= watch.idleFirst * 1000
+    const waiting = since >= idleLeadSeconds * 1000
       && (at === undefined || (watch.idleRepeat !== undefined && now - at >= watch.idleRepeat * 1000));
     if (!waiting) continue;
     const screen = read(obs.cli, live.screens[obs.agent.pane]);

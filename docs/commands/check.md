@@ -27,7 +27,8 @@ the state holds ready that the team registry's record does not list in its roste
 too, repaired with the same `team register <seat>`: where the registry holds a record of the team,
 its roster is the record of who its seats are for the permission bridge, and a seat the roster does
 not list has none. A team the registry holds no record of is not this difference — the bridge reads
-the file's own declaration then. A seat no source has heard from past the blind threshold reads
+the file's own declaration then. A seat no source has heard from past the blind threshold — five
+minutes shipped, and every level may tighten it, never loosen it — reads
 `unknown (blind)` in
 [`team seats`](seats.md) and counts as not working: `<seat>: unknown for over <threshold> — blind,
 and it counts as not working`, repaired with the owner's look at the pane.

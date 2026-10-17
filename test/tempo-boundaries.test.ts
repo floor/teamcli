@@ -70,6 +70,8 @@ describe('the scaling stays inside its bounds', () => {
   const watch = (over: Partial<TeamFile['watch']>): TeamFile['watch'] => ({
     interval: 120,
     idleFirst: 600,
+    idleOwner: 900,
+    blindAfter: 300,
     teamIdle: 600,
     nudgeWait: 600,
     unsentAfter: 60,

@@ -4,7 +4,9 @@
 // `team.coordinator` to `team.orchestrator`, the same value under the section's canonical name,
 // the unrecognised-screen fail-safe's quiet-unknown line, added to both sides below,
 // the model-drift line's restart, which the check now names,
-// and the nudge, which now types into the idle seat rather than the operator —
+// the nudge, which now types into the idle seat rather than the operator,
+// and the idle check's owner stage, which reports at `idle_owner` as well as the lead at
+// `idle_first` — added to both sides below —
 // and used by this file alone. Every scenario runs both
 // implementations over the same fixtures, step for step, and demands equal PassResults and equal
 // pending state — for a team file without `watch.checks`, which is every fixture here.
@@ -30,7 +32,7 @@ import { withWas } from './helpers.ts';
 type OldMemory = {
   idleSince: Record<string, number>;
   lastWorking: Record<string, number>;
-  idleTold: Record<string, number>;
+  idleTold: Record<string, { lead?: number; owner?: number }>;
   unsentSince: Record<string, number>;
   active: Set<string>;
   teamIdleSince: number | null;
@@ -148,17 +150,19 @@ function oldPass(
     const worked = memory.lastWorking[name];
     if (worked === undefined) memory.idleSince[name] ??= now;
     const since = now - (worked ?? (memory.idleSince[name] as number));
-    const told = memory.idleTold[name];
+    const told = (memory.idleTold[name] ??= {});
     const repeat = team.watch.idleRepeat;
-    if (since >= team.watch.idleFirst * 1000 && (told === undefined || (repeat !== undefined && now - told >= repeat * 1000))) {
-      memory.idleTold[name] = now;
-      reports.push({
-        key: `idle:${name}`,
-        text: worked === undefined
-          ? `${name} has been idle since the watch started`
-          : `${name} has been idle for ${oldMinutes(since)} minutes`,
-        to: 'operator',
-      });
+    const line = worked === undefined
+      ? `${name} has been idle since the watch started`
+      : `${name} has been idle for ${oldMinutes(since)} minutes`;
+    if (since >= team.watch.idleFirst * 1000 && (told.lead === undefined || (repeat !== undefined && now - told.lead >= repeat * 1000))) {
+      told.lead = now;
+      reports.push({ key: `idle:${name}`, text: line, to: 'operator' });
+    }
+    // The owner stage: told once per idle period, at idle_owner.
+    if (since >= team.watch.idleOwner * 1000 && told.owner === undefined) {
+      told.owner = now;
+      reports.push({ key: `idle-owner:${name}`, text: `${line} — reported to the owner`, to: 'owner' });
     }
   }
 
@@ -573,7 +577,7 @@ describe('the modular core against the pass it replaced', () => {
   });
 
   test('the watch section changes mid-sequence', () => {
-    const brisk = valid(example.replace('  idle_first: 10m', '  idle_first: 1m').replace('  idle_repeat: 20m', '  idle_repeat: 2m'));
+    const brisk = valid(example.replace('  idle_first: 5m', '  idle_first: 1m').replace('  idle_repeat: 20m', '  idle_repeat: 2m'));
     const quiet = live({ 'deepseek-acme': { status: 'idle', screen: idle } });
     both('a changed watch section', team(), [
       { live: quiet, at: 0 },

@@ -11,7 +11,7 @@
 
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DELIVERY_LEGS, type DeliveryLeg } from '../settings/inherit.ts';
+import { DELIVERY_LEGS, type DeliveryLeg, type LivenessThresholds } from '../settings/inherit.ts';
 import { writeAtomic } from '../state.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
@@ -34,8 +34,34 @@ export type ProjectRecord = {
    * no command writes it in this build, but a hand-written one reads, and an upsert keeps it.
    */
   deliveryOrder?: DeliveryLeg[];
+  /**
+   * The project's word on the liveness defaults — the idle-to-lead, idle-to-owner and blind
+   * windows, in seconds — or absent when the project declares none. Written under `liveness`.
+   * A project may tighten a default (a shorter window), never loosen it: a longer word is set
+   * aside where the thresholds resolve, and the inherited value stands.
+   */
+  liveness?: Partial<LivenessThresholds>;
   provenance: ProjectProvenance;
 };
+
+/** The keys `liveness` may carry, in the order the writer emits them. */
+const LIVENESS_KEYS = ['idle_lead_seconds', 'idle_owner_seconds', 'blind_after_seconds'] as const;
+
+/** One `liveness` map, checked: only the three keys, each a positive number of seconds. */
+function checkedLiveness(value: unknown, bad: (what: string) => never): Partial<LivenessThresholds> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) bad('"liveness" must be a map of thresholds');
+  const out: Partial<LivenessThresholds> = {};
+  for (const [key, held] of Object.entries(value as Record<string, unknown>)) {
+    if (!(LIVENESS_KEYS as readonly string[]).includes(key)) {
+      bad(`"liveness" has no threshold "${key}"; the keys are ${LIVENESS_KEYS.join(', ')}`);
+    }
+    if (typeof held !== 'number' || !Number.isFinite(held) || held <= 0) {
+      bad(`liveness "${key}" must be a positive number of seconds`);
+    }
+    out[key as keyof LivenessThresholds] = held;
+  }
+  return out;
+}
 
 /** The registry file could not be read as a project registry. Names the file and what is wrong. */
 export class ProjectsError extends Error {
@@ -147,6 +173,7 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
         lead: fields.lead ?? null,
         teams: fields.teams ?? [],
         ...(fields.deliveryOrder !== undefined ? { deliveryOrder: fields.deliveryOrder } : {}),
+        ...(fields.liveness !== undefined ? { liveness: fields.liveness } : {}),
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
       };
     }
@@ -168,6 +195,9 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
           throw new ProjectsError(`a "delivery_order" leg must be one of: ${DELIVERY_LEGS.join(', ')}`);
         }
       }
+    }
+    if (record.liveness !== undefined) {
+      record = { ...record, liveness: checkedLiveness(record.liveness, (what) => { throw new ProjectsError(what); }) };
     }
     for (const [other, held] of Object.entries(projects)) {
       if (other !== id && held.name === record.name) throw new ProjectsError(`a project named ${record.name} is already ${other}`);
@@ -254,6 +284,12 @@ function emit(projects: Record<string, ProjectRecord>): string {
     // Only when the project declares one: a registry written before the field keeps its bytes,
     // so a record read and written back is the file it was.
     if (project.deliveryOrder) lines.push(`    delivery_order: [${project.deliveryOrder.map(scalar).join(', ')}]`);
+    if (project.liveness !== undefined) {
+      const said = LIVENESS_KEYS
+        .filter((key) => project.liveness?.[key] !== undefined)
+        .map((key) => `${key}: ${project.liveness?.[key]}`);
+      if (said.length) lines.push(`    liveness: { ${said.join(', ')} }`);
+    }
     const p = project.provenance;
     lines.push(`    provenance: { registered_by: ${scalar(p.registered_by)}, registered_at: ${scalar(p.registered_at)}, updated_at: ${scalar(p.updated_at)} }`);
   }
@@ -301,6 +337,11 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     }
     if (new Set(legs).size !== legs.length) bad('"delivery_order" names a leg twice');
   }
+  // The project's word on the liveness defaults, when the record writes one: seconds, under the
+  // same names the settings carry.
+  const liveness = raw.liveness === undefined
+    ? undefined
+    : checkedLiveness(raw.liveness, (what) => bad(what));
   const prov = raw.provenance;
   if (!isMap(prov)) return bad('"provenance" must be a map');
   for (const key of ['registered_by', 'registered_at', 'updated_at']) {
@@ -313,6 +354,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     lead: lead as string | null,
     teams: teams as string[],
     ...(order !== undefined ? { deliveryOrder: order as DeliveryLeg[] } : {}),
+    ...(liveness !== undefined ? { liveness } : {}),
     provenance: { registered_by: prov.registered_by as string, registered_at: prov.registered_at as string, updated_at: prov.updated_at as string },
   };
 }

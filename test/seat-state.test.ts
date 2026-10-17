@@ -70,7 +70,8 @@ describe('the reading, best source first', () => {
 
   test('no source answers: unknown, and blind only past the blind threshold', () => {
     // A trace older than the window but younger than the blind threshold: unknown, not blind.
-    expect(seatState({ trace: ago(600) }, NOW)).toEqual({ state: 'unknown', source: 'none', blind: false });
+    expect(seatState({ trace: ago(DEFAULT_STATE_THRESHOLDS.trace_window_seconds + 60) }, NOW))
+      .toEqual({ state: 'unknown', source: 'none', blind: false });
     // The blind boundary itself is not yet blind; one second past it is.
     expect(seatState({ trace: ago(DEFAULT_STATE_THRESHOLDS.blind_after_seconds) }, NOW).blind).toBe(false);
     expect(seatState({ trace: ago(DEFAULT_STATE_THRESHOLDS.blind_after_seconds + 1) }, NOW).blind).toBe(true);
@@ -140,28 +141,30 @@ describe('the gatherer the readers share', () => {
 describe('the thresholds are settings', () => {
   test('nothing declared keeps the shipped fallbacks', () => {
     expect(stateThresholds({})).toEqual(DEFAULT_STATE_THRESHOLDS);
+    // The blind window is a liveness default now: five minutes, and no level may lengthen it.
     expect(DEFAULT_STATE_THRESHOLDS)
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 1800, hook_working_seconds: 120 });
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 300, hook_working_seconds: 120 });
   });
 
   test('a team may tighten any threshold freely, and the other fields are untouched', () => {
-    expect(stateThresholds({ team: { blind_after_seconds: 600 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 600, hook_working_seconds: 120 });
+    expect(stateThresholds({ team: { blind_after_seconds: 120 } }))
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 120, hook_working_seconds: 120 });
     expect(stateThresholds({ seat: { trace_window_seconds: 10, blind_after_seconds: 60 } }))
       .toEqual({ trace_window_seconds: 10, blind_after_seconds: 60, hook_working_seconds: 120 });
     // The hook's own window: a team may make the screen win sooner, never later.
     expect(stateThresholds({ team: { hook_working_seconds: 30 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 1800, hook_working_seconds: 30 });
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 300, hook_working_seconds: 30 });
   });
 
   test('a team may not loosen: the word is refused and the inherited value stands', () => {
     expect(stateThresholds({ team: { blind_after_seconds: 7200 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 1800, hook_working_seconds: 120 });
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 300, hook_working_seconds: 120 });
     expect(stateThresholds({ team: { hook_working_seconds: 900 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 1800, hook_working_seconds: 120 });
-    // The project may open it, the same level `seats_cross_teams` allows.
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 300, hook_working_seconds: 120 });
+    // The project may open the trace and hook windows, the same level `seats_cross_teams`
+    // allows — but the blind threshold is liveness, and only ever tightens.
     expect(stateThresholds({ project: { blind_after_seconds: 7200, hook_working_seconds: 900 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 7200, hook_working_seconds: 900 });
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 300, hook_working_seconds: 900 });
   });
 
   test('the resolver the settings share reports what it set aside', () => {
@@ -171,9 +174,10 @@ describe('the thresholds are settings', () => {
     );
     expect(resolution.value).toBe(60);
     expect(resolution.source).toBe('seat');
-    expect(resolution.refused).toEqual([{ level: 'team', value: 7200 }]);
+    // The word set aside carries the value it would have replaced, so a report names both.
+    expect(resolution.refused).toEqual([{ level: 'team', value: 7200, inherited: 300 }]);
     // A word equal to the value in force is no word at all.
-    expect(resolveNumberSetting(STATE_THRESHOLDS.blind_after_seconds, [{ level: 'entity', value: 1800 }]).source).toBeNull();
+    expect(resolveNumberSetting(STATE_THRESHOLDS.blind_after_seconds, [{ level: 'entity', value: 300 }]).source).toBeNull();
   });
 });
 

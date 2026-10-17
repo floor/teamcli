@@ -259,6 +259,7 @@ tempo: urgent
   `urgent` halves them, to the nearest second, and never below one second. `normal` leaves
   them as written.
 - An omitted `idle_repeat` stays off. `interval` is the pass rate and is not scaled, and
-  neither are the quota marks or the check switches.
+  neither are the quota marks, the check switches or the liveness windows `idle_owner` and
+  `blind_after`.
 - `relaxed` and `urgent` take effect when the file is approved. A file that omits the key,
   and one that sets `normal`, stay the file that was approved.

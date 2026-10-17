@@ -82,7 +82,7 @@ function liveScene(over: Partial<Record<string, { status?: string; screen?: stri
 }
 
 describe('watch idle reports (once per period by default, repeat on request)', () => {
-  test('default: a seat idle for three hours yields exactly one report (at idle_first) and one nudge', () => {
+  test('default: a seat idle for three hours yields one lead report (at idle_first), one owner report (at idle_owner), and one nudge', () => {
     const file = valid(defaultExample);
     expect(file.watch.idleRepeat).toBeUndefined();
 
@@ -102,8 +102,11 @@ describe('watch idle reports (once per period by default, repeat on request)', (
       if (result.nudge) nudges++;
     }
 
-    // Exactly one report and one nudge across the entire 3 hours:
-    expect(reports).toEqual(['deepseek-acme has been idle since the watch started']);
+    // Exactly one lead report (at 5m), one owner report (at 15m) and one nudge across the 3 hours.
+    expect(reports).toEqual([
+      'deepseek-acme has been idle since the watch started',
+      'deepseek-acme has been idle since the watch started — reported to the owner',
+    ]);
     expect(nudges).toBe(1);
     expect(memory.pending).toEqual([]);
     expect(memory.pendingSince).toBeNull();
@@ -122,7 +125,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     expect(p0.reports).toEqual([]);
     expect(p0.nudge).toBeNull();
 
-    // 10m: idle_first reached -> reports and nudges
+    // 10m: idle_first (5m) already reached -> reports and nudges
     const p10 = pass({
       team: file, watch: file.watch, state: emptySession(),
       live: liveScene({ 'deepseek-acme': { status: 'idle', screen: idleScreen } }),
@@ -131,7 +134,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     expect(p10.reports.map((r) => r.text)).toEqual(['deepseek-acme has been idle since the watch started']);
     expect(p10.nudge).not.toBeNull();
 
-    // 14m: still quiet -> no repeat
+    // 14m: still quiet, idle_owner (15m) not reached -> no repeat
     const p14 = pass({
       team: file, watch: file.watch, state: emptySession(),
       live: liveScene({ 'deepseek-acme': { status: 'idle', screen: idleScreen } }),
@@ -157,7 +160,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     });
     expect(p24.reports).toEqual([]);
 
-    // 30m: 10 minutes since work at 20m -> reports new period with duration!
+    // 30m: 10 minutes since work at 20m -> reports the new period with its duration
     const p30 = pass({
       team: file, watch: file.watch, state: emptySession(),
       live: liveScene({ 'deepseek-acme': { status: 'idle', screen: idleScreen } }),
@@ -166,13 +169,13 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     expect(p30.reports.map((r) => r.text)).toEqual(['deepseek-acme has been idle for 10 minutes']);
     expect(p30.nudge).not.toBeNull();
 
-    // 50m: stays quiet -> no repeated report for this new period
+    // 50m: past idle_owner (15m since work at 20m) -> the owner is told, once for this period
     const p50 = pass({
       team: file, watch: file.watch, state: emptySession(),
       live: liveScene({ 'deepseek-acme': { status: 'idle', screen: idleScreen } }),
       machine: fine, now: 50 * MIN, memory,
     });
-    expect(p50.reports).toEqual([]);
+    expect(p50.reports).toEqual([{ key: 'idle-owner:deepseek-acme', text: 'deepseek-acme has been idle for 30 minutes — reported to the owner', to: 'owner' }]);
     expect(p50.nudge).toBeNull();
   });
 
@@ -187,7 +190,8 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     for (let minute = 0; minute <= 180; minute += 1) {
       const result = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: minute * MIN, memory });
       for (const r of result.reports) {
-        if (r.text.includes('idle since the watch started')) count++;
+        // The lead's report only: the owner's carries the same words and its own key.
+        if (r.to === 'operator' && r.text.includes('idle since the watch started')) count++;
       }
     }
     expect(count).toBe(1);
@@ -213,7 +217,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
   });
 
   test('an idle seat is nudged on the pass that reports it, and a repeat does not duplicate pending', () => {
-    const brisk = valid(defaultExample.replace('  idle_first: 10m', '  idle_first: 1m\n  idle_repeat: 2m'));
+    const brisk = valid(defaultExample.replace('  idle_first: 5m', '  idle_first: 1m\n  idle_repeat: 2m'));
     const memory = newMemory();
     const live = liveScene({
       'claude-operator-acme': { status: 'working', screen: workingScreen },
@@ -245,7 +249,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     // text proves nothing: with no record in this process of typing it, the box is its owner's,
     // and the pass raises no nudge into it.
     const file = valid(defaultExample
-      .replace('  idle_first: 10m', '  idle_first: 1m\n  idle_repeat: 2m')
+      .replace('  idle_first: 5m', '  idle_first: 1m\n  idle_repeat: 2m')
       .replace('  unsent_after: 1m', '  unsent_after: 1h'));
     const memory = newMemory();
     const nudgeBox = `${RULE}\n❯ ${NUDGE_TEXT}\n${RULE}\n${STATUS}\n`;
@@ -262,7 +266,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     // The same box, after this process typed the line itself and its Enter never went out. The
     // pass acts on the record of the typing, in this pane — and on nothing else.
     const file = valid(defaultExample
-      .replace('  idle_first: 10m', '  idle_first: 1m\n  idle_repeat: 2m')
+      .replace('  idle_first: 5m', '  idle_first: 1m\n  idle_repeat: 2m')
       .replace('  unsent_after: 1m', '  unsent_after: 1h'));
     const memory = newMemory();
     memory.ownNudge = { pane: 'w3:p1', text: NUDGE_TEXT };
@@ -283,7 +287,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
 
   test('a box holding any other text is not free, and the pass raises no nudge', () => {
     const file = valid(defaultExample
-      .replace('  idle_first: 10m', '  idle_first: 1m\n  idle_repeat: 2m')
+      .replace('  idle_first: 5m', '  idle_first: 1m\n  idle_repeat: 2m')
       .replace('  unsent_after: 1m', '  unsent_after: 1h'));
     const memory = newMemory();
     const otherBox = `${RULE}\n❯ Brief: take the next task from the queue\n${RULE}\n${STATUS}\n`;
@@ -315,9 +319,10 @@ describe('watch idle reports (once per period by default, repeat on request)', (
       if (result.nudge) nudgeTimes.push(minute);
     }
 
-    const expectedTimes = [10, 30, 50, 70, 90, 110, 130, 150, 170];
-    expect(reportTimes).toEqual(expectedTimes);
-    expect(nudgeTimes).toEqual(expectedTimes);
+    // The lead at idle_first (5m), then every idle_repeat (20m); the owner once, at idle_owner
+    // (15m). An owner report raises no nudge: nothing enters the pending list for it.
+    expect(reportTimes).toEqual([6, 16, 26, 46, 66, 86, 106, 126, 146, 166]);
+    expect(nudgeTimes).toEqual([6, 26, 46, 66, 86, 106, 126, 146, 166]);
   });
 
   test('idle_repeat validation: smallest (1s) and largest (1000h) values pass, zero and negative refused', () => {

@@ -154,8 +154,9 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> is blocked, and its screen is not one the watch recognises` | herdr says blocked and the screen says nothing the watch knows |
 | `<seat>: herdr reports the status "<status>"` | a status that is neither idle, done, working nor blocked |
 | `<seat> holds text in its input box that was never sent` | unsent text for `watch.unsent_after`; the watch never sends or clears text it cannot show it typed itself |
-| `<seat> has been idle since the watch started` | quiet for `watch.idle_first`, and never seen working (reported once; repeated every `watch.idle_repeat` when set) |
-| `<seat> has been idle for <n> minutes` | quiet for `watch.idle_first` since its last turn (reported once per idle period; repeated every `watch.idle_repeat` when set) |
+| `<seat> has been idle since the watch started` | quiet for `watch.idle_first`, and never seen working (reported to its lead once; repeated every `watch.idle_repeat` when set) |
+| `<seat> has been idle for <n> minutes` | quiet for `watch.idle_first` since its last turn (reported to its lead once per idle period; repeated every `watch.idle_repeat` when set) |
+| `<seat> has been idle for <n> minutes — reported to the owner` (or `… since the watch started — reported to the owner`) | the same idle period, quiet for `watch.idle_owner`: said once per idle period, and it is the owner's |
 | `every agent is idle` | every seat that is not the orchestrator, the operator or parked, quiet for `watch.team_idle` |
 | `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model — <repair>` (`<declared>` is the seat's `display` spelling) | the running model or version is not the file's. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
 | `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, a workspace labelled `Watch · <project>` aside |
@@ -171,10 +172,31 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<account> <n> <currency> left, at its <n> <currency> floor` | a spend account at or below its `floor` |
 | `<account> is unknown while <seat> runs on it` | nothing counts for an account whose seats are running |
 
+The idle and blind windows are liveness defaults, and they are settings in the inheritance —
+machine, then entity, project, team, seat:
+
+| Threshold | Team file | Shipped |
+| --- | --- | --- |
+| idle to the lead | `watch.idle_first` | 5m |
+| idle to the owner | `watch.idle_owner` | 15m |
+| unknown to blind | `watch.blind_after` | 5m |
+
+A project record declares them under `liveness`, and the levels above it in their own settings. A
+lower level may tighten one — a shorter window — and never loosen it — a longer one — unless the
+level above allows it, which no level does today. A word that would loosen one is set aside, the
+value in force stands, and the watch says the rule once per setting, as a line of its own (never a
+report and never a nudge):
+
+    liveness_idle_lead_seconds: the team declared 10m, longer than the 5m in force — a liveness threshold may be tightened, never loosened, unless the level above allows it
+
+The blind window is the one `team status` and `team check` read as `unknown (blind)`.
+`watch.idle_repeat` repeats the lead's line only: the owner is told once per idle period. `tempo`
+does not scale `idle_owner` or `blind_after`.
+
 Each report is addressed to the owner or to the operator. The operator's is what the nudge stands
 for, and `--no-notify` can drop its desktop notification. The owner's — a permission prompt, a
 vendor notice, an approval difference, a
-machine figure, an account inside its reserve or at its floor — is notified anyway, and so are the
+machine figure, an account inside its reserve or at its floor, an idle seat past `idle_owner` — is notified anyway, and so are the
 watch's own notices: the file can't be read, herdr doesn't answer, no idle seat could be nudged,
 a typed nudge was not sent, and the watch stopped. Neither flag
 removes the log line, and neither reaches `team status`: a reserve still shows on the budgets
@@ -198,6 +220,7 @@ A report that is the operator's to act on is also what the nudge stands for. The
 | `the check for <account> is unapproved; that account reads unknown` | the check's file changed since the approval, or was never approved: it is not run |
 | `the session "<session>" is not this file's "<session>": its readings are not saved` | `--session` names a session other than the file's own; said once, on the first pass that sees it |
 | `team.yaml can't be read (<problem>); watching with the team as it was` | the file broke and no copy of it validated |
+| `liveness_<setting>: the <level> declared <n>, longer than the <n> in force — a liveness threshold may be tightened, never loosened, unless the level above allows it` | a liveness word in the chain would loosen a threshold: it is set aside, the value in force stands, and the line is said once per setting |
 | `<name>: its record is not an approved seat; left as it is (the owner cleans it: team remove <name> --abandon)` | a temporary seat whose end is proved and whose pane is free is left running |
 | `worktree <task> was not removed` | its removal failed; it is tried again on the next pass |
 | `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
@@ -422,9 +445,13 @@ exit 0
 The watch reads its timings and nudge settings from the live file on each pass once an
 approval is in force. Edits take effect without another approval. A file with no verified
 approval uses the default timings.
-By default an idle seat is reported once per idle period (`idle_repeat` is off). A team that wants
-repeated idle reports turns them on by setting `watch.idle_repeat` to the repeat interval (such as
-`idle_repeat: 20m`), repeating every 20 minutes while the seat stays quiet.
+By default an idle seat is reported to its lead once per idle period (`idle_repeat` is off).
+A team that wants repeated idle reports turns them on by setting `watch.idle_repeat` to the
+repeat interval (such as `idle_repeat: 20m`), repeating every 20 minutes while the seat stays
+quiet. The defaults themselves are the liveness windows: five minutes to the lead
+(`watch.idle_first`), fifteen to the owner (`watch.idle_owner`), five to blind
+(`watch.blind_after`). A team may tighten each one; a longer word is set aside with the rule
+named once, and a project may tighten them in its own record.
 
 A check the team doesn't want is turned off in `watch.checks`. Edits to that list take effect
 on the next pass. The machine below sits at 8% free memory, and the live file turns that
