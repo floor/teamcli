@@ -20,6 +20,7 @@ import { readSendGrants } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
+import { deliveryChainOf } from '../send/delivery.ts';
 import { bindPane, deliverTrigger, showsHeldFrameDialog, type DeliverResult } from '../send/deliver.ts';
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
@@ -138,9 +139,10 @@ export type SendHost = {
   projects?: ProjectSources;
   /** Optional override for the per-project send daemon socket path. */
   daemonSocket?: string;
-  /** The receiving seat's own chain for the delivery order — entity, project, team, seat. No
-   *  record carries the setting yet, so the real host leaves it out and the fallback order
-   *  stands; a test stands in for the chain. */
+  /** The receiving seat's own chain for the delivery order — entity, project, team, seat. Left
+   *  out (the real host does), the chain is read from the files: the receiving team file's own
+   *  key and the seat's, and the registry project's (`src/send/delivery.ts`). A test hands in a
+   *  chain to decide the order without a file to write. */
   delivery?: Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>;
 };
 
@@ -325,8 +327,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 
   const dry = args.flags.has('dry-run');
   // The receiving seat's own chain — entity, project, team, seat — decides the order the send
-  // walks; nothing declared leaves native, mcp-inbox, typed.
-  const order = deliveryOrder(host.delivery ?? {});
+  // walks; nothing declared leaves native, mcp-inbox, typed. The words are the receiving team
+  // file's (its own key and the seat's) and the registry project's, read here; a host that hands
+  // in a chain decides instead, which is how a test picks an order without a file to write.
+  const order = deliveryOrder(host.delivery ?? deliveryChainOf({
+    root: to.root,
+    seat: to.seat,
+    home: host.home,
+    // Across teams the file loaded above is the caller's own: the receiving team's is loaded
+    // from its root, and one that cannot be read declares nothing.
+    ...(to.cross ? {} : { file: team }),
+    projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
+  }));
   // --wait needs the socket frame, and only a Claude Code seat has that listener. Any other
   // seat is refused before a write. A Claude Code --wait run is refused as well when the order
   // does not lead with the native leg — the frame the reply listener stands beside is that leg —

@@ -11,6 +11,7 @@
 
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { DELIVERY_LEGS, type DeliveryLeg } from '../settings/inherit.ts';
 import { writeAtomic } from '../state.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
@@ -27,6 +28,12 @@ export type ProjectRecord = {
   lead: string | null;
   /** The team IDs this project groups. */
   teams: string[];
+  /**
+   * The project's word on the delivery order — the legs a send walks before the team file's own
+   * words are read — or absent when the project declares none. Written under `delivery_order`;
+   * no command writes it in this build, but a hand-written one reads, and an upsert keeps it.
+   */
+  deliveryOrder?: DeliveryLeg[];
   provenance: ProjectProvenance;
 };
 
@@ -139,6 +146,7 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
         entity: fields.entity ?? null,
         lead: fields.lead ?? null,
         teams: fields.teams ?? [],
+        ...(fields.deliveryOrder !== undefined ? { deliveryOrder: fields.deliveryOrder } : {}),
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
       };
     }
@@ -148,6 +156,18 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
     if (!Array.isArray(record.teams)) throw new ProjectsError('"teams" must be a list of team IDs');
     for (const team of record.teams) {
       if (typeof team !== 'string' || !team) throw new ProjectsError('a team ID in "teams" must be text');
+    }
+    // The word the reader takes: a non-empty list of distinct leg names, so what this writer
+    // stores is what `recordOf` reads back.
+    if (record.deliveryOrder !== undefined) {
+      if (!Array.isArray(record.deliveryOrder)) throw new ProjectsError('"delivery_order" must be a list of legs');
+      if (record.deliveryOrder.length === 0) throw new ProjectsError('"delivery_order" must name at least one leg');
+      if (new Set(record.deliveryOrder).size !== record.deliveryOrder.length) throw new ProjectsError('"delivery_order" names a leg twice');
+      for (const leg of record.deliveryOrder) {
+        if (typeof leg !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(leg)) {
+          throw new ProjectsError(`a "delivery_order" leg must be one of: ${DELIVERY_LEGS.join(', ')}`);
+        }
+      }
     }
     for (const [other, held] of Object.entries(projects)) {
       if (other !== id && held.name === record.name) throw new ProjectsError(`a project named ${record.name} is already ${other}`);
@@ -231,6 +251,9 @@ function emit(projects: Record<string, ProjectRecord>): string {
     lines.push(`    entity: ${nullable(project.entity)}`);
     lines.push(`    lead: ${nullable(project.lead)}`);
     lines.push(project.teams.length ? `    teams: [${project.teams.map(scalar).join(', ')}]` : '    teams: []');
+    // Only when the project declares one: a registry written before the field keeps its bytes,
+    // so a record read and written back is the file it was.
+    if (project.deliveryOrder) lines.push(`    delivery_order: [${project.deliveryOrder.map(scalar).join(', ')}]`);
     const p = project.provenance;
     lines.push(`    provenance: { registered_by: ${scalar(p.registered_by)}, registered_at: ${scalar(p.registered_at)}, updated_at: ${scalar(p.updated_at)} }`);
   }
@@ -264,6 +287,20 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
   for (const [i, team] of (teams as YamlValue[]).entries()) {
     if (typeof team !== 'string') bad(`teams line ${i + 1} must be a team ID`);
   }
+  // The project's word on the delivery order, when the record writes one — the shape the team
+  // file's own reader takes (src/file/sections/delivery_order.ts), so one word means one thing.
+  const order = raw.delivery_order ?? undefined;
+  if (order !== undefined) {
+    if (!Array.isArray(order)) bad('"delivery_order" must be a list of legs');
+    const legs = order as YamlValue[];
+    if (legs.length === 0) bad('"delivery_order" must name at least one leg');
+    for (const [i, leg] of legs.entries()) {
+      if (typeof leg !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(leg)) {
+        bad(`delivery_order line ${i + 1} must be one of: ${DELIVERY_LEGS.join(', ')}`);
+      }
+    }
+    if (new Set(legs).size !== legs.length) bad('"delivery_order" names a leg twice');
+  }
   const prov = raw.provenance;
   if (!isMap(prov)) return bad('"provenance" must be a map');
   for (const key of ['registered_by', 'registered_at', 'updated_at']) {
@@ -275,6 +312,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     entity: entity as string | null,
     lead: lead as string | null,
     teams: teams as string[],
+    ...(order !== undefined ? { deliveryOrder: order as DeliveryLeg[] } : {}),
     provenance: { registered_by: prov.registered_by as string, registered_at: prov.registered_at as string, updated_at: prov.updated_at as string },
   };
 }

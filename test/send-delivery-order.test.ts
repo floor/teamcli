@@ -6,6 +6,11 @@
 // not make — are recorded `unavailable` in the walk's own words. A waited send is refused unless
 // the native leg leads the order: the frame the reply listener stands beside is that leg.
 //
+// Both ways a chain reaches the walk are here: handed in on the host, and — the production
+// reading — left out, so the team file's own `delivery_order` and its seats' are what the walk
+// resolves (`src/send/delivery.ts`), with the registry project's word when a test hands in a
+// registry.
+//
 // Fixtures only: fake seats, fake panes, a fake sockets folder, and a `deliver` that counts the
 // attempt and throws, so a walk that dials fails loudly. No live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -14,10 +19,14 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
+import type { ProjectSources } from '../src/commands/projects.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import type { ProjectRecord } from '../src/registry/projects.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
+import { deliveryChainOf } from '../src/send/delivery.ts';
 import { readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
@@ -45,7 +54,10 @@ afterEach(async () => {
   base = '';
 });
 
-function teamYaml(root: string, lobby: string): string {
+/** The fixture file. `extra.top` is a top-level line appended after the sections, and
+ *  `extra.lead` a line inside the lead's seat entry — the two places the delivery order is
+ *  written, so a scene can declare one without a second fixture. */
+function teamYaml(root: string, lobby: string, extra: { top?: string; lead?: string } = {}): string {
   return `format: 1
 project: acme
 coordinator: lead
@@ -64,7 +76,7 @@ seats:
     model: Test
     version: "1"
     launch: claude
-  - role: implementer
+${extra.lead ?? ''}  - role: implementer
     name: helper
     cli: claude-code
     vendor: test
@@ -78,10 +90,10 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
-`;
+${extra.top ?? ''}`;
 }
 
-function world(): { root: string; dir: string; sockets: string; home: string; team: TeamFile } {
+function world(extra: { top?: string; lead?: string } = {}): { root: string; dir: string; sockets: string; home: string; team: TeamFile } {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-walk-')));
   const root = join(base, 'acme');
   const dir = join(root, '.agents');
@@ -91,7 +103,7 @@ function world(): { root: string; dir: string; sockets: string; home: string; te
   mkdirSync(sockets, { recursive: true });
   mkdirSync(lobbyDir(home), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  writeFileSync(join(dir, 'team.yaml'), teamYaml(root, lobbyDir(home)));
+  writeFileSync(join(dir, 'team.yaml'), teamYaml(root, lobbyDir(home), extra));
   const loaded = loadTeamFile(root, { home });
   if (!loaded.ok) throw new Error('fixture team.yaml failed to load');
   return { root, dir, sockets, home, team: loaded.team };
@@ -104,9 +116,10 @@ type Walker = SendHost & DaemonHost & {
   dials: () => number;
 };
 
-/** The host every scene is handed. `delivery` is the chain the walk resolves; absent, nothing
- *  declares an order and the default stands. The pane is an idle box that reads back the trigger
- *  once it is typed, and `deliver` counts the attempt before throwing: no walk dials. */
+/** The host every scene is handed. `delivery` is the chain the walk resolves; absent, the walk
+ *  reads the chain from the fixture files (`src/send/delivery.ts`). The pane is an idle box that
+ *  reads back the trigger once it is typed, and `deliver` counts the attempt before throwing: no
+ *  walk dials. */
 function walker(w: { sockets: string; home: string }, delivery?: Delivery): Walker {
   const typed: { pane: string; text: string }[] = [];
   const enters: string[] = [];
@@ -163,6 +176,24 @@ function dropDir(root: string, seat: string): string {
 
 function dropped(root: string, seat: string): string {
   return join(dropDir(root, seat), readdirSync(dropDir(root, seat)).sort()[0] as string);
+}
+
+/** One registry project record, with a delivery order when a scene declares one. */
+function projectRecord(order?: DeliveryLeg[]): ProjectRecord {
+  return {
+    id: 'acme',
+    name: 'acme',
+    entity: null,
+    lead: null,
+    teams: [],
+    ...(order ? { deliveryOrder: order } : {}),
+    provenance: { registered_by: 'test', registered_at: NOW.toISOString(), updated_at: NOW.toISOString() },
+  };
+}
+
+/** The registry seam a scene hands the host: one project, answering every read. */
+function projectSources(record: ProjectRecord | null): ProjectSources {
+  return { list: () => (record ? [record] : []), byName: () => record, ofTeam: () => record };
 }
 
 function lastEntry(root: string, home: string): Record<string, unknown> {
@@ -259,6 +290,108 @@ describe('the walk records the channel and the legs it skipped', () => {
     const entry = lastEntry(w.root, w.home);
     expect(entry.outcome).toBe('unreachable');
     expect('failed' in entry).toBe(false);
+  });
+});
+
+describe('the chain is read from the files when the host hands none in', () => {
+  test('a team file declaring typed-only makes the walk skip native, and the history shows it', async () => {
+    const w = world({ top: 'delivery_order: [typed]\n' });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    const code = await runSend(['lead', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('lead: delivered\n');
+    // The order in force holds the one leg, so the send goes by it and neither skip a default
+    // walk records is walked: the history line has no `failed` at all.
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('typed');
+    expect('failed' in entry).toBe(false);
+    expect(entry.body).toBe(`${HEADER}hello`);
+    expect(existsSync(dropped(w.root, 'lead'))).toBe(true);
+    expect(host.typed[0]?.pane).toBe('pane-lead');
+  });
+
+  test('a seat’s own word is read from the seat, and the walk goes by it', async () => {
+    const w = world({ lead: '    delivery_order: [typed]\n' });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('typed');
+    expect('failed' in entry).toBe(false);
+  });
+
+  test('a project’s word is read from its registry record', async () => {
+    const w = world();
+    const host = walker(w);
+    host.projects = projectSources(projectRecord(['typed']));
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('typed');
+    expect('failed' in entry).toBe(false);
+  });
+
+  test('a seat word that would add a leg is set aside by the walk, over the project’s word', async () => {
+    const w = world({ lead: '    delivery_order: [native, typed]\n' });
+    const host = walker(w);
+    host.projects = projectSources(projectRecord(['typed']));
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    // Honouring the seat's word would put the native leg back in and record its skip; it is not
+    // in the order in force, so the word is no word and the project's typed-only order stands.
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('typed');
+    expect('failed' in entry).toBe(false);
+  });
+
+  test('the team file’s word and the seat’s resolve to the team and seat levels', () => {
+    const w = world({ top: 'delivery_order: [native, typed]\n', lead: '    delivery_order: [typed]\n' });
+    const chain = deliveryChainOf({ root: w.root, seat: 'lead', home: w.home, projectOfTeam: () => null });
+    expect(chain).toEqual({ team: ['native', 'typed'], seat: ['typed'] });
+  });
+
+  test('a file the reader cannot load declares nothing: the default order stands', () => {
+    const w = world();
+    writeFileSync(join(w.dir, 'team.yaml'), teamYaml(w.root, lobbyDir(w.home), { top: 'delivery_order: [telepathy]\n' }));
+    expect(deliveryChainOf({ root: w.root, seat: 'lead', home: w.home, projectOfTeam: () => null })).toEqual({});
+  });
+
+  test('a registry that cannot answer is no project word, never a failed send', () => {
+    const w = world({ top: 'delivery_order: [typed]\n' });
+    const chain = deliveryChainOf({
+      root: w.root,
+      seat: 'lead',
+      home: w.home,
+      projectOfTeam: () => {
+        throw new Error('team acme is named in 2 projects');
+      },
+    });
+    expect(chain).toEqual({ team: ['typed'] });
+  });
+
+  test('the project word is asked for the team’s own id', () => {
+    const w = world();
+    const asked: string[] = [];
+    const chain = deliveryChainOf({
+      root: w.root,
+      seat: 'lead',
+      home: w.home,
+      projectOfTeam: (id) => {
+        asked.push(id);
+        return projectRecord(['mcp-inbox', 'typed']);
+      },
+    });
+    expect(asked).toEqual([teamIdOf(w.root)]);
+    expect(chain).toEqual({ project: ['mcp-inbox', 'typed'] });
   });
 });
 

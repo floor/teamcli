@@ -299,6 +299,63 @@ describe('upsertProject', () => {
   });
 });
 
+// The project's word on the delivery order: read when a record writes one, kept by every write
+// that does not name it, and written back in the record's own shape. A record without one keeps
+// the bytes it had — the documented shape test above writes none and pins exactly that.
+describe('delivery_order', () => {
+  test('a written word reads back, and a record without one carries no field', () => {
+    writeProjects(
+      'projects:\n  teamcli:\n    name: TeamCLI\n    entity: null\n    lead: null\n    teams: []\n' +
+        `    delivery_order: [native, typed]\n    provenance: { registered_by: owner, registered_at: "${AT}", updated_at: "${AT}" }\n`,
+    );
+    expect(get(home, 'teamcli')?.deliveryOrder).toEqual(['native', 'typed']);
+    writeProjects(twoProjects());
+    expect('deliveryOrder' in (get(home, 'teamcli') as object)).toBe(false);
+  });
+
+  test('a word that is not a non-empty list of distinct legs is refused, naming the project', () => {
+    const prov = `    provenance: { registered_by: owner, registered_at: "${AT}", updated_at: "${AT}" }\n`;
+    const record = (word: string) => `projects:\n  teamcli:\n    name: TeamCLI\n    ${word}\n${prov}`;
+    writeProjects(record('delivery_order: []'));
+    expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" must name at least one leg/);
+    writeProjects(record('delivery_order: typed'));
+    expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" must be a list of legs/);
+    writeProjects(record('delivery_order: [telepathy]'));
+    expect(() => readProjects(home)).toThrow(/project teamcli: delivery_order line 1 must be one of: native, mcp-inbox, typed/);
+    writeProjects(record('delivery_order: [typed, typed]'));
+    expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" names a leg twice/);
+  });
+
+  test('a written word is the record’s own line, and an unrelated patch keeps it', () => {
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', deliveryOrder: ['typed'], by: 'owner', at: AT });
+    expect(readFileSync(projectsFile(home), 'utf8')).toBe(
+      [
+        'projects:',
+        '  teamcli:',
+        '    name: TeamCLI',
+        '    entity: null',
+        '    lead: null',
+        '    teams: []',
+        '    delivery_order: [typed]',
+        `    provenance: { registered_by: owner, registered_at: "${AT}", updated_at: "${AT}" }`,
+        '',
+      ].join('\n'),
+    );
+    upsertProject(home, 'teamcli', { teams: ['cli-id'], at: AT });
+    expect(get(home, 'teamcli')?.deliveryOrder).toEqual(['typed']);
+    expect(get(home, 'teamcli')?.teams).toEqual(['cli-id']);
+  });
+
+  test('a patch with a word the reader would refuse is refused, and the file stays as it was', () => {
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: AT });
+    const before = readFileSync(projectsFile(home), 'utf8');
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: [] })).toThrow('"delivery_order" must name at least one leg');
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['telepathy'] as never })).toThrow('a "delivery_order" leg must be one of: native, mcp-inbox, typed');
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['typed', 'typed'] })).toThrow('"delivery_order" names a leg twice');
+    expect(readFileSync(projectsFile(home), 'utf8')).toBe(before);
+  });
+});
+
 describe('projectIdOf', () => {
   test('lowercases the name and writes every other run as one dash', () => {
     expect(projectIdOf('teamcli')).toBe('teamcli');
