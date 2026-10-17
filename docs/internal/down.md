@@ -149,6 +149,19 @@ clearing key runs first — and a dry run says so in a note under its typing ste
 It prints `session <session> is not running: nothing to stop` and exits 0 when there is nothing to
 stop at all.
 
+Under `--json` the run writes one `team.down` v1 document on stdout, its `schema` tag first:
+`format`, `dry_run`, `status` (`dry-run`, `idle` for a session with nothing to stop, `stopped`
+otherwise), `action_summary`, `project`, `session`, `seats` and `notes`. A dry run's document has
+`dry run: nothing was run` as its `action_summary` and the plan in `plan` — one
+`{ step, seat?, detail, prefix? }` per plan line, a run step prefixed `+`, a skip `skip`, a wait
+with none, and a warning leading as `{ step: "warning", prefix: "!" }` when there is one; a
+session that is not running prints the idle line as its first note. A real run's `action_summary`
+is its closing line — `session <session>: stopped and cleared`, or `stopped; it did not clear`
+when the clear did not happen — or `session <session>: stopped` when nothing was said, and the
+lines before it travel in `notes`. A refusal under `--json` writes
+a `team.error` v1 document on stdout instead — the refusal's own `id`, its `message` and `repair`
+— and stderr stays empty. The exit code is the same as without `--json`.
+
 ## Refusals
 
 | Message | Exit |

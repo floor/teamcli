@@ -46,6 +46,21 @@ That line names the schema of the release that wrote the file — the tag `v` pl
 The owner, from a terminal outside herdr. A seat or an agent-run CLI is refused with the caller
 named. A run with no terminal is refused with one sentence, before the repository is read.
 
+## What it prints
+
+`Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.`, or
+`Restored .agents/team.yaml from the copy you last approved on this machine.`, followed by the
+privacy paragraph: the file is private to this clone, listed in `.git/info/exclude` and never in
+`.gitignore`, so git doesn't see it and a fresh clone doesn't carry it; a collaborator writes
+their own, or receives one and approves it themselves.
+
+Under `--json` the run writes one `team.init` v1 document on stdout, its `schema` tag first:
+`format`, `dry_run` (always false), `status` (`wrote`, or `restored`), `action_summary` — the
+closing line above — `file` (`.agents/team.yaml`), `restored`, and `notes`; the privacy paragraph
+is plain prose and has no field. A refusal under `--json` writes a `team.error` v1 document on
+stdout instead — the refusal's own `id`, its `message` and `repair` — and stderr stays empty. The
+exit code is the same as without `--json`.
+
 ## Refusals
 
 | Message | Exit |
