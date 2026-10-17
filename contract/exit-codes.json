@@ -2151,6 +2151,13 @@
       "trigger": "team reload worker"
     },
     {
+      "code": 0,
+      "command": "reload",
+      "id": "reload.unrecorded",
+      "meaning": "its launch record held no model; the screen's or the file's values were recorded, and nothing was closed",
+      "trigger": "team reload worker"
+    },
+    {
       "code": 1,
       "command": "reload",
       "id": "reload.absent",
@@ -2252,15 +2259,8 @@
       "code": 1,
       "command": "reload",
       "id": "reload.self",
-      "meaning": "a granted reload does not close the caller's seat",
+      "meaning": "a reload does not close the caller's seat",
       "trigger": "team reload lead"
-    },
-    {
-      "code": 1,
-      "command": "reload",
-      "id": "reload.unrecorded",
-      "meaning": "the model and effort were not recorded at launch",
-      "trigger": "team reload worker"
     },
     {
       "code": 1,

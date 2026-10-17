@@ -1,7 +1,7 @@
 // The dev-mode scope, in one place. `TEAMCLI_DEV_MODE`, set to exactly `1`, folds the caller
-// gate of these seven commands — up, down, remove, register, add, restart and init — into a
-// warning and lets the run continue past it. No other command lifts anything, and no other
-// gate of these seven is lifted: `broker` and `tempo` stay owner-only in every mode, a
+// gate of these eight commands — up, down, remove, register, add, restart, reload and init —
+// into a warning and lets the run continue past it. No other command lifts anything, and no
+// other gate of these eight is lifted: `broker` and `tempo` stay owner-only in every mode, a
 // non-owner never abandons (`remove --abandon`), a delegate's `add` never edits the file, and
 // every placement, aim, approval, grant, delegation and trust word stays the refusal it is.
 //
@@ -12,7 +12,7 @@ import type { Io } from './io.ts';
 import { logLine } from './log.ts';
 
 /** The commands whose caller gate dev mode lifts: the one place the list is written. */
-export const DEV_MODE_COMMANDS = ['up', 'down', 'remove', 'register', 'add', 'restart', 'init'] as const;
+export const DEV_MODE_COMMANDS = ['up', 'down', 'remove', 'register', 'add', 'restart', 'reload', 'init'] as const;
 
 export type DevModeCommand = (typeof DEV_MODE_COMMANDS)[number];
 

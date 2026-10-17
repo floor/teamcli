@@ -7,9 +7,12 @@ reaches that seat. This command names one seat and does only that swap.
 
 The close happens at an idle prompt. A seat that is working, a seat whose input box holds
 unsent text, and a seat whose screen is not an idle prompt are left as they are: nothing is
-closed and nothing is launched. A seat whose launch was not recorded — one brought up before
-the record existed — is refused the same way. The next launch that reaches an idle prompt
-writes the record, and a later reload can read it.
+closed and nothing is launched. A seat whose launch record kept no model — one brought up
+before the record held one — still reloads: the model its screen shows is read first, the
+team file's declared model and effort stand when the screen names none, and the reading is
+said and recorded. A seat already running what that reading declares is recorded in place
+with no close. The next launch that reaches an idle prompt writes the record, and a later
+reload can read it.
 
 A matching seat exits without closing anything and without a log line. A close that passes
 is logged at that moment, before the workspace is closed. The owner's line names the seat
@@ -30,11 +33,14 @@ The log gains one line when the close happens, and no line when it does not.
 
 ## Who may run it
 
-The owner at a terminal may name any seat, including the operator. A granted orchestrator
-may name any other seat when the file's grant lists `reload`, and may not name its own
-seat: closing that pane would end the caller. The grant this run reads is the live file's,
-like `up` and `down`: a file edited since the last approval is not a refusal. `--file` is
-the owner's. A delegate is not offered this command.
+The owner at a terminal may name any seat, including the operator. A lead — a seat the map's
+`leads` row admits, as for `restart` — may name another seat, standing on its own recorded
+pane, with or without a grant in the file. A seat the file's grant names — the orchestrator —
+may also name any other seat when the grant lists `reload`, and may not name its own seat:
+closing that pane would end the caller. A grant the file carries is a second gate, as it is
+for `down`: where the file carries one, its words are read even for a lead. The grant this
+run reads is the live file's, like `up` and `down`: a file edited since the last approval is
+not a refusal. `--file` is the owner's. A delegate is not offered this command.
 
 ## Flags
 

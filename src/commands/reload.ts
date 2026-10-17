@@ -1,12 +1,21 @@
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
-import { describeCaller, isOwner, walkCaller } from '../caller.ts';
+import {
+  anotherPaneRefusal,
+  callerOf,
+  describeCaller,
+  isOwner,
+  noPaneRefusal,
+  standingOf,
+  walkCaller,
+} from '../caller.ts';
+import { devModeCallerGate, logDevMode } from '../dev_mode.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
-import { grantGate, logGranted } from '../grant.ts';
+import { grantGate, logGranted, type GrantVerdict } from '../grant.ts';
 import {
   agentList,
   agentRename,
@@ -29,8 +38,9 @@ import { upPlan } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
-import { modelDiffers } from '../status/statusline.ts';
+import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -87,7 +97,8 @@ export default reload;
  * `team reload <seat>`: when the file's model, version or effort differs from the launch
  * record, close that seat at an idle prompt and launch the file's line. A ready seat `up`
  * leaves alone stays up. Nothing is closed while the seat is working or the box holds
- * unsent text, and a seat launched before the record existed is refused.
+ * unsent text. A seat launched before the record kept a model is read from its screen, or
+ * from the file when the screen names none, and recorded in place when nothing drifts.
  */
 export async function runReload(argv: string[], io: Io, sources: ReloadSources = realSources): Promise<number> {
   const out = cleanedIo(io);
@@ -104,25 +115,17 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   const flagged = args.values.file;
   const foreign = flagged !== undefined && resolve(io.cwd, flagged) !== resolve(io.cwd, TEAM_FILE);
   let grantSeat: string | null = null;
+  let said: GrantVerdict | null = null;
   if (!owner) {
-    const said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home });
-    if (said.kind === 'refused') {
+    said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home });
+    // A grant that cannot be read is the refusal it was, before any other reading: the rest is
+    // judged with the team file in hand, where the map's `reload` row admits a lead.
+    if (said.kind === 'refused' && said.id === 'grant.file') {
       out.stderr(`team reload: ${said.text}\n`);
-      // exit: reload.grant-another-pane
-      // exit: reload.grant-approval
-      // exit: reload.grant-caller
       // exit: reload.grant-file
-      // exit: reload.grant-no-pane
-      // exit: reload.grant-omitted
-      // exit: reload.grant-scope
       return 1;
     }
-    grantSeat = said.grant.seat;
-    if (foreign) {
-      out.stderr(`team reload: --file is the owner's; the granted seat cannot use it\n`);
-      // exit: reload.grant-flag
-      return 1;
-    }
+    if (said.kind === 'passed') grantSeat = said.grant.seat;
   }
 
   const loaded = loadTeamFile(io.cwd, {
@@ -138,59 +141,100 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   }
 
   const team = loaded.team;
+  const dir = dirname(loaded.path);
+  const session = team.session;
+  // Two doors for a seat: the map's `reload` row (the owner and the team's `leads`, standing on
+  // their recorded pane) and the grant. A grant the file carries is a second gate, as it is for
+  // `down`: its refusal is a refusal even where the map would admit the caller. With no grant,
+  // a lead passes on the map's row alone.
+  const placed = callerOf(io, session);
+  if (!owner && grantSeat === null) {
+    const rule = gateVerdict(
+      placed, team, loaded.root, sources.home ?? homedir(), 'reload',
+      standingOf(dir, session, placed), sources.now ?? (() => new Date()),
+    );
+    let refusal: string | null = null;
+    // A grant the file carries is read before the placement: its sentence names what the file
+    // must fix (an approval, a scope, a seat), which is more than "you are not placed". The
+    // grant's own placement words are the same sentence the map's verdict gives, so they are
+    // taken from the verdict below.
+    const grantWords = said !== null && said.kind === 'refused' ? said : null;
+    const placementWords = grantWords?.id === 'grant.no-pane' || grantWords?.id === 'grant.another-pane';
+    if (grantWords !== null && !placementWords && (team.grant !== null || rule.kind !== 'ok')) refusal = grantWords.text;
+    else if (rule.kind === 'no-pane') refusal = noPaneRefusal(rule.name);
+    else if (rule.kind === 'another-pane') refusal = anotherPaneRefusal(rule.name, rule.recordedPane);
+    else if (!(rule.kind === 'ok' && team.grant === null)) refusal = said?.kind === 'refused' ? said.text : null;
+    if (refusal !== null) {
+      // Dev mode lifts the caller gate's own words — a grant the file omits, or one naming
+      // another seat — and nothing else: the placement's repair, the approval and the scope
+      // stay refusals.
+      const liftable = rule.kind === 'refused' && said !== null && said.kind === 'refused'
+        && (said.id === 'grant.omitted' || said.id === 'grant.caller');
+      const folded = liftable ? devModeCallerGate('reload', io, refusal) : null;
+      if (folded === null) {
+        out.stderr(`team reload: ${refusal}\n`);
+        // exit: reload.grant-another-pane
+        // exit: reload.grant-approval
+        // exit: reload.grant-caller
+        // exit: reload.grant-no-pane
+        // exit: reload.grant-omitted
+        // exit: reload.grant-scope
+        return 1;
+      }
+      out.stderr(`team reload: ${folded}\n`);
+      logDevMode(dir, 'reload', describeCaller(placed), folded, sources.now?.() ?? new Date());
+    }
+  }
+  if (!owner && foreign) {
+    out.stderr(`team reload: --file is the owner's; the granted seat cannot use it\n`);
+    // exit: reload.grant-flag
+    return 1;
+  }
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) {
     out.stderr(`team reload: no seat of that name\n`);
     // exit: reload.absent
     return 1;
   }
-  if (grantSeat !== null && seat.name === grantSeat) {
-    out.stderr(`team reload: a granted reload does not close the caller's seat\n`);
+  if (placed.kind === 'seat' && seat.name === placed.name) {
+    out.stderr(`team reload: a reload does not close the caller's seat\n`);
     // exit: reload.self
     return 1;
   }
 
-  const dir = dirname(loaded.path);
-  const session = team.session;
   const recorded = readState(dir).sessions[session]?.seats[seat.name];
   if (seat.stopped || !recorded || recorded.stage !== 'ready' || !recorded.pane || !recorded.workspace || !recorded.launched) {
     out.stderr(`team reload: ${seat.name} has no ready pane to close\n`);
     // exit: reload.not-running
     return 1;
   }
+  // A seat started before the launch record kept a model still reloads: its screen's status row
+  // is the first answer, the team file's declared values the second, and whichever answered is
+  // said and then recorded. A seat already running what that answer declares is recorded in
+  // place, with no close.
+  let compared = recorded;
+  let source: 'screen' | 'file' | null = null;
+  let shown: Running | null = null;
   if (recorded.model === undefined || recorded.version === undefined) {
-    out.stderr(`team reload: ${seat.name}: its model and effort were not recorded at launch\n`);
-    // exit: reload.unrecorded
-    return 1;
+    shown = seatModel({ cli: seat.cli, model: seat.model }, sources.launch.paneText(session, recorded.pane) ?? undefined);
+    compared = {
+      ...recorded,
+      model: shown?.model ?? seat.model,
+      version: shown?.version ?? seat.version,
+      ...(recorded.effort === undefined && seat.effort !== undefined ? { effort: seat.effort } : {}),
+    };
+    source = shown === null ? 'file' : 'screen';
   }
-  const detail = driftOf(recorded, seat);
-  if (detail === null) {
+  const detail = driftOf(compared, seat);
+  if (detail === null && source === null) {
     out.stdout(`team reload: ${seat.name} is already running what the file declares\n`);
     // exit: reload.same
     return 0;
   }
 
-  const listed = sources.launch.agents(session)?.find((agent) => agent.name === seat.name);
-  if (listed && listed.pane === recorded.pane && listed.workspace === recorded.workspace) {
-    const text = sources.launch.paneText(session, recorded.pane);
-    const kind = readScreen(seat.cli, text ?? undefined).kind;
-    if (listed.status === 'working' || kind === 'working') {
-      out.stderr(`team reload: ${seat.name} is working; nothing closed\n`);
-      // exit: reload.working
-      return 1;
-    }
-    if (kind === 'unsent') {
-      out.stderr(`team reload: ${seat.name} holds unsent text; nothing closed\n`);
-      // exit: reload.unsent
-      return 1;
-    }
-    if (!((listed.status === 'idle' || listed.status === 'done') && kind === 'idle')) {
-      out.stderr(`team reload: ${seat.name} is not at an idle prompt; nothing closed\n`);
-      // exit: reload.not-idle
-      return 1;
-    }
-  }
-
+  // Both writes — the record kept in place and the close that follows a drift — happen under the
+  // session's mutator lock, and the idle-prompt reading is taken there too, so nothing between
+  // that reading and the close can move the seat.
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
     out.stderr(`team reload: ${plainLine(runLockText(runLock.held, session, dir))}\n`);
@@ -198,6 +242,48 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     return 1;
   }
   try {
+    if (detail === null) {
+      updateState(dir, (file) => {
+        const held = file.sessions[session]?.seats[seat.name];
+        if (!held) return;
+        held.model = compared.model;
+        held.version = compared.version;
+        if (compared.effort === undefined) delete held.effort;
+        else held.effort = compared.effort;
+      });
+      out.stdout(`team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares\n`);
+      // exit: reload.unrecorded
+      return 0;
+    }
+
+    const listed = sources.launch.agents(session)?.find((agent) => agent.name === seat.name);
+    if (listed && listed.pane === recorded.pane && listed.workspace === recorded.workspace) {
+      const text = sources.launch.paneText(session, recorded.pane);
+      const kind = readScreen(seat.cli, text ?? undefined).kind;
+      if (listed.status === 'working' || kind === 'working') {
+        out.stderr(`team reload: ${seat.name} is working; nothing closed\n`);
+        // exit: reload.working
+        return 1;
+      }
+      if (kind === 'unsent') {
+        out.stderr(`team reload: ${seat.name} holds unsent text; nothing closed\n`);
+        // exit: reload.unsent
+        return 1;
+      }
+      if (!((listed.status === 'idle' || listed.status === 'done') && kind === 'idle')) {
+        out.stderr(`team reload: ${seat.name} is not at an idle prompt; nothing closed\n`);
+        // exit: reload.not-idle
+        return 1;
+      }
+    }
+
+    if (source !== null) {
+      const effort = source === 'screen' ? effortFromFile(recorded, compared) : effortSaid(recorded, compared);
+      out.stdout(source === 'screen'
+        ? `team reload: ${seat.name}: its launch record held no model; its screen shows ${compared.model} ${compared.version}${effort}; reloading\n`
+        : `team reload: ${seat.name}: its launch record held no model; its screen names none, so the file's ${compared.model} ${compared.version}${effort} stand; reloading\n`);
+    }
+
     const root = loaded.root;
     const planned = {
       name: seat.name,
@@ -348,8 +434,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
 /** `model`, `effort`, or `model; effort`. Null when the launch record already matches the file. */
 function driftOf(recorded: SeatState, seat: Seat): string | null {
   // The shared comparison (`modelDiffers`): another word order, another casing, or the version
-  // written inside the recorded model name is the model the file declares. A record without a
-  // model is a drift, as before — the caller refuses those seats earlier anyway.
+  // written inside the recorded model name is the model the file declares.
   const model =
     recorded.model === undefined || recorded.version === undefined
       ? true
@@ -360,6 +445,27 @@ function driftOf(recorded: SeatState, seat: Seat): string | null {
   const effort = (recorded.effort ?? null) !== (seat.effort ?? null);
   if (!model && !effort) return null;
   return [model ? 'model' : '', effort ? 'effort' : ''].filter(Boolean).join('; ');
+}
+
+/** The effort the launch record lacked, read from the team file: said wherever the fallback
+ *  values are named, so the reader knows which half came from where. */
+/** The effort the file supplied, said plainly; the caller has already said where it came from. */
+function effortSaid(recorded: SeatState, compared: SeatState): string {
+  return compared.effort !== undefined && recorded.effort === undefined
+    ? ` and effort ${compared.effort}`
+    : '';
+}
+
+function effortFromFile(recorded: SeatState, compared: SeatState): string {
+  const effort = effortSaid(recorded, compared);
+  return effort === '' ? '' : `${effort} from the file`;
+}
+
+/** What the fallback recorded, and from where: the screen's model, or the file's values when the
+ *  screen names none. */
+function mentioned(shown: Running | null, compared: SeatState, recorded: SeatState): string {
+  if (shown === null) return `the file's ${compared.model} ${compared.version}${effortSaid(recorded, compared)}, since its screen names none`;
+  return `${compared.model} ${compared.version} from its screen${effortFromFile(recorded, compared)}`;
 }
 
 function invocation(io: Io, message: string): number {

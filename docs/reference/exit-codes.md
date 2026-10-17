@@ -313,6 +313,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `release.usage` | `release` | 64 | the invocation can't be read | `team release` |
 | `reload.reloaded` | `reload` | 0 | the seat was closed at an idle prompt and the new launch reached ready | `team reload worker` |
 | `reload.same` | `reload` | 0 | the seat is already running what the file declares | `team reload worker` |
+| `reload.unrecorded` | `reload` | 0 | its launch record held no model; the screen's or the file's values were recorded, and nothing was closed | `team reload worker` |
 | `reload.absent` | `reload` | 1 | the file has no seat of that name | `team reload missing` |
 | `reload.changed` | `reload` | 1 | the seat changed before it closed; nothing relaunched | `team reload worker` |
 | `reload.grant-another-pane` | `reload` | 1 | the state records another pane for the granted seat | `team reload worker` |
@@ -327,8 +328,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `reload.not-idle` | `reload` | 1 | the seat is not at an idle prompt; nothing closed | `team reload worker` |
 | `reload.not-running` | `reload` | 1 | the seat has no ready pane to close | `team reload worker` |
 | `reload.run-lock` | `reload` | 1 | another session-mutating run is holding the session | `team reload worker` |
-| `reload.self` | `reload` | 1 | a granted reload does not close the caller's seat | `team reload lead` |
-| `reload.unrecorded` | `reload` | 1 | the model and effort were not recorded at launch | `team reload worker` |
+| `reload.self` | `reload` | 1 | a reload does not close the caller's seat | `team reload lead` |
 | `reload.unsent` | `reload` | 1 | the seat holds unsent text; nothing closed | `team reload worker` |
 | `reload.working` | `reload` | 1 | the seat is working; nothing closed | `team reload worker` |
 | `reload.file` | `reload` | 2 | the team file can't be read | `team reload worker --file missing.yaml` |

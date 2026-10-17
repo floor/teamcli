@@ -60,6 +60,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-or-leads',
       why: 'the `start` row for a seat: as `start`',
     },
+    reload: {
+      kind: 'owner-or-leads',
+      why: 'the `start` row for a running seat, as `restart`: closing and relaunching one seat is the same act',
+    },
     add: {
       kind: 'owner-only',
       why: 'adding a seat is the owner\'s in 0.5.0, where no `agree` or `grant` holders stand',

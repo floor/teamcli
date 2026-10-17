@@ -31,15 +31,15 @@ function git(cwd: string, ...args: string[]): string {
   });
 }
 
-function seat(name: string, role: string, effort: string): string {
+function seat(name: string, role: string, effort: string, model = 'Claude Opus', version = '5.5'): string {
   return [
     `  - role: ${role}`,
     `    name: ${name}`,
     `    label: ${name}`,
     '    cli: claude-code',
     '    vendor: anthropic',
-    '    model: Claude Opus',
-    '    version: "5.5"',
+    `    model: ${model}`,
+    `    version: "${version}"`,
     '    launch: claude --model claude-opus-5-5',
     `    effort: ${effort}`,
     '    mode: shared',
@@ -47,7 +47,7 @@ function seat(name: string, role: string, effort: string): string {
   ].join('\n');
 }
 
-function teamYaml(scope: string[]): string {
+function teamYaml(scope: string[], model = 'Claude Opus', version = '5.5'): string {
   return `format: 1
 project: acme
 coordinator: lead
@@ -59,14 +59,20 @@ trust:
 workspace:
   mode: shared
 seats:
-${seat('lead', 'coordinator', 'high')}
-${seat('worker', 'implementer', 'high')}
+${seat('lead', 'coordinator', 'high', model, version)}
+${seat('worker', 'implementer', 'high', model, version)}
 grant:
   session: alpha
   seat: lead
   scope:
 ${scope.map((act) => `    - ${act}`).join('\n')}
 `;
+}
+
+/** The same team with no `grant` section: the map's `reload` row is the only door. */
+function withoutGrant(): string {
+  const text = teamYaml(['reload']);
+  return `${text.slice(0, text.indexOf('\ngrant:'))}\n`;
 }
 
 function approve(text = teamYaml(['reload'])): void {
@@ -96,6 +102,15 @@ function remember(name: string, effort: string | undefined, version = '5.5', mod
       version,
       launch_line: 'claude --model claude-opus-5-5',
       ...(effort === undefined ? {} : { effort }),
+    };
+  });
+}
+
+/** A launch record from before the record kept a model: ready, on its pane, with no model. */
+function forget(name: string): void {
+  updateState(dir, (file) => {
+    (file.sessions.alpha ??= emptySession()).seats[name] = {
+      stage: 'ready', pane: `${name}-pane`, workspace: `${name}-ws`, launched: { shell: 1, cli: [2] },
     };
   });
 }
@@ -241,18 +256,43 @@ describe('team reload', () => {
     expect(io.out).toContain('already running what the file declares');
   });
 
-  test('a ready seat with no recorded model is refused', async () => {
-    updateState(dir, (file) => {
-      (file.sessions.alpha ??= emptySession()).seats.worker = {
-        stage: 'ready', pane: 'worker-pane', workspace: 'worker-ws', launched: { shell: 1, cli: [2] },
-      };
-    });
+  test('a ready seat with no recorded model records what its screen shows and closes nothing', async () => {
+    forget('worker');
     const { sources, closed } = harness();
     const io = testIo(root, OWNER);
     const code = await runReload(['worker'], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toContain('were not recorded at launch');
-    expect(closed).toEqual([]);
+    expect({ code, err: io.err, closed }).toEqual({ code: 0, err: '', closed: [] });
+    expect(io.out).toContain(
+      'its launch record held no model; recorded Claude Opus 5.5 from its screen and effort high from the file; '
+      + 'it is already running what the file declares',
+    );
+    expect(readState(dir).sessions.alpha?.seats.worker).toMatchObject({ model: 'Claude Opus', version: '5.5', effort: 'high' });
+  });
+
+  test('a ready seat with no recorded model whose screen names none records the file, and says so', async () => {
+    // A claude-code seat declared on another maker's model: its screen names no model this
+    // profile can read, so the team file's values stand.
+    approve(teamYaml(['reload'], 'DeepSeek Flash', '4.1'));
+    forget('worker');
+    const { sources, closed } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect({ code, err: io.err, closed }).toEqual({ code: 0, err: '', closed: [] });
+    expect(io.out).toContain(
+      "its launch record held no model; recorded the file's DeepSeek Flash 4.1 and effort high, since its screen names none",
+    );
+    expect(readState(dir).sessions.alpha?.seats.worker).toMatchObject({ model: 'DeepSeek Flash', version: '4.1', effort: 'high' });
+  });
+
+  test('a ready seat with no recorded model whose screen names another model reloads', async () => {
+    forget('worker');
+    const { sources, closed } = harness({ text: IDLE.replaceAll('Opus 5.5', 'Sonnet 5.5') });
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect(code, io.err).toBe(0);
+    expect(closed).toEqual(['worker-ws']);
+    expect(io.out).toContain('its launch record held no model; its screen shows Claude Sonnet 5.5 and effort high from the file; reloading');
+    expect(readState(dir).sessions.alpha?.seats.worker).toMatchObject({ model: 'Claude Opus', version: '5.5', effort: 'high' });
   });
 
   test('a record spelling the same model in another word order is no drift', async () => {
@@ -366,6 +406,63 @@ describe('team reload', () => {
     expect(closed).toEqual(['worker-ws']);
     expect(logText()).toContain('grant [grant] lead reload: worker effort');
     expect(logText()).not.toContain('reload [owner]');
+  });
+
+  test('a lead reloads through the map\'s row with no grant in the file', async () => {
+    approve(withoutGrant());
+    remember('lead', 'high');
+    remember('worker', 'low');
+    const { sources, closed } = harness();
+    const io = testIo(root, LEAD);
+    const code = await runReload(['worker'], io, sources);
+    expect({ code, err: io.err, closed }).toEqual({ code: 0, err: '', closed: ['worker-ws'] });
+    expect(logText()).toContain('reload [lead] worker: effort');
+  });
+
+  test('dev mode lifts the reload caller gate once, and a grant word stays a refusal', async () => {
+    remember('lead', 'high');
+    remember('worker', 'low');
+    const helper = { kind: 'seat' as const, name: 'helper', pane: 'w9:p1', session: 'alpha' };
+    const CALLER_LINE = 'only the seat the grant names runs this: this call is helper';
+
+    // Unset: the grant's caller sentence refuses, and nothing closes.
+    const bare = testIo(root, helper);
+    const refused = harness();
+    expect(await runReload(['worker'], bare, refused.sources)).toBe(1);
+    expect(bare.err).toBe(`team reload: ${CALLER_LINE}\n`);
+    expect(refused.closed).toEqual([]);
+
+    // Set to exactly 1: the gate warns, logs, and the run continues past it.
+    const io = testIo(root, helper);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const warned = harness();
+    expect(await runReload(['worker'], io, warned.sources)).toBe(0);
+    expect(io.err).toBe(`team reload: warning: ${CALLER_LINE}; dev mode continues\n`);
+    expect(warned.closed).toEqual(['worker-ws']);
+    expect(logText()).toContain(`reload [helper] warning: ${CALLER_LINE}; dev mode continues\n`);
+
+    // A grant in the file that leaves `reload` out of its scope is a fourth gate, not the
+    // caller's: dev mode leaves it where it is.
+    approve(teamYaml(['up']));
+    const scoped = testIo(root, LEAD);
+    scoped.env = { TEAMCLI_DEV_MODE: '1' };
+    const kept = harness();
+    expect(await runReload(['worker'], scoped, kept.sources)).toBe(1);
+    expect(scoped.err).toBe('team reload: the grant does not list `reload`\n');
+    expect(kept.closed).toEqual([]);
+  });
+
+  test('dev mode lifts the omitted grant too, where the file grants nothing at all', async () => {
+    approve(withoutGrant());
+    remember('worker', 'low');
+    const helper = { kind: 'seat' as const, name: 'helper', pane: 'w9:p1', session: 'alpha' };
+    const io = testIo(root, helper);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const { sources, closed } = harness();
+    expect(await runReload(['worker'], io, sources)).toBe(0);
+    expect(io.err).toBe('team reload: warning: the file grants nothing; dev mode continues\n');
+    expect(closed).toEqual(['worker-ws']);
+    expect(logText()).toContain('reload [helper] warning: the file grants nothing; dev mode continues\n');
   });
 
 });

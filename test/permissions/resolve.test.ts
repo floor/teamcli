@@ -248,7 +248,7 @@ describe('the map is the table, and no more', () => {
 
   test('the map holds exactly the table\'s rows', () => {
     const reads = ['messages', 'feed', 'status', 'list', 'check', 'usage', 'available', 'next', 'waits'];
-    const rows = ['init', 'up', 'down', 'restart', 'add', 'remove', 'register', 'grant', 'revoke', 'delegate', 'send', 'answer', ...reads, ...GRANT_CAPABILITIES];
+    const rows = ['init', 'up', 'down', 'restart', 'reload', 'add', 'remove', 'register', 'grant', 'revoke', 'delegate', 'send', 'answer', ...reads, ...GRANT_CAPABILITIES];
     expect(Object.keys(COMMAND_GATES).sort()).toEqual([...rows].sort());
   });
 });

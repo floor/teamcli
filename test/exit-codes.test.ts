@@ -3553,7 +3553,7 @@ scene('reload.not-running', async (place) => {
 scene('reload.unrecorded', async (place) => {
   write(place, TEAM);
   recordReload(place, 'lead', false);
-  return show(await reloaded(place, ['lead']), 'were not recorded at launch');
+  return show(await reloaded(place, ['lead']), 'its launch record held no model; recorded Claude Opus 5.5 from its screen');
 });
 scene('reload.unsent', async (place) => {
   write(place, RELOAD_FILE);
@@ -3612,7 +3612,7 @@ scene('reload.grant-flag', async (place) => {
 });
 scene('reload.grant-omitted', async (place) => {
   approve(place, TEAM);
-  return show(await reloaded(place, ['lead'], leadSeat), 'the file grants nothing');
+  return show(await reloaded(place, ['lead'], other), 'the file grants nothing');
 });
 scene('reload.grant-file', async (place) => {
   write(place, 'format: [\n');
