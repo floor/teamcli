@@ -9,6 +9,30 @@ writes it for you. The commands check that file against the machine and start an
 The live file is what they read. It runs the team in
 [herdr](https://herdr.dev), and Node 22 or later runs it.
 
+## What's new in 0.5.0
+
+The first release since 0.3.5, and the first on npm since it. The full list is in
+[CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md).
+
+- **A registry, and `team register`.** The machine records the agents, teams and projects it has
+  seen, and a seat that is already running is written in without a relaunch, so the other
+  commands can address it by name.
+- **`team send`, and the channel it takes.** A plain send gives the seat the body in a drop file
+  and one trigger line; `--wait` to a Claude Code seat takes its cross-session socket and brings
+  the reply back. Every run ends in one word — `delivered`, `answered`, `held`, `not-submitted`,
+  `timeout`, `unreachable` or `refused`. A seat its file marks `assistant: true` is its entity's
+  assistant, admitted to the entity's main coordinator by its place in the chain, never by a
+  role's name.
+- **Projects.** A team names the project it sits in; `team projects` lists them, and
+  `team status --project <name>` covers one project's teams.
+- **Seat state, live.** `team seats` gives each seat a state and the source it was read from, and
+  a blind seat is called blind.
+- **Grants and delegates, the owner's alone.** `team grant` records what a seat or a team may do
+  and `team delegate` what a pane outside the team may run; `team revoke` takes any of them back.
+- **`team approve` is gone.** The file in the clone is the record, and `team up` admits from it.
+- **`team check` is integrity, not authority.** It reads and reports and grants nothing: a clean
+  answer approves no change, starts no seat and gives no right.
+
 ## Install
 
 ```sh
