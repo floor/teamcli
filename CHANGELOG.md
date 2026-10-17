@@ -143,7 +143,8 @@ commands read them.
 
 - **Three more launch profiles.** `grok`, `gemini` and `muse` join `claude-code`, `codex`,
   `cursor` and `antigravity`, each with its own screen reading, unattended flags, login check
-  where the CLI offers one, and tested range.
+  where the CLI offers one, and tested range. The Claude Code profile is tested with CLI
+  2.1.288 to 2.1.302.
 
 - **Jules as a pane seat.** `jules` joins the profiles with its 0.1.42 CLI: a send to a jules seat
   still writes its drop file, and the body is typed through the CLI's own screens, so a new
