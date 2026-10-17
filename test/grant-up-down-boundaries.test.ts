@@ -445,6 +445,8 @@ describe('the scope the approval signed', () => {
       { label: 'lead', cwd: root },
       { label: 'pilot', cwd: root },
       { label: 'worker', cwd: lobby },
+      // Last, the watch's own workspace: the pane that runs the watch for the session.
+      { label: 'Watch · acme', cwd: root },
     ]);
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -482,6 +484,8 @@ describe('the approval the grant rides on', () => {
       { label: 'lead', cwd: root },
       { label: 'pilot', cwd: root },
       { label: 'worker', cwd: lobby },
+      // Last, the watch's own workspace: the pane that runs the watch for the session.
+      { label: 'Watch · acme', cwd: root },
     ]);
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -501,6 +505,8 @@ describe('the approval the grant rides on', () => {
     expect(trace.workspaces).toEqual([
       { label: 'pilot', cwd: root },
       { label: 'worker', cwd: lobby },
+      // Last, the watch's own workspace.
+      { label: 'Watch · acme', cwd: root },
     ]);
     expect(trace.audits).toEqual([{ seat: 'lead', act: 'up' }]);
     const doctorIo = testIo(root);

@@ -124,7 +124,8 @@ describe('parallel launch execution', () => {
     const names = ['seat-1', 'seat-2', 'seat-3', 'seat-4', 'seat-5', 'seat-6'];
     const plan: Step[] = [
       ...names.flatMap((name, i) => seatSteps(name, i % 2 === 0 ? 'claude-code' : 'codex')),
-      { kind: 'run', argv: [], do: { do: 'spawn-watch', command: 'team watch', cwd: '.' } },
+      { kind: 'run', argv: [], do: { do: 'create', label: 'Watch · acme', cwd: '.' } },
+      { kind: 'run', argv: [], do: { do: 'watch', label: 'Watch · acme', command: 'team watch' } },
     ];
 
     let t = 0;
@@ -156,7 +157,6 @@ describe('parallel launch execution', () => {
       closeWorkspace: () => true,
       stopSession: () => true,
       kill: () => true,
-      spawnWatch: () => 4242,
       agentPanes: () => names.map((name) => `${name}-pane`),
       // Every seat takes 6 s (3 polls of 2 s) before showing its idle prompt.
       classify: (): ScreenKind => (t >= 3 * IDLE_POLL_MS ? 'idle' : 'working'),
@@ -260,7 +260,8 @@ describe('parallel launch execution', () => {
       ...seatSteps('seat-3', 'codex'),
       ...seatSteps('seat-4', 'codex'),
       ...seatSteps('seat-5', 'claude-code'),
-      { kind: 'run', argv: [], do: { do: 'spawn-watch', command: 'team watch', cwd: '.' } },
+      { kind: 'run', argv: [], do: { do: 'create', label: 'Watch · acme', cwd: '.' } },
+      { kind: 'run', argv: [], do: { do: 'watch', label: 'Watch · acme', command: 'team watch' } },
     ];
 
     let t = 0;
@@ -277,7 +278,6 @@ describe('parallel launch execution', () => {
       deliverRules: async () => true,
       renameAgent: () => true,
       closeWorkspace: () => true,
-      spawnWatch: () => 4242,
       stopSession: () => true,
       kill: () => true,
       agentPanes: () => ['seat-1-pane', 'seat-3-pane', 'seat-4-pane', 'seat-5-pane'],

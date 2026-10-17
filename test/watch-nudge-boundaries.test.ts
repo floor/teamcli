@@ -3,8 +3,8 @@
 // never typed into; a lead, a parked or stopped seat and a temporary one are never the seat the
 // nudge means; the pane is the seat's live one, never a renamed stranger's; the thresholds hold —
 // the fallback fires once at nudge_wait and a delivered nudge never repeats; and `up` starts the
-// watch as a process with no pane of its own, never over a live one, while a second watch is
-// refused and the recorded pid runs.
+// watch in a workspace of its own, never over a live one, while a second watch is refused and the
+// recorded pid runs.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,6 +22,7 @@ import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval, type Standing } from '../src/store/store.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
@@ -323,15 +324,15 @@ function approve(cwd: string, file: string, home: string, text: string): void {
   );
 }
 
-// The launch as a fake herdr: workspaces it created, commands its panes ran, and watches it
-// spawned — with no pane, because the plan gives the watch none.
+// The launch as a fake herdr: workspaces it created, and the commands their panes ran. The watch
+// has a workspace of its own; its pane runs a shell command, never an agent.
 function world(): {
   launch: Launch;
   creates: { label: string; cwd: string }[];
-  watches: { command: string; cwd: string }[];
+  runs: { pane: string; command: string }[];
 } {
   const creates: { label: string; cwd: string }[] = [];
-  const watches: { command: string; cwd: string }[] = [];
+  const runs: { pane: string; command: string }[] = [];
   const panes = new Map<string, { text: string; agent: boolean }>();
   let session: 'absent' | 'running' = 'absent';
   let n = 0;
@@ -350,13 +351,10 @@ function world(): {
       creates.push({ label, cwd });
       return { pane, workspace: `w${n}` };
     },
-    paneRun(_session, pane, _command) {
-      panes.get(pane)!.agent = true;
+    paneRun(_session, pane, command) {
+      runs.push({ pane, command });
+      if (!/\bteam watch\b/.test(command)) panes.get(pane)!.agent = true;
       return true;
-    },
-    spawnWatch(command, cwd) {
-      watches.push({ command, cwd });
-      return 4242;
     },
     renameAgent: () => true,
     closeWorkspace: () => true,
@@ -373,7 +371,7 @@ function world(): {
     },
     now: () => new Date(clock),
   };
-  return { launch, creates, watches };
+  return { launch, creates, runs };
 }
 
 function upSources(home: string, made: ReturnType<typeof world>, alive?: (pid: number) => boolean): UpSources {
@@ -421,7 +419,7 @@ function watchSources(home: string, over: Partial<WatchSources> = {}): WatchSour
 }
 
 describe('the watch `up` starts', () => {
-  test('no workspace of its own: spawned in the folder, file and pid recorded in the state', async () => {
+  test('its own workspace, the folder it runs in, file and pane recorded in the state', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -436,21 +434,24 @@ describe('the watch `up` starts', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', custom], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    // The watch is a process: the only workspaces made are seats', and no pane is recorded for it.
-    expect(made.creates.map((one) => one.label)).toEqual(['coordinator', 'operator']);
-    const watch = made.watches[0];
-    expect(watch?.cwd).toBe(customDir);
-    expect(watch?.command).toContain(' watch');
-    expect(watch?.command).toContain(`--session ${SESSION}`);
-    expect(watch?.command).not.toContain('--file');
+    // Three workspaces: the two seats' and the watch's own, started in the folder the watch reads.
+    expect(made.creates.map((one) => one.label)).toEqual(['coordinator', 'operator', watchLabel('acme')]);
+    expect(made.creates[2]?.cwd).toBe(customDir);
+    const run = made.runs.find((one) => one.command.includes(' watch'));
+    expect(run?.command).toContain(' watch');
+    expect(run?.command).toContain(`--session ${SESSION}`);
+    expect(run?.command).not.toContain('--file');
+    expect(run?.pane).toBe('w3:p1');
     expect(io.err).toContain('watch: started\n');
     const state = readState(customDir).sessions[SESSION];
-    expect(state?.watchdog).toEqual({ file: custom });
-    expect(state?.watch?.pid).toBe(4242);
+    expect(state?.watchdog).toEqual({ file: custom, pane: 'w3:p1' });
+    expect(state?.watch?.pane).toBe('w3:p1');
+    expect(state?.watch?.workspace).toBe('w3');
     expect(state?.watch?.heartbeat).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(state?.watch?.pid).toBeUndefined();
   });
 
-  test('a watch whose pid is alive is never spawned over', async () => {
+  test('a watch whose pid is alive is never started over', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -468,14 +469,15 @@ describe('the watch `up` starts', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', custom], io, upSources(home, made, (pid) => pid === 99));
     expect(code, io.out + io.err).toBe(0);
-    expect(made.watches).toEqual([]);
+    expect(made.creates.map((one) => one.label)).toEqual(['coordinator', 'operator']);
+    expect(made.runs.some((one) => one.command.includes(' watch'))).toBe(false);
     expect(io.err).not.toContain('watch: started');
     expect(readState(customDir).sessions[SESSION]?.watch?.pid).toBe(99);
   });
 });
 
 describe('a second watch', () => {
-  test('is refused, and the recorded pid itself runs with no pane of its own', async () => {
+  test('is refused: no run with no terminal is ever the watch', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -498,15 +500,17 @@ describe('a second watch', () => {
     expect(refused).toBe(1);
     expect(second.err).toContain('only the owner runs this, from a terminal outside herdr');
 
-    // The recorded pid itself: no pane, no terminal, and the pid is the whole of its grant.
+    // The recorded pid itself, run with no terminal: the watch lives in a pane of its own now, so
+    // a process outside a terminal is nobody's watch — the same refusal, for the pid too, and the
+    // file stays unread.
     updateState(customDir, (state) => {
       const session = state.sessions[SESSION];
       if (session?.watch) session.watch.pid = process.pid;
     });
     const own = testIo(customDir, { kind: 'owner-no-tty' });
     const ran = await runWatch(['--session', SESSION], own, watchSources(home, { alive: () => true, pid: process.pid }));
-    expect(ran, own.out + own.err).toBe(0);
-    expect(own.out).toContain(`watching the session "${SESSION}"`);
+    expect(ran).toBe(1);
+    expect(own.err).toContain('only the owner runs this, from a terminal outside herdr');
     expect(readState(customDir).sessions[SESSION]?.watchdog).toEqual({ file: custom });
   });
 });

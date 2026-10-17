@@ -285,9 +285,6 @@ function launching(text: string, paneOk: (command: string) => boolean = () => tr
       if (known) known.agent = true;
       return true;
     },
-    spawnWatch(command) {
-      return paneOk(command) ? 4242 : null;
-    },
     renameAgent: () => true,
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
@@ -1990,6 +1987,22 @@ scene('watch.already', async (place) => {
 scene('watch.stopped', async (place) => {
   write(place, TEAM);
   return show(await watched(place, [], owner), 'stopped');
+});
+scene('watch.workspace', async (place) => {
+  write(place, TEAM);
+  return show(await watched(place, [], owner, watchSources({
+    createWorkspace: () => null,
+    paneRun: () => false,
+    watchCommand: () => 'team watch',
+  })), 'did not start in its workspace');
+});
+scene('watch.started', async (place) => {
+  write(place, TEAM);
+  return show(await watched(place, [], owner, watchSources({
+    createWorkspace: () => ({ pane: 'w2:p1', workspace: 'w2' }),
+    paneRun: () => true,
+    watchCommand: () => 'team watch',
+  })), 'the watch runs in its own workspace');
 });
 
 async function used(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {

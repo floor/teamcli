@@ -140,18 +140,23 @@ export type SessionState = {
    */
   swapping?: Record<string, SwapRecord>;
   worktrees: Record<string, WorktreeState>;
-  watch?: { pid: number; heartbeat: string; pane?: string; workspace?: string };
+  /**
+   * The watch: the pane and workspace it runs in, the process once a pass has recorded one, and
+   * the last heartbeat. `pid` is absent from the moment `up` — or an owner's own run — starts the
+   * watch until that pane's first pass records its process; `pane` is absent only on a record an
+   * older detached watch left.
+   */
+  watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string };
   /**
    * The team file this session was launched from. A lead in the lobby resolves it from a pane
    * the state records, and from no other path. Absent on a session started before it was written.
    */
   launched_file?: string;
   /**
-   * The team file `up` resolved, and who may read it. Written before the watch process is
-   * spawned, and left in place when that process exits: a flagless watch started in the project
-   * folder would miss this file or read another one. `pane` is set only for a watch an older
-   * `up` started in a pane. The process `up` records on `watch.pid`, or that pane, may read it.
-   * Any other non-owner is refused.
+   * The team file `up` resolved, and who may read it. Written before the watch's pane runs its
+   * command, because a flagless watch started in the project folder would miss this file or read
+   * another one. The pane the record names, or the process a pass records on `watch.pid`, may
+   * read it. Any other non-owner is refused.
    */
   watchdog?: { file: string; pane?: string };
   nudge?: { pending_since: string | null };

@@ -89,6 +89,7 @@ describe('a shared label', () => {
       sessionRunning: true,
       seats: [seat('coordinator', 'claude opus 5.5'), seat('implementer', 'claude opus 5.5')],
       watchAlive: true,
+      watchLabel: 'Watch · scratch',
     }));
     expect(plan).toContain("--label 'claude opus 5.5'");
     expect(plan).toContain('<pane of coordinator>');

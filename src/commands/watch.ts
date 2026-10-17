@@ -11,7 +11,7 @@ import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, pressEnter, reportDisplayAgent, typeText, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, typeText, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState } from '../state.ts';
@@ -19,7 +19,8 @@ import { waitOrStop } from '../wait.ts';
 import type { Live } from '../status/compare.ts';
 import { readMachine, readingsText } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
-import { beatWatch, ownWatchPane, placedWatch } from '../watch/pane.ts';
+import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '../watch/pane.ts';
+import { watchCommand, watchWouldRead } from './up.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
@@ -86,6 +87,15 @@ export type WatchSources = {
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** The home whose store holds the override file. Absent in a test that does not set one. */
   home?: string;
+  /**
+   * The watch's own workspace: `up`'s two steps, run by a hand start. Absent, no workspace can
+   * be made here: the watch runs in this process, as one started by hand always did.
+   */
+  createWorkspace?(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
+  /** Types the watch's command into its pane. False when herdr refused. */
+  paneRun?(session: string, pane: string, command: string): boolean;
+  /** The command a watch pane runs: the one `up` starts. Defaults to `up`'s own. */
+  watchCommand?(session: string): string;
 };
 
 export const realWatchSources: WatchSources = {
@@ -119,6 +129,9 @@ export const realWatchSources: WatchSources = {
   home: homedir(),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, session === 'default' ? undefined : session),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, session === 'default' ? undefined : session),
+  createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, session === 'default' ? undefined : session),
+  paneRun: (session, pane, command) => paneRun(pane, command, session === 'default' ? undefined : session),
+  watchCommand,
 };
 
 export const watch: Command = (argv, io) => runWatch(argv, io, realWatchSources);
@@ -166,23 +179,6 @@ async function admittedWatchdog(
   }
 }
 
-/** Whether this process is the detached watch `up` recorded for this folder's session. */
-function isSpawnedWatchPid(cwd: string, session: string | undefined): boolean {
-  for (const dir of [join(cwd, '.agents'), cwd]) {
-    try {
-      const sessions = readState(dir).sessions;
-      if (session !== undefined) {
-        if (sessions[session]?.watch?.pid === process.pid) return true;
-      } else if (Object.values(sessions).some((entry) => entry?.watch?.pid === process.pid)) {
-        return true;
-      }
-    } catch {
-      // An unreadable state file does not admit a detached caller.
-    }
-  }
-  return false;
-}
-
 // How often the watch writes the machine's readings to the log, in seconds. Not the pass rate:
 // the default pass is 120s and the machine moves on an hourly scale, so a line per pass would be
 // 720 a day saying what one every ten minutes says.
@@ -200,9 +196,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // writes beside it: a non-owner aiming `--file` must not make this command read and validate
   // another project's team file, nor leave its `last_valid`, its log line or its heartbeat in
   // that project's state. The one place every command whose `--file` is the owner's decides it is
-  // `fileOwnerRefusal` (caller.ts). The watch `up` starts carries no `--file`: a detached
-  // process is not an owner at a terminal. The file is recorded on the session instead, and
-  // only that process — or a pane an older run recorded — may read it.
+  // `fileOwnerRefusal` (caller.ts). The watch's pane carries no `--file`: a pane is not an owner
+  // at a terminal. The file is recorded on the session instead, and only that pane — or the
+  // process a pass records — may read it.
   const fileRefusal = fileOwnerRefusal(io, args.values.file);
   if (fileRefusal !== undefined) {
     io.stderr(`team watch: ${fileRefusal}\n`);
@@ -211,7 +207,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   }
   const caller = callerOf(io, args.values.session);
   const grant = args.values.file ? undefined : await admittedWatchdog(io.cwd, args.values.session, caller);
-  if (detached !== undefined && !(grant && 'file' in grant) && !isSpawnedWatchPid(io.cwd, args.values.session)) {
+  // A run with no terminal is refused: the watch lives in a pane of its own now, so no process
+  // outside a terminal is ever the watch and none has to be admitted to the file.
+  if (detached !== undefined) {
     io.stderr(`team watch: ${detached}\n`);
     // exit: watch.caller
     return 1;
@@ -233,11 +231,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   const session = args.values.session ?? first.team.session;
   const { dir } = first;
 
+  const placed = callerOf(io, session);
+
   // A seat that starts the session's only watch must not be able to drop the operator's nudge
   // or the operator's desktop notices. The owner's own `--no-notify` still cannot silence a
   // report addressed to the owner: those are routed below.
   if (args.flags.has('no-nudge') || args.flags.has('no-notify')) {
-    const placed = callerOf(io, session);
     if (!isOwner(placed)) {
       io.stderr(`team watch: --no-nudge and --no-notify are the owner's, from a terminal outside herdr; this call is ${describeCaller(placed)}\n`);
       // exit: watch.no-nudge
@@ -249,13 +248,65 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // The load above wrote nothing, and a flag refusal returned above. A watch that is already
   // running leaves the state file as it was. An allowed run remembers once that check has
   // passed, before the loop. The loop's own read remembers again when the file changes.
+  const standing = sources.standing(first.root);
   const other = readState(dir).sessions[session]?.watch;
-  if (other && other.pid !== sources.pid && sources.alive(other.pid)) {
-    io.stderr(`team watch: a watch already runs for the session "${session}" (pid ${other.pid})\n`);
+  // A record with a pane and no pid yet is the hand-over `up` — or the owner's own run — made:
+  // the command typed into that pane is the watch this call is. Only a caller the walk provably
+  // places elsewhere — the owner's terminal outside herdr, a seat, another pane — is refused
+  // while that record is fresh. A caller the walk cannot place is admitted, because the pane's
+  // own command reads exactly so when herdr names no pane to it (a `pane run` whose process
+  // carries no pane hint places nobody), and its first pass then records the pid every later
+  // caller is judged by.
+  const elsewhere = placed.kind === 'owner' || placed.kind === 'owner-no-tty' || placed.kind === 'seat'
+    || (placed.kind === 'pane' && placed.pane !== other?.pane);
+  const handOver = !elsewhere && other !== undefined && other.pid === undefined && other.pane !== undefined;
+  const otherRunning = other && !handOver && other.pid !== sources.pid && watchRunning(other, {
+    alive: (pid) => sources.alive(pid),
+    now: sources.now().getTime(),
+    interval: watchInForceOf(standing, first.team).interval,
+  });
+  if (otherRunning) {
+    const where = other.pid !== undefined ? `pid ${other.pid}` : `pane ${other.pane ?? 'not recorded'}`;
+    io.stderr(`team watch: a watch already runs for the session "${session}" (${where})\n`);
     // exit: watch.already
     return 1;
   }
   if (first.path !== undefined) rememberCurrent(first.dir, first.path, sources.now());
+
+  // Started alone, from the owner's terminal outside herdr: the watch runs in its own workspace
+  // of the team's session — `up`'s own two steps — so the one watch `team status` and the checks
+  // look for is the one running, and not a process this terminal owns. The file the pane would
+  // not resolve for itself is recorded for that pane before its command runs, and the pane
+  // itself once the command has started: a run whose typing failed leaves no watch in the state.
+  // An owner who asked to watch without nudges or notices keeps this terminal — those flags are
+  // the owner's, and the pane's own `team watch` cannot carry them — and so does a build with no
+  // workspace to make (a test's own sources), which runs the watch here as one always did.
+  if (isOwner(placed) && !args.flags.has('no-nudge') && !args.flags.has('no-notify')
+    && sources.createWorkspace && sources.paneRun) {
+    const label = watchLabel(first.team.project);
+    const made = sources.createWorkspace(session, first.root, label);
+    if (made) {
+      const file = first.path !== undefined && !watchWouldRead(first.root, first.path, sources.home) ? first.path : undefined;
+      if (file !== undefined) {
+        updateState(dir, (state) => {
+          const current = (state.sessions[session] ??= emptySession());
+          current.watchdog = { file, pane: made.pane };
+        });
+      }
+      if (sources.paneRun(session, made.pane, (sources.watchCommand ?? watchCommand)(session))) {
+        updateState(dir, (state) => {
+          const current = (state.sessions[session] ??= emptySession());
+          current.watch = { pane: made.pane, workspace: made.workspace, heartbeat: sources.now().toISOString() };
+        });
+        io.stdout(`team watch: the watch runs in its own workspace (${label}, pane ${made.pane})\n`);
+        // exit: watch.started
+        return 0;
+      }
+    }
+    io.stderr('team watch: the watch did not start in its workspace\n');
+    // exit: watch.workspace
+    return 1;
+  }
 
   // The log line is written for every report. `--no-notify` never removes it, and it never
   // removes a desktop notice addressed to the owner. It does silence every other notice.

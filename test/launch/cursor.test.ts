@@ -296,6 +296,7 @@ describe('Cursor launch and captured screens', () => {
       session: 'scratch',
       sessionRunning: true,
       watchAlive: true,
+      watchLabel: 'Watch · scratch',
       seats: [{
         name: 'grok',
         cli: 'cursor',
