@@ -129,6 +129,18 @@ describe('team pr check follows the output contract', () => {
     assertJsonErrorShape(result.out, { id: 'pr.invocation', messageContains: 'a <file> is required', repair: null });
   });
 
+  test('--json is read before the parser: a bad option, or --json=<value>, still writes the error document', async () => {
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const result = await run([...argv]);
+      expect(result.code).toBe(2);
+      expect(result.err).toBe('');
+      assertJsonErrorShape(result.out, { id: 'pr.invocation', messageContains, repair: null });
+    }
+  });
+
   test('--json: a load refusal is the team.error document for its row', async () => {
     const failing: LoadConfig = () => ({ ok: false, errors: [{ line: 0, message: NOT_A_REPO }] });
     const result = await run(['body.md', '--json'], failing);

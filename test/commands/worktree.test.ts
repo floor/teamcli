@@ -169,6 +169,18 @@ describe('team worktree new', () => {
     assertJsonErrorShape(io.out, { id: 'worktree.shared', messageContains: 'workspace.mode is shared' });
   });
 
+  test('--json is read before the parser: a bad option, or --json=<value>, still writes the error document', async () => {
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const io = await run([...argv]);
+      expect(io.code).toBe(2);
+      expect(io.err).toBe('');
+      assertJsonErrorShape(io.out, { id: 'worktree.invocation', messageContains, repair: null });
+    }
+  });
+
   test('--json: a setup failure is the worktree.setup error document, and it writes nothing on stderr', async () => {
     approve(teamText({ setup: '  setup:\n    - "false"\n' }));
     const io = await run(['new', 'select-width', '--kind', 'fix', '--json']);
