@@ -1,0 +1,12 @@
+
+  >_ OpenAI Codex (v0.161.0)
+     <workspace>                     
+
+  Tip: Use the desktop app. Run codex app to open it.
+  It installs automatically if needed.
+
+⚠ Heads up, you have less than 5% of your weekly
+  limit left. Run /status for a breakdown.
+Session ID: <session-id>                        
+<workspace>                      main       12:47:49
+❯ 

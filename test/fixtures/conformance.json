@@ -120,6 +120,55 @@
       "provenance": "capture"
     },
     {
+      "file": "antigravity/1.3.5/exit.txt",
+      "cli": "antigravity",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/idle.txt",
+      "cli": "antigravity",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/permission.txt",
+      "cli": "antigravity",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/question.txt",
+      "cli": "antigravity",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/rules-line.txt",
+      "cli": "antigravity",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/trust.txt",
+      "cli": "antigravity",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.3.5/working.txt",
+      "cli": "antigravity",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "claude-code/2.1.289/bash-mode-ansi.txt",
       "cli": "claude-code",
       "classify": "unknown",
@@ -299,6 +348,48 @@
       "cli": "claude-code",
       "classify": "working",
       "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/exit.txt",
+      "cli": "claude-code",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/idle.txt",
+      "cli": "claude-code",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/permission.txt",
+      "cli": "claude-code",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/question.txt",
+      "cli": "claude-code",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/trust.txt",
+      "cli": "claude-code",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.299/working.txt",
+      "cli": "claude-code",
+      "classify": "working",
+      "composer": "idle",
       "provenance": "capture"
     },
     {
@@ -659,9 +750,44 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/exit.txt",
+      "cli": "codex",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
       "file": "codex/0.161.0/idle.txt",
       "cli": "codex",
       "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/permission.txt",
+      "cli": "codex",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/trust.txt",
+      "cli": "codex",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/unsent.txt",
+      "cli": "codex",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/working.txt",
+      "cli": "codex",
+      "classify": "working",
       "composer": "idle",
       "provenance": "capture"
     },
@@ -1002,6 +1128,55 @@
       "provenance": "capture"
     },
     {
+      "file": "cursor/2026.10.14/exit.txt",
+      "cli": "cursor",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/idle.txt",
+      "cli": "cursor",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/permission.txt",
+      "cli": "cursor",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/question.txt",
+      "cli": "cursor",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/trust.txt",
+      "cli": "cursor",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/unsent.txt",
+      "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/working.txt",
+      "cli": "cursor",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "exit-typing/claude-code-exit-lines-quoted-no-rule-question.txt",
       "cli": "claude-code",
       "classify": "question",
@@ -1219,6 +1394,83 @@
       "provenance": "capture"
     },
     {
+      "file": "gemini/0.64.0/exit-typed.txt",
+      "cli": "gemini",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "gemini/0.64.0/exit.txt",
+      "cli": "gemini",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "gemini/0.64.0/idle.txt",
+      "cli": "gemini",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "gemini/0.64.0/permission.txt",
+      "cli": "gemini",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "gemini/0.64.0/question.txt",
+      "cli": "gemini",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "gemini/0.64.0/rate-limit.txt",
+      "cli": "gemini",
+      "classify": "rate limit",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "gemini/0.64.0/rules-accepted.txt",
+      "cli": "gemini",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "gemini/0.64.0/rules-line.txt",
+      "cli": "gemini",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "gemini/0.64.0/trust.txt",
+      "cli": "gemini",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "gemini/0.64.0/unsent.txt",
+      "cli": "gemini",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "gemini/0.64.0/working.txt",
+      "cli": "gemini",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "grok/1.0.50/after-turn.txt",
       "cli": "grok",
       "classify": "idle",
@@ -1303,27 +1555,6 @@
       "provenance": "capture"
     },
     {
-      "file": "nudge-typing/claude-code-nudge-idle-ansi.txt",
-      "cli": "claude-code",
-      "classify": "idle",
-      "composer": "idle",
-      "provenance": "capture"
-    },
-    {
-      "file": "nudge-typing/claude-code-nudge-partial-ansi.txt",
-      "cli": "claude-code",
-      "classify": "unsent",
-      "composer": "unsent",
-      "provenance": "constructed"
-    },
-    {
-      "file": "nudge-typing/claude-code-nudge-unsent-ansi.txt",
-      "cli": "claude-code",
-      "classify": "unsent",
-      "composer": "unsent",
-      "provenance": "capture"
-    },
-    {
       "file": "grok/1.0.52/exit-typed.txt",
       "cli": "grok",
       "classify": "unsent",
@@ -1366,224 +1597,14 @@
       "provenance": "capture"
     },
     {
-      "file": "antigravity/1.3.5/exit.txt",
-      "cli": "antigravity",
-      "classify": "unknown",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "antigravity/1.3.5/idle.txt",
-      "cli": "antigravity",
-      "classify": "idle",
-      "composer": "idle",
-      "provenance": "capture"
-    },
-    {
-      "file": "antigravity/1.3.5/permission.txt",
-      "cli": "antigravity",
-      "classify": "permission",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "antigravity/1.3.5/question.txt",
-      "cli": "antigravity",
-      "classify": "question",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "antigravity/1.3.5/rules-line.txt",
-      "cli": "antigravity",
-      "classify": "unsent",
-      "composer": "unsent",
-      "provenance": "capture"
-    },
-    {
-      "file": "antigravity/1.3.5/trust.txt",
-      "cli": "antigravity",
-      "classify": "trust",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "antigravity/1.3.5/working.txt",
-      "cli": "antigravity",
-      "classify": "working",
-      "composer": "idle",
-      "provenance": "capture"
-    },
-    {
-      "file": "cursor/2026.10.14/exit.txt",
-      "cli": "cursor",
-      "classify": "unknown",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "cursor/2026.10.14/idle.txt",
-      "cli": "cursor",
-      "classify": "idle",
-      "composer": "idle",
-      "provenance": "capture"
-    },
-    {
-      "file": "cursor/2026.10.14/permission.txt",
-      "cli": "cursor",
-      "classify": "permission",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "cursor/2026.10.14/question.txt",
-      "cli": "cursor",
-      "classify": "question",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "cursor/2026.10.14/trust.txt",
-      "cli": "cursor",
-      "classify": "trust",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "cursor/2026.10.14/working.txt",
-      "cli": "cursor",
-      "classify": "working",
-      "composer": "idle",
-      "provenance": "capture"
-    },
-    {
-      "file": "claude-code/2.1.299/exit.txt",
-      "cli": "claude-code",
-      "classify": "unknown",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "claude-code/2.1.299/idle.txt",
-      "cli": "claude-code",
-      "classify": "idle",
-      "composer": "idle",
-      "provenance": "capture"
-    },
-    {
-      "file": "claude-code/2.1.299/permission.txt",
-      "cli": "claude-code",
-      "classify": "permission",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "claude-code/2.1.299/question.txt",
-      "cli": "claude-code",
-      "classify": "question",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "claude-code/2.1.299/trust.txt",
-      "cli": "claude-code",
-      "classify": "trust",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "claude-code/2.1.299/working.txt",
-      "cli": "claude-code",
-      "classify": "working",
-      "composer": "idle",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/exit-typed.txt",
-      "cli": "gemini",
-      "classify": "unsent",
-      "composer": "unsent",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/exit.txt",
-      "cli": "gemini",
-      "classify": "unknown",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/idle.txt",
-      "cli": "gemini",
-      "classify": "idle",
-      "composer": "idle",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/permission.txt",
-      "cli": "gemini",
-      "classify": "permission",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/question.txt",
-      "cli": "gemini",
-      "classify": "question",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/rate-limit.txt",
-      "cli": "gemini",
-      "classify": "rate limit",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/rules-accepted.txt",
-      "cli": "gemini",
-      "classify": "idle",
-      "composer": "idle",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/rules-line.txt",
-      "cli": "gemini",
-      "classify": "unsent",
-      "composer": "unsent",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/trust.txt",
-      "cli": "gemini",
-      "classify": "trust",
-      "composer": "unknown",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/unsent.txt",
-      "cli": "gemini",
-      "classify": "unsent",
-      "composer": "unsent",
-      "provenance": "capture"
-    },
-    {
-      "file": "gemini/0.64.0/working.txt",
-      "cli": "gemini",
-      "classify": "working",
-      "composer": "idle",
-      "provenance": "capture"
-    },
-    {
-      "file": "muse/1.4.9/idle.txt",
+      "file": "muse/1.4.9/idle-footer.txt",
       "cli": "muse",
       "classify": "idle",
       "composer": "idle",
       "provenance": "capture"
     },
     {
-      "file": "muse/1.4.9/idle-footer.txt",
+      "file": "muse/1.4.9/idle.txt",
       "cli": "muse",
       "classify": "idle",
       "composer": "idle",
@@ -1602,6 +1623,13 @@
       "classify": "permission",
       "composer": "unknown",
       "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.9/spark-constructed.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
     },
     {
       "file": "muse/1.4.9/trust.txt",
@@ -1632,6 +1660,13 @@
       "provenance": "capture"
     },
     {
+      "file": "muse/1.4.9/wonder-full-constructed.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
       "file": "muse/1.4.9/working.txt",
       "cli": "muse",
       "classify": "working",
@@ -1639,18 +1674,25 @@
       "provenance": "capture"
     },
     {
-      "file": "muse/1.4.9/spark-constructed.txt",
-      "cli": "muse",
+      "file": "nudge-typing/claude-code-nudge-idle-ansi.txt",
+      "cli": "claude-code",
       "classify": "idle",
       "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "nudge-typing/claude-code-nudge-partial-ansi.txt",
+      "cli": "claude-code",
+      "classify": "unsent",
+      "composer": "unsent",
       "provenance": "constructed"
     },
     {
-      "file": "muse/1.4.9/wonder-full-constructed.txt",
-      "cli": "muse",
-      "classify": "idle",
-      "composer": "idle",
-      "provenance": "constructed"
+      "file": "nudge-typing/claude-code-nudge-unsent-ansi.txt",
+      "cli": "claude-code",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
     }
   ],
   "yaml": [
