@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runApprove, type ApproveSources } from '../src/approve/command.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
@@ -805,6 +805,36 @@ test('init: an entity dev-mode off governs the place and retires the variable, b
   expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toBe(
     `${NOW.toISOString()} init [unplaced (it runs under herdr)] dev-mode: TEAMCLI_DEV_MODE=1 ignored because dev-mode policy is off\n`,
   );
+});
+
+test('init: a declared parent root holds the place — the entity off refuses, the entity on lifts', async () => {
+  const refused = emptyRepo();
+  const refusedBase = dirname(refused.root);
+  // The owner declared the folder holding the repo, not the repo itself: the root holds the
+  // place the run is in, as it holds the teams a record covers.
+  mkdirSync(join(refused.home, '.config', 'team'), { recursive: true });
+  writeFileSync(join(refused.home, '.config', 'team', 'entities.yaml'), `acme-corp:\n  roots:\n    - ${refusedBase}\n`);
+  const off = writePolicySet(refused.home, { level: 'entity', target: 'acme-corp', name: 'dev-mode', value: 'off' }, { now: NOW });
+  if (!off.ok) throw new Error(off.why);
+  const refusedIo = testIo(refused.root, UNPLACED);
+  refusedIo.env = { ...refusedIo.env, TEAMCLI_DEV_MODE: '1' };
+  expect(await runInit([], refusedIo, refused.home, undefined, { loggedIn: () => true, now: () => NOW })).toBe(1);
+  expect(refusedIo.err).toBe(`team init: ${INIT_LINE}\n`);
+  expect(existsSync(join(refused.root, '.agents', 'team.yaml'))).toBe(false);
+  expect(readFileSync(join(refused.root, '.agents', 'team.log'), 'utf8')).toBe(
+    `${NOW.toISOString()} init [unplaced (it runs under herdr)] dev-mode: TEAMCLI_DEV_MODE=1 ignored because dev-mode policy is off\n`,
+  );
+
+  const lifted = emptyRepo();
+  const liftedBase = dirname(lifted.root);
+  mkdirSync(join(lifted.home, '.config', 'team'), { recursive: true });
+  writeFileSync(join(lifted.home, '.config', 'team', 'entities.yaml'), `acme-corp:\n  roots:\n    - ${liftedBase}\n`);
+  const on = writePolicySet(lifted.home, { level: 'entity', target: 'acme-corp', name: 'dev-mode', value: 'on' }, { now: NOW });
+  if (!on.ok) throw new Error(on.why);
+  const liftedIo = testIo(lifted.root, UNPLACED);
+  expect(await runInit([], liftedIo, lifted.home, undefined, { loggedIn: () => true, now: () => NOW })).toBe(0);
+  expect(liftedIo.err).toBe(`team init: warning: ${INIT_LINE}; dev mode continues (dev-mode on at entity level)\n`);
+  expect(existsSync(join(lifted.root, '.agents', 'team.yaml'))).toBe(true);
 });
 
 test('reload: a refused call logs the ignored variable before the gate returns', async () => {

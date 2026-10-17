@@ -8,7 +8,7 @@ import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { TEAM_FILE, findRoot, loadTeamFile } from '../file/load.ts';
 import { validateTeamFile } from '../file/validate.ts';
-import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
+import { entityGrantAdmits, isSameOrInside, readEntityCreateGrants } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
@@ -27,34 +27,41 @@ export const PRIVACY = `The team file is private to this clone: it is listed in 
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or
 receives one and approves it themselves.`;
 
+/** A folder's real path where it can be read, its resolved spelling otherwise. */
+function realOf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
 /**
- * The entity whose declared roots hold `place`, read from the owner's entities file. A root is
- * compared by its resolved spelling — `~/…` expanded against `home`, a link resolved where it
- * can be — so the entity governs `init` from the place the run is in, exactly as it governs the
- * commands that read a team file there.
+ * The entity whose declared roots hold `place`, read from the owner's entities file: the root
+ * itself or a folder containing it, so `roots: [~/Code]` declares every team under it. Both
+ * spellings are compared — `~/…` expanded against `home`, and the real path on both sides,
+ * so a root reached through a link still holds the place it names. The deepest matching root
+ * wins, so a broader entity does not shadow a more specific one. This is the entity that
+ * governs `init` from the place the run is in, exactly as it governs the commands that read a
+ * team file there.
  */
 function declaredEntity(home: string, place: string): string | null {
   const resolvedPlace = resolve(place);
-  let realPlace = resolvedPlace;
-  try {
-    realPlace = realpathSync(resolvedPlace);
-  } catch {
-    // A folder that cannot be resolved is compared by its resolved spelling alone.
-  }
+  const realPlace = realOf(resolvedPlace);
   const homeResolved = resolve(home);
+  let found: { name: string; depth: number } | null = null;
   for (const [name, roots] of declaredRoots(home)) {
     for (const root of roots) {
       if (!root.startsWith('/') && !root.startsWith('~/')) continue;
       const expanded = resolve(root.replace(/^~(?=$|\/)/, homeResolved));
-      if (expanded === resolvedPlace || expanded === realPlace) return name;
-      try {
-        if (realpathSync(expanded) === realPlace) return name;
-      } catch {
-        // A declared root that is not there yet is compared as it is written.
-      }
+      const holds =
+        isSameOrInside(expanded, resolvedPlace) ||
+        isSameOrInside(realOf(expanded), realPlace);
+      if (!holds) continue;
+      if (found === null || expanded.length > found.depth) found = { name, depth: expanded.length };
     }
   }
-  return null;
+  return found === null ? null : found.name;
 }
 
 function git(root: string, ...args: string[]): string | null {
