@@ -3562,6 +3562,13 @@ scene('reload.unsent', async (place) => {
   recordReload(place, 'lead');
   return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ text: claudeBox('draft') }) }), 'holds unsent text');
 });
+scene('reload.untested', async (place) => {
+  write(place, RELOAD_FILE);
+  recordReload(place, 'lead');
+  // The installed CLI sits outside its profile's tested range: the relaunch's ready screen may
+  // be one no recogniser knows, so the seat is not closed at all.
+  return show(await reloaded(place, ['lead'], owner, { version: () => '2.2.0' }), 'its ready screen may not be recognised, so nothing closed');
+});
 scene('reload.working', async (place) => {
   write(place, RELOAD_FILE);
   recordReload(place, 'lead');

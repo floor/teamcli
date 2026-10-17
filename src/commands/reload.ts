@@ -46,6 +46,7 @@ import { rulesOf } from '../launch/rules.ts';
 import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
 import { gateVerdict } from '../permissions/who.ts';
+import { profileFor, versionVerdict } from '../profiles/profile.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
@@ -53,6 +54,7 @@ import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
+import { realSources as doctorSources } from './doctor.ts';
 import { rulesFileProblem } from './status.ts';
 import type { Launch } from './up.ts';
 
@@ -65,10 +67,20 @@ export type ReloadSources = {
   grantGate?: typeof grantGate;
   logGranted?: typeof logGranted;
   standing?: (root: string) => Standing;
+  /** What the installed `<binary>` reports as its version, read once before a close. The
+   *  profile's tested range is the record of which screens this build reads: a version outside
+   *  it refuses up front, and a version that cannot be read refuses nothing. Absent: the close
+   *  is made exactly as it was before this guard. */
+  version?: (binary: string) => string | null;
 };
 
 function aim(session: string): string | undefined {
   return session === 'default' ? undefined : session;
+}
+
+/** A profile's tested range as `doctor` prints it. */
+function testedRange(tested: { from: string; to: string }): string {
+  return tested.from === tested.to ? tested.from : `${tested.from} to ${tested.to}`;
 }
 
 const realLaunch: Launch = {
@@ -101,6 +113,7 @@ const realSources: ReloadSources = {
   launch: realLaunch,
   home: homedir(),
   now: () => new Date(),
+  version: (binary) => doctorSources.version(binary),
 };
 
 export const reload: Command = (argv, io) => runReload(argv, io, realSources);
@@ -277,6 +290,22 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       out.stdout(`team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares\n`);
       // exit: reload.unrecorded
       return 0;
+    }
+
+    // The close this run makes hands the seat's place to a relaunch, and the relaunch's ready
+    // screen is read through the CLI's profile: an installed version outside the profile's
+    // tested range may draw a prompt no recogniser knows, and the seat would be closed and left
+    // without one. The version is read once, before anything is closed. A version that cannot
+    // be read is not evidence against the CLI, and refuses nothing.
+    const profile = profileFor(seat.cli);
+    const printed = profile === null || sources.version === undefined ? null : sources.version(profile.binary);
+    if (profile !== null && printed !== null) {
+      const verdict = versionVerdict(printed, profile.tested);
+      if (verdict === 'older' || verdict === 'newer') {
+        out.stderr(`team reload: ${seat.name}: ${plainLine(profile.binary)} ${plainLine(printed)} is ${verdict} than the tested ${plainLine(testedRange(profile.tested))}; its ready screen may not be recognised, so nothing closed\n`);
+        // exit: reload.untested
+        return 1;
+      }
     }
 
     const listed = sources.launch.agents(session)?.find((agent) => agent.name === seat.name);

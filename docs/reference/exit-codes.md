@@ -330,6 +330,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `reload.run-lock` | `reload` | 1 | another session-mutating run is holding the session | `team reload worker` |
 | `reload.self` | `reload` | 1 | a reload does not close the caller's seat | `team reload lead` |
 | `reload.unsent` | `reload` | 1 | the seat holds unsent text; nothing closed | `team reload worker` |
+| `reload.untested` | `reload` | 1 | the installed CLI is outside its profile's tested range, so the relaunch's ready screen may not be recognised; nothing closed | `team reload worker` |
 | `reload.working` | `reload` | 1 | the seat is working; nothing closed | `team reload worker` |
 | `reload.file` | `reload` | 2 | the team file can't be read | `team reload worker --file missing.yaml` |
 | `reload.invocation` | `reload` | 2 | the invocation can't be read | `team reload` |

@@ -238,6 +238,28 @@ describe('team reload', () => {
     expect(readState(dir).sessions.alpha?.seats.worker?.effort).toBe('low');
   });
 
+  test('an installed version outside the tested range closes nothing', async () => {
+    remember('worker', 'low');
+    const { sources, closed, commands } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, { ...sources, version: () => '2.2.0' });
+    expect(code).toBe(1);
+    expect(closed).toEqual([]);
+    expect(commands).toEqual([]);
+    expect(io.err).toContain('claude 2.2.0 is newer than the tested 2.1.288 to 2.1.299; its ready screen may not be recognised, so nothing closed');
+    // The record and the log are untouched: the seat is still the one the file's last run made.
+    expect(readState(dir).sessions.alpha?.seats.worker?.effort).toBe('low');
+    expect(logText()).toBe('');
+  });
+
+  test('a version that cannot be read refuses nothing', async () => {
+    remember('worker', 'low');
+    const { sources, closed } = harness();
+    const code = await runReload(['worker'], testIo(root, OWNER), { ...sources, version: () => null });
+    expect(code).toBe(0);
+    expect(closed).toEqual(['worker-ws']);
+  });
+
   test('a working seat closes nothing and writes no log', async () => {
     remember('worker', 'low');
     const { sources, closed } = harness({ status: 'working' });
