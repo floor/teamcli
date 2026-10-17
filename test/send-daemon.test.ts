@@ -700,6 +700,37 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(hist.entries).toEqual([]);
   });
 
+  test('the daemon refuses a stopped seat for a caller that reaches it directly, and starts no worker', async () => {
+    const w = setupWorld();
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('  - role: reviewer', '  - role: reviewer\n    stopped: true'));
+    const loaded = loadTeamFile(w.root, { home: w.home });
+    if (!loaded.ok) throw new Error('fixture team.yaml failed to reload');
+    const host = makeHost(w);
+
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: loaded.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    // An older caller that still asks the daemon directly is refused at the queue, and no leg runs.
+    const asked = await requestDaemon(started.handle.socketPath, {
+      v: 1,
+      op: 'send',
+      from: 'owner',
+      to: 'native',
+      body: 'from an older caller',
+    });
+    const refused = asked && 'outcome' in asked ? asked : null;
+    expect(refused?.outcome).toBe('refused');
+    expect(refused && 'detail' in refused ? refused.detail : '').toBe('native is stopped');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (!hist.ok) return;
+    expect(hist.entries).toEqual([]);
+  });
+
   test('trigger points at state-folder drop path when delivered through the daemon', async () => {
     const w = setupWorld();
     const host = makeHost(w);
