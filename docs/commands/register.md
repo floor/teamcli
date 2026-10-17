@@ -75,9 +75,10 @@ declares, and every gate wired to the bridge refuses it what the file says it ho
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--session` is the owner's own |
 | a run with no terminal | nothing, unless an active create-grant covers this project: `team register: only the owner runs this, from a terminal outside herdr` |
+| a seat of this team | run it: the record it writes belongs to the seat's own team, its own seat's included |
 | a caller the file's `delegates` section names for `up` | run it: a delegate gate that passes admits the record write, exactly as it admits the launch that would have written it |
-| the seat the file's `grant` names for `up` | run it: the grant gate that admits the owner's `team up` admits the record write, and `--session` is refused in the grant's words — the owner's flag |
-| anyone else | nothing: `team register: only the owner, a delegate this file names for \`up\`, or the seat a grant names for it registers a running seat; this call is <caller>` |
+| the seat the file's `grant` names for `up` | run it: the grant gate that admits the owner's `team up` admits the record write, and the write is audited as the grant's; a verified grant that names another seat or pane, or leaves `up` out of its scope, refuses it. `--session` is refused in the grant's words — the owner's flag |
+| anyone else | nothing: `team register: only the owner or a seat of this team registers a running seat; this call is <caller>` |
 
 ## Output and exit codes
 
@@ -101,7 +102,7 @@ declares, and every gate wired to the bridge refuses it what the file says it ho
 | `team register: only the owner runs this, from a terminal outside herdr` | 1 |
 | `team register: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team register: --session is the owner's; the granted seat cannot use it` | 1 |
-| `team register: only the owner, a delegate this file names for \`up\`, or the seat a grant names for it registers a running seat; this call is <caller>` | 1 |
+| `team register: only the owner or a seat of this team registers a running seat; this call is <caller>` | 1 |
 | ``team register: only the owner or the approved delegate runs `up`; this call is <caller>`` — the file's `delegates` section decided, and refused | 1 |
 | `team register: only the seat the grant names runs this: this call is <caller>` / ``team register: the grant does not list `up` `` / `team register: a grant needs a verified approval: <why>` — the file's `grant` decided, and refused | 1 |
 | `team register: the file has no seat "<name>"` | 1 |
@@ -181,8 +182,8 @@ claude-beacon: already registered — pane w1:p1; the record was refreshed from 
 exit 0
 ```
 
-The seat is now `team send`'s and `team down`'s to address, and the implementer's seat is not the
-owner: it registers no seat, its own included:
+The seat is now `team send`'s and `team down`'s to address. A seat of this team registers its
+session's seats — its own included; a caller outside the team registers nothing:
 
 ```console
 $ team register claude-keeper ; echo "exit $?"
@@ -190,9 +191,9 @@ team register: no agent named claude-keeper is running in session "beacon"; noth
 exit 1
 ```
 
-```console caller=claude-beacon
+```console caller=agent
 $ team register claude-keeper ; echo "exit $?"
-team register: only the owner, a delegate this file names for `up`, or the seat a grant names for it registers a running seat; this call is claude-beacon
+team register: only the owner or a seat of this team registers a running seat; this call is unplaced (it is run by an agent (claude) outside herdr)
 exit 1
 ```
 

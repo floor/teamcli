@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
-import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
+import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { insideTrust, isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -578,14 +579,6 @@ function restartNote(
   return {};
 }
 
-/** The live file names this caller for `up`: the grant seat, on the pane the state records. */
-function grantAdmitsUp(team: TeamFile, io: Io, dir: string): boolean {
-  const grant = team.grant;
-  if (!grant || !grant.scope.includes('up')) return false;
-  const caller = callerOf(io, grant.session);
-  return callerVerdict(caller, grant.seat, standingOf(dir, grant.session, caller)).kind === 'ok';
-}
-
 /** A caller who is not the owner and is not named for `up`. Stderr is the word `deny`. */
 function denyUp(out: { stderr(text: string): void }): number {
   out.stderr('deny\n');
@@ -605,9 +598,10 @@ function denyUp(out: { stderr(text: string): void }): number {
 
 /** The sentence a caller the run does not admit is refused with. One spelling, so the bare
  *  `deny` a real run answers with, the warning dev mode folds it into, and the `! up would
- *  refuse:` line a dry run prints are the same words. */
+ *  refuse:` line a dry run prints are the same words. The rule is the map's `up` row
+ *  (`owner-or-leads`): the owner, or a seat this team's record marks `leads`. */
 function placementRefusal(caller: Caller): string {
-  return `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+  return `only the owner or \`leads\` starts the team; this call is ${describeCaller(caller)}`;
 }
 
 /** The one command that unblocks a run this caller cannot start: the owner's own, in this folder,
@@ -693,10 +687,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
   let grantedSeat: string | null = null;
   let grantRefusal: string | null = null;
+  let grantRefusalId: string | null = null;
   if (!mayLaunchSeats(walked) && delegated === null && delegateMissed && grantTeam) {
     const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home });
     if (said.kind === 'passed') grantedSeat = said.grant.seat;
-    else grantRefusal = said.text;
+    else {
+      grantRefusal = said.text;
+      grantRefusalId = said.id;
+    }
   }
   // A non-owner passing `--session`, or a `--file` other than this folder's own team file, is
   // refused here, before that file is read, before a session is asked, and before an out-of-band
@@ -738,7 +736,24 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.delegate-flag
     return 1;
   }
-  const caller = callerOf(io);
+  // The caller rule is the map's row (`owner-or-leads`): the owner, or a seat the team's record
+  // marks `leads` — its orchestrator, or a roster mark. The decision is made where the caller
+  // stands, by the same search `down` makes (`judgeCallerIn`), and the pane proof stays the
+  // standing's: a lead the state does not record on its pane is still refused below. The row
+  // reads the file the run is on, so an aimed run — refused above unless a gate took it — is
+  // judged on this folder's own file, the one every non-owner run still loads.
+  const gate = defaultLoad !== null && defaultLoad.ok ? defaultLoad : null;
+  let judged: ReturnType<typeof judgeCallerIn> | null = null;
+  let rule: ReturnType<typeof gateVerdict> | null = null;
+  if (gate !== null) {
+    const gateDir = dirname(gate.path);
+    const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+      gateVerdict(who, gate.team, gate.root, sources.home ?? homedir(), 'up', at, sources.now);
+    judged = judgeCallerIn(io, gateDir, gate.team, verdictOf);
+    rule = verdictOf(judged.caller, standingOf(gateDir, judged.session, judged.caller));
+  }
+  const ordinaryAdmitted = mayLaunchSeats(walked) || rule?.kind === 'ok';
+  const caller = judged?.caller ?? callerOf(io);
   // The file this run is whole on: the default one whenever the gate decided on it — a refused
   // run stops on the gate's words without reading a flagged target, a delegated one runs the
   // file its delegation was read from — and otherwise today's load, `--file` honoured exactly
@@ -792,7 +807,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     standing.kind === 'verified' ? upFingerprint(standing.record.approval.fingerprints, standing.generation) : undefined;
   const ownerToken =
     detached === undefined &&
-    !mayLaunchSeats(caller) &&
+    !ordinaryAdmitted &&
     verdict === null &&
     grantedSeat === null &&
     grantRefusal === null &&
@@ -800,13 +815,25 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     ownerAuthorized(io.env, upFp);
 
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
-  // The owner, the seat the live file names for `up`, or an agent with an active entity create-grant.
+  // The file's `grant` is the orchestrator's own authority for `up`, and a constraint where the
+  // map has admitted it: a verified grant that names another seat or pane, or that leaves `up`
+  // out of its scope, refuses the orchestrator's run (the bare word, as every other seat
+  // refusal on this page). A file no approval covers grants nothing — not even a constraint —
+  // so its refusal does not stop the map's own admission: the run goes on as the lead's, with
+  // no audit line.
+  const grantBlocked =
+    ordinaryAdmitted &&
+    grantRefusal !== null &&
+    grantRefusalId !== 'grant.approval' &&
+    caller.kind === 'seat' &&
+    caller.name === team.orchestrator;
+  // The map's admission, the trusted owner token, the granted seat, a passed delegation, a pane
+  // the live file names for `up`, or an agent with an active entity create-grant.
   const named =
-    mayLaunchSeats(caller) ||
+    (ordinaryAdmitted && !grantBlocked) ||
     ownerToken ||
     grantedSeat !== null ||
     delegated !== null ||
-    grantAdmitsUp(team, io, dir) ||
     delegateNamedFor(team, 'up', io) ||
     createGranted;
 
@@ -855,7 +882,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // decision. Written only when this call is one that may run `up` — the refusals above
       // accumulate rather than return, so a caller the caller gate refused must leave every
       // file as it was — and not on a dry run, which decides nothing.
-      if (!dry && (mayLaunchSeats(caller) || delegated !== null || grantedSeat !== null || createGranted || ownerToken)) {
+      if (!dry && (ordinaryAdmitted || delegated !== null || grantedSeat !== null || createGranted || ownerToken)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
       refusals.push(problem);
@@ -1131,7 +1158,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // dialog. A folder is written only when the grant's paths cover it and the file's `trust:` lists
   // it. The owner at a terminal, and every caller the grant does not admit, write nothing here.
   const stampGrantedTrust = () => {
-    if (!createGranted || mayLaunchSeats(caller)) return;
+    if (!createGranted || ordinaryAdmitted) return;
     const now = sources.now?.() ?? new Date();
     const grant = {
       covers: (folder: string) => entityGrantAdmits(root, io, { home: sources.home, now, cwd: folder }),

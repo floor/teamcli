@@ -260,8 +260,8 @@ test('up: unset, the caller gate refuses; set, it is a warning and the mount con
   const mountedCode = await runUp([], mountedIo, upSources(mounted.home, mountedWorld.launch));
   expect(mountedCode).toBe(0);
   expect(mountedIo.err).toContain('team up: warning:');
-  expect(mountedIo.err).toContain('only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr)');
-  expect(mountedIo.err).not.toContain('team up: only the owner runs `up`');
+  expect(mountedIo.err).toContain('only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)');
+  expect(mountedIo.err).not.toContain('team up: only the owner or `leads` starts the team');
   expect(mountedWorld.runs.map((run) => run.command).join('\n')).toContain('claude --model claude-opus-5-5');
   expect(readState(join(mounted.root, '.agents')).sessions.acme?.seats.lead?.stage).toBe('ready');
 });
@@ -484,7 +484,7 @@ test('init: unset, the caller gate refuses and nothing is written; set, it warns
 // that shows the run moved past the gate. The warning is stderr-only: `register` logs when a
 // registration completes, and none did.
 
-const REGISTER_LINE = 'only the owner, a delegate this file names for `up`, or the seat a grant names for it registers a running seat; this call is unplaced (it runs under herdr)';
+const REGISTER_LINE = 'only the owner or a seat of this team registers a running seat; this call is unplaced (it runs under herdr)';
 
 test('register: unset, the caller gate refuses; set, it warns and the run reads on', async () => {
   const refused = repo();

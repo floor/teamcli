@@ -261,14 +261,15 @@ export function sessionOwnerRefusal(walked: Caller): string {
 }
 
 // The owner, or the orchestrator's or the operator's seat: who may change a running team —
-// by the name rule this walk grew on. The six commands that wire the map (`up`, `down`,
-// `restart`, `add`, `remove`, `register`) decide by the resolver instead
-// (src/permissions/who.ts's `gateVerdict`); `hold` and `worktree list / new / remove` still
-// ask this, and it stays the shape they and every `CallerVerdict` branch on. Those are the
-// names the file resolved (`coordinator:` or `leads: true`, and `operator:`), not the seat's
-// role, so a lead written `role: coordinator` is admitted when its name is that lead. The
-// no-pane and another-pane verdicts name the seat, so a command's refusal can say which seat
-// the state lost, or which pane it holds that the caller is not on.
+// by the name rule this walk grew on. The commands wired to the map decide by the resolver
+// instead (src/permissions/who.ts's `gateVerdict`), each on its own row: `up`, `down`,
+// `restart`, `remove` and `register`; `add` wires its row in its own change. `hold` and
+// `worktree list / new / remove` still ask this, and it stays the shape they and every
+// `CallerVerdict` branch on. Those are the names the file resolved (`coordinator:` or
+// `leads: true`, and `operator:`), not the seat's role, so a lead written
+// `role: coordinator` is admitted when its name is that lead. The no-pane and another-pane
+// verdicts name the seat, so a command's refusal can say which seat the state lost, or which
+// pane it holds that the caller is not on.
 export function mayChangeTeamVerdict(caller: Caller, team: Pick<TeamFile, 'orchestrator' | 'operator'>, at?: SeatStanding): CallerVerdict {
   if (caller.kind === 'owner') return { kind: 'ok' };
   const asOrchestrator = callerVerdict(caller, team.orchestrator, at);

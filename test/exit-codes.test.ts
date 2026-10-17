@@ -3737,7 +3737,7 @@ scene('register.caller', async (place) => {
 });
 scene('register.not-owner', async (place) => {
   write(place, TEAM);
-  return show(await registered(place, ['lead'], other), 'only the owner, a delegate this file names for `up`, or the seat a grant names');
+  return show(await registered(place, ['lead'], other), 'only the owner or a seat of this team registers a running seat');
 });
 scene('register.delegate', async (place) => {
   approve(place, `${TEAM}${DELEGATES}`);
@@ -3969,7 +3969,7 @@ for (const command of ['up', 'down', 'add', 'register'] as const) {
           // says the word alone, and a dry run is never denied — it names the reason and the
           // owner's own command instead, which this holds to the caller the real run answered.
           const dryText = `${dry.err}${dry.out}`;
-          expect(dryText, id).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
+          expect(dryText, id).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
           expect(dryText, id).toContain('! to unblock: the owner runs `team up');
           continue;
         }

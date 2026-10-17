@@ -36,7 +36,7 @@ const WORKSPACE = 'ws-1';
 
 /** The caller gate's sentence, as both the refusal and the warning carry it. */
 const CALLER_GATE =
-  'only the owner, a delegate this file names for `up`, or the seat a grant names for it registers a running seat; this call is unplaced (it runs under herdr)';
+  'only the owner or a seat of this team registers a running seat; this call is unplaced (it runs under herdr)';
 /** The one command behind that gate: the owner's own run, from the same folder. */
 const UNBLOCK = '! to unblock: the owner runs `team register lead` from this folder, at a terminal outside herdr';
 
