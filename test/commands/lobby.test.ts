@@ -2577,7 +2577,7 @@ describe('the upgrade from 0.2.1', () => {
     // The orchestrator and the operator stand in the seat that reads the line: their own gaps
     // draw no note, and no identity line names a whole-team restart any more.
     expect(docIdent.out.split('\n').filter((line) => line.includes('launched before team recorded its process'))).toEqual([
-      '--    worker: launched before team recorded its process; run `team register worker` to record its process',
+      'note  worker: launched before team recorded its process; run `team register worker` to record its process',
     ]);
     expect(docIdent.out).not.toContain('team remove lead --keep');
     expect(docIdent.out).not.toContain('team remove opSeat --keep');
