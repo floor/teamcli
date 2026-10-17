@@ -16,6 +16,7 @@ import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, senderHeader } from '../src/send/admit.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { isRegistrySpec, resolveTarget, type LiveAgent } from '../src/send/resolve.ts';
+import { updateState } from '../src/state.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 const OWNER = { kind: 'owner' as const };
@@ -90,6 +91,14 @@ function agent(home: string, init: { name: string; role: string; cli: string; te
 
 function team(home: string, id: string, project: string, session: string, root: string, roster: { agent: string; seat: string; role: string }[]): void {
   upsertTeam(home, id, { project, entity: project, session, root, lobby: join(home, 'lobby'), roster, lifecycle: 'running' });
+}
+
+/** The state record `up` leaves for a launched seat: the pane herdr placed it on. The placement
+ *  check reads this, so a caller judged as the file's declared seat is placed here. */
+function place(root: string, session: string, seat: string, pane: string): void {
+  updateState(join(root, '.agents'), (state) => {
+    state.sessions[session] = { seats: { [seat]: { stage: 'launched', pane, workspace: 'w1' } }, worktrees: {} };
+  });
 }
 
 /** The rule the real admission returns for this target: what the drop's header must carry. */
@@ -167,7 +176,7 @@ describe('resolveTarget by seat@team', () => {
     seatOf(w, 'alpha', 'alpha', 'lead', 'coordinator', 'pane-alpha-lead');
 
     expect(resolveTarget(w.home, 'lead@ghost', { cwd: w.root })).toEqual({ error: 'lead@ghost: no team registry record matches "ghost" (by id, project or session)' });
-    expect(resolveTarget(w.home, 'ghost@alpha', { cwd: w.root })).toEqual({ error: 'ghost@alpha: no registered agent holds the seat "ghost" in that team' });
+    expect(resolveTarget(w.home, 'ghost@alpha', { cwd: w.root })).toEqual({ error: 'ghost@alpha: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running' });
     expect(resolveTarget(w.home, 'a@b@c', { cwd: w.root })).toEqual({ error: 'a@b@c: a spec is <seat>@<team>, or an agent id' });
     expect(resolveTarget(w.home, 'lead@', { cwd: w.root })).toEqual({ error: 'lead@: a spec is <seat>@<team>, or an agent id' });
     expect(resolveTarget(w.home, '@alpha', { cwd: w.root })).toEqual({ error: '@alpha: a spec is <seat>@<team>, or an agent id' });
@@ -191,7 +200,7 @@ describe('resolveTarget by plain seat', () => {
     expect(resolveTarget(w.home, 'lead', { cwd: w.root })).toEqual({ error: 'lead: this team has no registry record yet' });
 
     seatOf(w, 'alpha', 'alpha', 'lead', 'coordinator', 'pane-alpha-lead');
-    expect(resolveTarget(w.home, 'ghost', { cwd: w.root })).toEqual({ error: 'ghost: no registered agent holds the seat "ghost" in that team' });
+    expect(resolveTarget(w.home, 'ghost', { cwd: w.root })).toEqual({ error: 'ghost: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running' });
   });
 
   test('a folder that is no team at all refuses with the folder it could not read', () => {
@@ -358,22 +367,51 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(drop.text).toContain(BODY);
   });
 
-  test('a seat whose own record is missing is refused: no rule can name it', async () => {
+  test('a seat whose own record is missing is judged as the file\'s seat: the own-team rules admit it', async () => {
     const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
-    // The team record and the target exist; the caller's own seat has no record to admit it.
+    // The team record and the target exist; the caller's own seat has no record of its own — the
+    // live file declares it, and that declared seat is the identity the own-team rule judges.
     const target = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
     team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: target.id, seat: 'builder-1', role: 'builder' }]);
     const builderPane = scripted(['idle', 'working']);
     const host = sendHost(alpha, 'alpha', { lead: { pane: 'pane-alpha-lead', paneStatus: scripted(['idle']) }, 'builder-1': { pane: 'pane-builder', paneStatus: builderPane } });
-    // The caller stands on the orchestrator's pane, but has no agent record of its own.
+    // The state records the caller on the orchestrator's pane — the placement the declared
+    // judgement asks — and it has no agent record of its own.
+    place(alpha.root, 'alpha', 'lead', 'pane-alpha-lead');
     const caller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-alpha-lead', session: 'alpha' };
     const io = testIo(alpha.root, caller);
 
     const code = await runSend([target.id, BODY], io, host);
 
+    expect(code).toBe(0);
+    const typed = builderPane.typed[0] as Typed;
+    const drop = dropOf(typed.text);
+    expect(drop.text.split('\n')[0]).toBe(
+      "from the file's seat lead (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team",
+    );
+    expect(drop.text).toContain(BODY);
+  });
+
+  test('a seat whose own record is missing and whose target is another team is refused: no rule names it', async () => {
+    const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
+    const beta = world('beta', 'beta', 'chief', [seatBlock('coordinator', 'chief', 'claude-code', 'anthropic')], alpha);
+    const chief = agent(beta.home, { name: 'chief', role: 'coordinator', cli: 'claude-code', team: teamIdOf(beta.root), seat: 'chief', session: 'beta', pane: 'pane-beta-chief' });
+    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: chief.id, seat: 'chief', role: 'coordinator' }]);
+    const chiefPane = scripted(['idle', 'working']);
+    const host = sendHost(beta, 'beta', { chief: { pane: 'pane-beta-chief', paneStatus: chiefPane } });
+    // A record-less caller is judged as the file's seat for its own team's rules only: another
+    // team's seat is out of the declared identity's reach until a record exists for it.
+    place(alpha.root, 'alpha', 'lead', 'pane-alpha-lead');
+    const io = testIo(alpha.root, { kind: 'seat', name: 'lead', pane: 'pane-alpha-lead', session: 'alpha' });
+
+    const code = await runSend([chief.id, BODY], io, host);
+
     expect(code).toBe(1);
     expect(io.err).toContain('lead: no agent record on this machine, so no rule admits the send');
-    expect(builderPane.typed).toEqual([]);
-    expect(AGENT_ID.test(target.id)).toBe(true);
+    // The file declares this caller's seat, so the refusal names both commands that record it:
+    // `register` is the one that does it where the seat already runs, and it is named first.
+    expect(io.err).toContain('`team register lead` records the seat where it already runs, or `team up` registers a seat it leaves standing');
+    expect(chiefPane.typed).toEqual([]);
+    expect(AGENT_ID.test(chief.id)).toBe(true);
   });
 });

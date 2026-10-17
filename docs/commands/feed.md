@@ -7,7 +7,13 @@ with any `briefs/<from>-to-<to>.md` files and Desk audit lines when present.
 Each completed `team send` run (`delivered`, `answered`, `held`, `not-submitted`, `timeout`, or `unreachable`)
 appends one JSON object per line to `messages.jsonl`:
 
-    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>"}
+    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","ms":<milliseconds>,"via":"<socket|typed>"}
+
+The last two fields are optional: `ms` is the whole milliseconds from send to outcome, written
+when the send measured it, and `via` is the path the message actually travelled — `typed` (a
+composer trigger) or `socket` (a frame) — absent when it never left the sender. A line that has
+neither, from a build older than these fields, carries the six required fields alone. `team feed`
+shows them on the formatted line, after the outcome: `[delivered] via socket in 120 ms`.
 
 The log rotates at 1 MB and keeps three files (`messages.jsonl`, `messages.jsonl.1`,
 `messages.jsonl.2`), each at mode `0600`. Pre-flight refusals, `--list`, and `--dry-run` write
@@ -98,12 +104,12 @@ $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
 gpt-reviewer: delivered
 exit 0
 $ team feed ; echo "exit $?"
-09:00:00  owner -> gpt-reviewer  [delivered]  from the owner — admitted by: the owner
+09:00:00  owner -> gpt-reviewer  [delivered] via typed in 0 ms  from the owner — admitted by: the owner
           
           the gate is green
 exit 0
 $ team feed --seat gpt-reviewer ; echo "exit $?"
-09:00:00  owner -> gpt-reviewer  [delivered]  from the owner — admitted by: the owner
+09:00:00  owner -> gpt-reviewer  [delivered] via typed in 0 ms  from the owner — admitted by: the owner
           
           the gate is green
 exit 0

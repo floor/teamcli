@@ -14,10 +14,10 @@ import type { Terminal } from '../../src/launch/terminal.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-15T09:00:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const AMPLE: Machine = {
   loadPerCore: 0.2, memoryFree: 80, diskFree: 200e9, swapTotal: 10e9, swapFree: 9e9, swapUsed: 1e9,
 };
@@ -288,7 +288,9 @@ describe('team up without an approval record', () => {
       mkdirSync(sendHost.socketsDir, { recursive: true });
       const sent = await runSend(['builder-1', 'first brief'], sendIo, sendHost);
       expect(sent, `${sendIo.err}${sendIo.out}`).toBe(0);
-      expect(sendIo.out).toContain('builder-1: delivered\n');
+      // No socket file under the host's sockets folder: the typed trigger is the fallback, and
+      // the outcome names that path and the socket's reason.
+      expect(sendIo.out).toMatch(/builder-1: delivered \(typed, socket .+\)/);
       expect(existsSync(approval(here.root, here.home))).toBe(false);
     } finally {
       rmSync(here.base, { recursive: true, force: true });

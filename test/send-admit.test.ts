@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { admitSend, sendGrantFor, senderHeader, type AdmitTeams, type SendGrant, type SendGrantRecord } from '../src/send/admit.ts';
+import { admitSend, sendGrantFor, senderHeader, type AdmitTeams, type DeclaredSender, type SendGrant, type SendGrantRecord } from '../src/send/admit.ts';
 import type { Agent } from '../src/registry/agents.ts';
 
 // The reach every rule is decided over, and nothing else: a send is admitted only by a rule
@@ -104,13 +104,13 @@ describe('send admission: the rules that admit', () => {
     expect(admitSend(assistantCli, orchCli, teams)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
   });
 
-  test('an orchestrator reaches no seat of its own team', () => {
-    // The design admits orchestrator to orchestrator only: the work that carries down to a
-    // team's seats is `team brief`, not this command, and no rule below names that pair.
-    expect(admitSend(orchCli, builder1, teams).ok).toBe(false);
-    expect(admitSend(orchCli, tester1, teams).ok).toBe(false);
-    expect(admitSend(orchCli, assistantCli, teams).ok).toBe(false);
-    expect(admitSend(orchRadio, builderRadio, teams).ok).toBe(false);
+  test('an orchestrator reaches every seat of its own team, and no seat of another', () => {
+    // The team's lead briefs its own seats; this is the command it does it with.
+    const own = { ok: true, rule: 'an orchestrator or operator to a seat of its own team' } as const;
+    expect(admitSend(orchCli, builder1, teams)).toEqual(own);
+    expect(admitSend(orchCli, tester1, teams)).toEqual(own);
+    expect(admitSend(orchCli, assistantCli, teams)).toEqual(own);
+    expect(admitSend(orchRadio, builderRadio, teams)).toEqual(own);
     // Another team's seats are reached through that team's orchestrator, not directly.
     expect(admitSend(orchCli, builderLabs, teams).ok).toBe(false);
     expect(admitSend(orchCli, builderRadio, teams).ok).toBe(false);
@@ -166,8 +166,8 @@ describe('send admission: the lead seat a file names itself', () => {
 
   test('a seat reaches the coordinator its roster names, with no lead field to read', () => {
     expect(admitSend(agy, coordinator, fileTeams)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
-    // The coordinator's own reach is the other orchestrators'; a seat of its team is not one.
-    expect(admitSend(coordinator, second, fileTeams).ok).toBe(false);
+    // The coordinator briefs a seat of its own team, and reaches the other orchestrators.
+    expect(admitSend(coordinator, second, fileTeams)).toEqual({ ok: true, rule: 'an orchestrator or operator to a seat of its own team' });
     expect(admitSend(coordinator, betaLead, fileTeams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
   });
 
@@ -178,7 +178,7 @@ describe('send admission: the lead seat a file names itself', () => {
   test('the file word names only the lead: seat to seat still has no rule', () => {
     expect(admitSend(agy, second, fileTeams)).toEqual({
       ok: false,
-      why: "agy-seat@aaa111aaa111 may not send to second-seat@aaa111aaa111: no rule admits it (the owner; an orchestrator to another orchestrator; an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
+      why: "agy-seat@aaa111aaa111 may not send to second-seat@aaa111aaa111: no rule admits it (the owner; an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     });
   });
 
@@ -231,6 +231,11 @@ describe('send admission: default deny', () => {
     'tester-1@teamcli -> orchestrator@teamcli',
     'builder-1@labs -> orchestrator@labs',
     'builder-1@radio -> orchestrator@radio',
+    'orchestrator@teamcli -> assistant@teamcli',
+    'orchestrator@teamcli -> builder-1@teamcli',
+    'orchestrator@teamcli -> tester-1@teamcli',
+    'orchestrator@labs -> builder-1@labs',
+    'orchestrator@radio -> builder-1@radio',
   ]);
 
   test('every pair the rules do not list is refused', () => {
@@ -247,6 +252,7 @@ describe('send admission: default deny', () => {
             ok: false,
             why: `${from.name} may not send to ${to.name}: no rule admits it (` +
               'the owner; an orchestrator to another orchestrator; ' +
+              'an orchestrator or operator to a seat of its own team; ' +
               'an assistant seat to its entity\'s coordinator; ' +
               "a seat to its own team's orchestrator; an owner-signed grant naming send)",
           });
@@ -297,7 +303,7 @@ describe('send admission: default deny', () => {
     expect(admitSend(builderRadio, builder1, teams)).toEqual({
       ok: false,
       why: 'builder-1@radio may not send to builder-1@teamcli: no rule admits it (the owner; ' +
-        'an orchestrator to another orchestrator; ' +
+        'an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; ' +
         "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     });
   });
@@ -376,7 +382,7 @@ describe('send admission: the owner-signed grant, verified pair by pair', () => 
     expect(admitSend(builderRadio, builder1, teams, grantOf(builderRadio, builder1, []))).toEqual({
       ok: false,
       why: 'builder-1@radio may not send to builder-1@teamcli: no rule admits it (the owner; ' +
-        'an orchestrator to another orchestrator; ' +
+        'an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; ' +
         "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     });
   });
@@ -386,6 +392,15 @@ describe('the drop file header', () => {
   test('an agent\'s header carries its id, its seat and the admitting rule', () => {
     expect(senderHeader(builder1, "a seat to its own team's orchestrator")).toBe(
       `from ${BUILDER_1} (builder-1 of teamcli, builder-1@teamcli) — admitted by: a seat to its own team's orchestrator\n`,
+    );
+  });
+
+  test('a sender the registry holds no record for is spelled as the file\'s seat, and says the record is missing', () => {
+    // The bootstrap sender: no id the registry wrote, so the header names the seat the live file
+    // declares and says outright that no record exists yet — a receiver reads why the id is absent.
+    const declared: DeclaredSender = { seat: 'helper', team: 'teamcli', role: 'implementer', declared: true };
+    expect(senderHeader(declared, "a seat to its own team's orchestrator")).toBe(
+      "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n",
     );
   });
 

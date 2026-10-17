@@ -30,6 +30,7 @@ import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { refreshAgentAddress } from '../send/address.ts';
 import { readScreen } from '../watch/screen.ts';
 import type { Launch } from './up.ts';
 
@@ -285,6 +286,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
             readState(dir).sessions[session]?.seats[next]?.id,
           );
           if ('note' in made) logLine(dir, 'reload', describeCaller(caller), made.note, now());
+          else {
+            // The address: the live session socket this relaunch answers at, recorded on the agent.
+            const refreshed = refreshAgentAddress(sources.home, made.id, patch.pane, session);
+            if (refreshed.note) logLine(dir, 'reload', describeCaller(caller), refreshed.note, now());
+          }
         }
       },
       say: () => {},

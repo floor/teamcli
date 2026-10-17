@@ -143,6 +143,14 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
   });
 }
 
+/** Records the agent's cross-session address — the socket a send can reach the live session at —
+ *  or clears it with null. The launch and register paths write it; nothing here reads herdr, so a
+ *  caller hands in what it found. The pid the path's own name carries is how a later read tells a
+ *  live address from one a relaunch left behind. */
+export function recordAgentAddress(home: string, id: string, address: string | null): Agent {
+  return updateAgent(home, id, { reach: { address } });
+}
+
 /** The agent that holds a seat of a team. A retired agent no longer holds it; if more than one
  *  does, the most recently updated wins. */
 export function findAgent(home: string, query: { team: string; seat: string }): Agent | null {

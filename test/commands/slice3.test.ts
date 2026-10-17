@@ -693,14 +693,16 @@ describe('team up', () => {
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 
-  test('a seat the file does not name is denied before the plan', async () => {
+  test('a seat the file does not name: the dry run names the placement, the owner\'s command and the plan', async () => {
     const run = await up(['--dry-run'], WORKER, {
       sessionRunning: () => true,
       agents: () => [agent('stranger'), agent(null)],
     });
     expect(run.code).toBe(1);
-    expect(run.err).toBe('deny\n');
-    expect(run.out).toBe('');
+    expect(run.err).toBe('');
+    expect(run.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is deepseek-acme\n');
+    expect(run.out).toContain('! to unblock: the owner runs `team up --file .agents/team.yaml` from this folder, at a terminal outside herdr\n');
+    expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 
   test('--dry-run names an edited file and a silent herdr', async () => {

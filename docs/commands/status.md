@@ -72,11 +72,23 @@ answer once the caller has passed the gate: without it, `status` can't say anyth
 `--json` prints the same reading as one document and nothing else, with the same exit code; a caller
 who may not read the team gets the fixed sentence and no document.
 
+A hold on the team ([team hold](hold.md)) is the first `note:` the reading prints — `hold: <reason>`,
+or `hold until <instant>: <reason>` — and `--json` carries the same record as the document's
+top-level `hold` while it stands. A hold past its `until` reads as none: neither the note nor the
+document carries one that has lapsed.
+
 Every line the table prints is cleaned first: escape sequences, control characters and invisible
 format characters carried by the team file, the state, a pane or herdr are removed, and the columns
 are padded on the cleaned text, so a value can never move the cursor, paint the terminal or open a
 second line. `--json` is the one text not cleaned: the document carries each string as it was read,
 escaped where JSON requires it, for a parser rather than a terminal.
+
+Every row of the seats table ends with the word a send would use to reach that seat: `socket` while
+the file declares the seat `cli: claude-code` and the pane's own processes carry a live session
+socket, and `typed` otherwise — another CLI, a pane that is gone, one herdr could not read. The word
+is read from the processes the comparison already holds, so no extra herdr call is made; only the
+socket file itself is looked up on disk. `--json` rows keep the shape they published: the document
+carries no such word.
 
 ## Example
 
@@ -169,8 +181,8 @@ never reported — that one too comes from the status line, so its row marks it 
 $ team status ; echo "exit $?"
 team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 team beacon, session "beacon"
-  claude-keeper  missing  Claude Opus 5.5  -
-  claude-beacon  working  Claude Opus 5.5  w1:p1
+  claude-keeper  missing  Claude Opus 5.5  -     typed
+  claude-beacon  working  Claude Opus 5.5  w1:p1  typed
 budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
