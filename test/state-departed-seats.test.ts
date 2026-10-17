@@ -182,8 +182,8 @@ describe('a state seat the file no longer declares', () => {
     const r = check(w);
 
     expect(r.code).toBe(1);
-    expect(r.out).toContain('difference: helper: a state seat not in the file claims pane w1:p1');
-    expect(r.out).toContain('difference: runner: a state seat not in the file claims pane w2:p1');
+    expect(r.out).toContain('difference: helper: left the team file but its record still claims pane w1:p1');
+    expect(r.out).toContain('difference: runner: left the team file but its record still claims pane w2:p1');
     expect(r.out).toContain('difference: the state records the session "gone-one", and no seat of the team is in it');
     expect(r.out).toContain('difference: the state records the session "gone-two", and no seat of the team is in it');
     expect(r.out).toContain('repair: drop its record from the state (team check --repair)');
@@ -218,8 +218,8 @@ describe('a state seat the file no longer declares', () => {
     const fixed = check(w, { repair: true });
 
     expect(fixed.code).toBe(0);
-    expect(fixed.out).toContain('repaired: helper: a state seat not in the file claimed pane w1:p1; its record is dropped');
-    expect(fixed.out).toContain('repaired: runner: a state seat not in the file claimed pane w2:p1; its record is dropped');
+    expect(fixed.out).toContain('repaired: helper: left the team file and its record claimed pane w1:p1; its record is dropped');
+    expect(fixed.out).toContain('repaired: runner: left the team file and its record claimed pane w2:p1; its record is dropped');
     expect(fixed.out).toContain('repaired: the state\'s session "gone-one" holds no seat of the team; its record is dropped');
     expect(fixed.out).toContain('repaired: the state\'s session "gone-two" holds no seat of the team; its record is dropped');
     expect(fixed.out).toContain('0 difference(s)');
@@ -228,7 +228,7 @@ describe('a state seat the file no longer declares', () => {
     expect(Object.keys(readState(w.dir).sessions)).toEqual(['acme']);
     // The drop is accountable: every line it printed is in the project's log under the check.
     const log = readFileSync(join(w.dir, LOG_FILE), 'utf8');
-    expect(log).toContain('check [owner] repaired: helper: a state seat not in the file claimed pane w1:p1; its record is dropped');
+    expect(log).toContain('check [owner] repaired: helper: left the team file and its record claimed pane w1:p1; its record is dropped');
     expect(log).toContain('check [owner] repaired: the state\'s session "gone-two" holds no seat of the team; its record is dropped');
 
     // The next plain check reads the state the file would have written.
@@ -278,7 +278,7 @@ describe('the session the run addresses', () => {
     expect(r.out).not.toContain('the state records the session "alt"');
     // The records inside the addressed session are still compared with the file: the departed
     // seat is dropped from it, and the session itself stands.
-    expect(r.out).toContain('repaired: helper: a state seat not in the file claimed pane w2:p1; its record is dropped');
+    expect(r.out).toContain('repaired: helper: left the team file and its record claimed pane w2:p1; its record is dropped');
     expect(readState(w.dir).sessions.alt).toEqual({ seats: {}, worktrees: {} });
   });
 });

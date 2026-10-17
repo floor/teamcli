@@ -26,14 +26,14 @@ The file is the truth about who the seats are. The state can keep a record the f
 speaks for — a seat an older file named and this one dropped — and a session the file does not
 name with no seat of the team in it. Both are leftovers, and both are named:
 
-    difference: <seat>: a state seat not in the file claims pane <pane>
+    difference: <seat>: left the team file but its record still claims pane <pane>
       repair: drop its record from the state (team check --repair)
       who: the owner
     difference: the state records the session "<name>", and no seat of the team is in it
       repair: drop its record from the state (team check --repair)
       who: the owner
 
-A record with no pane reads `<seat>: a state seat not in the file`, without the pane clause. The
+A record with no pane reads `<seat>: left the team file but its record is still in the state`. The
 repair is never an edit of the file and never a guess at which record is right: the commands that
 resolve who holds a pane read past a record the file does not declare (`seatOfFile`,
 `src/state.ts`), so a departed seat's old record no longer refuses the real seat's registration,
@@ -196,7 +196,7 @@ The closing line counts the differences and, when any are the owner's, how many 
 nothing to act on it is `0 difference(s)`.
 
 A `--repair` run that dropped records prints one `repaired: <what was dropped>` line per record before
-the notes and differences — `repaired: <seat>: a state seat not in the file claimed pane <pane>; its record is
+the notes and differences — `repaired: <seat>: left the team file and its record claimed pane <pane>; its record is
 dropped` and `repaired: the state's session "<name>" holds no seat of the team; its record is
 dropped` — and each line is written to the project's log under `check` and the owner's label. The
 drop runs before the comparison, so a check whose only findings were the leftovers answers

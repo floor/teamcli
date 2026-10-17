@@ -143,7 +143,8 @@ describe('the dev-mode mark on a record', () => {
     record(home, root, { by: DEV_CALLER, dev: true });
     const before = registryOnDisk(home);
     const { code, out } = check(root, home);
-    expect(out).toContain(`difference: lead: registered under dev mode (by ${DEV_CALLER})`);
+    expect(out).toContain('difference: lead: registered by an agent, not by the owner');
+    expect(out).not.toContain(DEV_CALLER);
     expect(out).toContain('  repair: re-record the seat with the caller gate in force (team register lead)');
     expect(code).toBe(1);
     // The record is the finding's evidence, read only: the check writes nothing.
@@ -154,7 +155,7 @@ describe('the dev-mode mark on a record', () => {
     const { root, home } = place();
     record(home, root, { by: 'owner' });
     const { code, out } = check(root, home);
-    expect(out).not.toContain('registered under dev mode');
+    expect(out).not.toContain('registered by an agent, not by the owner');
     expect(code).toBe(0);
     expect(out).toContain('0 difference(s)');
   });
@@ -162,25 +163,25 @@ describe('the dev-mode mark on a record', () => {
   test('a record written again in force takes the mark off, and the finding with it', () => {
     const { root, home } = place();
     const id = record(home, root, { by: DEV_CALLER, dev: true });
-    expect(check(root, home).out).toContain('registered under dev mode');
+    expect(check(root, home).out).toContain('registered by an agent, not by the owner');
     // The repair itself, as `team register` makes it: the same record, written again with the
     // caller gate in force.
     updateAgent(home, id, { provenance: { dev_mode: false } });
     const { code, out } = check(root, home);
-    expect(out).not.toContain('registered under dev mode');
+    expect(out).not.toContain('registered by an agent, not by the owner');
     expect(code).toBe(0);
   });
 
-  test('a re-registration under dev mode names that run\'s caller, not the original registrant', () => {
+  test('a re-registration under dev mode states the plain finding without the raw caller label', () => {
     const { root, home } = place();
     // The owner registered the seat first; a later run under dev mode, by a caller the gate did
     // not admit, wrote the record again. `registered_by` is still the owner's, and the finding
-    // names the run that made the record without the gate behind it.
+    // states plainly that the seat was registered by an agent, not by the owner.
     const id = record(home, root, { by: 'owner' });
     updateAgent(home, id, { provenance: { dev_mode: true, dev_mode_by: DEV_CALLER } });
     const { code, out } = check(root, home);
-    expect(out).toContain(`difference: lead: registered under dev mode (by ${DEV_CALLER})`);
-    expect(out).not.toContain('registered under dev mode (by owner)');
+    expect(out).toContain('difference: lead: registered by an agent, not by the owner');
+    expect(out).not.toContain(DEV_CALLER);
     expect(code).toBe(1);
   });
 
@@ -208,18 +209,19 @@ describe('the dev-mode mark on a record', () => {
     expect(read?.provenance.dev_mode_at).toBeDefined();
   });
 
-  test('a record a dev-mode run registered first names that run\'s caller too', () => {
+  test('a record a dev-mode run registered first states the plain finding too', () => {
     const { root, home } = place();
     record(home, root, { by: DEV_CALLER, dev: true });
     const { out } = check(root, home);
-    expect(out).toContain(`difference: lead: registered under dev mode (by ${DEV_CALLER})`);
+    expect(out).toContain('difference: lead: registered by an agent, not by the owner');
+    expect(out).not.toContain(DEV_CALLER);
   });
 
   test('a check with no home reads no registry: the mark is invisible to it', () => {
     const { root, home } = place();
     record(home, root, { by: DEV_CALLER, dev: true });
     const { code, out } = check(root, undefined);
-    expect(out).not.toContain('registered under dev mode');
+    expect(out).not.toContain('registered by an agent, not by the owner');
     expect(code).toBe(0);
   });
 

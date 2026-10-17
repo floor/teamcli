@@ -293,6 +293,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const notes = collapseNotes([
     ...delegateNotes(team),
     ...lobbyNotes(team, root, sources.home, session),
+    ...unknownStatusNotes(team, state, live),
   ]);
   if (args.json) {
     writeJson(io, 'team.check', {
@@ -392,8 +393,8 @@ function staleDifferences(stale: Stale): Difference[] {
   for (const seat of stale.seats) {
     out.push({
       what: seat.pane === undefined
-        ? `${seat.name}: a state seat not in the file`
-        : `${seat.name}: a state seat not in the file claims pane ${seat.pane}`,
+        ? `${seat.name}: left the team file but its record is still in the state`
+        : `${seat.name}: left the team file but its record still claims pane ${seat.pane}`,
       repair,
       owner: true,
     });
@@ -430,8 +431,8 @@ function dropStale(dir: string, session: string, stale: Stale): string[] {
         if (held === undefined || held.temporary !== undefined) continue;
         delete current.seats[seat.name];
         lines.push(seat.pane === undefined
-          ? `${seat.name}: a state seat not in the file; its record is dropped`
-          : `${seat.name}: a state seat not in the file claimed pane ${seat.pane}; its record is dropped`);
+          ? `${seat.name}: left the team file; its record is dropped`
+          : `${seat.name}: left the team file and its record claimed pane ${seat.pane}; its record is dropped`);
       }
     }
     return lines;
@@ -442,11 +443,10 @@ function dropStale(dir: string, session: string, stale: Stale): string[] {
  * A seat whose record carries the dev mark: its registration was written by a run whose caller
  * gate was folded into a warning (`src/registry/agents.ts`, `src/registry/sync.ts`), so the
  * record that says what the seat is was made without the ordinary gate behind it. The difference
- * names the caller the record itself kept — the dev-mode run's own `dev_mode_by`, and the
- * `registered_by` of an older record that kept only the mark — and the one repair that takes the
- * mark off: the owner's own `team register`, the same write with nothing folded — a clean launch
- * of the seat does it too. A seat the file no longer names, and one whose record the registry
- * holds none for, is not this finding's.
+ * states plainly that the seat was registered by an agent rather than by the owner, and names the
+ * one repair that takes the mark off: the owner's own `team register`, the same write with nothing
+ * folded — a clean launch of the seat does it too. A seat the file no longer names, and one whose
+ * record the registry holds none for, is not this finding's.
  */
 function devModeDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
   if (home === undefined) return [];
@@ -456,7 +456,7 @@ function devModeDifferences(team: TeamFile, root: string, home: string | undefin
     const record = findAgent(home, { team: teamId, seat: seat.name });
     if (record?.provenance.dev_mode !== true) continue;
     out.push({
-      what: `${seat.name}: registered under dev mode (by ${record.provenance.dev_mode_by ?? record.provenance.registered_by})`,
+      what: `${seat.name}: registered by an agent, not by the owner`,
       repair: `re-record the seat with the caller gate in force (team register ${seat.name})`,
     });
   }
@@ -804,8 +804,11 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
 /**
  * One difference per attention, in the watch's own words (`src/watch/checks/attention.ts`): the
  * repair is the one act the report names, and `owner` is the watch's `to`, an owner's report only.
+ * A seat that is idle or done on an unrecognised screen (`attention === 'unknown'`) is a normal
+ * state, never a difference; an unrecognised herdr status word is surfaced as a note by
+ * `unknownStatusNotes` instead.
  */
-function viewOf(attention: Attention, name: string, status: string): Difference | null {
+function viewOf(attention: Attention, name: string, _status: string): Difference | null {
   switch (attention) {
     // `compare()` already emits the permission-prompt difference for `status` and `check`.
     case 'question':
@@ -814,11 +817,35 @@ function viewOf(attention: Attention, name: string, status: string): Difference 
       return { what: `${name} shows a vendor notice: its owner's to act on`, repair: 'the owner acts in the pane', owner: true };
     case 'blocked':
       return { what: `${name} is blocked, and its screen is not one the watch recognises`, repair: 'the owner looks at the pane', owner: true };
-    case 'unknown':
-      return { what: `${name}: herdr reports the status "${status}"`, repair: 'the operator looks at the pane' };
     default:
       return null;
   }
+}
+
+/**
+ * A note for any seat on its recorded pane whose herdr status is not one of the known words
+ * (`idle`, `done`, `working`, `blocked`). An `idle` or `done` seat is a normal state even when its
+ * screen is unrecognised, and an unknown herdr status word is reported as a note so it does not
+ * count as a difference or change the exit code.
+ */
+function unknownStatusNotes(team: TeamFile, state: SessionState, live: Live): string[] {
+  const out: string[] = [];
+  for (const seat of team.seats) {
+    const recorded = state.seats[seat.name]?.pane;
+    if (recorded === undefined) continue;
+    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    if (!agent || agent.pane !== recorded) continue;
+    if (
+      agent.status !== '' &&
+      agent.status !== 'idle' &&
+      agent.status !== 'done' &&
+      agent.status !== 'working' &&
+      agent.status !== 'blocked'
+    ) {
+      out.push(`${seat.name}: herdr reports the status "${agent.status}"`);
+    }
+  }
+  return out;
 }
 
 // `status`'s own problem lines, in the check's name.

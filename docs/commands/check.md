@@ -34,7 +34,7 @@ and it counts as not working`, repaired with the owner's look at the pane.
 
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of
-the team in it are both named: `<seat>: a state seat not in the file claims pane <pane>` (its pane
+the team in it are both named: `<seat>: left the team file but its record still claims pane <pane>` (its pane
 named when the record expects one) and `the state records the session "<name>", and no seat of the
 team is in it`. The file is the truth: neither record is ever guessed back into the file, and the
 one repair is `team check --repair`, the owner's own write, which drops exactly those records from

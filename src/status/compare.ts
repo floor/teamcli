@@ -260,6 +260,15 @@ export function compare(
         pane: agent.pane,
         ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
       });
+      if (
+        agent.status !== '' &&
+        agent.status !== 'idle' &&
+        agent.status !== 'done' &&
+        agent.status !== 'working' &&
+        agent.status !== 'blocked'
+      ) {
+        notes.push(`${seat.name}: herdr reports the status "${agent.status}"`);
+      }
       if (seat.stopped) {
         differences.push({
           what: `${seat.name} is marked stopped in the file and is running`,

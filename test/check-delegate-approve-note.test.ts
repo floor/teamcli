@@ -278,4 +278,66 @@ describe('a delegate entry naming approve', () => {
       'team.yaml is invalid (line 1: "[" is not closed on its line); using the copy of 2026-10-17T11:00:00.000Z',
     );
   });
+
+  test('idle or done on an unrecognised screen is not a difference in check, and an unknown herdr status is a note (exit 0)', () => {
+    const root = place(CLEAN);
+    for (const status of ['idle', 'done']) {
+      const io = testIo(root, { kind: 'owner' });
+      const code = runTeamCheck({ json: true }, io, {
+        live: () => ({
+          running: true,
+          agents: [
+            {
+              name: 'lead',
+              agent: 'claude',
+              pane: 'w1:p1',
+              workspace: 'w1',
+              status,
+              cwd: null,
+              displayAgent: DISPLAY,
+            },
+          ],
+          workspaces: [{ id: 'w1', label: TITLE }],
+          screens: { 'w1:p1': 'Some unrecognised terminal text\n' },
+        }),
+        branch: () => 'main',
+        standing: () => ({ kind: 'none' as const }),
+        now: () => NOW,
+      });
+      expect(code).toBe(0);
+      const doc = assertMatchesOutputSchema<{ differences: unknown[]; notes: string[] }>(io.out, CHECK_OUTPUT_SCHEMA);
+      expect(doc.differences).toEqual([]);
+      expect(doc.notes.some((n) => n.includes('herdr reports the status'))).toBe(false);
+    }
+
+    const unknownIo = testIo(root, { kind: 'owner' });
+    const unknownCode = runTeamCheck({ json: true }, unknownIo, {
+      live: () => ({
+        running: true,
+        agents: [
+          {
+            name: 'lead',
+            agent: 'claude',
+            pane: 'w1:p1',
+            workspace: 'w1',
+            status: 'unknown',
+            cwd: null,
+            displayAgent: DISPLAY,
+          },
+        ],
+        workspaces: [{ id: 'w1', label: TITLE }],
+        screens: { 'w1:p1': CLAUDE_IDLE },
+      }),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' as const }),
+      now: () => NOW,
+    });
+    expect(unknownCode).toBe(0);
+    const unknownDoc = assertMatchesOutputSchema<{ differences: unknown[]; notes: string[] }>(
+      unknownIo.out,
+      CHECK_OUTPUT_SCHEMA,
+    );
+    expect(unknownDoc.differences).toEqual([]);
+    expect(unknownDoc.notes).toContain('lead: herdr reports the status "unknown"');
+  });
 });
