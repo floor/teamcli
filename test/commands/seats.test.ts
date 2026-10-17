@@ -10,11 +10,13 @@ import { formatRelativeTime, runSeats, USAGE, type SeatsJson, type SeatsSources 
 import { runStatus, type StatusJson, type StatusSources } from '../../src/commands/status.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
+import { SEATS_OUTPUT_SCHEMA } from '../../src/output/index.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
 import type { Live } from '../../src/status/compare.ts';
 import type { Standing } from '../../src/store/store.ts';
 import { gitEnv, testIo } from '../helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
 
 const example = readFileSync(new URL('../fixtures/example.yaml', import.meta.url), 'utf8');
 // A real idle capture, scrollback and all: the table's own reading of a pane.
@@ -142,17 +144,22 @@ describe('formatRelativeTime', () => {
 });
 
 describe('team seats', () => {
-  test('--help prints the usage header and exits 0', async () => {
+  test('--help prints the usage header and exits 0 (including with --json)', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await main(['seats', '--help'], io);
     expect(code).toBe(0);
     expect(io.out).toBe(USAGE);
+
+    const ioJsonHelp = testIo(dir, { kind: 'owner' });
+    expect(await main(['seats', '--json', '--help'], ioJsonHelp)).toBe(0);
+    expect(ioJsonHelp.out).toBe(USAGE);
   });
 
   test('lists active seats in the 11-column registry table and omits stopped seats by default', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runSeats(['--file', file], io, statusSources);
     expect(code).toBe(0);
+    expect(io.out).toContain('team acme-web, session "acme-web"');
     expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE    SOURCE  LAST ACTIVE  PANE');
     // The coordinator is idle at its prompt, but its record was touched 12s before NOW — a
     // trace inside the window, which an idle word yields to (src/labels/state.ts).
@@ -160,6 +167,7 @@ describe('team seats', () => {
     expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  idle     herdr   4m ago       pane-2');
     expect(io.out).toContain('deepseek-acme            seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       done (screen not recognised)          done     herdr   1h ago       pane-3');
     expect(io.out).toContain('deepseek-acme-2          seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle (screen not recognised)          idle     herdr   -            pane-4');
+    expect(io.out).toContain('4 seat(s)');
     expect(io.out).not.toContain('grok-acme');
   });
 
@@ -237,12 +245,14 @@ describe('team seats', () => {
     expect(code).toBe(0);
     // A retained seat is done (its process is gone), not judged blind on its day-old trace.
     expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done     process  1d ago       -');
+    expect(io.out).toContain('5 seat(s)');
   });
 
-  test('--json and --all --json emit the SeatsJson payload', async () => {
+  test('--json and --all --json emit the SeatsJson payload and match SEATS_OUTPUT_SCHEMA', async () => {
     const ioActive = testIo(dir, { kind: 'owner' });
     expect(await runSeats(['--file', file, '--json'], ioActive, statusSources)).toBe(0);
-    const parsedActive = JSON.parse(ioActive.out) as SeatsJson;
+    const parsedActive = assertMatchesOutputSchema<SeatsJson>(ioActive.out, SEATS_OUTPUT_SCHEMA);
+    expect(parsedActive.schema).toEqual({ name: 'team.seats', version: 1 });
     expect(parsedActive.format).toBe(1);
     expect(parsedActive.project).toBe('acme-web');
     expect(parsedActive.session).toBe('acme-web');
@@ -271,7 +281,7 @@ describe('team seats', () => {
 
     const ioAll = testIo(dir, { kind: 'owner' });
     expect(await runSeats(['--file', file, '--all', '--json'], ioAll, statusSources)).toBe(0);
-    const parsedAll = JSON.parse(ioAll.out) as SeatsJson;
+    const parsedAll = assertMatchesOutputSchema<SeatsJson>(ioAll.out, SEATS_OUTPUT_SCHEMA);
     expect(parsedAll.seats.map((s) => s.name)).toContain('grok-acme');
     const grok = parsedAll.seats.find((s) => s.name === 'grok-acme');
     expect(grok).toEqual({
@@ -289,6 +299,11 @@ describe('team seats', () => {
       pane: null,
       launch_line: 'grok --model grok-4.7',
     });
+
+    const ioErr = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], ioErr, { ...statusSources, live: () => null })).toBe(2);
+    expect(ioErr.err).toBe('');
+    assertJsonErrorShape(ioErr.out, { id: 'seats.herdr', messageContains: "herdr doesn't answer" });
   });
 
   test('--json carries each seat’s state and state_source, and blind only where it applies', async () => {

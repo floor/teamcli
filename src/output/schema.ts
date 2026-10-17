@@ -287,8 +287,60 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   ],
 };
 
+/** Published `--json` output schema for `team seats` (`schema/seats.schema.json`). */
+export const SEATS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.seats',
+  fileName: 'seats.schema.json',
+  title: 'team seats --json output',
+  required: ['format', 'project', 'session', 'seats'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    seats: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'name',
+          'id',
+          'role',
+          'cli',
+          'model',
+          'effort',
+          'status',
+          'state',
+          'state_source',
+          'last_active',
+          'pane',
+          'launch_line',
+        ],
+        properties: {
+          name: { type: 'string', minLength: 1 },
+          id: { type: ['string', 'null'] },
+          role: { type: 'string', minLength: 1 },
+          cli: { type: 'string', minLength: 1 },
+          model: { type: 'string', minLength: 1 },
+          effort: { type: ['string', 'null'] },
+          status: { type: 'string', minLength: 1 },
+          state: { type: 'string', minLength: 1 },
+          state_source: { type: 'string', minLength: 1 },
+          blind: { type: 'boolean', const: true },
+          last_active: { type: ['string', 'null'] },
+          pane: { type: ['string', 'null'] },
+          launch_line: { type: ['string', 'null'] },
+          dev_mode: { type: 'boolean' },
+          start_cwd: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
+  SEATS_OUTPUT_SCHEMA,
 ];
