@@ -2811,7 +2811,7 @@ scene('proc.done', async (place) => {
 });
 scene('proc.listed', async (place) => {
   write(place, TEAM);
-  return show(await proced(place, ['list']), 'no processes recorded');
+  return show(await proced(place, ['list']), '0 process(es)');
 });
 scene('proc.caller', async (place) => {
   write(place, TEAM);
