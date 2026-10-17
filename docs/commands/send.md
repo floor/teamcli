@@ -134,6 +134,11 @@ capability, never a role's name: the entity's assistant is the first mark found 
 in chain order, the entity's own team first and then its other teams by team id, so an entity
 whose files mark none has no assistant for the rule to admit.
 
+Which seat leads a team — the seat these rules call its orchestrator — is read the same way: the
+lead the file declares, carried onto the record's roster line as `leads: true`. A role word names
+nothing on its own, in any language: a seat called `orchestrator`, or one whose role is written
+`coordinator`, leads nothing without the mark.
+
 An owner-signed grant is a record in the owner's grants folder (`~/.config/team/grants/`, the
 same folder the standing create-grants live in), naming the pair it admits and when it stops:
 

@@ -135,7 +135,7 @@ export function admitSend(
   const callerTeam = teams[callerTeamId];
   const targetTeamId = teamOf(target);
   const targetTeam = teams[targetTeamId];
-  const targetOrchestrator = orchestratorSeat(targetTeam);
+  const targetOrchestrator = leadSeat(targetTeam);
 
   // The project rules, asked first when the caller's records know their projects: the project
   // record decides its own pairs, and the `leads` capability decides which seat leads a team.
@@ -163,12 +163,12 @@ export function admitSend(
 
   // An orchestrator writes to an orchestrator, in any team: the pair that carries work between
   // teams.
-  if (seatOf(caller) === orchestratorSeat(callerTeam) && seatOf(target) === targetOrchestrator) {
+  if (seatOf(caller) === leadSeat(callerTeam) && seatOf(target) === targetOrchestrator) {
     return { ok: true, rule: 'an orchestrator to another orchestrator' };
   }
   // The team's own leads brief its seats: the orchestrator, or the operator, to any seat of the
   // same team. Never across teams: another team's seats are reached through its orchestrator.
-  const leadsOwnTeam = seatOf(caller) === orchestratorSeat(callerTeam) || roleOf(caller, callerTeam) === 'operator';
+  const leadsOwnTeam = seatOf(caller) === leadSeat(callerTeam) || roleOf(caller, callerTeam) === 'operator';
   if (callerTeam !== undefined && targetTeam === callerTeam && leadsOwnTeam) {
     return { ok: true, rule: 'an orchestrator or operator to a seat of its own team' };
   }
@@ -305,25 +305,11 @@ function roleOf(caller: SendSide, team: AdmitTeam | undefined): string | null {
   return caller.role ?? null;
 }
 
-/** The lead seat of a team: the record's own field, else the seat holding the `leads` capability
- *  — the same reading the project rules make — else the legacy spelling for records that predate
- *  the capability: the registry's `orchestrator` role, the `coordinator` a live file's own seats
- *  carry, or the seat named for it. */
-function orchestratorSeat(team: AdmitTeam | undefined): string | null {
-  if (!team) return null;
-  if (team.orchestrator) return team.orchestrator;
-  const byCapability = team.roster.find((entry) => entry.leads === true);
-  if (byCapability) return byCapability.seat;
-  const byRole =
-    team.roster.find((entry) => entry.role === 'orchestrator') ?? team.roster.find((entry) => entry.role === 'coordinator');
-  if (byRole) return byRole.seat;
-  return team.roster.find((entry) => entry.seat === 'orchestrator')?.seat ?? null;
-}
-
-/** The seat that leads a team by the `leads` capability: the lead seat the record carries — the
- *  one a team file's own `leads` spelling projects onto — else the roster line that holds the
- *  capability. Null when the record says neither, and never a guess from a role's name: a role is
- *  each team's own word, in any language. */
+/** The team's lead seat — the seat the rules above also call its orchestrator: the record's own
+ *  field, which a live file's `orchestrator:` seat fills, else the seat holding the `leads`
+ *  capability — the mark a file's `leads: true` writes on the lead's line. Null when the record
+ *  says neither, and never a guess from a role's name: a role is each team's own word, in any
+ *  language, so `orchestrator` and `coordinator` name nothing on their own. */
 function leadSeat(team: AdmitTeam | undefined): string | null {
   if (!team) return null;
   if (team.orchestrator) return team.orchestrator;
@@ -389,7 +375,7 @@ function onMainCoordinator(target: SendSide, entity: string | null | undefined, 
   for (const id of Object.keys(teams).sort()) {
     const team = teams[id];
     if (!team || team.entity !== entity || team.project !== entity) continue;
-    if (teamOf(target) === id && seatOf(target) === orchestratorSeat(team)) return true;
+    if (teamOf(target) === id && seatOf(target) === leadSeat(team)) return true;
   }
   return false;
 }
