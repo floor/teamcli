@@ -37,7 +37,7 @@ import { profileFor } from '../profiles/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
-import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
+import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
 export const USAGE = `Usage: team register <seat> [--session <name>] [--pane <id>] [--dry-run]\n`;
@@ -452,8 +452,14 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   }
   // A pane is one seat's: the pane this run records — named by `--pane`, or the one herdr names
   // the seat on — must not be one another seat of this session's record already holds. A pane
-  // herdr renamed to this seat, but recorded for another, would otherwise be held twice.
-  const holder = Object.entries(recorded.seats).find(([seat, state]) => seat !== name && state.pane === pane);
+  // herdr renamed to this seat, but recorded for another, would otherwise be held twice. The
+  // file is the truth: a record for a seat the file no longer declares names nothing of this
+  // team's, and its pane is free for a seat the file does name (`seatOfFile`; a temporary seat
+  // the file never lists still holds its own).
+  const declared = new Set(team.seats.map((item) => item.name));
+  const holder = Object.entries(recorded.seats).find(
+    ([seat, state]) => seat !== name && state.pane === pane && seatOfFile(seat, state, declared),
+  );
   if (holder !== undefined) return paneTakenRefused(out, pane, holder[0], session);
 
   // A record that names another pane — or no pane at all, a launch this command did not finish —

@@ -75,7 +75,7 @@ import { teamIdOf } from '../registry/teams.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
+import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -909,10 +909,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // was never renamed, so herdr lists its pane with no `name` field at all. That agent is
       // known by its pane, whatever its name is now: the resume path verifies pane and process
       // itself, and its prompt is the only way the owner can finish the seat.
+      // The file is the truth: a record for a seat the file no longer declares names nothing of
+      // this team's, and the pane it claims is no reason to know an agent there (`seatOfFile`).
+      const declared = new Set(team.seats.map((seat) => seat.name));
       const waitingPanes = new Set(
-        Object.values(recorded)
-          .filter((seat) => seat.waiting)
-          .map((seat) => seat.pane)
+        Object.entries(recorded)
+          .filter(([name, seat]) => seat.waiting && seatOfFile(name, seat, declared))
+          .map(([, seat]) => seat.pane)
           .filter((pane) => pane !== undefined),
       );
       // A seat left at `launched` — a run stopped between "the pane exists" and "the seat has
@@ -922,9 +925,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // Only `launched` qualifies — a seat at `named` or `ready` has its name, so a foreign
       // agent on its pane is refused exactly as before, and so is any pane no record names.
       const launchedPanes = new Set(
-        Object.values(recorded)
-          .filter((seat) => seat.stage === 'launched')
-          .map((seat) => seat.pane)
+        Object.entries(recorded)
+          .filter(([name, seat]) => seat.stage === 'launched' && seatOfFile(name, seat, declared))
+          .map(([, seat]) => seat.pane)
           .filter((pane) => pane !== undefined),
       );
       // A force-close — a non-owner's `remove` — leaves its seat's pane running and renames the
@@ -1398,7 +1401,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // The session's workspaces with their labels now; the pause compares the label of the pane's
       // live workspace with the one this seat's launch gives (`pause.ts`, `waitingProblem`).
       workspaces: () => sources.workspaces?.(session) ?? null,
-      seatStates: () => readState(dir).sessions[session]?.seats ?? null,
+      // The proof a waiting pane is asked for looks at the session's seat records (`pause.ts`,
+      // `waitingProblem`): a record for a seat the file no longer declares names no pane of this
+      // team's, and does not block the seat that now stands there (`seatOfFile`).
+      seatStates: () => {
+        const seats = readState(dir).sessions[session]?.seats ?? null;
+        if (seats === null) return null;
+        const declared = new Set(team.seats.map((seat) => seat.name));
+        return Object.fromEntries(Object.entries(seats).filter(([name, seat]) => seatOfFile(name, seat, declared)));
+      },
       workspacePanes: launch.workspacePanes ? (session, workspace) => launch.workspacePanes!(session, workspace) : undefined,
       classify: (name, pane, cli) => readScreen(cli, launch.paneText(name, pane) ?? undefined).kind,
       paneText: (session, pane) => launch.paneText(session, pane),

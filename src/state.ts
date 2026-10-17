@@ -90,6 +90,17 @@ export type SeatState = {
  *  pause, which carry it between the state and the prompt. */
 export type WaitingRecord = NonNullable<SeatState['waiting']>;
 
+/**
+ * Whether a state seat's record is one the team file still speaks for: a seat the file
+ * declares, or a temporary seat — `team add --temporary` never writes one into the file, so
+ * its record is the only place it exists. Any other record names a seat the file no longer
+ * has, and the commands that resolve who holds a pane read past it: the file is the truth,
+ * and only `team check --repair` drops the record.
+ */
+export function seatOfFile(name: string, seat: SeatState, declared: ReadonlySet<string>): boolean {
+  return seat.temporary !== undefined || declared.has(name);
+}
+
 export type WorktreeState = {
   path: string;
   branch: string;

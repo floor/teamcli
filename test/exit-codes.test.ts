@@ -3853,7 +3853,10 @@ scene('register.no-pane', async (place) => {
   return show(await registered(place, ['lead', '--pane', 'w9:p9'], owner, { processInfo: () => null }), 'no pane w9:p9 in session');
 });
 scene('register.pane-taken', async (place) => {
-  write(place, TEAM);
+  // The file declares the seat whose record holds the pane, so the record really is another
+  // seat's: a record for a seat the file no longer declares holds nothing — the file is the
+  // truth, and `test/state-departed-seats.test.ts` reads that side.
+  write(place, TWO);
   updateState(join(place.root, '.agents'), (state) => {
     (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'w2:p2' };
   });
