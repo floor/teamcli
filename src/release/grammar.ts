@@ -37,6 +37,46 @@ export function hasPrerelease(version: string): boolean {
   return (version.split('+')[0] as string).includes('-');
 }
 
+/**
+ * Two valid SemVer versions by precedence (semver.org §11): negative when `a` is older, positive
+ * when newer, zero when they have the same precedence — build metadata never decides that. The
+ * prerelease list decides a tie on the core: absent outranks present, a numeric identifier is
+ * older than an alphanumeric one and compared numerically, two alphanumerics compare by ASCII
+ * order, and a list that is a prefix of another is older. Null when either string is not a
+ * version: nothing here guesses at a tag that is not one.
+ */
+export function compareVersions(a: string, b: string): number | null {
+  if (!SEMVER_PATTERN.test(a) || !SEMVER_PATTERN.test(b)) return null;
+  const split = (version: string): { core: number[]; pre: string[] | undefined } => {
+    const bare = (version.split('+')[0] as string);
+    const at = bare.indexOf('-');
+    const core = (at === -1 ? bare : bare.slice(0, at)).split('.').map(Number);
+    return { core, pre: at === -1 ? undefined : bare.slice(at + 1).split('.') };
+  };
+  const left = split(a);
+  const right = split(b);
+  for (let index = 0; index < 3; index++) {
+    const delta = (left.core[index] as number) - (right.core[index] as number);
+    if (delta !== 0) return delta < 0 ? -1 : 1;
+  }
+  if (left.pre === undefined || right.pre === undefined) {
+    if (left.pre === right.pre) return 0;
+    return left.pre === undefined ? 1 : -1;
+  }
+  for (let index = 0; index < Math.max(left.pre.length, right.pre.length); index++) {
+    const one = left.pre[index];
+    const two = right.pre[index];
+    if (one === undefined) return -1;
+    if (two === undefined) return 1;
+    if (one === two) continue;
+    const numeric = (value: string): boolean => /^[0-9]+$/.test(value);
+    if (numeric(one) && numeric(two)) return Number(one) < Number(two) ? -1 : 1;
+    if (numeric(one) !== numeric(two)) return numeric(one) ? -1 : 1;
+    return one < two ? -1 : 1;
+  }
+  return 0;
+}
+
 /** A Linear project ID: a lowercase ASCII UUID in canonical 8-4-4-4-12 form. */
 export const LINEAR_PROJECT_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 

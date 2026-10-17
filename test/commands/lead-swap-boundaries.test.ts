@@ -15,10 +15,10 @@ import type { Launch } from '../../src/commands/up.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { LOG_FILE, STATE_FILE, emptySession, readState, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const PERMISSION = 'Do you want to proceed?\n1. Yes\n';
 const SWAP_AT = '2026-10-15T07:00:00.000Z';
 

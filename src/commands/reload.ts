@@ -29,6 +29,8 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
+import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { refreshAgentAddress } from '../send/address.ts';
 import { readScreen } from '../watch/screen.ts';
 import type { Launch } from './up.ts';
 
@@ -105,9 +107,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       out.stderr(`team reload: ${said.text}\n`);
       // exit: reload.grant-another-pane
       // exit: reload.grant-approval
-      // exit: reload.grant-approved-copy
       // exit: reload.grant-caller
-      // exit: reload.grant-drift
       // exit: reload.grant-file
       // exit: reload.grant-no-pane
       // exit: reload.grant-omitted
@@ -258,6 +258,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           const seats = file.sessions[session]?.seats;
           if (seats) delete seats[next];
         });
+        // The registry: a reload whose seat was dropped leaves its agent stopped.
+        if (next === seat.name && sources.home) {
+          const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, next, 'stopped');
+          if (ended) logLine(dir, 'reload', describeCaller(caller), ended.note, now());
+        }
       },
       record(next, patch) {
         updateState(dir, (file) => {
@@ -271,6 +276,22 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           else if (effort !== undefined) stored.effort = effort;
           current.seats[next] = stored;
         });
+        // The registry: the relaunched seat keeps its agent, re-pointed to the new pane with the
+        // model and effort the file now declares.
+        if (patch.pane && next === seat.name && sources.home) {
+          const made = registerLaunch(
+            { home: sources.home, team, root, by: describeCaller(caller), session },
+            seat,
+            patch.pane,
+            readState(dir).sessions[session]?.seats[next]?.id,
+          );
+          if ('note' in made) logLine(dir, 'reload', describeCaller(caller), made.note, now());
+          else {
+            // The address: the live session socket this relaunch answers at, recorded on the agent.
+            const refreshed = refreshAgentAddress(sources.home, made.id, patch.pane, session);
+            if (refreshed.note) logLine(dir, 'reload', describeCaller(caller), refreshed.note, now());
+          }
+        }
       },
       say: () => {},
       final: () => {},

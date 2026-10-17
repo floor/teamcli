@@ -207,6 +207,29 @@ None.
 
 None.
 
+## `delegate`
+
+Hidden: no
+
+Usage:
+
+    team delegate <session/pane> --commands <act,...> [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--commands` | yes | no | no |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `session/pane` | no | no |
+
 ## `doctor`
 
 Hidden: no
@@ -280,6 +303,29 @@ Usage:
 
 None.
 
+## `grant`
+
+Hidden: no
+
+Usage:
+
+    team grant <seat> --scope <act,...> [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--scope` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `help`
 
 Hidden: yes
@@ -295,6 +341,30 @@ None.
 ### Positionals
 
 None.
+
+## `hold`
+
+Hidden: no
+
+Usage:
+
+    team hold <reason> [--until <time>]
+    team hold --release
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--release` | no | no | no |
+| `--until` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `reason` | yes | no |
 
 ## `init`
 
@@ -542,6 +612,114 @@ Usage:
 | --- | --- | --- |
 | `file` | no | no |
 
+## `proc`
+
+Hidden: no
+
+Usage:
+
+    team proc add <name> [--pid <pid>] [--note <text>]
+    team proc list [--json]
+    team proc done <name>
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `add`
+
+Hidden: no
+
+Usage:
+
+    team proc add <name> [--pid <pid>] [--note <text>]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--note` | yes | no | no |
+| `--pid` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `name` | no | no |
+
+### `done`
+
+Hidden: no
+
+Usage:
+
+    team proc done <name>
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `name` | no | no |
+
+### `list`
+
+Hidden: no
+
+Usage:
+
+    team proc list [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+## `register`
+
+Hidden: no
+
+Usage:
+
+    team register <seat> [--session <name>] [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `release`
 
 Hidden: no
@@ -655,6 +833,68 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `seat` | no | no |
+
+## `revoke`
+
+Hidden: no
+
+Usage:
+
+    team revoke grant [--dry-run]
+    team revoke delegate <session/pane> [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `delegate`
+
+Hidden: no
+
+Usage:
+
+    team revoke delegate <session/pane> [--dry-run]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `session/pane` | no | no |
+
+### `grant`
+
+Hidden: no
+
+Usage:
+
+    team revoke grant [--dry-run]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
 
 ## `seats`
 
@@ -804,12 +1044,13 @@ Hidden: no
 
 Usage:
 
-    team usage [--json]
+    team usage [--json] [--all]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--all` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `-h` | no | no | yes |
@@ -849,7 +1090,7 @@ Usage:
 
     team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]
     team worktree list [--session <name>] [--file <path>]
-    team worktree remove <task> [--session <name>] [--file <path>]
+    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]
 
 ### Flags
 
@@ -914,12 +1155,13 @@ Hidden: no
 
 Usage:
 
-    team worktree remove <task> [--session <name>] [--file <path>]
+    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--branch` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--session` | yes | no | no |

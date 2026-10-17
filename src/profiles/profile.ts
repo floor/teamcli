@@ -109,7 +109,7 @@ export function launchCommand(profile: Profile, launch: string, rules: string): 
 
 /** True when the CLI accepts an effort override flag on its launch line. */
 export function supportsEffortLaunch(cli: string): boolean {
-  return cli === 'claude-code' || cli === 'antigravity' || cli === 'grok' || cli === 'codex';
+  return cli === 'claude-code' || cli === 'antigravity' || cli === 'grok' || cli === 'codex' || cli === 'muse';
 }
 
 /**
@@ -170,6 +170,10 @@ function synthesizeModelId(cli: string, modelName: string, version: string): str
   if (cli === 'antigravity' || cli === 'gemini') {
     const match = /^Gemini\s+(\S+)$/i.exec(modelName);
     return match?.[1] ? `gemini-${version}-${match[1].toLowerCase()}` : null;
+  }
+  if (cli === 'muse') {
+    const match = /^Muse\s+(Wonder(?:\s+Full)?|Spark)$/i.exec(modelName);
+    return match?.[1] ? `muse-${match[1].toLowerCase().replace(/\s+/g, '-')}-${version}` : null;
   }
   if (cli === 'grok') {
     if (/Fast$/i.test(modelName)) return `grok-${version}-build-fast`;
@@ -267,7 +271,7 @@ export type ModelRule = {
 
 type Shipped = { profile: Profile; status: ModelRule[]; quota: QuotaPattern[] };
 
-const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'] as const;
+const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse'] as const;
 // The keys every profile carries. `status_model` and `last_used_model` are optional: a profile
 // without the first belongs to a CLI whose screen doesn't show its model; the second says the
 // CLI starts on its last-used model when a launch names none, and no shipped profile sets it.
@@ -445,6 +449,16 @@ export function lobbyFileOwners(): ReadonlyMap<string, readonly string[]> {
 /** The quota patterns shipped with a CLI. An unknown CLI, or one with none, has an empty list. */
 export function quotaFor(cli: string): readonly QuotaPattern[] {
   return SHIPPED[cli]?.quota ?? [];
+}
+
+/** Every account some shipped profile's quota patterns can read, sorted: the accounts a CLI
+ *  screen on this machine can expose a figure for, whatever seats a team happens to run. An
+ *  account outside this list, and outside every team's own overrides, is not readable from a
+ *  CLI screen — the machine report says so in those words rather than `unknown`. */
+export function shippedQuotaAccounts(): string[] {
+  const names = new Set<string>();
+  for (const name of NAMES) for (const one of SHIPPED[name]?.quota ?? []) names.add(one.account);
+  return [...names].sort();
 }
 
 /** Patterns from a YAML list, for a profile snippet. A bad pattern throws. */

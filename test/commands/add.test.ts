@@ -15,13 +15,13 @@ import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
 import { rulesFilePath } from '../../src/launch/rules-file.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
-import { gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const PERMISSION = 'Do you want to proceed?\n1. Yes\n';
 
 let base: string;
@@ -764,7 +764,7 @@ describe('team add', () => {
       }),
     );
     expect(tempCode).toBe(1);
-    expect(ioTemp.err).toContain('the approval allows 1 temporary seats; 2 would be running');
+    expect(ioTemp.err).toContain('the file allows 1 temporary seats; 2 would be running');
 
     const ioVendor = testIo(project, owner);
     const vendorCode = await runAdd(
@@ -777,7 +777,7 @@ describe('team add', () => {
       }),
     );
     expect(vendorCode).toBe(1);
-    expect(ioVendor.err).toContain('the approval allows 1 anthropic seats; 2 would be running');
+    expect(ioVendor.err).toContain('the file allows 1 anthropic seats; 2 would be running');
   });
 
   test('a new seat found at a dialog waits for its owner: nothing is closed, and it exits 1', async () => {
@@ -1267,7 +1267,7 @@ describe('team add delegated', () => {
     expect(existsSync(join(project, '.agents', 'team.log'))).toBe(false);
   });
 
-  test('a delegated add that would restore a missing seat is refused the same way', async () => {
+  test('a delegated add cannot restore a seat absent from the live file', async () => {
     // `limits.seats` is fixed in the file, so a seat taken out of the live file is not drift —
     // a seat taken out needs no new approval — and putting it back is still the owner's: the
     // entry returns only with the approval.
@@ -1283,7 +1283,7 @@ describe('team add delegated', () => {
     const io = testIo(project, pilot);
     const code = await runAdd(['worker'], io, sources(made, { delegateGate: () => passed }));
     expect(code).toBe(1);
-    expect(io.err).toBe(EDIT_REFUSAL);
+    expect(io.err).toBe('team add: the file has no seat "worker"\n');
     expect(readFileSync(path, 'utf8')).not.toContain('name: worker');
     expect(readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8')).toBe(record);
     expect(made.creates).toEqual([]);
@@ -1615,7 +1615,7 @@ describe('team add --model and --effort', () => {
       typed.push(command);
       return baseRun(session, pane, command);
     };
-    made.launch.paneText = () => IDLE.replace('Opus 5.5', 'Sonnet 5.5');
+    made.launch.paneText = () => IDLE.replaceAll('Opus 5.5', 'Sonnet 5.5');
 
     const io = testIo(project, owner);
     expect(await runAdd(['worker', '--model', 'claude-sonnet-5-5', '--effort', 'high'], io, sources(made))).toBe(0);
@@ -1641,7 +1641,7 @@ describe('team add --model and --effort', () => {
       typed.push(command);
       return baseRun(session, pane, command);
     };
-    made.launch.paneText = () => IDLE.replace('Opus 5.5', 'Sonnet 5.5');
+    made.launch.paneText = () => IDLE.replaceAll('Opus 5.5', 'Sonnet 5.5');
 
     const io = testIo(project, owner);
     const code = await runAdd(

@@ -156,7 +156,7 @@ describe('an approval written by v0.1.2', () => {
     ].join('\n');
     expect(approvalDifferences(team(gained), home, home)).toEqual([
       '`limits` changed',
-      'seat kimi-implementer is not in the approved file',
+      'seat kimi-implementer is not in the last approval',
     ]);
   });
 

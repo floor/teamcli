@@ -1,0 +1,22 @@
+│                                                   │
+│  BILLING        Subscription · Muse Code Power U… │
+└───────────────────────────────────────────────────┘
+
+  You are currently subscribed to the Muse Code Power
+  Usage usage plan.
+  Usage currently unavailable
+
+  Manage your plan in Account Center
+  (https://accountscenter.meta.com/muse_code)
+
+── Voice input (⌥ + v to start) ─────────────────────
+❯
+─────────────────────────────────────────────────────
+  Choose model
+
+⟩ muse-wonder-1.0
+  muse-wonder-full-1.0
+  muse-spark-1.3
+  muse-spark-1.2
+
+  ↑↓ move · enter confirm · esc go back

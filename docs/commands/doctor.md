@@ -39,6 +39,11 @@ Every line it prints is cleaned first: escape sequences, control characters and 
 characters carried by the team file, a pane or a CLI's own output are removed, so a value can
 never move the cursor, paint the terminal or open a second line.
 
+A hold on the team ([team hold](hold.md)) is the last `--  ` line before the summary:
+`hold: <reason>`, or `hold until <instant>: <reason>`, naming `team hold --release` as what clears
+it. It is a note: the summary's counts do not move, and no exit changes. A hold past its `until`
+reads as none, so a lapsed one is not printed.
+
 ## Example
 
 ```yaml file=.agents/team.yaml

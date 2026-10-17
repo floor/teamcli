@@ -79,6 +79,52 @@ export function agyMismatchedFrame(shape: AgyRuleShape, text?: string): string {
   return lines.join('\n');
 }
 
+/** The `herdr 0.7.1` `workspace list` entry, captured in a scratch session: every field the
+ *  real envelope carries, with the ids per scene. The stripped-down stand-in carried two of
+ *  these; a reader that leaned on a field the capture has and the stand-in did not would pass
+ *  here and fail against a real herdr. */
+export function capturedWorkspaceEntry(workspaceId: string, label: string) {
+  return {
+    active_tab_id: `${workspaceId}:t1`,
+    agent_status: 'unknown',
+    focused: true,
+    label,
+    number: 1,
+    pane_count: 1,
+    tab_count: 1,
+    workspace_id: workspaceId,
+  };
+}
+
+/** The `herdr 0.7.1` `pane list` entry, as captured. */
+export function capturedPaneEntry(paneId: string, workspaceId: string, terminalId = 'term_65dd8274742df1') {
+  return {
+    agent_status: 'unknown',
+    cwd: '/private/tmp',
+    focused: true,
+    foreground_cwd: '/private/tmp',
+    pane_id: paneId,
+    revision: 0,
+    tab_id: `${workspaceId}:t1`,
+    terminal_id: terminalId,
+    workspace_id: workspaceId,
+  };
+}
+
+/** The `herdr 0.7.1` `pane process-info` result, as captured: the shell the pane runs, and the
+ *  foreground process under it — which a scene sets apart from `shellPid` when it means to say
+ *  the pane is running something. */
+export function capturedProcessInfo(paneId: string, shellPid: number, foregroundPid = shellPid) {
+  return {
+    foreground_process_group_id: shellPid,
+    foreground_processes: [
+      { argv: ['-zsh'], argv0: 'zsh', cmdline: '-zsh', cwd: '/private/tmp', name: 'zsh', pid: foregroundPid },
+    ],
+    pane_id: paneId,
+    shell_pid: shellPid,
+  };
+}
+
 /** Greedy word wrap at a content width: as many words as fit on one row, the rest on the next —
  *  how a pane breaks a line wider than its text column. The captured Cursor frame is this wrap of
  *  its sentence at the pane's content width. */

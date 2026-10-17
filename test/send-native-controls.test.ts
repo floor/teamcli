@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { triggerLine } from '../src/send/native.ts';
-import { dropDir, nativeHost, owner, world } from './send-native-fixtures.ts';
+import { dropDir, filed, nativeHost, owner, world } from './send-native-fixtures.ts';
 
 const BODY = 'PAYLOAD\n\x1b[31m\x00\x07\rEND';
 
@@ -36,6 +36,6 @@ test('control characters in the body are not typed into the pane', async () => {
   const line = triggerLine(path);
   if (line === null) throw new Error(`no trigger for ${path}`);
   expect(trigger).toBe(line);
-  expect(readFileSync(path).equals(Buffer.from(BODY, 'utf8'))).toBe(true);
+  expect(readFileSync(path).equals(Buffer.from(filed(BODY), 'utf8'))).toBe(true);
   expect(host.frames).toEqual([]);
 });

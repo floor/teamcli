@@ -15,7 +15,7 @@ import { realFetch, BODY_LIMIT } from '../../src/release/http.ts';
 import type { KeyReader } from '../../src/release/keychain.ts';
 import { gitEnv, testIo, type TestIo } from '../helpers.ts';
 import {
-  KEY, URLS, activityFile, fakeFetch, fixture, happy, happyRecords, json, linearAnswer, type Answers, type Recorded,
+  KEY, URLS, activityFile, fakeFetch, fixture, happy, happyRecords, json, linearAnswer, withChange, type Answers, type Recorded,
 } from './world.ts';
 
 const TEAM = `format: 1
@@ -75,6 +75,14 @@ const SPEC_JSON = `{
 }
 `;
 
+/* The warning's own text for the standard 3.0.2 declaration, and the answers that produce it:
+ * npm's `next` dist-tag one patch behind `latest`. */
+const STALE_NEXT = "npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next";
+
+function staleNext(answers: Answers): Answers {
+  return withChange(answers, URLS.tags, () => ({ latest: '3.0.2', next: '3.0.1' }));
+}
+
 let project: string;
 
 beforeEach(() => {
@@ -122,6 +130,34 @@ describe('the output', () => {
     expect(code).toBe(0);
   });
 
+  test('a stale next tag adds one warn line after the table, changing no status and no exit', async () => {
+    const { code, io } = await run(['check', 'material@3.0.2'], staleNext(specAnswers()));
+    expect(code).toBe(1);
+    expect(io.out).toBe(`${SPEC_TABLE}warn  ${STALE_NEXT}\n`);
+    expect(io.err).toBe('');
+  });
+
+  test('a warning on an otherwise passing run: every row pass, still exit 0', async () => {
+    const { code, io } = await run(['check', 'material@3.0.2'], staleNext(happy()));
+    expect(code).toBe(0);
+    expect(io.out).toBe(`check      status  detail
+npm        pass    exact version, checksums, and provenance found
+tag        pass    tag resolves to a commit on the default branch
+github     pass    published release matches SemVer channel
+changelog  pass    changelog entry has a valid release date
+warn  ${STALE_NEXT}
+`);
+  });
+
+  test('--json carries the warning as a fourth key after the checks, and only when there is one', async () => {
+    const stale = await run(['check', 'material@3.0.2', '--json'], staleNext(specAnswers()));
+    expect(stale.code).toBe(1);
+    expect(stale.io.out.endsWith(`  },\n  "warning": ${JSON.stringify(STALE_NEXT)}\n}\n`)).toBe(true);
+    const level = await run(['check', 'material@3.0.2', '--json'], happy());
+    expect(level.code).toBe(0);
+    expect(level.io.out).not.toContain('warning');
+  });
+
   test('exit 2 when any check is unknown, even with another missing', async () => {
     const answers = specAnswers();
     answers.set(URLS.npm, [json({}, 500), json({}, 500)]);
@@ -130,10 +166,10 @@ describe('the output', () => {
     expect(io.out).toContain('npm        unknown');
   });
 
-  test('one full run requests exactly the eleven endpoints, all HTTPS, in order', async () => {
+  test('one full run requests exactly the twelve endpoints, all HTTPS, in order', async () => {
     // The same maximal shape as the caps test: trusted publishing, a chain of tag objects.
     const { requested } = await run(['check', 'material@3.0.2'], happy());
-    expect(requested).toEqual([URLS.npm, URLS.attest, URLS.repo, URLS.ref, URLS.compare, URLS.release, URLS.changelog]);
+    expect(requested).toEqual([URLS.npm, URLS.attest, URLS.tags, URLS.repo, URLS.ref, URLS.compare, URLS.release, URLS.changelog]);
     for (const url of requested) expect(url).toStartWith('https://');
   });
 

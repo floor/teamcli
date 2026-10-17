@@ -5,7 +5,7 @@
 // untouched, and the seat gets the repair line. Antigravity's record was not captured,
 // so that seat still starts: a guessed file is not written, and a refusal could not be cleared.
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { profileFor } from '../profiles/index.ts';
 
 /** The fields a launch seat needs for the lobby trust decision. */
@@ -56,13 +56,51 @@ export function lobbyPretrustLine(
 /** The same seats `up` is about to launch into the lobby. A seat already refused, or
  *  one the plan will not launch, is left alone. */
 function launchesIntoLobby(seat: PretrustSeat): boolean {
-  if (!seat.lobby || seat.unidentifiedHold || seat.stopped || seat.launchProblem || seat.grantKeep || seat.waiting) {
+  return Boolean(seat.lobby) && startsFresh(seat);
+}
+
+/** A seat the plan is about to start, wherever it starts: not refused, held, stopped or
+ *  already running, and with a profile. */
+function startsFresh(seat: PretrustSeat): boolean {
+  if (seat.unidentifiedHold || seat.stopped || seat.launchProblem || seat.grantKeep || seat.waiting) {
     return false;
   }
   if (!profileFor(seat.cli)) return false;
   const fresh = seat.stage === undefined || !seat.pane || (seat.stage === 'launched' && !seat.agentLive);
   if (!fresh) return false;
   return seat.budget?.kind !== 'refuse';
+}
+
+/** What a create-grant run may trust beyond the lobby: the seat's own start folder (the
+ *  project, for a lead). `covers` says the grant that admitted the run names the folder in its
+ *  paths; `listed` says the team file's `trust:` does. Both must hold. */
+export interface FolderGrant {
+  covers(folder: string): boolean;
+  listed(folder: string): boolean;
+}
+
+/** Writes the trust record of a launching seat's start folder, for a run a create-grant
+ *  admitted. True when the folder was written or already recorded. Nothing is written for a
+ *  lobby seat (`lobbyPretrustLine` owns that), a seat that does not start now, a CLI with no
+ *  captured record, or a folder the grant or the file's `trust:` does not both name. A folder
+ *  that cannot be written is not a refusal: the seat starts, and the CLI's own dialog is
+ *  handled the way it was before. */
+export function grantedFolderPretrust(
+  seat: PretrustSeat,
+  home: string,
+  opts: { now: Date; grant: FolderGrant },
+): boolean {
+  if (seat.lobby || !isAbsolute(seat.cwd) || !startsFresh(seat)) return false;
+  const writer = WRITERS[seat.cli];
+  if (!writer) return false;
+  try {
+    const folder = realpathSync(seat.cwd);
+    if (!opts.grant.covers(folder) || !opts.grant.listed(folder)) return false;
+    writer(folder, home, opts.now);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function repair(cli: string, lobby: string): string {

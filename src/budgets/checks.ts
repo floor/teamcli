@@ -55,7 +55,7 @@ export function checkReadings(budgets: TeamFile['budgets'], approved: Record<str
   });
 }
 
-/** Lines for a resolved command whose path or hash is not the approved one. */
+/** Lines for a resolved command whose path or hash is not the one the approval recorded. */
 export function checkDrift(approved: Record<string, ApprovedCheck> | undefined, current: Record<string, ApprovedCheck>): string[] {
   const lines: string[] = [];
   const previous = approved ?? {};
