@@ -496,7 +496,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // writes below: this path is that act too, and its early return must not skip them.
       if (delegated !== null) logDelegated(dir, delegated, 'up', refreshedAt, 'register');
       if (grantedSeat !== null) logGranted(dir, grantedSeat, 'up', refreshedAt, 'register');
-      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev }, seat, pane, held.id);
+      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev, owner: walked.kind === 'owner' }, seat, pane, held.id);
       if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
       else {
         refreshed = true;
@@ -570,7 +570,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     current.launched_file = path;
   });
 
-  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev }, seat, pane, id);
+  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev, owner: walked.kind === 'owner' }, seat, pane, id);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);
   else {
     // The address: the live session socket this seat answers at, recorded on the agent the way a

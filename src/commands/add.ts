@@ -783,7 +783,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const who = describeCaller(caller);
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
-      caller: who, owner: caller.kind === 'owner', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
+      caller: who, owner: caller.kind === 'owner', devMode: io.env.TEAMCLI_DEV_MODE === '1', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
       verifiedLobby, startCwd: planSeat.cwd, inLobby: planSeat.lobby === true, records, teamFile: path,
       doctor: sources.doctor,
       // The lobby is read again directly before the workspace this run makes in it, with nothing
@@ -996,7 +996,7 @@ function alreadyRunningLine(name: string, owner: boolean, unknown: boolean): str
 
 function hostOf(input: {
   dir: string; session: string; team: TeamFile; root: string; home: string; ceilings: Ceilings; running: Running[];
-  seat: Seat; temporary?: SeatState['temporary']; caller: string; owner: boolean; now(): Date; launch: Launch;
+  seat: Seat; temporary?: SeatState['temporary']; caller: string; owner: boolean; devMode: boolean; now(): Date; launch: Launch;
   readMachine?: (root: string) => Machine; samples: SwapSample[]; limits: TeamFile['machine']; io: Io;
   standing: Standing;
   teamFile: string;
@@ -1164,7 +1164,7 @@ function hostOf(input: {
         // The registry: the seat's agent is registered at its first launch, re-pointed after.
         if (name === seat.name) {
           const made = registerLaunch(
-            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
+            { home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[name]?.id,
