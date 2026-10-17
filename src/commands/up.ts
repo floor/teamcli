@@ -688,8 +688,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // folder's own file would make, so it is matched only on the path below, which never opens a
   // flagged file and never asks a named session. A delegate verdict that already refused this aim
   // returns in the gate's words, before the caller is placed. A granted seat that aims either
-  // flag is refused in its own words, and the flagged path is not opened. This folder's own
-  // file, with no `--session`, continues below.
+  // flag is refused in its own words, and the flagged path is not opened. The owner-only rule is
+  // the first thing the aim meets: a grant that refused the run — for any reason — never turns
+  // the aim into an ordinary one on the file's own session. This folder's own file, with no
+  // `--session`, continues below.
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const aimed = otherFile || args.values.session !== undefined;
   if (detached !== undefined && aimed) {
@@ -707,7 +709,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // One return answers both runs: a real one with the bare word, a dry one never denied but told
   // the reason and the owner's own command. Either way the flagged file stays unread, so the dry
   // run prints no plan for it.
-  if (!mayLaunchSeats(walked) && aimed && verdict === null && grantRefusal === null && !dev) {
+  if (!mayLaunchSeats(walked) && aimed && verdict === null && !dev) {
     if (dry) {
       out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}\n`);
       out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
@@ -717,7 +719,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.not-owner
     return 1;
   }
-  if (!mayLaunchSeats(walked) && aimed && verdict?.kind === 'refused' && grantRefusal === null) {
+  if (!mayLaunchSeats(walked) && aimed && verdict?.kind === 'refused') {
     out.stderr(`team up: ${verdict.text}\n`);
     // exit: up.delegate-flag
     return 1;
@@ -745,12 +747,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // file its delegation was read from — and otherwise today's load, `--file` honoured exactly
   // as before.
   const loaded =
-    aimed && grantRefusal !== null && grantTeam !== null
-      ? grantTeam
-      : delegateTeam ??
-        (defaultLoad !== null && !args.values.file
-          ? defaultLoad
-          : loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: sources.home }));
+    delegateTeam ??
+    (defaultLoad !== null && !args.values.file
+      ? defaultLoad
+      : loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: sources.home }));
   if (!loaded.ok) {
     // A file that does not load refuses both runs, one voice each: the real one stops in
     // `team up`'s own words, the dry one says what a real run would stop on (`! up would
@@ -772,8 +772,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // machine no longer waits behind the first team's lobby.
   const teamLobby = resolveLobby(sources.home, team);
   // Owner-only targets are honoured only when no gate decided: a delegated run is the default
-  // file's own session, and a refused one never adopts the session its caller tried to name.
-  const session = verdict !== null || (aimed && grantRefusal !== null) ? team.session : (args.values.session ?? team.session);
+  // file's own session, and an aimed run by anyone but the owner has already returned above.
+  const session = verdict !== null ? team.session : (args.values.session ?? team.session);
   const dir = dirname(loaded.path);
   let state = resolveState(sources, session);
   // A stopped session this team's state records is cleared under the run lock, then started.

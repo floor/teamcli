@@ -83,8 +83,7 @@ ${seat('worker', 'implementer', ['    count: 1'])}
 
 /** Writes the file and the approval an owner's `team approve` of exactly that text leaves, so
  *  `up`'s standing is in force and only the caller gate decides. */
-function setup(): void {
-  const text = teamText();
+function approve(text: string): void {
   writeFileSync(join(dir, 'team.yaml'), text);
   const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
@@ -94,6 +93,21 @@ function setup(): void {
     loaded.team.seats,
     home,
   );
+}
+
+function setup(): void {
+  approve(teamText());
+}
+
+/** The same file with a verified grant that names the lead and lists only `down`: the grant
+ *  refuses `up` for every caller, the lead included. */
+function grantedText(): string {
+  return `${teamText()}grant:
+  session: alpha
+  seat: lead
+  scope:
+    - down
+`;
 }
 
 function record(seats: Record<string, { pane: string; workspace: string }>): void {
@@ -316,6 +330,45 @@ describe('the up row (owner-or-leads)', () => {
     expect(io.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
     expect(io.out).toContain('! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\n');
     expect(io.out).not.toContain('dry run: nothing was run');
+  });
+
+  test("a lead's aimed flags are refused before a refusing grant is considered, and the flag never widens the target", async () => {
+    // The verified grant names the lead and lists `down` alone, so it refuses `up` for this
+    // roster lead. The map's row admits the run; the owner-only rule for `--session` and
+    // `--file` still runs first, whatever the grant said, so the aim cannot fall back to
+    // the file's own session.
+    upsertTeam(home, teamIdOf(root), {
+      project: 'acme',
+      session: 'alpha',
+      root,
+      roster: [
+        { agent: 'agt_aaaaaaaaaaaa', seat: 'lead', role: 'coordinator' },
+        { agent: 'agt_bbbbbbbbbbbb', seat: 'worker', role: 'implementer', leads: true },
+      ],
+    });
+    approve(grantedText());
+    record({ worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
+    const { sources, trace } = upTrace();
+
+    const real = testIo(root, seatCaller('worker', 'worker-pane'));
+    expect(await runUp(['--session', 'other'], real, sources)).toBe(1);
+    expect(real.err).toBe('deny\n');
+    expect(real.out).toBe('');
+
+    const dry = testIo(root, seatCaller('worker', 'worker-pane'));
+    expect(await runUp(['--dry-run', '--session', 'other'], dry, sources)).toBe(1);
+    expect(dry.err).toBe('');
+    expect(dry.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is worker\n');
+    expect(dry.out).toContain('! to unblock: the owner runs `team up --session other` from this folder, at a terminal outside herdr\n');
+    expect(dry.out).not.toContain('dry run: nothing was run');
+
+    // `other.yaml` does not exist: the caller sentence, not the file's exit 2, is the proof the
+    // flagged path was never opened — with a grant in the file exactly as without one.
+    const flagged = testIo(root, seatCaller('worker', 'worker-pane'));
+    expect(await runUp(['--dry-run', '--file', 'other.yaml'], flagged, sources)).toBe(1);
+    expect(flagged.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is worker\n');
+    expect(flagged.out).toContain('! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\n');
+    expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 });
 
