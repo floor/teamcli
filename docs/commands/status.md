@@ -11,6 +11,13 @@ in its input box reads `(unsent text)`, a quiet seat on a screen its profile can
 limit on <account>, resets at <time>)` — the pool the seat spends, its own `account:` or its
 vendor when it names none, and the reset the screen gives when it gives one.
 
+For a seat whose profile says herdr cannot report it (`herdr_status: unreliable`), the word is
+the screen's instead of herdr's: the idle table, or a box holding text, reads `idle`; a running
+turn reads `working`; any other screen the profile reads reads `blocked`; and a screen the
+profile cannot read keeps herdr's `unknown`, with the note that names herdr's word. The same
+reading decides the quiet a mark above needs, and `team check` and the watch take their state and
+attention from it too.
+
 A pane that no longer holds the process `team` launched is not by itself a difference: when a
 program `team` did not launch is in front and the agent session stored at its launch is the
 session the pane reports now — a herdr restart brings the pane back under a new shell pid — the

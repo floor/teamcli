@@ -5,7 +5,7 @@
 // the repair it names is the file, one word shorter. Fake herdr throughout: no live session is read.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
@@ -339,5 +339,57 @@ describe('a delegate entry naming approve', () => {
     );
     expect(unknownDoc.differences).toEqual([]);
     expect(unknownDoc.notes).toContain('lead: herdr reports the status "unknown"');
+  });
+
+  test('a jules seat herdr reports unknown is read from its screen: no note and no attention (exit 0)', () => {
+    // The same world as the unknown-status scene above, one cli different: the profile says herdr
+    // cannot report this CLI, so the screen is the reading and `unknown` is not a finding.
+    const head = `format: 1
+project: acme
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: jules
+    vendor: google
+    model: Jules
+    version: "0.1.42"
+    launch: jules
+    leads: true
+`;
+    const root = place(head);
+    const parsed = validateTeamFile(head);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    const julesSeat = parsed.team.seats[0]!;
+    const julesIdle = readFileSync(new URL('./fixtures/jules/0.1.42/idle.txt', import.meta.url), 'utf8');
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({ file: '.agents/team.yaml', json: true }, io, {
+      live: () => ({
+        running: true,
+        agents: [
+          {
+            name: 'lead',
+            agent: null,
+            pane: 'w1:p1',
+            workspace: 'w1',
+            status: 'unknown',
+            cwd: null,
+            displayAgent: displayAgent(julesSeat),
+          },
+        ],
+        workspaces: [{ id: 'w1', label: workspaceLabel(julesSeat) }],
+        screens: { 'w1:p1': julesIdle },
+      }),
+      branch: () => 'main',
+      standing: (at) => approvalStanding(at, join(root, 'nowhere')),
+      now: () => NOW,
+    });
+    expect(code).toBe(0);
+    const doc = assertMatchesOutputSchema<{ differences: unknown[]; notes: string[] }>(io.out, CHECK_OUTPUT_SCHEMA);
+    expect(doc.differences).toEqual([]);
+    expect(doc.notes.some((note) => note.includes('herdr reports the status'))).toBe(false);
   });
 });

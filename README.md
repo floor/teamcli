@@ -249,7 +249,8 @@ every jules seat receives carry `Never delete a Jules session.` herdr reports a 
 agent, and its status unknown, so the profile says `herdr_status: unreliable`: readiness is read
 from the screen, a pane herdr has not listed is named by its own process, and `down`, `restart`
 and `remove` treat the idle table as free where they would otherwise wait on a word herdr cannot
-give.
+give. Status, check and the watch read the seat's state from the same screen: its idle table is
+idle, a running turn is working, and only a screen the profile cannot read is unknown.
 
 Launching a Cursor seat, like launching cursor-agent by hand, creates Cursor's own project record
 under ~/.cursor/projects for that folder; team writes no trust (.workspace-trusted) and no Cursor

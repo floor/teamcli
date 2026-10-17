@@ -467,6 +467,13 @@ export function profileFor(cli: string): Profile | null {
   return Object.hasOwn(SHIPPED, cli) ? (SHIPPED[cli]?.profile ?? null) : null;
 }
 
+/** Whether herdr cannot report this CLI's agent status faithfully, so the profile's own screen
+ *  reading is the seat's state there. False for a CLI with no shipped profile, and for one whose
+ *  profile trusts herdr's word. */
+export function herdrUnreliable(cli: string | undefined): boolean {
+  return cli !== undefined && profileFor(cli)?.herdrStatus === 'unreliable';
+}
+
 /** The files the tool itself keeps in the lobby, beside the profiles' own: the reach projection
  *  `up`, `add` and `remove` regenerate (`src/reach/projection.ts`) and the temporary its atomic
  *  write passes through. Declared below so the closed-tree gate passes a lobby holding them,

@@ -29,6 +29,18 @@ export type Screen =
                                      // screen names, or null when it names none
   | { kind: 'unknown' };
 
+/** What a screen says a seat is doing, in the state words the readers use: an idle table or a
+ *  composer holding text is `idle` (the two the CLI takes a line at), a running turn is
+ *  `working`, every other screen the profile reads is `blocked` (someone has to act on it), and
+ *  one no profile reads is `unknown`. The four words are the ones a herdr status can carry, so a
+ *  profile herdr cannot report can be read with them in place of its word. */
+export function screenWord(screen: Screen): 'idle' | 'working' | 'blocked' | 'unknown' {
+  if (screen.kind === 'idle' || screen.kind === 'unsent') return 'idle';
+  if (screen.kind === 'working') return 'working';
+  if (screen.kind === 'unknown') return 'unknown';
+  return 'blocked';
+}
+
 function load(name: string): ScreenData {
   return loadScreen(readFileSync(new URL(`../profiles/${name}.yaml`, import.meta.url), 'utf8'), undefined, `${name}.yaml`);
 }

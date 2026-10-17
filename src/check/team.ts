@@ -45,6 +45,7 @@ import {
 } from '../output/index.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { rosterOf } from '../permissions/who.ts';
+import { herdrUnreliable } from '../profiles/index.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import {
   loadAndResolvePolicyChain,
@@ -654,8 +655,14 @@ function attentionDifferences(team: TeamFile, state: SessionState, live: Live): 
     // Only the pane the state records for this seat, and only where that seat answers on it: a
     // pane herdr lists for the name on any other pane is a stale record, and is not read.
     if (!agent || agent.pane !== recorded) continue;
-    const quiet = agent.status === 'idle' || agent.status === 'done';
-    const view = viewOf(attentionOf(readScreen(seat.cli, live.screens[recorded]), agent.status, quiet), seat.name, agent.status);
+    // The watch's own reading, from its own two inputs: herdr's word, and — for a profile herdr
+    // cannot report — the seat's screen, which is the reading there.
+    const screen = readScreen(seat.cli, live.screens[recorded]);
+    const theirWord = herdrUnreliable(seat.cli);
+    const quiet = theirWord
+      ? screen.kind === 'idle' || screen.kind === 'unsent'
+      : agent.status === 'idle' || agent.status === 'done';
+    const view = viewOf(attentionOf(screen, agent.status, quiet, theirWord), seat.name, agent.status);
     if (view) out.push(view);
   }
   return out;
@@ -982,6 +989,9 @@ function unknownStatusNotes(team: TeamFile, state: SessionState, live: Live): st
     if (recorded === undefined) continue;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
     if (!agent || agent.pane !== recorded) continue;
+    // A profile herdr cannot report is read from its own screen: a screen it reads is the word,
+    // and herdr's `unknown` beside it is not a note. A screen no profile reads leaves the note.
+    if (herdrUnreliable(seat.cli) && readScreen(seat.cli, live.screens[recorded]).kind !== 'unknown') continue;
     if (
       agent.status !== '' &&
       agent.status !== 'idle' &&

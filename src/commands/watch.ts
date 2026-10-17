@@ -36,7 +36,7 @@ import { boxHoldsText, DRAW_WAIT_MS } from '../launch/deliver.ts';
 import { removeWorktree } from './worktree.ts';
 import { stateOf } from './down.ts';
 import type { DownSeat } from '../launch/plan.ts';
-import { profileFor } from '../profiles/index.ts';
+import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import { classifyWith, overridesInForceOf, quotaWith, type OverrideForce } from '../profiles/overrides.ts';
 import { ofTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -748,7 +748,13 @@ async function deliver(
   if ((kind === 'idle' || kind === 'unsent') && memory.ownNudge?.pane === nudge.pane && !mine) {
     memory.ownNudge = null;
   }
-  if ((status !== 'idle' && status !== 'done') || (!mine && (kind !== 'idle' || !sources.typeText(nudge.pane, nudge.text, session)))) {
+  // The free reading: herdr's idle or done, or — for a profile herdr cannot report — the seat's
+  // own screen, the same reading the pass chose the seat by. The screen check beside it stays
+  // the gate on what may be typed into: only an empty idle box takes the line.
+  const quiet = herdrUnreliable(cli)
+    ? kind === 'idle' || (mine && kind === 'unsent')
+    : status === 'idle' || status === 'done';
+  if (!quiet || (!mine && (kind !== 'idle' || !sources.typeText(nudge.pane, nudge.text, session)))) {
     keep();
     return;
   }
@@ -847,9 +853,14 @@ function tellOnce(told: Set<string>, key: string, text: string, tell: (text: str
 function noteWorked(dir: string, session: string, live: Live, now: Date): void {
   const recorded = readState(dir).sessions[session];
   if (!recorded) return;
+  // Working is herdr's word, or — for a profile herdr cannot report — the seat's own screen:
+  // herdr gives such a CLI no word while its turn runs.
+  const working = (status: string, seat: { cli?: string } | undefined, pane: string): boolean =>
+    status === 'working'
+    || (seat !== undefined && herdrUnreliable(seat.cli) && readScreen(seat.cli ?? '', live.screens[pane]).kind === 'working');
   const due = live.agents.some((agent) => {
     const seat = agent.name ? recorded.seats[agent.name] : undefined;
-    return seat && seat.stage === 'ready' && agent.status === 'working';
+    return seat && seat.stage === 'ready' && working(agent.status, seat, agent.pane);
   });
   if (!due) return;
   const activeAt = now.toISOString();
@@ -857,7 +868,7 @@ function noteWorked(dir: string, session: string, live: Live, now: Date): void {
     const seats = (file.sessions[session] ??= emptySession()).seats;
     for (const agent of live.agents) {
       const seat = agent.name ? seats[agent.name] : undefined;
-      if (seat && seat.stage === 'ready' && agent.status === 'working') {
+      if (seat && seat.stage === 'ready' && working(agent.status, seat, agent.pane)) {
         if (seat.temporary) seat.worked = true;
         seat.last_active = activeAt;
       }
@@ -897,7 +908,7 @@ async function closeEnded(input: {
     const agent = live.agents.find((item) => item.name === name);
     const cli = team.seats.find((seat) => seat.name === temporary.like)?.cli ?? '';
     const free = agent
-      ? stateOf(sources.status(agent.pane, session) ?? agent.status, readScreen(cli, sources.screen(agent.pane, session) ?? undefined)) === 'free'
+      ? stateOf(sources.status(agent.pane, session) ?? agent.status, readScreen(cli, sources.screen(agent.pane, session) ?? undefined), cli) === 'free'
       : false;
     const decision = judgeTemporary({ worked: recorded.worked === true, free, ownBefore, end });
     if (decision.ownCommits) {

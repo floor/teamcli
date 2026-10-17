@@ -41,7 +41,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { boxHoldsOther, boxHoldsText, DRAW_WAIT_MS, settleScreen } from '../launch/deliver.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
-import { profileFor } from '../profiles/index.ts';
+import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import { logLine } from '../log.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
@@ -202,13 +202,6 @@ export function stateOfPane(
     return 'exited';
   }
   return stateOf(status, screen, pane.cli);
-}
-
-/** Whether herdr reports this CLI's agent status faithfully. A profile that says it does not is
- *  read from its screen alone: herdr reports those CLIs as no agent, or `unknown`, while they
- *  run, so its word cannot free a seat or hold one. */
-function herdrUnreliable(cli: string | undefined): boolean {
-  return cli !== undefined && profileFor(cli)?.herdrStatus === 'unreliable';
 }
 
 export function stateOf(status: string, screen: Screen, cli?: string): DownSeat['state'] {
