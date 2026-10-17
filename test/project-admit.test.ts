@@ -24,9 +24,9 @@ function agent(id: string, seat: string, team: string): Agent {
   };
 }
 
-const AGAMEMNON = 'agt_000000030001';
-const ODYSSEUS = 'agt_000000030002';
-const HELIOS = 'agt_000000030003';
+const LEAD_A = 'agt_000000030001';
+const LEAD_B = 'agt_000000030002';
+const LEAD_C = 'agt_000000030003';
 const BUILDER_1 = 'agt_000000030004';
 const BUILDER_2 = 'agt_000000030005';
 const BUILDER_3 = 'agt_000000030006';
@@ -35,9 +35,9 @@ const SOLO_BUILDER = 'agt_000000030008';
 const LEGACY_LEAD = 'agt_000000030009';
 const ROLE_WORD = 'agt_00000003000a';
 
-const agamemnon = agent(AGAMEMNON, 'agamemnon', 'cli');
-const odysseus = agent(ODYSSEUS, 'odysseus', 'site');
-const helios = agent(HELIOS, 'helios', 'labs');
+const leadA = agent(LEAD_A, 'lead-a', 'cli');
+const leadB = agent(LEAD_B, 'lead-b', 'site');
+const leadC = agent(LEAD_C, 'lead-c', 'labs');
 const builder1 = agent(BUILDER_1, 'builder-1', 'cli');
 const builder2 = agent(BUILDER_2, 'builder-2', 'site');
 const builder3 = agent(BUILDER_3, 'builder-3', 'radio');
@@ -46,7 +46,7 @@ const soloBuilder = agent(SOLO_BUILDER, 'builder-1', 'solo');
 const legacyLead = agent(LEGACY_LEAD, 'chief', 'legacy');
 const roleWord = agent(ROLE_WORD, 'coordinator', 'legacy');
 
-// Two projects: `teamcli` groups three teams and names agamemnon its lead; `radio` is its own
+// Two projects: `teamcli` groups three teams and names lead-a its lead; `radio` is its own
 // world and names its lead too. `solo` is named by no project, so it is its own. `legacy` carries
 // the one row whose role is the old word and no capability, beside the seat that holds it.
 const teams: AdmitTeams = {
@@ -54,7 +54,7 @@ const teams: AdmitTeams = {
     project: 'cli',
     entity: 'teamcli',
     roster: [
-      { agent: AGAMEMNON, seat: 'agamemnon', role: 'chief', leads: true },
+      { agent: LEAD_A, seat: 'lead-a', role: 'chief', leads: true },
       { agent: BUILDER_1, seat: 'builder-1', role: 'builder' },
     ],
   },
@@ -62,14 +62,14 @@ const teams: AdmitTeams = {
     project: 'site',
     entity: 'teamcli',
     roster: [
-      { agent: ODYSSEUS, seat: 'odysseus', role: 'chief', leads: true },
+      { agent: LEAD_B, seat: 'lead-b', role: 'chief', leads: true },
       { agent: BUILDER_2, seat: 'builder-2', role: 'builder' },
     ],
   },
   labs: {
     project: 'labs',
     entity: 'teamcli',
-    roster: [{ agent: HELIOS, seat: 'helios', role: 'chief', leads: true }],
+    roster: [{ agent: LEAD_C, seat: 'lead-c', role: 'chief', leads: true }],
   },
   legacy: {
     project: 'legacy',
@@ -95,7 +95,7 @@ const teams: AdmitTeams = {
 };
 
 const projects = {
-  teamcli: { lead: AGAMEMNON, teams: ['cli', 'site', 'labs', 'legacy'] },
+  teamcli: { lead: LEAD_A, teams: ['cli', 'site', 'labs', 'legacy'] },
   radio: { lead: RADIO_LEAD, teams: ['radio'] },
 };
 const context: AdmitContext = { projects };
@@ -104,40 +104,40 @@ const crossed: AdmitContext = { ...context, crossTeams: { project: true } };
 describe('project admission: the project decides its own pairs', () => {
   test('the project lead reaches the leads of its teams, and they reach it', () => {
     const rule = 'the project lead and the leads of its teams';
-    for (const lead of [odysseus, helios, legacyLead]) {
-      expect(admitSend(agamemnon, lead, teams, undefined, context)).toEqual({ ok: true, rule });
+    for (const lead of [leadB, leadC, legacyLead]) {
+      expect(admitSend(leadA, lead, teams, undefined, context)).toEqual({ ok: true, rule });
     }
-    expect(admitSend(odysseus, agamemnon, teams, undefined, context)).toEqual({ ok: true, rule });
-    expect(admitSend(helios, agamemnon, teams, undefined, context)).toEqual({ ok: true, rule });
-    expect(admitSend(legacyLead, agamemnon, teams, undefined, context)).toEqual({ ok: true, rule });
+    expect(admitSend(leadB, leadA, teams, undefined, context)).toEqual({ ok: true, rule });
+    expect(admitSend(leadC, leadA, teams, undefined, context)).toEqual({ ok: true, rule });
+    expect(admitSend(legacyLead, leadA, teams, undefined, context)).toEqual({ ok: true, rule });
   });
 
   test('team leads within one project reach each other', () => {
     const rule = 'team leads within one project to each other';
-    expect(admitSend(helios, odysseus, teams, undefined, context)).toEqual({ ok: true, rule });
-    expect(admitSend(odysseus, helios, teams, undefined, context)).toEqual({ ok: true, rule });
-    expect(admitSend(legacyLead, odysseus, teams, undefined, context)).toEqual({ ok: true, rule });
+    expect(admitSend(leadC, leadB, teams, undefined, context)).toEqual({ ok: true, rule });
+    expect(admitSend(leadB, leadC, teams, undefined, context)).toEqual({ ok: true, rule });
+    expect(admitSend(legacyLead, leadB, teams, undefined, context)).toEqual({ ok: true, rule });
   });
 
   test('the project lead reaches the leads of its teams, not a plain seat of another', () => {
     // A seat of the lead's own team is the team rules' business, as it was.
-    expect(admitSend(agamemnon, builder1, teams, undefined, context)).toEqual({
+    expect(admitSend(leadA, builder1, teams, undefined, context)).toEqual({
       ok: true,
       rule: 'an orchestrator or operator to a seat of its own team',
     });
     // Another team's plain seat is reached through its own lead, not from the top of the project.
-    expect(admitSend(agamemnon, builder2, teams, undefined, context).ok).toBe(false);
-    expect(admitSend(agamemnon, roleWord, teams, undefined, context).ok).toBe(false);
+    expect(admitSend(leadA, builder2, teams, undefined, context).ok).toBe(false);
+    expect(admitSend(leadA, roleWord, teams, undefined, context).ok).toBe(false);
   });
 
   test('a lead is the `leads` capability, never a role name', () => {
     // The row whose role is the old word does not lead `legacy`; the seat holding the capability
     // does — and the capability reaches the project lead both ways, whatever the role is called.
     const rule = 'the project lead and the leads of its teams';
-    expect(admitSend(roleWord, agamemnon, teams, undefined, context).ok).toBe(false);
-    expect(admitSend(legacyLead, agamemnon, teams, undefined, context)).toEqual({ ok: true, rule });
-    expect(admitSend(roleWord, odysseus, teams, undefined, context).ok).toBe(false);
-    expect(admitSend(legacyLead, odysseus, teams, undefined, context)).toEqual({
+    expect(admitSend(roleWord, leadA, teams, undefined, context).ok).toBe(false);
+    expect(admitSend(legacyLead, leadA, teams, undefined, context)).toEqual({ ok: true, rule });
+    expect(admitSend(roleWord, leadB, teams, undefined, context).ok).toBe(false);
+    expect(admitSend(legacyLead, leadB, teams, undefined, context)).toEqual({
       ok: true,
       rule: 'team leads within one project to each other',
     });
@@ -167,22 +167,22 @@ describe('project admission: the project decides its own pairs', () => {
 
   test('cross-project stays refused, setting or not', () => {
     expect(admitSend(builder1, builder3, teams, undefined, crossed).ok).toBe(false);
-    expect(admitSend(agamemnon, radioLead, teams, undefined, crossed).ok).toBe(false);
+    expect(admitSend(leadA, radioLead, teams, undefined, crossed).ok).toBe(false);
     // `solo` is named by no project, so it is its own: no setting opens a door into it.
     expect(admitSend(builder1, soloBuilder, teams, undefined, crossed).ok).toBe(false);
-    expect(admitSend(agamemnon, soloBuilder, teams, undefined, crossed).ok).toBe(false);
+    expect(admitSend(leadA, soloBuilder, teams, undefined, crossed).ok).toBe(false);
   });
 
   test('a team named in two projects is refused, naming both', () => {
     const cliTwice: AdmitContext = { projects: { ...projects, pOther: { lead: null, teams: ['cli'] } } };
-    expect(admitSend(agamemnon, odysseus, teams, undefined, cliTwice)).toEqual({
+    expect(admitSend(leadA, leadB, teams, undefined, cliTwice)).toEqual({
       ok: false,
-      why: 'agamemnon@cli may not send to odysseus@site: team cli is named in 2 projects: pOther, teamcli',
+      why: 'lead-a@cli may not send to lead-b@site: team cli is named in 2 projects: pOther, teamcli',
     });
     const radioTwice: AdmitContext = { projects: { ...projects, pOther: { lead: null, teams: ['radio'] } } };
-    expect(admitSend(agamemnon, builder3, teams, undefined, radioTwice)).toEqual({
+    expect(admitSend(leadA, builder3, teams, undefined, radioTwice)).toEqual({
       ok: false,
-      why: 'agamemnon@cli may not send to builder-3@radio: team radio is named in 2 projects: pOther, radio',
+      why: 'lead-a@cli may not send to builder-3@radio: team radio is named in 2 projects: pOther, radio',
     });
   });
 
@@ -191,7 +191,7 @@ describe('project admission: the project decides its own pairs', () => {
     expect(verdict.ok).toBe(false);
     expect((verdict as { why: string }).why).not.toContain('project');
     // The team rules read the same capability: two leads of one entity are the orchestrator pair.
-    expect(admitSend(helios, odysseus, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
-    expect(admitSend(agamemnon, builder1, teams)).toEqual({ ok: true, rule: 'an orchestrator or operator to a seat of its own team' });
+    expect(admitSend(leadC, leadB, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
+    expect(admitSend(leadA, builder1, teams)).toEqual({ ok: true, rule: 'an orchestrator or operator to a seat of its own team' });
   });
 });

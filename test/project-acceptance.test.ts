@@ -75,7 +75,7 @@ const PANES: Record<string, { session: string; workspace: string; pane: string }
 
 /** The two team files, and a home: the shape `team register` and `team send` read. */
 function world(): World {
-  const base = tempBase('p0b-acc-');
+  const base = tempBase('acc-');
   const home = join(base, 'h');
   mkdirSync(lobbyDir(home), { recursive: true });
   const rootA = join(base, 'teamcli');
