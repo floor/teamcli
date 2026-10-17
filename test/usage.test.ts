@@ -2254,10 +2254,11 @@ describe('team usage', () => {
     expect(rows).toEqual([]);
   });
 
-  test('a named team whose file cannot be read reads as one sentence: its name and its ~ root', async () => {
-    // The owner's sentence (Atlas, 2026-10-17): `the team "team" (~/Code/floor/team): its file
-    // could not be read.` The store's folder is the record of the name; the root prints under
-    // the home it lives in, never as an absolute path.
+  test('a named team whose file cannot be read reads as one sentence in every view: its name and its ~ root', async () => {
+    // The sentence (Atlas, 2026-10-17): `the team "team" (~/Code/floor/team): its file could
+    // not be read.` The store's folder is the record of the name; the root prints under the
+    // home it lives in, never as an absolute path. A `~/…` root prints in every view — the
+    // owner's and the restricted view alike — so a seat sees the same sentence the owner does.
     const otherRoot = join(home, 'Code', 'floor', 'team');
     mkdirSync(join(otherRoot, '.agents'), { recursive: true });
     const other = teamText().replace('project: acme', 'project: team').replace('session: acme-web', 'session: team-web').replace(root, otherRoot);
@@ -2267,10 +2268,10 @@ describe('team usage', () => {
     const out = await usageAt(root, OWNER);
     expect(out.code).toBe(0);
     expect(out.out).toContain('note: the team "team" (~/Code/floor/team): its file could not be read.\n');
-    // Anyone but the owner reads the fixed sentence under the team's name, and no root at all.
+    // The restricted view reads the same sentence, root and all — the store's own folder is the
+    // record the note is built from, and the team is named by the file that cannot be read.
     const seat = await usageAt(root, SEAT);
-    expect(seat.out).toContain('note: team: its file could not be read\n');
-    expect(seat.out).not.toContain('~/Code/floor/team');
+    expect(seat.out).toContain('note: the team "team" (~/Code/floor/team): its file could not be read.\n');
   });
 
   test('the RESERVE column prints only when a row has something in it, headers and cells together', async () => {

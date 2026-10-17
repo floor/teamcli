@@ -1532,11 +1532,13 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
       if (!shownProblem(problem)) continue;
       // A team the machine still records by name keeps its name: the store's own folder is the
       // record of which team this is, and the owner asked a team whose file cannot be read to
-      // print by that name — the name, never a path. The owner's view names the root too, as
-      // `~/…` (the report's own rule for a path), so the line reads as the sentence it is.
+      // print by that name and its `~/…` root (the report's own rule for a path) as one sentence.
+      // A `~/…` root prints in every view, so a seat's line says what the owner's says; a root
+      // outside the home is a location this tool derived, and only the owner reads it.
       if (problem.kind === 'unreadable-file' && team.recorded !== undefined && team.recorded !== '') {
-        namedTeams.push(view.full
-          ? { scope: 'named-team', why: `the team "${team.recorded}" (${tildify(team.root, machine.home)}): its file could not be read.` }
+        const shownRoot = tildify(team.root, machine.home);
+        namedTeams.push(view.full || shownRoot.startsWith('~/')
+          ? { scope: 'named-team', why: `the team "${team.recorded}" (${shownRoot}): its file could not be read.` }
           : { scope: team.recorded, why: 'its file could not be read' });
         continue;
       }

@@ -212,9 +212,9 @@ or a usage print answers. A figure an undeclared account's own read names lands 
 account's lab the same way, and only a reading this caller may make can name it: under the
 restricted view a machine-wide reading lands only on a lab the caller's own seats pay. An
 unreadable seat pane or an unanswered usage command is one counted note, however many seats hit
-it; a team whose own file cannot be read is one note too — the owner reads the team's name and its
-`~` root (`the team "team" (~/Code/floor/team): its file could not be read.`), every other caller
-the team's name only. In `--json` the block is the `quota` key:
+it; a team whose own file cannot be read is one note too, naming the team and its `~` root in
+every view (`the team "team" (~/Code/floor/team): its file could not be read.`). In `--json` the
+block is the `quota` key:
 `format`, `accountsFile`, one entry per lab with its accounts, seats, states and windows, and
 `advice`.
 

@@ -186,8 +186,9 @@ left/used percentages, reset countdown and reading age; Antigravity pool rows ad
 machine account counts once even with multiple windows or pools. The `quota` block carries
 `format: 1`, the accounts file the declaration line points at, one lab per entry with its
 accounts, seats, states and windows (each with its source, age, staleness, wall flag and margin),
-and the one advice sentence. A team whose file cannot be read is one note: the owner's names the
-team and its `~` root, every other caller's names the team only.
+and the one advice sentence. A team whose file cannot be read is one note naming the team and its
+`~` root in every view; a root outside the home is a derived location, so it stays the owner's
+sentence and other callers read the team's name only.
 
 The full view belongs to the owner at a terminal. Every other caller receives the restricted
 view: its approved team names and rows, shared machine subscriptions, and anonymized counts or
