@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { plainText } from '../src/launch/plain.ts';
 import {
   buildActionSchemaSpec,
   buildCommandOutputSchema,
@@ -6,12 +7,14 @@ import {
   COMMAND_OUTPUT_SCHEMAS,
   contextLine,
   DIFFERENCE_WHO_VALUES,
+  displayPath,
   ERROR_OUTPUT_SCHEMA,
   formatDeprecationWarning,
   formatHelpExits,
   formatTable,
   jsonEnvelope,
   jsonError,
+  pluralCount,
   projectContextLine,
   renderActionSummary,
   renderDeprecationWarnings,
@@ -33,6 +36,7 @@ import {
   whoOfDifference,
 } from '../src/output/index.ts';
 import {
+  assertCleanHumanOutput,
   assertGoldenOutput,
   assertJsonErrorShape,
   assertMatchesOutputSchema,
@@ -42,14 +46,31 @@ import {
 } from './helpers/output.ts';
 
 describe('src/output/ — context line and tables', () => {
-  test('contextLine and projectContextLine clean control bytes and format the header', () => {
+  test('contextLine and projectContextLine clean control bytes, unescape HTML entities idempotently, and format the header', () => {
     expect(contextLine('beacon\x1b[31m', 'beacon\nnext')).toBe('team beacon, session "beacon next"');
+    expect(plainText('status &lt;seat&gt; &amp; &amp;lt;literal&amp;gt;')).toBe('status <seat> & &lt;literal&gt;');
     expect(projectContextLine({ name: 'Beacon', id: 'beacon', entity: 'acme', lead: null })).toBe(
       'project Beacon  beacon  entity acme  lead -',
     );
     expect(projectContextLine({ name: 'Beacon', id: 'beacon', entity: null, lead: 'lead-1' })).toBe(
       'project Beacon  beacon  lead lead-1',
     );
+  });
+
+  test('pluralCount and displayPath format real plurals and replace $HOME with ~ in human text', () => {
+    expect(pluralCount(0, 'difference', 'differences', { zero: 'no' })).toBe('no differences');
+    expect(pluralCount(1, 'difference')).toBe('1 difference');
+    expect(pluralCount(3, 'difference')).toBe('3 differences');
+    expect(pluralCount(0, 'seat')).toBe('0 seats');
+    expect(pluralCount(1, 'seat')).toBe('1 seat');
+    expect(pluralCount(4, 'seat')).toBe('4 seats');
+    expect(pluralCount(1, 'task')).toBe('1 task');
+
+    expect(displayPath('/Users/alice/.config/team/lobbies/acme', '/Users/alice')).toBe('~/.config/team/lobbies/acme');
+    expect(displayPath('the lobby /Users/alice/.config/team/lobby is not in trust', '/Users/alice')).toBe(
+      'the lobby ~/.config/team/lobby is not in trust',
+    );
+    expect(displayPath('/Users/alice_other/work', '/Users/alice')).toBe('/Users/alice_other/work');
   });
 
   test('renderTable prints uppercase headers, aligns on cleaned text, uses "-" for empty cells, and supports indent: ""', () => {
@@ -141,6 +162,9 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       'proc dev-server: builder-1 since 2026-10-17T10:00:00Z, pid 1234',
     ]);
     expect(renderNotes(['codex-acme: version unread'])).toEqual(['note: codex-acme: version unread']);
+    expect(renderNotes(['lobby at /Users/alice/.config/team/lobby'], { home: '/Users/alice' })).toEqual([
+      'note: lobby at ~/.config/team/lobby',
+    ]);
   });
 
   test('renderDifference, whoOfDifference, and renderSummary map to the closed 4-value vocabulary', () => {
@@ -178,9 +202,9 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       "  who: the team's lead",
     ]);
     expect(summaryCounts([diffs[1]!, diffs[3]!])).toEqual({ differences: 2, owner_differences: 1 });
-    expect(renderSummary([diffs[1]!, diffs[3]!])).toBe('2 difference(s), 1 for the owner');
-    expect(renderSummary([diffs[1]!])).toBe('1 difference(s)');
-    expect(renderSummary([])).toBe('0 difference(s)');
+    expect(renderSummary([diffs[1]!, diffs[3]!])).toBe('2 differences, 1 for the owner');
+    expect(renderSummary([diffs[1]!])).toBe('1 difference');
+    expect(renderSummary([])).toBe('no differences');
   });
 
   test('severity vocabulary, deprecation helper, action helpers, and help exits helper', () => {
@@ -189,12 +213,13 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       ok: 'ok  ',
       warn: 'warn',
       miss: 'MISS',
-      note: '--  ',
+      note: 'note',
     });
     expect(renderFinding({ level: 'ok', text: 'herdr 0.7.1' })).toBe('ok    herdr 0.7.1');
-    expect(renderFinding({ level: 'note', text: 'session beacon is running' })).toBe('--    session beacon is running');
+    expect(renderFinding({ level: 'note', text: 'session beacon is running' })).toBe('note  session beacon is running');
     expect(renderFinding({ level: 'warn', text: 'older herdr' })).toBe('warn  older herdr');
     expect(renderFinding({ level: 'miss', text: 'install herdr' })).toBe('MISS  install herdr');
+    assertCleanHumanOutput('note  session beacon is running\nno differences\n', { home: '/Users/alice' });
 
     expect(formatDeprecationWarning({ line: 3, message: '`coordinator:` is now `leads: true`' })).toBe(
       'warning: the file, line 3: `coordinator:` is now `leads: true`',
@@ -217,8 +242,8 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       '  skip session: already running',
       'dry run: nothing was run',
     ]);
-    expect(renderActionSummary({ command: 'up', summary: 'started 2 seat(s) in session "acme"' })).toBe(
-      'team up: started 2 seat(s) in session "acme"',
+    expect(renderActionSummary({ command: 'up', summary: 'started 2 seats in session "acme"' })).toBe(
+      'team up: started 2 seats in session "acme"',
     );
     expect(formatHelpExits([{ code: 0, when: 'when clean' }, { code: 1, when: 'on difference' }])).toBe(
       'Exits 0 when clean, 1 on difference.',

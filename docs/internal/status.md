@@ -180,7 +180,7 @@ here.
 | `<seat>: its launch stopped at "named", and it holds text in its input box that was never sent` | `the owner clears or sends it in the pane, then runs team up (it resumes the launch)` |
 | `<name>: a temporary seat is recorded and is not running` | `team remove <name>` |
 | `no watch has run for this session` | `team watch --session <s>` |
-| `the watch's last pass was <n> minute(s) ago` | `team watch --session <s>` |
+| `the watch's last pass was <n> minutes ago` | `team watch --session <s>` |
 | `an unnamed <cli> (w1:p2) is running and is not in the file` | add the seat to the file, or close it |
 | `worktree <task>: its setup failed` | `team worktree remove <task>` |
 | `the protected checkout "." is on "x", not on "main"` | `the owner switches it back: git -C . switch main` |
@@ -193,12 +193,11 @@ refuses while the record is not in force — `team up`, `team add`, `team restar
 `(after: …)`. Nothing else is reordered or marked: a missing or stale watch blocks no repair, and
 what blocks a launch is `team doctor`'s
 to report. When at least one repair is the owner's, the summary line reports
-`N difference(s), M for the owner`.
+`N difference` / `N differences, M for the owner` (and `no differences` when `N === 0`).
 
-The reading stops at its count: the `what 0.5.0 must not pretend:` block and its
-`Integrity, not authority` line live on `team --about` and `team doctor`, not on every status
-read; `team doctor` prints the whole block under its summary, and `team check` no longer quotes
-it at the end of a run.
+The reading stops at its count: the `what 0.5.0 must not pretend:` block and its first line live on
+`team --about` and `team doctor`, not on every status read; `team doctor` prints the whole block
+under its summary, and `team check` no longer quotes it at the end of a run.
 
 ## The JSON
 
@@ -228,7 +227,7 @@ when the budgets table would be printed, one object per row (`account`, `window`
 when a subscription's left figure is at or inside its reserve, `fallback` when the figure did not
 come from the first source the account names, and `reserve` the reserve that row was read against —
 the same figure the table's line names, null when the account has none. `summary` counts the
-differences (`differences`, `owner_differences`), the plain `<n> difference(s)` line's own
+differences (`differences`, `owner_differences`), the plain closing line's own
 figures. The exit code is the same as without `--json`; the file's own warnings are `team
 doctor`'s to print, never this document's. A caller who
 may not read the team gets the fixed sentence on stderr and nothing on stdout, with or without
@@ -358,7 +357,7 @@ budgets:
 difference: claude-keeper is in the file and is not running
   repair: team restart claude-keeper
   who: the team's lead
-1 difference(s)
+1 difference
 exit 1
 ```
 
@@ -472,7 +471,7 @@ budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
-0 difference(s)
+no differences
 exit 0
 ```
 
@@ -493,7 +492,7 @@ budgets:
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
-0 difference(s)
+no differences
 exit 0
 ```
 

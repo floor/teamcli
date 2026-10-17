@@ -802,7 +802,7 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
   return findings;
 }
 
-import { contextLine, hasJsonFlag, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
+import { contextLine, hasJsonFlag, pluralCount, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from '../permissions/must-not-pretend.ts';
 
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
@@ -909,14 +909,14 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
     });
   } else {
     const style = ttyStyle(io);
-    const plural = warnings === 1 ? '' : 's';
-    let summary = `team doctor: ${missing} missing, ${warnings} warning${plural}`;
-    if (!missing) summary = `team doctor: nothing missing, ${warnings} warning${plural}`;
+    const warnText = pluralCount(warnings, 'warning');
+    let summary = `team doctor: ${missing} missing, ${warnText}`;
+    if (!missing) summary = `team doctor: nothing missing, ${warnText}`;
     else if (blockers) summary += `: ${blockers} of them block \`up\` and \`add\``;
 
     const lines: string[] = [];
     if (!loginOnly) lines.push(contextLine(team.project, session));
-    for (const finding of findings) lines.push(renderFinding(finding, style));
+    for (const finding of findings) lines.push(renderFinding(finding, style, sources.home));
     lines.push(summary);
     if (!loginOnly) lines.push(...NOT_PRETENDED);
 

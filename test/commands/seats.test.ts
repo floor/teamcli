@@ -167,7 +167,7 @@ describe('team seats', () => {
     expect(io.out).toContain('codex-acme               -         seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  idle     herdr   4m ago       pane-2');
     expect(io.out).toContain('deepseek-acme            -         seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       done (screen not recognised)          done     herdr   1h ago       pane-3');
     expect(io.out).toContain('deepseek-acme-2          -         seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle (screen not recognised)          idle     herdr   -            pane-4');
-    expect(io.out).toContain('4 seat(s)');
+    expect(io.out).toContain('4 seats');
     expect(io.out).not.toContain('grok-acme');
   });
 
@@ -245,7 +245,7 @@ describe('team seats', () => {
     expect(code).toBe(0);
     // A retained seat is done (its process is gone), not judged blind on its day-old trace.
     expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done     process  1d ago       -');
-    expect(io.out).toContain('5 seat(s)');
+    expect(io.out).toContain('5 seats');
   });
 
   test('--json and --all --json emit the SeatsJson payload and match SEATS_OUTPUT_SCHEMA', async () => {
@@ -505,7 +505,7 @@ describe('team status --all', () => {
     expect(io.out).toContain('SEAT                     NICKNAME  ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE    SOURCE   LAST ACTIVE  PANE');
     expect(io.out).toContain('claude-coordinator-acme  -         seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               working  trace    now          pane-1');
     expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done     process  1d ago       -');
-    expect(io.out).toContain('0 difference(s)');
+    expect(io.out).toContain('no differences');
     expect(io.out).toContain('note: codex-acme: version unread');
   });
 
@@ -603,7 +603,7 @@ describe('team list --watch and --seats', () => {
     expect(ioTable.out).toContain('  lead      seat_111111111111  ready    claude-code  Claude Opus 5.5    pane-1');
     expect(ioTable.out).toContain('  builder   seat_222222222222  working  codex        GPT Sol 6          pane-2');
     expect(ioTable.out).toContain('  reviewer  seat_333333333333  waiting  claude-code  Claude Sonnet 5.5  pane-3');
-    expect(ioTable.out).toContain('2 session(s)');
+    expect(ioTable.out).toContain('2 sessions');
 
     const ioJson = testIo(dir, { kind: 'owner' });
     expect(await runList(['--all', '--seats', '--json'], ioJson, listSources)).toBe(0);

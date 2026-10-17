@@ -11,7 +11,7 @@ import { launchedTeamFile } from '../file/launched-file.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
-import { contextLine, formatTable, hasJsonFlag, refuse, renderNotes, writeJson } from '../output/index.ts';
+import { contextLine, displayPath, formatTable, hasJsonFlag, pluralCount, refuse, renderNotes, writeJson } from '../output/index.ts';
 import { emptySession, readState, withLock, writeAtomic, STATE_FILE, type State } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { fillPattern, publicNameHit, realLanding, taskProblem } from '../worktree/place.ts';
@@ -199,7 +199,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     return 1;
   }
   const who = describeCaller(caller);
-  if (sub === 'list') return listWorktrees(io, json, reading, root, dir, session);
+  if (sub === 'list') return listWorktrees(io, json, reading, root, dir, session, sources.home);
   // `list` is the only subcommand that arrives without a task; the gate above already returned.
   const named = task ?? '';
   if (sub === 'new') return create(io, json, sources, reading, root, dir, session, named, args.values.kind, args.values.seat, who);
@@ -221,7 +221,7 @@ function problemLine(problem: Problem): string {
 
 // The counted entries, and nothing else: no lock, no state write, no log line. The same rows
 // the limit refusal names. A missing folder stays a row until `team worktree remove` drops it.
-function listWorktrees(io: Io, json: boolean, team: TeamFile, root: string, dir: string, session: string): number {
+function listWorktrees(io: Io, json: boolean, team: TeamFile, root: string, dir: string, session: string, home?: string): number {
   const rows = worktreeRows(readState(dir), root);
   const limit = `limit ${team.workspace.limit} (workspace.limit)`;
   if (json) {
@@ -244,9 +244,9 @@ function listWorktrees(io: Io, json: boolean, team: TeamFile, root: string, dir:
   } else {
     const table = formatTable({
       headers: ['TASK', 'BRANCH', 'PATH'],
-      rows: rows.map((row) => [row.task, row.branch, row.exists ? row.path : `${row.path} (gone)`]),
+      rows: rows.map((row) => [row.task, row.branch, displayPath(row.exists ? row.path : `${row.path} (gone)`, home)]),
     });
-    io.stdout(`${contextLine(team.project, session)}\n${table}${renderNotes([limit]).join('\n')}\n${rows.length} worktree(s)\n`);
+    io.stdout(`${contextLine(team.project, session)}\n${table}${renderNotes([limit], { home }).join('\n')}\n${pluralCount(rows.length, 'worktree')}\n`);
   }
   // exit: worktree.listed
   return 0;

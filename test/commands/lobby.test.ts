@@ -585,14 +585,14 @@ describe('the lobby gate', () => {
 
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`the lobby ${lobby}: will be created at the first launch\n`);
+    expect(doc.out).toContain('the lobby ~/.config/team/lobby: will be created at the first launch\n');
     expect(existsSync(lobby)).toBe(false);
 
     mkdirSync(lobby, { recursive: true });
     chmodSync(lobby, 0o700);
     const docVerified = await runDoctorCmd();
     expect(docVerified.code).toBe(0);
-    expect(docVerified.out).toContain(`the lobby ${lobby}: verified\n`);
+    expect(docVerified.out).toContain('the lobby ~/.config/team/lobby: verified\n');
   });
 
   test('refusal: mode 01700 (sticky) and 02700 (setgid) refused as not 0700', async () => {
@@ -1026,13 +1026,13 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`the lobby ${lobby}: verified\n`);
-    expect(doc.out).toContain(`ok    the lobby ${lobby}: .claude/scheduled_tasks.lock is claude-code's\n`);
+    expect(doc.out).toContain('the lobby ~/.config/team/lobby: verified\n');
+    expect(doc.out).toContain("ok    the lobby ~/.config/team/lobby: .claude/scheduled_tasks.lock is claude-code's\n");
 
     writeFileSync(join(lobby, 'CLAUDE.md'), 'plant\n');
     const miss = await runDoctorCmd();
     expect(miss.code).toBe(1);
-    expect(miss.out).toContain(`the lobby ${lobby}: CLAUDE.md${readBy}claude-code, cursor and grok\n`);
+    expect(miss.out).toContain(`the lobby ~/.config/team/lobby: CLAUDE.md${readBy}claude-code, cursor and grok\n`);
   });
 
   test('a lobby whose .claude holds only the lock passes up, add and doctor', async () => {
@@ -1043,8 +1043,8 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`the lobby ${lobby}: verified\n`);
-    expect(doc.out).toContain(`ok    the lobby ${lobby}: .claude/scheduled_tasks.lock is claude-code's\n`);
+    expect(doc.out).toContain('the lobby ~/.config/team/lobby: verified\n');
+    expect(doc.out).toContain("ok    the lobby ~/.config/team/lobby: .claude/scheduled_tasks.lock is claude-code's\n");
 
     const made = world();
     const run = await runUpCmd([], made);
@@ -1153,7 +1153,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     const sentence = `${rel}${readBy}${by}`;
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(1);
-    expect(doc.out).toContain(`the lobby ${lobby}: ${sentence}\n`);
+    expect(doc.out).toContain(`the lobby ~/.config/team/lobby: ${sentence}\n`);
     const made = world();
     const run = await runUpCmd([], made);
     expect(run.code).toBe(1);
@@ -1247,8 +1247,8 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`the lobby ${lobby}: verified\n`);
-    expect(doc.out).toContain(`ok    the lobby ${lobby}: .claude/scheduled_tasks.lock is claude-code's\n`);
+    expect(doc.out).toContain('the lobby ~/.config/team/lobby: verified\n');
+    expect(doc.out).toContain("ok    the lobby ~/.config/team/lobby: .claude/scheduled_tasks.lock is claude-code's\n");
 
     const made = world();
     const run = await runUpCmd([], made);
@@ -1360,7 +1360,7 @@ seats:
     // the folder, up starts the team in it, add starts one more seat in it.
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`the lobby ${lobby}: verified\n`);
+    expect(doc.out).toContain('the lobby ~/.config/team/lobby: verified\n');
 
     const upWorld = codexWorld();
     const run = await runUpCmd([], upWorld);
@@ -1385,7 +1385,7 @@ seats:
     // an owner reading the report knows who left it there and may remove it at the exit.
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`ok    the lobby ${lobby}: .claude/scheduled_tasks.lock is claude-code's\n`);
+    expect(doc.out).toContain("ok    the lobby ~/.config/team/lobby: .claude/scheduled_tasks.lock is claude-code's\n");
   });
 
   test('CLAUDE.md: doctor misses, an up that starts no lobby seat does not refuse, add of a lobby seat does', async () => {
@@ -1397,7 +1397,7 @@ seats:
 
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(1);
-    expect(doc.out).toContain(`the lobby ${lobby}: ${sentence}\n`);
+    expect(doc.out).toContain(`the lobby ~/.config/team/lobby: ${sentence}\n`);
 
     // The worker is stopped, so this up starts only the lead, in the project.
     const upWorld = codexWorld();
@@ -1931,7 +1931,7 @@ describe('legacy files and migration', () => {
     const docBefore = await runDoctorCmd();
     expect(docBefore.code).toBe(0);
     expect(docBefore.out).toContain(
-      `--    the file is legacy: migrate from ../worktrees/acme/.lobby to ${lobby} by writing:\ntrust:\n  - ~/.config/team/lobby\n  - ${root}\n  - ${join(base, 'worktrees', 'acme')}\n`
+      `note  the file is legacy: migrate from ../worktrees/acme/.lobby to ~/.config/team/lobby by writing:\ntrust:\n  - ~/.config/team/lobby\n  - ${root}\n  - ${join(base, 'worktrees', 'acme')}\n`
         + `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root, replacing "."; `
         + `${join(base, 'worktrees', 'acme')} is the folder workspace.path "../worktrees/{repo}/{task}" places worktrees in, replacing "../worktrees/acme/*"\n`,
     );
@@ -2266,13 +2266,13 @@ describe('the upgrade from 0.2.1', () => {
     const io = testIo(inside, OWNER);
     await runDoctor(['--file', '.agents/team.yaml'], io, runDoctorCmdSources());
     expect(io.out).toContain(
-      `workspace.path "../.config/{task}" would need ${join(home, '.config')}, which would cover `
-        + `${join(home, '.config', 'team')}, which holds the lobby and the approval store: trust a folder of the team's own; `
+      `workspace.path "../.config/{task}" would need ~/.config, which would cover `
+        + `~/.config/team, which holds the lobby and the approval store: trust a folder of the team's own; `
         + 'team cannot choose it for you: pick a folder yourself and write it into trust',
     );
     // The refused folder is not suggested; the suggestions stay at the lobby and the project root.
-    expect(blockOf(io.out)).toEqual(['~/.config/team/lobby', inside]);
-    expect(io.out).not.toContain(`  - ${join(home, '.config')}\n`);
+    expect(blockOf(io.out)).toEqual(['~/.config/team/lobby', '~/acme']);
+    expect(io.out).not.toContain('  - ~/.config\n');
   });
 
   // The fake host a named repair runs on: `remove --keep` types the exit into a free seat and

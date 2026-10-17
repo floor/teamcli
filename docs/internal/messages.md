@@ -40,7 +40,7 @@ message key under its own domain. The receipt is written only after `io.stdout` 
 body: a write that throws leaves no receipt, and the record stays waiting. A receipt that does
 not verify leaves the message waiting.
 The second run, once every waiting record has a receipt, prints the zero-message reading: the
-table's headers and no rows, `note: nothing is waiting`, and `0 message(s)`.
+table's headers and no rows, `note: nothing is waiting`, and `0 messages`.
 
 Under `--json` the reading is one `team.messages` v1 document on stdout, its `schema` tag first:
 `format`, `project`, `session`, every row as `{ id, from, to, sent, sent_display, status, body? }`
@@ -137,6 +137,6 @@ team beacon, session "beacon"
 
 note: nothing is waiting
 
-0 message(s)
+0 messages
 exit 0
 ```

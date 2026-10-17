@@ -108,7 +108,7 @@ $ team seats ; echo "exit $?"
 team beacon, session "beacon"
 SEAT           NICKNAME   ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
 claude-keeper  agamemnon  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
-1 seat(s)
+1 seat
 exit 0
 ```
 
@@ -120,7 +120,7 @@ team beacon, session "beacon"
 SEAT           NICKNAME   ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
 claude-keeper  agamemnon  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
 claude-beacon  -          seat_fedcba987654  implementer  claude-code  Claude Opus 5.5  -       stopped  done   process  1h ago       -
-2 seat(s)
+2 seats
 exit 0
 ```
 

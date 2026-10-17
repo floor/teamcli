@@ -413,15 +413,15 @@ describe('team doctor', () => {
         'team acme-web, session "acme-web"',
         FILE_WARNING,
         'ok    herdr 0.7.1',
-        '--    session acme-web is not running',
+        'note  session acme-web is not running',
         'ok    claude 2.1.288 (Claude Code)',
         'ok    claude-code: logged in',
         'warn  deepseek-acme: the launch runs team-deepseek, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
         'warn  deepseek-acme-2: the launch runs team-deepseek, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
         'ok    codex codex-cli 0.157.0',
         'ok    codex: logged in',
-        `ok    the lobby ${home}/.config/team/lobby: will be created at the first launch`,
-        `--    the file is legacy: migrate from ../worktrees/acme-web/.lobby to ${home}/.config/team/lobby by writing:`,
+        'ok    the lobby ~/.config/team/lobby: will be created at the first launch',
+        'note  the file is legacy: migrate from ../worktrees/acme-web/.lobby to ~/.config/team/lobby by writing:',
         'trust:',
         '  - ~/.config/team/lobby',
         `  - ${root}`,
@@ -502,7 +502,7 @@ describe('team doctor', () => {
       'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.302: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into\n',
     );
     expect(run.out).toContain('warn  herdr 0.6.9 is older than the tested 0.7.1\n');
-    expect(run.out).toContain('--    claude-code: the login is not checked in this version\n');
+    expect(run.out).toContain('note  claude-code: the login is not checked in this version\n');
     expect(run.code).toBe(0);
   });
 
@@ -636,7 +636,7 @@ describe('team doctor', () => {
 
   test('--session names another session', async () => {
     await approve([], OWNER);
-    expect((await doctor({}, ['--session', 'team-test'])).out).toContain('--    session team-test is not running\n');
+    expect((await doctor({}, ['--session', 'team-test'])).out).toContain('note  session team-test is not running\n');
   });
 });
 

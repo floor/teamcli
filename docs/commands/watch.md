@@ -222,7 +222,7 @@ A report that is the operator's to act on is also what the nudge stands for. The
 | `nudge not typed (--no-nudge): <nudge>` | `--no-nudge`, with reports waiting |
 | `ring not typed (--no-nudge): Team: run team messages` | `--no-nudge`, with a message waiting and no report nudge to type; nothing is typed and the record stays |
 | `a nudge was typed and not sent: <seat>'s box does not hold it` | the pane had not drawn the typed line, or held something else, when the bounded wait for it ended; nothing is sent, and the reports wait for the next pass |
-| `no idle seat could be nudged for <n> minutes; <k> report(s) wait: <reports>` | no idle seat was free for `watch.nudge_wait`; this one is a desktop notification too |
+| `no idle seat could be nudged for <n> minutes; <k> report` / `<k> reports wait: <reports>` | no idle seat was free for `watch.nudge_wait`; this one is a desktop notification too |
 | `rang <seat>: Team: run team messages` | a message was already waiting and that seat's box was an empty idle prompt; the line was typed and sent, and the body was not |
 | `message <id> for <seat> has been waiting <n> minutes` | that message is older than `nudge_wait` and the seat's box was not free; said once, to the owner, and nothing is typed |
 | `herdr doesn't answer; the watch keeps trying` | the pass is skipped and the watch goes on |

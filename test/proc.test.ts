@@ -233,7 +233,7 @@ describe('team proc list', () => {
         '  NAME       BY             SINCE                     PID   NOTE',
         `  build      claude-keeper  ${new Date(AT).toISOString()}  4243  the release build`,
         `  flaky-job  owner          ${new Date(AT).toISOString()}  -     -`,
-        '2 process(es)',
+        '2 processes',
         '',
       ].join('\n'),
     );
@@ -247,7 +247,7 @@ describe('team proc list', () => {
       [
         `team acme, session "${where.session}"`,
         '  NAME  BY  SINCE  PID  NOTE',
-        '0 process(es)',
+        '0 processes',
         '',
       ].join('\n'),
     );

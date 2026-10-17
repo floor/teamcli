@@ -171,7 +171,7 @@ test('the one word filters by entity; a word no entity has is an empty list', as
   expect(((JSON.parse(run.out) as { rows: RegistryRow[] }).rows).map((row) => row.team)).toEqual(['acme']);
 
   const none = await listed(['acme2'], sources([ACME, BEACON]));
-  expect(none).toEqual({ code: 0, out: 'no teams\n0 team(s)\n', err: '' });
+  expect(none).toEqual({ code: 0, out: 'no teams\n0 teams\n', err: '' });
   const json = await listed(['--json', 'acme2'], sources([ACME, BEACON]));
   expect(json.code).toBe(0);
   expect(json.err).toBe('');
@@ -191,7 +191,7 @@ test('the table carries the contract columns, one state each', async () => {
   expect(lines[2]?.split(/\s{2,}/)).toEqual([
     'beacon', 'beacon', 'beacon', '/home/.config/team/lobbies/beacon', '?', 'yes', 'no', 'no', 'registry',
   ]);
-  expect(lines[3]).toBe('2 session(s)');
+  expect(lines[3]).toBe('2 sessions');
 });
 
 test('--seats adds the registry roster to the row, table and json alike', async () => {
@@ -234,7 +234,7 @@ test('a registry that reads but names no team still shows what discovery found, 
       source: 'discovered',
     },
   ]);
-  expect(await listed([], sources([], { sessions: () => null }))).toEqual({ code: 0, out: 'no teams\n0 team(s)\n', err: '' });
+  expect(await listed([], sources([], { sessions: () => null }))).toEqual({ code: 0, out: 'no teams\n0 teams\n', err: '' });
 });
 
 test('no registry to read: discovery alone, and a positional is still not this command\'s', async () => {
@@ -245,7 +245,7 @@ test('no registry to read: discovery alone, and a positional is still not this c
   };
   const run = await listed([], withoutRegistry);
   expect(run.code).toBe(0);
-  expect(run.out).toBe('TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE\nbeacon  beacon   running  2      -\n1 session(s)\n');
+  expect(run.out).toBe('TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE\nbeacon  beacon   running  2      -\n1 session\n');
 
   const nulled = await listed([], { ...withoutRegistry, registry: () => null });
   expect(nulled.out).toBe(run.out);
@@ -323,7 +323,7 @@ test('home with a registry file: the record and its team file are read from disk
     const bare = join(base, 'bare');
     mkdirSync(bare, { recursive: true });
     const none = await listed([], { ...realListSources(bare), sessions: () => [] });
-    expect(none.out).toBe('no running sessions\n0 session(s)\n');
+    expect(none.out).toBe('no running sessions\n0 sessions\n');
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

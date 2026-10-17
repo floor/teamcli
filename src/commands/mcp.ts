@@ -17,7 +17,9 @@ import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { lobbyDir } from '../lobby/gate.ts';
 import {
+  displayPath,
   hasJsonFlag,
+  pluralCount,
   renderFinding,
   renderTable,
   SEVERITY_LABELS,
@@ -529,7 +531,7 @@ function octal(mode: number): string {
 }
 
 function levelOf(state: string): Level {
-  return state === 'MISS' ? 'miss' : state === 'warn' ? 'warn' : state === '--' ? 'note' : 'ok';
+  return state === 'MISS' ? 'miss' : state === 'warn' ? 'warn' : state === 'note' || state.trim() === '--' ? 'note' : 'ok';
 }
 
 /** The pgrep pattern that finds the bridge for one config: the interpreter's argv holds the
@@ -854,17 +856,17 @@ function guardReport(sources: McpSources, dir: string): GuardReport {
 }
 
 /** The context line every report opens on: the lobby whose bridge configs are read. */
-function mcpContext(lobby: string): string {
-  return `mcp ${plainLine(lobby)}`;
+function mcpContext(lobby: string, home?: string): string {
+  return `mcp ${displayPath(plainLine(lobby), home)}`;
 }
 
-function renderSections(sections: Array<{ title: string; detail: string; rows: McpRow[] }>): string {
+function renderSections(sections: Array<{ title: string; detail: string; rows: McpRow[] }>, home?: string): string {
   const lines: string[] = [];
   for (const section of sections) {
-    lines.push(`${plainLine(section.title)}  ${plainLine(section.detail)}`);
+    lines.push(`${plainLine(section.title)}  ${displayPath(plainLine(section.detail), home)}`);
     lines.push(...renderTable({
       headers: ['NAME', 'STATE', 'DETAIL'],
-      rows: section.rows.map((row) => [row.name, row.state, row.detail]),
+      rows: section.rows.map((row) => [row.name, row.state, displayPath(row.detail, home)]),
     }));
   }
   return lines.join('\n');
@@ -873,7 +875,8 @@ function renderSections(sections: Array<{ title: string; detail: string; rows: M
 const NO_SETUP = 'no bridge configuration found (the setup command is not in this build yet)';
 
 export async function runMcpStatus(io: Io, json: boolean, sources: McpSources): Promise<number> {
-  const lobby = lobbyDir(sources.home());
+  const home = sources.home();
+  const lobby = lobbyDir(home);
   const helperRoot = sources.helperRoot();
   const dirs: string[] = [];
   for (const name of sources.listDir(lobby) ?? []) {
@@ -919,7 +922,7 @@ export async function runMcpStatus(io: Io, json: boolean, sources: McpSources): 
       if (front !== null) sections.push({ title: 'front', detail: front.json.origin ?? '', rows: front.rows });
     }
     for (const guard of guards) sections.push({ title: 'guard', detail: guard.dir, rows: guard.rows });
-    io.stdout(`${mcpContext(lobby)}\n${renderSections(sections)}\nstate: ${state}\n`);
+    io.stdout(`${mcpContext(lobby, home)}\n${renderSections(sections, home)}\nstate: ${state}\n`);
   }
   if (state === 'not-set-up') {
     // exit: mcp.not-set-up
@@ -1049,15 +1052,16 @@ export async function runMcpDoctor(io: Io, json: boolean, sources: McpSources): 
     const doc: McpDoctorJson = { format: 1, lobby_dir: lobby, findings, missing, warnings };
     writeJson(io, 'team.mcp', { ...doc });
   } else {
+    const home = sources.home();
     const style = ttyStyle(io);
-    const plural = warnings === 1 ? '' : 's';
-    const lines = [mcpContext(lobby)];
+    const warnText = pluralCount(warnings, 'warning');
+    const lines = [mcpContext(lobby, home)];
     for (const finding of findings) {
-      lines.push(renderFinding({ level: finding.level, text: finding.text }, style));
-      if (finding.fix !== null) lines.push(`      fix: ${plainLine(finding.fix)}`);
+      lines.push(renderFinding({ level: finding.level, text: finding.text }, style, home));
+      if (finding.fix !== null) lines.push(`      fix: ${displayPath(plainLine(finding.fix), home)}`);
     }
-    lines.push(missing ? `team mcp doctor: ${missing} missing, ${warnings} warning${plural}`
-      : `team mcp doctor: nothing missing, ${warnings} warning${plural}`);
+    lines.push(missing ? `team mcp doctor: ${missing} missing, ${warnText}`
+      : `team mcp doctor: nothing missing, ${warnText}`);
     io.stdout(`${lines.join('\n')}\n`);
   }
   // exit: mcp.clear

@@ -96,6 +96,6 @@ test('a session list that throws is the same empty state as herdr not answering'
 
 test('an empty registry with --all says there are no sessions', async () => {
   const run = await listed(['--all'], { sessions: () => [], roster: () => [], team: () => null });
-  expect(run).toEqual({ code: 0, out: 'no sessions\n0 session(s)\n', err: '' });
+  expect(run).toEqual({ code: 0, out: 'no sessions\n0 sessions\n', err: '' });
 });
 

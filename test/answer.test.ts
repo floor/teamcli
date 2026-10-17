@@ -1705,6 +1705,6 @@ describe('team answer', () => {
     };
     const doctor = testIo(root, { kind: 'owner' });
     await runDoctor(FILE, doctor, doctorSources);
-    expect(doctor.out).toContain('--    lead: waiting for owner at trust\n');
+    expect(doctor.out).toContain('note  lead: waiting for owner at trust\n');
   });
 });

@@ -93,7 +93,7 @@ test('through team check the permission difference appears exactly once', () => 
   // The summary counts exactly the lines above it — check may add differences status does not
   // carry (the rules file here), and every one of them must stay counted.
   const printed = out.split('difference: ').length - 1;
-  const summary = Number(out.match(/^(\d+) difference\(s\)/m)?.[1] ?? NaN);
+  const summary = Number(out.match(/^(\d+) differences?/m)?.[1] ?? NaN);
   expect(summary, 'the summary count parted from the printed lines').toBe(printed);
 });
 
@@ -108,7 +108,7 @@ test('status and check say the same words, for a seat herdr calls working too', 
   const st = await status();
   expect(st.out).toContain(`difference: codex-acme ${DIFFERENCE}\n  repair: ${REPAIR}\n`);
   expect(st.code, 'a permission prompt is a difference, whatever herdr calls the seat').toBe(1);
-  expect(st.out).toContain('1 difference(s), 1 for the owner\n');
+  expect(st.out).toContain('1 difference, 1 for the owner\n');
 
   const ck = check();
   const pair = (out: string) => out.split('\n').filter((line) => line.includes(DIFFERENCE) || line.includes(REPAIR));

@@ -219,8 +219,8 @@ describe('team check names the drift as a notice', () => {
     setRoster(w.home, id, [{ agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true }]);
     ready(w);
 
-    const recorded = join(w.home, '.config', 'team', 'lobbies', 'acme');
-    const derived = join(w.home, '.config', 'team', 'lobbies', 'renew');
+    const recorded = '~/.config/team/lobbies/acme';
+    const derived = '~/.config/team/lobbies/renew';
     // The file is edited where it stands: the record still holds the lobby from before, and the
     // file now derives another one. The check is what must say so.
     const after = fileAt(w, teamText('renew', null));
@@ -229,7 +229,7 @@ describe('team check names the drift as a notice', () => {
     // Nothing else is wrong in this scene, so the drift is the only thing the check has to say —
     // and what it says is a notice: outside the finding total and off the exit code.
     expect(code).toBe(0);
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(out).not.toContain('difference:');
 
     // One note, naming both lobbies: the one the registry holds and the one the file now derives.

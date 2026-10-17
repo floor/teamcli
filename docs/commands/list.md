@@ -149,7 +149,7 @@ The fixture's session is running, and both seats are idle:
 $ team list ; echo "exit $?"
 TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE
 beacon  beacon   running  2      2 idle
-1 session(s)
+1 session
 exit 0
 ```
 
@@ -161,7 +161,7 @@ TEAM    PROJECT  STATUS   SEATS  ACTIVITY                                     NO
 beacon  beacon   running  2      2 ready / 0 working / 0 waiting / 0 stopped
   claude-keeper  -  idle  -  -  -
   claude-beacon  -  idle  -  -  -
-1 session(s)
+1 session
 exit 0
 ```
 
@@ -194,7 +194,7 @@ A stopped session is left out unless `--all` is set. Herdr not answering is not 
 ```console herdr=stopped
 $ team list ; echo "exit $?"
 no running sessions
-0 session(s)
+0 sessions
 exit 0
 ```
 
@@ -202,7 +202,7 @@ exit 0
 $ team list --all ; echo "exit $?"
 TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE
 beacon  beacon   stopped  2      -
-1 session(s)
+1 session
 exit 0
 ```
 

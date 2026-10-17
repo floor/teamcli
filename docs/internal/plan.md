@@ -56,10 +56,10 @@ team plan: the state records pane <pane> for seat <name> in this session, not th
 ## What it prints
 
 The context line, then the takeable records as the contract's `STEP  STATE  OWNER  TITLE` table,
-then `<n> task(s)`. A deadline the clock has passed reads `overdue` in the STATE column; the mark
+then `1 task` / `<n> tasks`. A deadline the clock has passed reads `overdue` in the STATE column; the mark
 decides nothing.
 
-The context line and `0 task(s)` when no record is takeable. That is one answer, exit 0.
+The context line and `0 tasks` when no record is takeable. That is one answer, exit 0.
 
 With `--json`, the same queue is one document: the context's `project` and `session`, and one
 task per record carrying its `step`, its `state` (`open` or `overdue`), the owner or `null`, and
@@ -138,6 +138,6 @@ $ team plan ; echo "exit $?"
 team beacon, session "beacon"
   STEP  STATE    OWNER  TITLE
   1     overdue  -      the task title
-1 task(s)
+1 task
 exit 0
 ```

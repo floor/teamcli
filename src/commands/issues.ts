@@ -9,6 +9,7 @@ import { plainText } from '../launch/plain.ts';
 import {
   contextLine,
   hasJsonFlag,
+  pluralCount,
   renderTable,
   ttyStyle,
   writeJson,
@@ -149,13 +150,13 @@ export async function runIssues(argv: string[], io: Io, sources: IssuesSources =
           rows: read.records.map((record) => [record.id, issueState(record), record.assignee ?? '-', record.title]),
           style,
         }),
-        `${read.records.length} issue(s)`,
+        pluralCount(read.records.length, 'issue'),
       ];
       // Through `io`, not the cleaned view: the style above is this io's TTY style, and the
       // cleaned view would strip the very bold the table was rendered with.
       io.stdout(`${lines.join('\n')}\n`);
     } else if (empty) {
-      io.stdout(`${context}\n0 issue(s)\n`);
+      io.stdout(`${context}\n${pluralCount(0, 'issue')}\n`);
     }
   }
   if (read.refusals.length) {

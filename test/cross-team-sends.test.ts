@@ -282,7 +282,7 @@ describe('cross-team --list', () => {
         '  acme-helper@acme  -               builder      acme     socket',
         '  web-lead@web      -               guide        web      socket',
         '  web-helper@web    hephaestus@web  lead         web      socket',
-        '6 seat(s)',
+        '6 seats',
       ].join('\n') + '\n',
     );
     expect(reading.out).not.toContain('@beta');
@@ -310,7 +310,7 @@ describe('cross-team --list', () => {
     expect(reading.code).toBe(0);
     const doc = JSON.parse(reading.out) as { project: string; session: string; summary: string; seats: { name: string; nickname: string | null; cli: string; role: string; stopped: boolean; project: string; reach: string }[] };
     expect(doc.session).toBe('api');
-    expect(doc.summary).toBe('6 seat(s)');
+    expect(doc.summary).toBe('6 seats');
     const byName = new Map(doc.seats.map((row) => [row.name, row]));
     expect(doc.seats.length).toBe(6);
     expect(byName.get('acme-helper@acme')).toEqual({ name: 'acme-helper@acme', nickname: null, cli: 'claude-code', role: 'builder', project: 'acme', reach: 'socket', stopped: true });

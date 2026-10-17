@@ -14,6 +14,7 @@ import { replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { usesLauncher } from '../launch/line.ts';
 import { herdrUnreliable, profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
+import { pluralCount } from '../output/index.ts';
 import { livenessOf, type LivenessThresholds, type SettingLevel, type StateThresholds } from '../settings/inherit.ts';
 import { stateThresholds, thresholdRefusals, type ThresholdRefusal } from '../settings/resolve.ts';
 import { compareSeatNames } from '../seat-names.ts';
@@ -577,7 +578,7 @@ export function pass({
         cli: chosen.cli,
       };
     } else if (now - memory.pendingSince >= watch.nudgeWait * 1000) {
-      fallback = `no idle seat could be nudged for ${minutes(now - memory.pendingSince)} minutes; ${memory.pending.length} report(s) wait: ${memory.pending.join('; ')}`;
+      fallback = `no idle seat could be nudged for ${minutes(now - memory.pendingSince)} minutes; ${pluralCount(memory.pending.length, 'report')} wait: ${memory.pending.join('; ')}`;
     }
     if (nudge || fallback) {
       memory.pending = [];

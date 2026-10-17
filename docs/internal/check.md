@@ -59,7 +59,7 @@ anything, so a refused run has changed nothing.
 The repair is the owner's alone. A caller that passes the gate but is not the owner meets
 `team check: --repair is the owner's` and exit 1, as it does for the two aimed flags; nothing is
 written. A `--repair` run whose repairs leave nothing else to act on is a clean check — the `repaired:`
-lines, then `0 difference(s)`, exit 0. A state write that fails throws, as every
+lines, then `no differences`, exit 0. A state write that fails throws, as every
 command's state write does, and the run is `team.command-threw`'s.
 
 ## The other two repairs
@@ -215,17 +215,17 @@ prints no seat table and no budget block:
     difference: claude-beacon is in the file and is not running
       repair: the owner runs team up
       who: the owner
-    1 difference(s), 1 for the owner
+    1 difference, 1 for the owner
 
 The note is earned by a `delegates` entry still naming `approve`: `team approve` was removed,
 and the word stays accepted only so a file that already names it loads unchanged. It is a note
 and not a finding — in neither the closing count nor the exit code, so a file whose only note is
-this one still answers `0 difference(s)`, and the repair it asks for is the file:
+this one still answers `no differences`, and the repair it asks for is the file:
 one word shorter.
 
 The closing line counts the differences and, when any are the owner's, how many after a comma
-(`<n> difference(s), <k> for the owner`, or `<n> difference(s)` when none are the owner's). With
-nothing to act on it is `0 difference(s)`.
+(`1 difference` / `<n> differences, <k> for the owner`, or `<n> differences` when none are the owner's). With
+nothing to act on it is `no differences`.
 
 A `--repair` run prints one `repaired: <what was repaired>` line per repair before the notes and
 differences — the dropped records (`repaired: <seat>: left the team file and its record claimed
@@ -233,7 +233,7 @@ pane <pane>; its record is dropped`, `repaired: the state's session "<name>" hol
 team; its record is dropped`), the cleared marks (`repaired: <seat>: re-recorded with the caller
 gate in force; the dev-mode mark is cleared`) and the set-back sidebar lines — and each line is
 written to the project's log under `check` and the owner's label. The repairs run before the
-comparison, so a check whose only findings were among them answers `0 difference(s)`, exit 0.
+comparison, so a check whose only findings were among them answers `no differences`, exit 0.
 
 Under `--json`, the check writes a single JSON document on `stdout` with `schema: { name: "team.check", version: 1 }`, `format: 1`, `project`, `session`, `warnings`, `repaired`, `notes`, `differences` (`{ what, repair, who }`), and `summary` (`{ differences, owner_differences }`). Any invocation or gate refusal under `--json` writes a `team.error` JSON envelope (`schema/error.schema.json`) on `stdout` with `stderr` empty.
 
@@ -291,7 +291,7 @@ legacy `coordinator:` deprecation warning):
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
 warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
-0 difference(s)
+no differences
 exit 0
 ```
 
@@ -301,7 +301,7 @@ A seat of the team runs it too, and reads the same answer:
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
 warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
-0 difference(s)
+no differences
 exit 0
 ```
 
@@ -318,7 +318,7 @@ difference: claude-keeper is in the file and is not running
 difference: claude-beacon is in the file and is not running
   repair: the owner runs team up
   who: the owner
-2 difference(s), 2 for the owner
+2 differences, 2 for the owner
 exit 1
 ```
 

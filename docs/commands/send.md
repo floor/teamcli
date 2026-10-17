@@ -281,7 +281,7 @@ line on stderr and has none.
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
-| listed | 0 | a `SEAT  NICKNAME  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat(s)` on stdout; `NICKNAME` is `-` without one, `@<nickname>` for the file's own seats and `<nickname>@<team>` for another team's, and a seat of another team of the same entity reads `<seat>@<team>` in `SEAT` |
+| listed | 0 | a `SEAT  NICKNAME  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat` or `<n> seats` on stdout; `NICKNAME` is `-` without one, `@<nickname>` for the file's own seats and `<nickname>@<team>` for another team's, and a seat of another team of the same entity reads `<seat>@<team>` in `SEAT` |
 | recorded | 0 | `<seat>: recorded (native, <n> ms)` on stdout, for a `--record` run |
 | timeout | 1 | `team send: <seat>: timeout: sent, no reply within <s>s; a seat which does not accept messages from other sessions holds the frame until a person lets it through` on stderr |
 | unreachable | 1 | `team send: <seat>: unreachable: <reason>` on stderr |
@@ -431,7 +431,7 @@ team beacon, session "beacon"
   SEAT           NICKNAME    ROLE         PROJECT  REACH
   claude-keeper  @agamemnon  coordinator  beacon   socket
   gpt-reviewer   -           reviewer     beacon   typed
-2 seat(s)
+2 seats
 exit 0
 ```
 
@@ -467,7 +467,7 @@ $ team send --list --json ; echo "exit $?"
       "stopped": false
     }
   ],
-  "summary": "2 seat(s)"
+  "summary": "2 seats"
 }
 exit 0
 ```

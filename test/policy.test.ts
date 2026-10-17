@@ -1048,7 +1048,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       });
       expect(checkCode).toBe(0);
       expect(checkIo.out).toContain(`note: dev-mode expired at ${expiryIso} for team; off since\n`);
-      expect(checkIo.out).toContain('0 difference(s)\n');
+      expect(checkIo.out).toContain('no differences\n');
     } finally {
       fx.cleanup();
     }
@@ -1232,7 +1232,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
           '  repair: remove or narrow delivery_order in .agents/team.yaml\n' +
           "  who: the team's lead\n",
       );
-      expect(out1).toContain('1 difference(s)\n');
+      expect(out1).toContain('1 difference\n');
       expect(out1).not.toContain('for the owner');
 
       // Apply the printed repair: remove delivery_order from .agents/team.yaml, then check is clean.
@@ -1254,7 +1254,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
         home: fx.home,
       });
       expect(code2).toBe(0);
-      expect(out2).toContain('0 difference(s)\n');
+      expect(out2).toContain('no differences\n');
 
       // When a signed team entry shadows a legacy delivery_order line in the same file, check shows a note naming the shadowed line.
       writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [native, typed]\n`);
@@ -1291,7 +1291,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(out3).toContain(
         'note: delivery_order [native, typed] in .agents/team.yaml is shadowed by the signed team delivery-order policy; remove delivery_order from .agents/team.yaml so team policy unset does not bring it back\n',
       );
-      expect(out3).toContain('0 difference(s)\n');
+      expect(out3).toContain('no differences\n');
     } finally {
       fx.cleanup();
     }

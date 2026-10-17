@@ -51,7 +51,7 @@ team issues: m1 is not a task: title is required
 team issues: record 1 is not a task: id is required
 ```
 
-An empty list is not a refusal: it prints the context line and `0 issue(s)`, and the exit is 0.
+An empty list is not a refusal: it prints the context line and `0 issues`, and the exit is 0.
 
 `tasks.source must be file` is the local-adapter miss: it stands for a source this build does not
 carry. The broker-source sentence is the other side of the same rule — a tracker's records are
@@ -101,6 +101,6 @@ $ team issues ; echo "exit $?"
 team beacon, session "beacon"
   ID  STATE  ASSIGNEE  TITLE
   m1  open   -         the task title
-1 issue(s)
+1 issue
 exit 0
 ```

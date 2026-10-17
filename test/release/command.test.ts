@@ -64,7 +64,7 @@ const SPEC_TABLE = `package material, version 3.0.2
   tag        missing  tag commit is not an ancestor of the default branch
   github     pass     published release matches SemVer channel
   changelog  pass     changelog entry has a valid release date
-4 check(s), 1 missing
+4 checks, 1 missing
 `;
 
 const SPEC_JSON = `{
@@ -160,7 +160,7 @@ describe('the output', () => {
   test('a stale next tag adds one warn line after the table, changing no status and no exit', async () => {
     const { code, io } = await run(['check', 'material@3.0.2'], staleNext(specAnswers()));
     expect(code).toBe(1);
-    expect(io.out).toBe(SPEC_TABLE.replace('4 check(s), 1 missing\n', `warn  ${STALE_NEXT}\n4 check(s), 1 missing\n`));
+    expect(io.out).toBe(SPEC_TABLE.replace('4 checks, 1 missing\n', `warn  ${STALE_NEXT}\n4 checks, 1 missing\n`));
     expect(io.err).toBe('');
   });
 
@@ -174,7 +174,7 @@ describe('the output', () => {
   github     pass   published release matches SemVer channel
   changelog  pass   changelog entry has a valid release date
 warn  ${STALE_NEXT}
-4 check(s), 0 missing
+4 checks, 0 missing
 `);
   });
 
@@ -240,7 +240,7 @@ describe('the output with the records configured', () => {
   changelog  pass   changelog entry has a valid release date
   linear     pass   Linear milestone is complete and a qualifying status update exists
   activity   pass   public activity marker found
-6 check(s), 0 missing
+6 checks, 0 missing
 `;
 
   const WIDGETS_JSON = `{

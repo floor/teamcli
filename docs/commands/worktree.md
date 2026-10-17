@@ -42,7 +42,7 @@ writes nothing.
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | the worktree was created | the context line, then `worktree <task>: created at <path>` | 0 |
-| the recorded worktrees were listed | the context line, a `TASK  BRANCH  PATH` table (a missing folder's path ends ` (gone)`), `note: limit <n> (workspace.limit)`, then `<n> worktree(s)` | 0 |
+| the recorded worktrees were listed | the context line, a `TASK  BRANCH  PATH` table (a missing folder's path ends ` (gone)`), `note: limit <n> (workspace.limit)`, then `<n> worktree` / `<n> worktrees` | 0 |
 | the worktree was removed | the context line, then `removed <task>; the branch <branch> is kept` — the branch the worktree is on, read from git, not from the state record | 0 |
 | the folder was already gone | the context line, then `removed the record of <task>; its folder was already gone. No branch was deleted.` | 0 |
 | `new` created the worktree and `workspace.setup` failed | the created line, then `team worktree: setup failed on command <n> of <m>; the worktree is kept and recorded as setup: failed` on stderr | 1 |
@@ -108,7 +108,7 @@ $ team worktree list ; echo "exit $?"
 team beacon, session "beacon"
   TASK  BRANCH  PATH
 note: limit 8 (workspace.limit)
-0 worktree(s)
+0 worktrees
 exit 0
 ```
 

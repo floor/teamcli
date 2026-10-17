@@ -46,7 +46,7 @@ test('empty results go to stdout and leave stderr empty', async () => {
 
   const none = testIo('/anywhere');
   expect(await runList([], none, quiet)).toBe(0);
-  expect(none.out).toBe('no running sessions\n0 session(s)\n');
+  expect(none.out).toBe('no running sessions\n0 sessions\n');
   expect(none.err).toBe('');
 
   const json = testIo('/anywhere');

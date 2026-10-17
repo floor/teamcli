@@ -42,8 +42,8 @@ const CONTEXT = 'team acme, session "acme"\n';
 // The contract's issues table: headers, one row per record, the closing count.
 const TABLE = '  ID  STATE  ASSIGNEE  TITLE\n';
 const OPEN_M1 = '  m1  open   -         the task title\n';
-const ONE_OPEN = `${CONTEXT}${TABLE}${OPEN_M1}1 issue(s)\n`;
-const ONE_BLOCKED = `${CONTEXT}  ID  STATE    ASSIGNEE  TITLE\n  m1  blocked  -         the task title\n1 issue(s)\n`;
+const ONE_OPEN = `${CONTEXT}${TABLE}${OPEN_M1}1 issue\n`;
+const ONE_BLOCKED = `${CONTEXT}  ID  STATE    ASSIGNEE  TITLE\n  m1  blocked  -         the task title\n1 issue\n`;
 
 let base: string;
 let root: string;
@@ -81,7 +81,7 @@ describe('team issues', () => {
     list('- id: m1\n  title: the task title\n- id: m2\n  title: another title\n  priority: 1\n');
     expect(await run()).toEqual({
       code: 0,
-      out: `${CONTEXT}${TABLE}${OPEN_M1}  m2  open   -         another title\n2 issue(s)\n`,
+      out: `${CONTEXT}${TABLE}${OPEN_M1}  m2  open   -         another title\n2 issues\n`,
       err: '',
     });
   });
@@ -98,7 +98,7 @@ describe('team issues', () => {
     list('- id: m1\n- id: m2\n  title: another title\n');
     expect(await run()).toEqual({
       code: 1,
-      out: `${CONTEXT}${TABLE}  m2  open   -         another title\n1 issue(s)\n`,
+      out: `${CONTEXT}${TABLE}  m2  open   -         another title\n1 issue\n`,
       err: 'team issues: m1 is not a task: title is required\n',
     });
   });
@@ -119,7 +119,7 @@ describe('team issues', () => {
     const listed = await run();
     expect(listed.code).toBe(0);
     expect(listed.out).toBe(
-      `${CONTEXT}  ID  STATE    ASSIGNEE  TITLE\n  m1  blocked  -         the task title\n  m2  open     -         another title\n2 issue(s)\n`,
+      `${CONTEXT}  ID  STATE    ASSIGNEE  TITLE\n  m1  blocked  -         the task title\n  m2  open     -         another title\n2 issues\n`,
     );
   });
 
@@ -159,7 +159,7 @@ describe('team issues', () => {
   test('an empty list, a missing file, and a file with no task source', async () => {
     project();
     list('[]\n');
-    expect(await run()).toEqual({ code: 0, out: `${CONTEXT}0 issue(s)\n`, err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CONTEXT}0 issues\n`, err: '' });
     rmSync(join(root, '.agents', 'tasks.yaml'));
     expect(await run()).toEqual({ code: 1, out: '', err: 'team issues: the task file is not there\n' });
     project(TEAM);
@@ -224,7 +224,7 @@ describe('team issues', () => {
     };
     expect(await run([], { file: stub })).toEqual({
       code: 0,
-      out: `${CONTEXT}${TABLE}  s1  open   -         from the stub\n1 issue(s)\n`,
+      out: `${CONTEXT}${TABLE}  s1  open   -         from the stub\n1 issue\n`,
       err: '',
     });
     expect(read).toBe(true);

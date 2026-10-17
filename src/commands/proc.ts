@@ -8,7 +8,7 @@ import type { Problem, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { validLockName } from '../lock/machine.ts';
-import { contextLine, formatTable, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { contextLine, formatTable, hasJsonFlag, pluralCount, refuse, writeJson } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { emptySession, liveProcs, pidAlive, pruneProcs, readState, updateState } from '../state.ts';
 
@@ -283,7 +283,7 @@ function list(rest: string[], args: Args, io: Io, json: boolean, sources: ProcSo
         held.note ?? null,
       ]),
     });
-    io.stdout(`${contextLine(current.team.project, current.team.session)}\n${table}${rows.length} process(es)\n`);
+    io.stdout(`${contextLine(current.team.project, current.team.session)}\n${table}${pluralCount(rows.length, 'process', 'processes')}\n`);
   }
   // exit: proc.listed
   return 0;

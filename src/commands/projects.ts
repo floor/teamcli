@@ -11,6 +11,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import {
   hasJsonFlag,
+  pluralCount,
   renderTable,
   ttyStyle,
   writeJson,
@@ -105,7 +106,7 @@ export async function runProjects(argv: string[], io: Io, sources: ProjectSource
       indent: '',
       style,
     });
-    lines.push(`${listed.length} project(s)`);
+    lines.push(pluralCount(listed.length, 'project'));
     out.stdout(`${lines.join('\n')}\n`);
   }
   // exit: projects.listed

@@ -68,7 +68,7 @@ test('team projects lists each project: id, name, entity, lead and teams', async
   expect(io.out).toBe(
     'ID            NAME     ENTITY  LEAD      TEAMS\n'
     + `4f2a1b7c9d0e  TeamCLI  floor   agt_2b9f  ${TEAM_A}, ${TEAM_B}\n`
-    + '1 project(s)\n',
+    + '1 project\n',
   );
 });
 
@@ -83,7 +83,7 @@ test('a project with no entity or lead prints a dash, and a wider id widens ever
     'ID    NAME   ENTITY  LEAD  TEAMS\n'
     + 'b     Beta   -       -     -\n'
     + 'aaaa  Alpha  x       l     t\n'
-    + '2 project(s)\n',
+    + '2 projects\n',
   );
 });
 
@@ -91,7 +91,7 @@ test('a registry with no projects says so', async () => {
   const io = testIo('/anywhere');
   const code = await runProjects([], io, sourcesOf([]));
   expect(code).toBe(0);
-  expect(io.out).toBe('ID  NAME  ENTITY  LEAD  TEAMS\n0 project(s)\n');
+  expect(io.out).toBe('ID  NAME  ENTITY  LEAD  TEAMS\n0 projects\n');
 });
 
 test('--json carries the records, ids, provenance and deliveryOrder included, and matches PROJECTS_OUTPUT_SCHEMA', async () => {
@@ -165,7 +165,7 @@ test('team status --project covers every team of the project, registered or not'
     expect(io.err).toBe('');
     expect(io.out).toBe(
       'project TeamCLI  4f2a1b7c9d0e  entity floor  lead agt_2b9f\n'
-      + `  ${TEAM_A}  session "teamcli"  defined  1 seat(s)\n`
+      + `  ${TEAM_A}  session "teamcli"  defined  1 seat\n`
       + `  ${TEAM_B}  not registered\n`,
     );
   } finally {

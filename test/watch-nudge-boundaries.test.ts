@@ -140,7 +140,7 @@ describe('the seat the nudge is typed into', () => {
     expect(before.fallback).toBeNull();
     const at = pass({ team: teamOf(example), watch: teamOf(example).watch, state: emptySession(), live: blocked, machine: fine, now: 10 * MIN, memory });
     expect(at.nudge).toBeNull();
-    expect(at.fallback).toBe(`no idle seat could be nudged for 10 minutes; 1 report(s) wait: ${ASKED}`);
+    expect(at.fallback).toBe(`no idle seat could be nudged for 10 minutes; 1 report wait: ${ASKED}`);
     // The fallback said it, the report was answered for, and neither repeats.
     const again = pass({ team: teamOf(example), watch: teamOf(example).watch, state: emptySession(), live: blocked, machine: fine, now: 12 * MIN, memory });
     expect(again.nudge).toBeNull();

@@ -6,7 +6,7 @@ import { loadTeamFile } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { lobbyDir } from '../lobby/gate.ts';
-import { contextLine, hasJsonFlag, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
+import { contextLine, hasJsonFlag, pluralCount, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import {
   parseHistoryLine,
   readAllHistories,
@@ -581,7 +581,7 @@ function printBatch(io: Io, scope: Scope, entries: readonly HistoryEntry[]): voi
     indent: scope.context === null ? '' : '  ',
     style: ttyStyle(io, { json: false }),
   });
-  io.stdout(`${lines.join('\n')}\n${entries.length} event(s)\n`);
+  io.stdout(`${lines.join('\n')}\n${pluralCount(entries.length, 'event')}\n`);
 }
 
 function keyOf(entry: HistoryEntry): string {
@@ -694,7 +694,7 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
   } else if (!follow) {
     // An empty feed is still one answer: the context line and a zero count, never a bare table.
     printContext(io, scope);
-    io.stdout('0 event(s)\n');
+    io.stdout(`${pluralCount(0, 'event')}\n`);
   }
   for (const entry of initial.entries) seen.add(keyOf(entry));
 

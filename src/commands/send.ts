@@ -11,7 +11,7 @@ import type { Command, Io } from '../io.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
-import { contextLine, hasJsonFlag, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
+import { contextLine, hasJsonFlag, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
@@ -1254,7 +1254,7 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
   }
   const entity = teams[teamId]?.entity ?? loaded.team.entity ?? null;
   if (entity !== null) seats.push(...crossTeamRows(host, teams, teamId, entity));
-  const summary = `${String(seats.length)} seat(s)`;
+  const summary = pluralCount(seats.length, 'seat');
   if (report.json) {
     writeJson(io, 'team.send.list', {
       format: 1 as const,

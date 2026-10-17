@@ -13,6 +13,7 @@ import { plainText } from '../launch/plain.ts';
 import {
   contextLine,
   hasJsonFlag,
+  pluralCount,
   renderTable,
   ttyStyle,
   writeJson,
@@ -202,7 +203,7 @@ function show(
   const out = cleanedIo(io);
   const context = contextLine(team.project, team.session);
   if (candidates.length === 0) {
-    if (!json) io.stdout(`${context}\n0 task(s)\n`);
+    if (!json) io.stdout(`${context}\n${pluralCount(0, 'task')}\n`);
     // exit: plan.none
     return 0;
   }
@@ -215,7 +216,7 @@ function show(
         rows: candidates.map((record, index) => [String(index + 1), planState(record, at), record.assignee ?? '-', record.title]),
         style,
       }),
-      `${candidates.length} task(s)`,
+      pluralCount(candidates.length, 'task'),
     ];
     // Through `io`, not the cleaned view: the style above is this io's TTY style, and the
     // cleaned view would strip the very bold the table was rendered with.

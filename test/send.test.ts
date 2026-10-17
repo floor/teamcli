@@ -655,7 +655,7 @@ describe('team send: --list', () => {
         + '  lead    -         coordinator  acme     socket\n'
         + '  helper  -         implementer  acme     socket\n'
         + '  native  -         reviewer     acme     typed\n'
-        + '3 seat(s)\n',
+        + '3 seats\n',
     );
   });
 
@@ -698,7 +698,7 @@ describe('team send: --list', () => {
         + '  lead    -         coordinator  TeamCLI  socket\n'
         + '  helper  -         implementer  TeamCLI  socket\n'
         + '  native  -         reviewer     TeamCLI  typed\n'
-        + '3 seat(s)\n',
+        + '3 seats\n',
     );
   });
 
@@ -718,7 +718,7 @@ describe('team send: --list', () => {
         + '  lead    -         coordinator  TeamCLI  socket\n'
         + '  helper  -         implementer  TeamCLI  socket\n'
         + '  native  -         reviewer     TeamCLI  typed\n'
-        + '3 seat(s)\n',
+        + '3 seats\n',
     );
   });
 
@@ -742,7 +742,7 @@ describe('team send: --list', () => {
         { name: 'helper', nickname: null, cli: 'claude-code', role: 'implementer', project: 'acme', reach: 'socket', stopped: false },
         { name: 'native', nickname: null, cli: 'codex', role: 'reviewer', project: 'acme', reach: 'typed', stopped: true },
       ],
-      summary: '3 seat(s)',
+      summary: '3 seats',
     });
     const plain = owner(root);
     expect(await runSend(['--list'], plain, fake(sockets))).toBe(0);

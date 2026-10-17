@@ -132,7 +132,7 @@ describe('the effort a profile names as its default', () => {
     const read = live('antigravity', AGY_IDLE);
     const run = await status(read);
     expect(run.err).toBe('');
-    expect(run.out).toContain('0 difference(s)');
+    expect(run.out).toContain('no differences');
     expect(run.code).toBe(0);
     const checked = check(read);
     expect(checked.out).not.toContain('difference: effort-seat: running ');
@@ -145,7 +145,7 @@ describe('the effort a profile names as its default', () => {
     const run = await status(read);
     expect(run.err).toBe('');
     expect(run.out).toContain('difference: effort-seat: effort medium, file says high');
-    expect(run.out).toContain('1 difference(s)');
+    expect(run.out).toContain('1 difference');
     expect(run.code).toBe(1);
     const line = run.out.split('\n').find((one) => one.startsWith('difference: effort-seat: '));
     expect(line).toBe('difference: effort-seat: effort medium, file says high');
@@ -173,7 +173,7 @@ describe('the effort a profile names as its default', () => {
     const read = live('cursor', CURSOR_STARTUP);
     const run = await status(read);
     expect(run.err).toBe('');
-    expect(run.out).toContain('0 difference(s)');
+    expect(run.out).toContain('no differences');
     expect(run.code).toBe(0);
     const checked = check(read);
     expect(checked.out).not.toContain('difference: effort-seat: running ');

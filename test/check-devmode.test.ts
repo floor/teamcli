@@ -178,7 +178,7 @@ describe('the dev-mode mark on a record', () => {
     const { root, home } = place();
     record(home, root, { by: DEV_CALLER, dev: true });
     const { code, out } = checkWithEnv(root, home, { TEAMCLI_DEV_MODE: '1' });
-    expect(out).toContain('note: 1 seat(s) recorded under dev mode');
+    expect(out).toContain('note: 1 seat recorded under dev mode');
     expect(out).not.toContain('registered by an agent, not by the owner');
     expect(code).toBe(0);
   });
@@ -189,7 +189,7 @@ describe('the dev-mode mark on a record', () => {
     setDevMode(home, root, 'on');
     // The variable is not set: the policy alone quiets the reading.
     const { code, out } = check(root, home);
-    expect(out).toContain('note: 1 seat(s) recorded under dev mode');
+    expect(out).toContain('note: 1 seat recorded under dev mode');
     expect(out).not.toContain('registered by an agent, not by the owner');
     expect(code).toBe(0);
   });
@@ -200,7 +200,7 @@ describe('the dev-mode mark on a record', () => {
     setDevMode(home, root, 'off');
     const { code, out } = checkWithEnv(root, home, { TEAMCLI_DEV_MODE: '1' });
     expect(out).toContain('difference: lead: registered by an agent, not by the owner');
-    expect(out).not.toContain('seat(s) recorded under dev mode');
+    expect(out).not.toContain('recorded under dev mode');
     expect(code).toBe(1);
   });
 
@@ -227,7 +227,7 @@ describe('the dev-mode mark on a record', () => {
     const { code, out } = check(root, home);
     expect(out).not.toContain('registered by an agent, not by the owner');
     expect(code).toBe(0);
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
   });
 
   test('a record written again in force takes the mark off, and the finding with it', () => {

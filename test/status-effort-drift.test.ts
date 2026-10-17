@@ -150,7 +150,7 @@ describe('effort drift', () => {
     withAgySeat();
     live = builtWithAgy(agyScreen('Gemini 4 Argon', 'medium'));
     const { code, out } = await status();
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(out).not.toContain('Gemini Argon 4');
     expect(code).toBe(0);
   });
@@ -166,7 +166,7 @@ describe('effort drift', () => {
     // An effort alone does not move the model column: the model on the pane is still the file's.
     expect(out).toMatch(/agy-acme\s+idle\s+Gemini 4 Argon\s+w5:p1/);
     expect(out).not.toContain('(file:');
-    expect(out).toContain('1 difference(s)');
+    expect(out).toContain('1 difference');
     expect(code).toBe(1);
     // Observed ≠ file is a report, never a write.
     expect(readFileSync(file, 'utf8')).toBe(before);
@@ -186,7 +186,7 @@ describe('effort drift', () => {
     withEffort('    launch: claude --model claude-opus-5-5', 'high');
     live = { ...built(), screens: { 'w1:p1': claudeScreen('Opus 5.5', 'high') } };
     const { code, out } = await status();
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -202,7 +202,7 @@ describe('effort drift', () => {
   test('a screen that prints no word leaves the file\'s word standing', async () => {
     withEffort('    launch: claude --model claude-opus-5-5', 'high');
     const { code, out } = await status();
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
     // The word is still the seat's, and the column still reads the model: only a word the pane
     // actually printed could have differed.

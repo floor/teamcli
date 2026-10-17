@@ -43,8 +43,8 @@ reordered or released by lateness.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the queue was shown | `team <project>, session "<session>"`, the `STEP  STATE  OWNER  TITLE` table, and `<n> task(s)`, in `team next`'s order | 0 |
-| nothing was takeable | the context line and `0 task(s)` | 0 |
+| the queue was shown | `team <project>, session "<session>"`, the `STEP  STATE  OWNER  TITLE` table, and `<n> task` or `<n> tasks`, in `team next`'s order | 0 |
+| nothing was takeable | the context line and `0 tasks` | 0 |
 | refused: not a seat on its recorded pane, the team file can't be read, the task file is missing or not a list, nothing was shown and a record is not a task, or the broker path refused | `team plan: <reason>` (with `--json`, a `team.error` document) | 1 |
 | the invocation can't be read, or this folder is not a git checkout | `team plan: <problem>`, with the usage for the invocation (with `--json`, a `team.error` document) | 2 |
 
@@ -89,7 +89,7 @@ $ team plan ; echo "exit $?"
 team beacon, session "beacon"
   STEP  STATE    OWNER  TITLE
   1     overdue  -      the task title
-1 task(s)
+1 task
 exit 0
 ```
 

@@ -178,7 +178,7 @@ describe('team doctor --login', () => {
       [
         'ok    claude-code: logged in',
         'ok    codex: logged in',
-        '--    grok: the login is not checked in this version',
+        'note  grok: the login is not checked in this version',
         'team doctor: nothing missing, 0 warnings',
         '',
       ].join('\n'),
@@ -199,7 +199,7 @@ describe('team doctor --login', () => {
     expect(io.err).toBe('');
     expect(io.out).toContain('ok    claude-code: logged in\n');
     expect(io.out).toContain('MISS  log in to codex: `codex login`\n');
-    expect(io.out).toContain('--    grok: the login is not checked in this version\n');
+    expect(io.out).toContain('note  grok: the login is not checked in this version\n');
     expect(io.out).toContain('team doctor: 1 missing, 0 warnings: 1 of them block `up` and `add`\n');
   });
 
@@ -215,7 +215,7 @@ describe('team doctor --login', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toContain('--    claude-code: the login is not checked in this version\n');
+    expect(io.out).toContain('note  claude-code: the login is not checked in this version\n');
     expect(io.out).toContain('ok    codex: logged in\n');
     expect(io.out).toContain('team doctor: nothing missing, 0 warnings\n');
   });

@@ -92,9 +92,9 @@ meet the refusal every command gives them and exit 1.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| nothing needs acting on | `team <project>, session "<session>"`, any deprecation `warning:` or `note:` lines, and `0 difference(s)` | 0 |
-| the owner's `--repair` repaired what it can (the state's leftovers dropped, dev-mode marks cleared, drifted sidebar lines set back), and nothing else needs acting on | `team <project>, session "<session>"`, one `repaired: <what was repaired>` line per repair, and `0 difference(s)` | 0 |
-| something needs acting on | `team <project>, session "<session>"`, one `difference:` block per finding with its `  repair:` and `  who:` lines under it, then `<n> difference(s)` (and `, <m> for the owner` when any finding is the owner's) | 1 |
+| nothing needs acting on | `team <project>, session "<session>"`, any deprecation `warning:` or `note:` lines, and `no differences` | 0 |
+| the owner's `--repair` repaired what it can (the state's leftovers dropped, dev-mode marks cleared, drifted sidebar lines set back), and nothing else needs acting on | `team <project>, session "<session>"`, one `repaired: <what was repaired>` line per repair, and `no differences` | 0 |
+| something needs acting on | `team <project>, session "<session>"`, one `difference:` block per finding with its `  repair:` and `  who:` lines under it, then `<n> difference` / `<n> differences` (and `, <m> for the owner` when any finding is the owner's) | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | the check can't run (the loader's, the state's or herdr's own text), the invocation can't be read, or the caller may not check this team | `team check: <problem>`, or the one fixed sentence | 2 |
 
@@ -141,7 +141,7 @@ The team runs as the file and the state say, so there is nothing to act on:
 ```console
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
-0 difference(s)
+no differences
 exit 0
 ```
 

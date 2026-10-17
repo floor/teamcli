@@ -7,7 +7,7 @@ import { agentList, paneRead, sessionList, type HerdrSession } from '../herdr.ts
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { findTeamFile, type FoundTeam } from '../list/find.ts';
-import { hasJsonFlag, jsonEnvelope, ttyStyle, writeJsonError, type TtyStyle } from '../output/index.ts';
+import { displayPath, hasJsonFlag, jsonEnvelope, pluralCount, ttyStyle, writeJsonError, type TtyStyle } from '../output/index.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import { readTeams, teamsFile } from '../registry/teams.ts';
 import { isSeatId, readState } from '../state.ts';
@@ -73,6 +73,8 @@ export type RegistryFile = { valid: boolean; seats: number | null };
 
 /** What `list` reads from outside itself, so a test stands in with fixtures and never a socket. */
 export type ListSources = {
+  /** Home directory for ~ shortening in human tables; defaults to homedir(). */
+  home?: string;
   /** Null when herdr cannot be asked. */
   sessions(): ListedSession[] | null;
   /** Null when this running session's roster cannot be read. Not called for a stopped session. */
@@ -415,12 +417,12 @@ function yesNo(value: boolean | null): string {
   return value === null ? '?' : value ? 'yes' : 'no';
 }
 
-function registryCells(row: RegistryRow): string[] {
+function registryCells(row: RegistryRow, home?: string): string[] {
   return [
     row.entity ?? '-',
     row.team,
     row.project ?? '-',
-    row.lobby ?? '-',
+    row.lobby ? displayPath(row.lobby, home) : '-',
     row.seats === null ? '?' : String(row.seats),
     yesNo(row.defined),
     yesNo(row.approved),
@@ -436,9 +438,9 @@ function padStyled(cell: string, width: number, styled: string): string {
 
 /** The registry view's table. `--seats` prints each registered team's roster under its row,
  *  indented two spaces: seat, agent, role. A discovered row has no roster to print. */
-export function registryTable(rows: RegistryRow[], showSeats = false, style: TtyStyle = PLAIN_STYLE): string {
+export function registryTable(rows: RegistryRow[], showSeats = false, style: TtyStyle = PLAIN_STYLE, home?: string): string {
   const head = REGISTRY_HEAD;
-  const body = rows.map(registryCells);
+  const body = rows.map((row) => registryCells(row, home));
   const width = head.map((label, index) => Math.max(label.length, ...body.map((cells) => cells[index]?.length ?? 0)));
   const line = (cells: string[], isHeader = false): string => {
     const rendered = cells
@@ -466,7 +468,7 @@ export function registryTable(rows: RegistryRow[], showSeats = false, style: Tty
       }).join('  ').trimEnd()}`);
     }
   }
-  out.push(`${rows.length} session(s)`);
+  out.push(pluralCount(rows.length, 'session'));
   return `${out.join('\n')}\n`;
 }
 
@@ -508,7 +510,7 @@ function table(rows: ListRow[], style: TtyStyle = PLAIN_STYLE): string {
       .join('  ')
       .trimEnd();
   };
-  return `${[headerLine, ...body.map(rowLine), `${rows.length} session(s)`].join('\n')}\n`;
+  return `${[headerLine, ...body.map(rowLine), pluralCount(rows.length, 'session')].join('\n')}\n`;
 }
 
 function tableWithSeats(rows: ListSeatsRow[], style: TtyStyle = PLAIN_STYLE): string {
@@ -561,7 +563,7 @@ function tableWithSeats(rows: ListSeatsRow[], style: TtyStyle = PLAIN_STYLE): st
       }
     }
   }
-  out.push(`${rows.length} session(s)`);
+  out.push(pluralCount(rows.length, 'session'));
   return `${out.join('\n')}\n`;
 }
 
@@ -598,6 +600,7 @@ export function realListSources(home: string = homedir()): ListSources {
     return cache;
   };
   return {
+    home,
     sessions() {
       cache = sessionList();
       if (cache === null) return null;
@@ -752,8 +755,8 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
   const entity = registry === null ? null : (args.rest[0] ?? null);
   const registryText = (teams: RegistryTeam[]): { text: string; empty: boolean } => {
     const rows = registryRowsOf(teams, ask(() => sources.sessions(), null), sources, all, entity);
-    if (rows.length === 0) return { text: json ? jsonOf([]) : 'no teams\n0 team(s)\n', empty: true };
-    return { text: json ? registryJsonOf(rows, showSeats) : registryTable(rows, showSeats, style), empty: false };
+    if (rows.length === 0) return { text: json ? jsonOf([]) : `no teams\n${pluralCount(0, 'team')}\n`, empty: true };
+    return { text: json ? registryJsonOf(rows, showSeats) : registryTable(rows, showSeats, style, sources.home), empty: false };
   };
   if (watching) {
     const wait = sources.wait ?? waitOrStop;
@@ -769,10 +772,10 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
           body = 'herdr is not running\n';
         } else if (showSeats) {
           const rows = seatRowsOf(listed, sources, all);
-          body = rows.length === 0 ? (all ? 'no sessions\n0 session(s)\n' : 'no running sessions\n0 session(s)\n') : tableWithSeats(rows, style);
+          body = rows.length === 0 ? (all ? `no sessions\n${pluralCount(0, 'session')}\n` : `no running sessions\n${pluralCount(0, 'session')}\n`) : tableWithSeats(rows, style);
         } else {
           const rows = rowsOf(listed, sources, all);
-          body = rows.length === 0 ? (all ? 'no sessions\n0 session(s)\n' : 'no running sessions\n0 session(s)\n') : table(rows, style);
+          body = rows.length === 0 ? (all ? `no sessions\n${pluralCount(0, 'session')}\n` : `no running sessions\n${pluralCount(0, 'session')}\n`) : table(rows, style);
         }
       }
       if (io.stdoutIsTTY) {
@@ -799,7 +802,7 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
       }
       const rows = showSeats ? seatRowsOf(listed, sources, all) : rowsOf(listed, sources, all);
       empty = rows.length === 0;
-      if (empty) text = json ? jsonOf([]) : all ? 'no sessions\n0 session(s)\n' : 'no running sessions\n0 session(s)\n';
+      if (empty) text = json ? jsonOf([]) : all ? `no sessions\n${pluralCount(0, 'session')}\n` : `no running sessions\n${pluralCount(0, 'session')}\n`;
       else if (showSeats) text = json ? jsonWithSeatsOf(rows as ListSeatsRow[]) : tableWithSeats(rows as ListSeatsRow[], style);
       else text = json ? jsonOf(rows) : table(rows, style);
     }

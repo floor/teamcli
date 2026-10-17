@@ -130,7 +130,7 @@ describe('a legacy seat named lead', () => {
     expect(validateTeamFile(LEGACY).ok).toBe(true);
     const { code, out } = check(place(LEGACY), LEGACY);
     expect(out).not.toContain('note:');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -140,7 +140,7 @@ describe('a legacy seat named lead', () => {
     expect(out).toContain(NOTE);
     // A note is not a difference, and the repair is the team's lead's: the exit stays 0.
     expect(out).not.toContain('difference:');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 

@@ -2,7 +2,7 @@ import { readArgs } from '../args.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
-import { formatTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
+import { formatTable, pluralCount, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { runChecks, type Outcome, type ReleaseResult } from '../release/checks.ts';
 import { SEMVER_PATTERN, packageProblem } from '../release/grammar.ts';
 import { realFetch, type Fetch } from '../release/http.ts';
@@ -154,6 +154,6 @@ function renderPlainRelease(name: string, version: string, result: ReleaseResult
     },
   });
   const warning = result.warning === undefined ? '' : `warn  ${plainLine(result.warning)}\n`;
-  const summary = `${rows.length} check(s), ${missingCount} missing\n`;
+  const summary = `${pluralCount(rows.length, 'check')}, ${missingCount} missing\n`;
   return `package ${plainLine(name)}, version ${plainLine(version)}\n${tableBlock}${warning}${summary}`;
 }

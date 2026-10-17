@@ -916,7 +916,7 @@ describe('the nudge', () => {
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 9 * MIN, memory }).fallback).toBeNull();
     const result = pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 10 * MIN, memory });
     expect(result.nudge).toBeNull();
-    expect(result.fallback).toBe('no idle seat could be nudged for 10 minutes; 1 report(s) wait: deepseek-acme-2 asked a question: the operator\'s to act on');
+    expect(result.fallback).toBe('no idle seat could be nudged for 10 minutes; 1 report wait: deepseek-acme-2 asked a question: the operator\'s to act on');
     expect(memory.pending).toEqual([]);
   });
 

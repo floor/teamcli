@@ -528,7 +528,7 @@ describe('the doctor line', () => {
     expect(held.out).toBe(
       before.out.replace(
         'team doctor: ',
-        '--    hold: freeze deploys (`team hold --release` clears it)\nteam doctor: ',
+        'note  hold: freeze deploys (`team hold --release` clears it)\nteam doctor: ',
       ),
     );
   });

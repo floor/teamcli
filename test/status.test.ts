@@ -116,7 +116,7 @@ describe('team status', () => {
     const all = await status('--all');
     expect(all.out).toMatch(/grok-acme\s+-\s+-\s+reviewer\s+grok\s+Grok 4\.7\s+-\s+stopped/);
     // The suffix is a reading, not a difference: a team that matches its file still reads clean.
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -158,7 +158,7 @@ describe('team status', () => {
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const { code, out } = await status();
     expect(out).toContain('difference: deepseek-acme-2 is in the file and is not running\n  repair: team restart deepseek-acme-2');
-    expect(out).toContain('1 difference(s)');
+    expect(out).toContain('1 difference');
     expect(code).toBe(1);
   });
 
@@ -168,7 +168,7 @@ describe('team status', () => {
     expect(out).toContain('note: the herdr session "acme-web" is not running');
     expect(out).toContain('repair: the owner runs team up');
     expect(out).not.toContain('grok-acme is in the file');
-    expect(out).toContain('4 difference(s)');
+    expect(out).toContain('4 differences');
     expect(code).toBe(1);
   });
 
@@ -195,14 +195,14 @@ describe('team status', () => {
     expect(out).toMatch(/deepseek-acme\s+wrong name\s+\(unread\)\s+w3:p1/);
     expect(out).not.toMatch(/codex-acme\s+wrong name\s+GPT-6 Sol/);
     expect(out).not.toMatch(/deepseek-acme\s+wrong name\s+DeepSeek/);
-    expect(out).toContain('2 difference(s)');
+    expect(out).toContain('2 differences');
   });
 
   test('an agent the file doesn\'t hold; the watch\'s own workspace is not one', async () => {
     live = { ...built(), agents: [...built().agents, agent('stranger', 'w7'), agent(null, 'w9')] };
     const { out } = await status();
     expect(out).toContain('difference: stranger (w7:p1) is running and is not in the file');
-    expect(out).toContain('1 difference(s)');
+    expect(out).toContain('1 difference');
   });
 
   test('a seat that runs another model than the file\'s', async () => {
@@ -349,14 +349,14 @@ describe('team status', () => {
     expect(out).toContain('note: codex-acme-tmp-1 is temporary, until merged:fix/select-width');
     expect(out).toContain('codex-acme-tmp-2: a temporary seat is recorded and is not running');
     expect(out).toContain('worktree select-width: its setup failed\n  repair: team worktree remove select-width');
-    expect(out).toContain('4 difference(s)');
+    expect(out).toContain('4 differences');
   });
 
   test('a watch whose last pass is older than two intervals, and no watch at all', async () => {
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ?? emptySession()).watch = { pid: 1, heartbeat: '2026-10-03T14:00:00Z' };
     });
-    expect((await status()).out).toContain('the watch\'s last pass was 10 minute(s) ago\n  repair: team watch --session acme-web');
+    expect((await status()).out).toContain('the watch\'s last pass was 10 minutes ago\n  repair: team watch --session acme-web');
     updateState(join(dir, '.agents'), (state) => {
       delete state.sessions['acme-web']?.watch;
     });
@@ -388,7 +388,7 @@ describe('team status', () => {
     standing = { kind: 'none' };
     const unrecorded = await status();
     expect(unrecorded.out).not.toContain('never approved');
-    expect(unrecorded.out).toContain('0 difference(s)');
+    expect(unrecorded.out).toContain('no differences');
     expect(unrecorded.code).toBe(0);
   });
 
@@ -404,7 +404,7 @@ describe('team status', () => {
     writeFileSync(file, example.replace('format: 1', 'format: 9'));
     const { code, out } = await status();
     expect(out.split('\n')[0]).toBe('team.yaml is invalid (line 1: format must be 1: this version of team reads no other); using the copy of 2026-10-03T14:10:00.000Z');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -912,7 +912,7 @@ describe('team status', () => {
       "difference: codex-acme waits at a permission prompt: its owner's to answer\n" +
         '  repair: the owner answers it in the pane\n',
     );
-    expect(permRes.out).toContain('1 difference(s), 1 for the owner\n');
+    expect(permRes.out).toContain('1 difference, 1 for the owner\n');
 
     const trustScreen = codexScreen('trust-folder');
     live = {
@@ -931,19 +931,19 @@ describe('team status', () => {
     // 1. Without an owner repair: only a missing seat (repair: team restart <seat>)
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const noOwner = await status();
-    expect(noOwner.out).toContain('1 difference(s)\n');
+    expect(noOwner.out).toContain('1 difference\n');
     expect(noOwner.out).not.toContain('for the owner');
 
     // 2. With an owner repair: a refused record (repair: the live file is what the commands read)
     live = built();
     standing = { kind: 'refused', why: REFUSED_WHY };
     const withOwner = await status();
-    expect(withOwner.out).toContain('1 difference(s), 1 for the owner\n');
+    expect(withOwner.out).toContain('1 difference, 1 for the owner\n');
 
     // 3. Mixed: 1 owner repair (the record's row) + 1 non-owner repair (restart)
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const mixed = await status();
-    expect(mixed.out).toContain('2 difference(s), 1 for the owner\n');
+    expect(mixed.out).toContain('2 differences, 1 for the owner\n');
   });
 });
 
@@ -977,7 +977,7 @@ describe('a pane that no longer holds the process team launched', () => {
     );
     // `team up` admits a lead: the difference is one the lead repairs, not one counted for the
     // owner.
-    expect(out).toContain('1 difference(s)\n');
+    expect(out).toContain('1 difference\n');
     expect(out).not.toContain('for the owner');
     const doc = JSON.parse((await status('--json')).out);
     // The comparison's own 'missing' is a certainty: the reading is done, from the process,
@@ -1302,7 +1302,7 @@ describe('the rules files of message seats', () => {
   test('a team whose files hold the file\'s rules reads clean', async () => {
     writeAll(teamOf());
     const { code, out } = await status();
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -1396,7 +1396,7 @@ profiles:
 
     setDevMode('on');
     const dev = await statusDev();
-    expect(dev.out).toContain('note: 1 override difference(s); dev mode does not compare them');
+    expect(dev.out).toContain('note: 1 override difference; dev mode does not compare them');
     expect(dev.out).not.toContain('difference: the overrides differ from the stored copy');
   });
 

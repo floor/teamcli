@@ -26,13 +26,13 @@ mailbox is not a wall between seats.
 The reading opens with the context line (`team <project>, session "<session>"`) and the headed
 table `ID  FROM  TO  SENT  STATUS`, one row per waiting record; each verified body prints under
 its own `<seat>/<id>:` heading, then the notes and the differences print, and one summary line
-(`<n> message(s)`) closes it. `SENT` is the record's own timestamp read as its age; `--json` also
+(`<n> message` or `<n> messages`) closes it. `SENT` is the record's own timestamp read as its age; `--json` also
 carries the exact ISO string as `sent`.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | every waiting record was shown and receipted | the reading above, each verified row `shown` and its body printed before the receipt is written | 0 |
-| nothing was waiting | the same reading with no rows, the note `nothing is waiting`, and `0 message(s)` | 0 |
+| nothing was waiting | the same reading with no rows, the note `nothing is waiting`, and `0 messages` | 0 |
 | a record did not verify, the message key is missing or unreadable, or the team file can't be read | the record as a `refused` row with its `difference:` block (`repair:` names the file, `who: any seat`), or `team messages: no message key; nothing was shown` / `team messages: <team-file problem>` | 1 |
 | the invocation can't be read, or this folder is not a git checkout | `team messages: <problem>`, with the usage for the invocation | 2 |
 
@@ -73,7 +73,7 @@ team beacon, session "beacon"
 
 note: nothing is waiting
 
-0 message(s)
+0 messages
 exit 0
 ```
 

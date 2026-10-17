@@ -89,7 +89,7 @@ describe('a relaunch left before ready', () => {
     expect(out).toContain('difference: lead: its launch stopped at "launched"\n  repair: team up (it resumes the launch)\n');
     expect(out).not.toContain('the owner runs');
     // The check's summary is the contract's own line: the count alone, no command prefix.
-    expect(out).toContain('1 difference(s)\n');
+    expect(out).toContain('1 difference\n');
     expect(code).toBe(1);
     rmSync(base, { recursive: true, force: true });
   });

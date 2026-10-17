@@ -37,8 +37,8 @@ The other record fields are carried whole in `--json`; the plain listing is the 
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the records were listed | `team <project>, session "<session>"`, the `ID  STATE  ASSIGNEE  TITLE` table, and `<n> issue(s)`, in file order | 0 |
-| the list was empty | the context line and `0 issue(s)` | 0 |
+| the records were listed | `team <project>, session "<session>"`, the `ID  STATE  ASSIGNEE  TITLE` table, and `<n> issue` or `<n> issues`, in file order | 0 |
+| the list was empty | the context line and `0 issues` | 0 |
 | the team file can't be read, it declares no task source or one that is a broker's, the task file is missing or not a list, or a record is not a task | `team issues: <reason>` (with `--json`, a `team.error` document) | 1 |
 | the invocation can't be read, or this folder is not a git checkout | `team issues: <problem>`, with the usage for the invocation (with `--json`, a `team.error` document) | 2 |
 
@@ -82,7 +82,7 @@ $ team issues ; echo "exit $?"
 team beacon, session "beacon"
   ID  STATE  ASSIGNEE  TITLE
   m1  open   -         the task title
-1 issue(s)
+1 issue
 exit 0
 ```
 

@@ -82,7 +82,7 @@
                       "ok  ",
                       "warn",
                       "MISS",
-                      "--  "
+                      "note"
                     ]
                   },
                   "detail": {

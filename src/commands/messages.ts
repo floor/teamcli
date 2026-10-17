@@ -12,6 +12,7 @@ import {
   contextLine,
   formatRelativeTime,
   hasJsonFlag,
+  pluralCount,
   renderDifferences,
   renderNotes,
   renderTable,
@@ -298,7 +299,7 @@ function bodyLines(body: string): string[] {
 /**
  * Verifies every unacked record, prints each body that verifies, and writes its receipt in the
  * same step. A record that does not verify prints no body and writes nothing; it is a `refused`
- * row and a difference, and the run exits 1. An empty mailbox is a `0 message(s)` reading with
+ * row and a difference, and the run exits 1. An empty mailbox is a `0 messages` reading with
  * the note that nothing is waiting, and creates no key. Anyone in the checkout may run it: the
  * ring asks the recipient's pane, and the receipt records that a process was shown the body.
  */
@@ -462,7 +463,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
 
 /** The reading's plain text: the context line, the `ID  FROM  TO  SENT  STATUS` table, each shown
  *  body under its own `<seat>/<id>:` heading, the notes and differences, and the closing
- *  `<n> message(s)` line. */
+ *  `<n> message` / `<n> messages` line. */
 function renderMailbox(
   project: string,
   session: string,
@@ -486,6 +487,6 @@ function renderMailbox(
   }
   if (notes.length > 0) lines.push('', ...renderNotes(notes));
   if (differences.length > 0) lines.push('', ...renderDifferences(differences, style));
-  lines.push('', `${rows.length} message(s)`);
+  lines.push('', pluralCount(rows.length, 'message'));
   return `${lines.join('\n')}\n`;
 }

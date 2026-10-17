@@ -10,6 +10,7 @@ import { usesLauncher } from '../launch/line.ts';
 import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
+import { pluralCount } from '../output/text.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
@@ -521,7 +522,7 @@ export function compare(
     } else if (!(now.getTime() - beat <= 2 * watch.interval * 1000)) {
       const minutes = Number.isFinite(beat) ? Math.round((now.getTime() - beat) / 60_000) : null;
       differences.push({
-        what: `the watch's last pass was ${minutes === null ? 'never recorded' : `${minutes} minute(s) ago`}`,
+        what: `the watch's last pass was ${minutes === null ? 'never recorded' : `${pluralCount(minutes, 'minute')} ago`}`,
         repair: `team watch --session ${session}`,
       });
     }

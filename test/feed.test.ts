@@ -230,7 +230,7 @@ describe('team send history log & team feed', () => {
       'team acme, session "acme"\n' +
         '  TIME      KIND                           SEAT            DETAIL\n' +
         `  15:30:00  delivered (via typed in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
-        '1 event(s)\n',
+        '1 event\n',
     );
 
     // One envelope, not one line per event; it carries the legs that failed before the typed one.
@@ -520,8 +520,8 @@ describe('team send history log & team feed', () => {
     expect(code).toBe(0);
     expect((followIo.out.match(/^ *TIME +KIND +SEAT +DETAIL$/gm) ?? []).length).toBe(2);
     expect((followIo.out.match(/team acme, session "acme"/g) ?? []).length).toBe(1);
-    expect(followIo.out).toContain('1 event(s)\n');
-    expect(followIo.out).toContain('4 event(s)\n');
+    expect(followIo.out).toContain('1 event\n');
+    expect(followIo.out).toContain('4 events\n');
     expect(followIo.out).toContain(`9:${chunk}`);
     for (let j = 10; j <= 13; j++) {
       expect(followIo.out).toContain(`followed-${String(j)}:${'z'.repeat(240_000)}`);
@@ -569,7 +569,7 @@ describe('team send history log & team feed', () => {
         '  15:00:02  brief      iris -> atlas   handoff note\n' +
         '  15:00:03  delivered  lead -> native  second task line two\n' +
         '  15:00:04  verified   desk -> lead    status check\n' +
-        '4 event(s)\n',
+        '4 events\n',
     );
 
     const seatIo = testIo(root);
@@ -578,7 +578,7 @@ describe('team send history log & team feed', () => {
       'team acme, session "acme"\n' +
         '  TIME      KIND       SEAT            DETAIL\n' +
         '  15:00:01  delivered  lead -> helper  first task\n' +
-        '1 event(s)\n',
+        '1 event\n',
     );
 
     const limitIo = testIo(root);
@@ -618,7 +618,7 @@ describe('team send history log & team feed', () => {
         '  TIME      KIND   SEAT           DETAIL\n' +
         '  15:00:01  brief  iris -> atlas  Round 1: First brief section from Iris.\n' +
         '  15:00:05  brief  atlas -> iris  Round 1 Reply: Reply section from Atlas in the same file.\n' +
-        '2 event(s)\n',
+        '2 events\n',
     );
   });
 
@@ -680,7 +680,7 @@ describe('team send history log & team feed', () => {
         '16:00:02  delivered  keeper -> reviewer    beacon message\n' +
         '16:00:03  accepted   desk -> orchestrator  accepted (req-9)\n' +
         '16:00:04  answered   orchestrator -> desk  gate approved\n' +
-        '4 event(s)\n',
+        '4 events\n',
     );
 
     // Running inside `acme` with `--all`, `--audit`, and `--briefs` flags
@@ -710,7 +710,7 @@ describe('team send history log & team feed', () => {
         '  16:00:04  answered   orchestrator -> desk  gate approved\n' +
         '  16:00:05  brief      desk -> lead          custom brief line\n' +
         '  16:00:06  forwarded  desk -> lead          explicit audit line\n' +
-        '6 event(s)\n',
+        '6 events\n',
     );
 
     // Desk ask/answer and audit files remain untouched (read-only)

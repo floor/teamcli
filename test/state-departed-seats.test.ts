@@ -187,7 +187,7 @@ describe('a state seat the file no longer declares', () => {
     expect(r.out).toContain('difference: the state records the session "gone-one", and no seat of the team is in it');
     expect(r.out).toContain('difference: the state records the session "gone-two", and no seat of the team is in it');
     expect(r.out).toContain('repair: drop its record from the state (team check --repair)');
-    expect(r.out).toContain('4 difference(s), 4 for the owner');
+    expect(r.out).toContain('4 differences, 4 for the owner');
     // A plain check is a read: every record stands where it was.
     expect(seats(w)).toEqual(['helper', 'lead', 'runner']);
     expect(Object.keys(readState(w.dir).sessions).sort()).toEqual(['acme', 'gone-one', 'gone-two']);
@@ -222,7 +222,7 @@ describe('a state seat the file no longer declares', () => {
     expect(fixed.out).toContain('repaired: runner: left the team file and its record claimed pane w2:p1; its record is dropped');
     expect(fixed.out).toContain('repaired: the state\'s session "gone-one" holds no seat of the team; its record is dropped');
     expect(fixed.out).toContain('repaired: the state\'s session "gone-two" holds no seat of the team; its record is dropped');
-    expect(fixed.out).toContain('0 difference(s)');
+    expect(fixed.out).toContain('no differences');
     // The file's own seat is untouched, and the leftovers are gone from the state.
     expect(seats(w)).toEqual(['lead']);
     expect(Object.keys(readState(w.dir).sessions)).toEqual(['acme']);
@@ -234,7 +234,7 @@ describe('a state seat the file no longer declares', () => {
     // The next plain check reads the state the file would have written.
     const after = check(w);
     expect(after.code).toBe(0);
-    expect(after.out).toContain('0 difference(s)');
+    expect(after.out).toContain('no differences');
   });
 
   test('--repair keeps a session a seat of the team lives in, and drops one with none', async () => {

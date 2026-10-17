@@ -95,7 +95,7 @@ the same way.
 
 `list` prints the team's context line, its `TASK  BRANCH  PATH` table — a folder that is gone reads
 `<path> (gone)` — the note line `note: limit <n> (workspace.limit)` and the count
-`<n> worktree(s)`; it writes nothing. `new` prints the context line and
+`1 worktree` / `<n> worktrees`; it writes nothing. `new` prints the context line and
 `worktree <task>: created at <path>`, and `remove` the context line and
 `removed <task>; the branch <branch> is kept` — or, for a record whose folder was already gone,
 `removed the record of <task>; its folder was already gone. No branch was deleted.`

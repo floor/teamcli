@@ -854,7 +854,7 @@ describe('team worktree list', () => {
       'team acme, session "acme"\n' +
       '  TASK  BRANCH  PATH\n' +
       'note: limit 8 (workspace.limit)\n' +
-      '0 worktree(s)\n',
+      '0 worktrees\n',
     );
     expect(existsSync(statePath())).toBe(false);
     expect(existsSync(logPath())).toBe(false);
@@ -872,7 +872,7 @@ describe('team worktree list', () => {
       '  TASK          BRANCH            PATH\n' +
       '  select-width  fix/select-width  ../worktrees/acme/select-width\n' +
       'note: limit 8 (workspace.limit)\n' +
-      '1 worktree(s)\n',
+      '1 worktree\n',
     );
     expect(readFileSync(statePath(), 'utf8')).toBe(stateBefore);
     expect(readFileSync(logPath(), 'utf8')).toBe(logBefore);
@@ -885,7 +885,7 @@ describe('team worktree list', () => {
       '  TASK          BRANCH            PATH\n' +
       '  select-width  fix/select-width  ../worktrees/acme/select-width (gone)\n' +
       'note: limit 8 (workspace.limit)\n' +
-      '1 worktree(s)\n',
+      '1 worktree\n',
     );
     expect(readState(join(project, '.agents')).sessions.acme?.worktrees['select-width']?.branch).toBe('fix/select-width');
     expect(git(project, 'rev-parse', '--verify', 'refs/heads/fix/select-width').trim().length).toBeGreaterThan(0);
@@ -931,7 +931,7 @@ describe('team worktree list', () => {
       '  alpha  fix/alpha  ../worktrees/acme/alpha (gone)\n' +
       '  beta   fix/beta   ../worktrees/acme/beta (gone)\n' +
       'note: limit 8 (workspace.limit)\n' +
-      '2 worktree(s)\n',
+      '2 worktrees\n',
     );
   });
 
@@ -955,7 +955,7 @@ describe('team worktree list', () => {
       'team acme, session "acme"\n' +
       '  TASK  BRANCH  PATH\n' +
       'note: limit 8 (workspace.limit)\n' +
-      '0 worktree(s)\n',
+      '0 worktrees\n',
     );
     const other = await run(['list'], { kind: 'seat', name: 'stranger', pane: 'w2:p1' });
     expect(other.code).toBe(1);

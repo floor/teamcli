@@ -16,6 +16,22 @@ export function assertNoAnsi(text: string): void {
 }
 
 /**
+ * Assert that human-mode command output is free of HTML-escaped entities
+ * (`&lt;`, `&gt;`, `&amp;`), `(s)` template plurals, `--    ` mystery prefix rows,
+ * and raw `$HOME` paths (when `opts.home` is provided).
+ */
+export function assertCleanHumanOutput(text: string, opts?: { home?: string }): void {
+  const plain = stripAnsi(text);
+  expect(plain).not.toMatch(/&(lt|gt|amp);/);
+  expect(plain).not.toContain('(s)');
+  expect(plain).not.toContain('(es)');
+  expect(plain).not.toMatch(/^--\s{2,}/m);
+  if (opts?.home) {
+    expect(plain).not.toContain(opts.home);
+  }
+}
+
+/**
  * Golden-text assertion helper for command plain output:
  * - verifies trailing newline and no ANSI sequences when `tty` is false
  * - verifies exact line-by-line match against `expected` (array of lines or full string)
@@ -127,7 +143,7 @@ export function assertMatchesOutputSchema<T = Record<string, unknown>>(
     ? buildCommandOutputSchema(spec as CommandSchemaSpec)
     : (spec as JsonSchema);
   const violations = validateAgainstJsonSchema(parsed, schema);
-  expect(violations).toEqual([]);
+  expect(violations, rawJson).toEqual([]);
   return parsed as T;
 }
 

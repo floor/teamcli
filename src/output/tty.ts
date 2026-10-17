@@ -49,7 +49,7 @@ const ANSI_STYLE: TtyStyle = {
   red: (text) => wrap('\x1b[31m', '\x1b[39m', text),
   styleState(state) {
     const trimmed = state.trim();
-    if (trimmed === 'stopped' || trimmed === '-' || trimmed === '--') return ANSI_STYLE.dim(state);
+    if (trimmed === 'stopped' || trimmed === '-' || trimmed === '--' || trimmed === 'note') return ANSI_STYLE.dim(state);
     if (
       trimmed === 'missing'
       || trimmed === 'wrong name'

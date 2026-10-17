@@ -223,7 +223,7 @@ describe('the owner\'s one repair', () => {
     expect(out).toContain('repaired: dev-three: re-recorded with the caller gate in force; the dev-mode mark is cleared');
     expect(out).toContain(`repaired: lead: its herdr workspace label is set back to "${TITLES.lead}"`);
     expect(out).toContain('repaired: gone: left the team file and its record claimed pane w9:p1; its record is dropped');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(out).not.toContain('difference:');
     // The two writes are `team register`'s own, from the file alone, and only for the line that
     // drifted: the display lines are the file's, so nothing is reported to herdr for them.
@@ -241,7 +241,7 @@ describe('the owner\'s one repair', () => {
     const { code, out } = check(root, home, { repair: true, writes, displays: { 'dev-one': 'Something Else default' } });
     expect(code).toBe(0);
     expect(out).toContain(`repaired: dev-one: its herdr display is set back to "${DISPLAYS['dev-one']}"`);
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(writes.display).toEqual([['acme', paneOf(1), DISPLAYS['dev-one'] as string]]);
     expect(writes.rename).toEqual([]);
   });
@@ -251,14 +251,14 @@ describe('the owner\'s one repair', () => {
     record(home, root, 'dev-one', { by: DEV_CALLER, dev: true });
     setDevMode(home, root, 'on');
     const before = check(root, home);
-    expect(before.out).toContain('note: 1 seat(s) recorded under dev mode');
+    expect(before.out).toContain('note: 1 seat recorded under dev mode');
     expect(before.out).not.toContain('registered by an agent, not by the owner');
     expect(before.code).toBe(0);
 
     const repaired = check(root, home, { repair: true });
     expect(repaired.code).toBe(0);
     expect(repaired.out).toContain('repaired: dev-one: re-recorded with the caller gate in force; the dev-mode mark is cleared');
-    expect(repaired.out).not.toContain('seat(s) recorded under dev mode');
+    expect(repaired.out).not.toContain('recorded under dev mode');
     expect(findAgent(home, { team: teamIdOf(root), seat: 'dev-one' })?.provenance.dev_mode).toBeUndefined();
   });
 

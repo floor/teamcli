@@ -135,7 +135,7 @@ describe('team plan', () => {
         '  1     open   -      the second title\n' +
         '  2     open   -      the third title\n' +
         '  3     open   -      the first title\n' +
-        '3 task(s)\n',
+        '3 tasks\n',
       err: '',
     });
     const listed = testIo(root);
@@ -146,7 +146,7 @@ describe('team plan', () => {
         '  m1  open   -         the first title\n' +
         '  m2  open   -         the second title\n' +
         '  m3  open   -         the third title\n' +
-        '3 issue(s)\n',
+        '3 issues\n',
     );
     expect(planned.out).not.toBe(listed.out);
     ready(WITH, '- id: z\n  title: the z title\n- id: a\n  title: the a title\n');
@@ -157,7 +157,7 @@ describe('team plan', () => {
         '  STEP  STATE  OWNER  TITLE\n' +
         '  1     open   -      the z title\n' +
         '  2     open   -      the a title\n' +
-        '2 task(s)\n',
+        '2 tasks\n',
     });
     project(`${WITH}  fallback: id\n`);
     list('- id: z\n  title: the z title\n- id: a\n  title: the a title\n');
@@ -169,7 +169,7 @@ describe('team plan', () => {
         '  STEP  STATE  OWNER  TITLE\n' +
         '  1     open   -      the a title\n' +
         '  2     open   -      the z title\n' +
-        '2 task(s)\n',
+        '2 tasks\n',
     });
   });
 
@@ -187,7 +187,7 @@ describe('team plan', () => {
         '  2     open     -      the future title\n' +
         '  3     open     -      the unreadable title\n' +
         '  4     overdue  -      the date-only title\n' +
-        '4 task(s)\n',
+        '4 tasks\n',
       err: '',
     });
     // At the deadline itself the clock has not passed it: the comparison is strictly before now.
@@ -206,7 +206,7 @@ describe('team plan', () => {
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(0);
     expect(listed.out).toBe(
-      'team acme, session "acme"\n  ID    STATE  ASSIGNEE  TITLE\n  past  open   -         the past title\n1 issue(s)\n',
+      'team acme, session "acme"\n  ID    STATE  ASSIGNEE  TITLE\n  past  open   -         the past title\n1 issue\n',
     );
   });
 
@@ -222,7 +222,7 @@ describe('team plan', () => {
       'team acme, session "acme"\n' +
       '  STEP  STATE  OWNER  TITLE\n' +
       '  1     open   -      the task title\n' +
-      '1 task(s)\n';
+      '1 task\n';
     const mine = await run();
     expect(mine).toEqual({ code: 0, out: planned, err: '' });
     const theirs = await run([], worker);
@@ -235,7 +235,7 @@ describe('team plan', () => {
 
   test('an empty queue is one answer, exit 0', async () => {
     ready(WITH, '[]\n');
-    expect(await run()).toEqual({ code: 0, out: 'team acme, session "acme"\n0 task(s)\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: 'team acme, session "acme"\n0 tasks\n', err: '' });
     expect(leaseNames()).toEqual([]);
   });
 
@@ -276,7 +276,7 @@ describe('team plan', () => {
         'team acme, session "acme"\n' +
         '  STEP  STATE  OWNER  TITLE\n' +
         '  1     open   -      the second title\n' +
-        '1 task(s)\n',
+        '1 task\n',
       err: 'team plan: m1 is not a task: title is required\n',
     });
   });
@@ -296,7 +296,7 @@ describe('team plan', () => {
         'team acme, session "acme"\n' +
         '  STEP  STATE  OWNER  TITLE\n' +
         '  1     open   -      the task title\n' +
-        '1 task(s)\n',
+        '1 task\n',
       err: '',
     });
   });
@@ -402,7 +402,7 @@ describe('team plan over the broker', () => {
           'team acme, session "acme"\n' +
           '  STEP  STATE  OWNER  TITLE\n' +
           '  1     open   -      the task title\n' +
-          '1 task(s)\n',
+          '1 task\n',
         err: 'team plan: the tracker holds more tasks than this read; the take still proceeds\n',
       });
     } finally {

@@ -160,11 +160,11 @@ describe('team check omits the footer on every run; team doctor and team --about
     ]);
   });
 
-  test('nothing wrong: ends with 0 difference(s) and omits NOT_PRETENDED and not known', async () => {
+  test('nothing wrong: ends with no differences and omits NOT_PRETENDED and not known', async () => {
     const ran = await runCheck(running());
     expect(ran.code).toBe(0);
     expect(ran.err).toBe('');
-    expect(ran.out).toBe('team beacon, session "beacon"\n0 difference(s)\n');
+    expect(ran.out).toBe('team beacon, session "beacon"\nno differences\n');
     expect(ran.out).not.toContain(NOT_KNOWN);
     expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
@@ -181,7 +181,7 @@ describe('team check omits the footer on every run; team doctor and team --about
         'difference: claude-beacon is in the file and is not running\n' +
         '  repair: the owner runs team up\n' +
         '  who: the owner\n' +
-        '2 difference(s), 2 for the owner\n',
+        '2 differences, 2 for the owner\n',
     );
     expect(ran.out).not.toContain(NOT_KNOWN);
     expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
@@ -193,14 +193,14 @@ describe('team status omits the footer on every run; team --about prints NOT_PRE
     const ran = await status(running());
     expect(ran.code).toBe(0);
     expect(ran.err).toBe('');
-    expect(ran.out).toEndWith('0 difference(s)\n');
+    expect(ran.out).toEndWith('no differences\n');
     expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 
   test('a status reading with differences ends with the summary count and omits the footer', async () => {
     const ran = await status(down);
     expect(ran.code).toBe(1);
-    expect(ran.out).toEndWith('2 difference(s), 2 for the owner\n');
+    expect(ran.out).toEndWith('2 differences, 2 for the owner\n');
     expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 

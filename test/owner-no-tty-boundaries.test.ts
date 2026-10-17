@@ -597,7 +597,7 @@ describe('the owner at a terminal outside herdr still passes', () => {
     // its own file writes.
     expect(io.out).toContain('  SEAT  NICKNAME  ROLE         PROJECT  REACH\n');
     expect(io.out).toContain('  lead  -         coordinator  acme     socket\n');
-    expect(io.out).toContain('1 seat(s)\n');
+    expect(io.out).toContain('1 seat\n');
   });
 });
 

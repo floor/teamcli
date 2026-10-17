@@ -888,7 +888,7 @@ scene('check.ok', async (place) => {
     // difference the check reports, so a healthy team's pane says what it is.
     screens: { 'w1:p1': IDLE },
   };
-  return show(await checked(place, [], owner, checkSources(matched, approvalStanding(place.root, place.home))), '0 difference(s)');
+  return show(await checked(place, [], owner, checkSources(matched, approvalStanding(place.root, place.home))), 'no differences');
 });
 scene('check.findings', async (place) => {
   write(place, TEAM);
@@ -1701,7 +1701,7 @@ scene('status.agrees', async (place) => {
   };
   approve(place, TEAM);
   const standing = approvalStanding(place.root, place.home);
-  return show(await status(place, [], statusSources(matched, standing)), '0 difference');
+  return show(await status(place, [], statusSources(matched, standing)), 'no differences');
 });
 scene('status.difference', async (place) => {
   write(place, TEAM);
@@ -1728,7 +1728,7 @@ scene('status.project-listed', async (place) => {
   });
   const ran = await status(place, ['--project', 'TeamCLI'], { ...statusSources(quiet), projects: projectSources(), home: place.home });
   expect(ran.out).toContain('project TeamCLI  4f2a1b7c9d0e');
-  expect(ran.out).toContain(`  ${TEAM_A}  session "teamcli"  defined  1 seat(s)`);
+  expect(ran.out).toContain(`  ${TEAM_A}  session "teamcli"  defined  1 seat`);
   expect(ran.out).toContain(`  ${TEAM_B}  not registered`);
   return show(ran, 'lead agt_2b9f');
 });
@@ -1746,7 +1746,7 @@ scene('projects.invocation', async (place) => show(await projects(place, ['extra
 scene('projects.listed', async (place) => {
   const empty = await projects(place, [], { ...projectSources(), list: () => [] });
   expect(empty.code).toBe(0);
-  expect(empty.out).toBe('ID  NAME  ENTITY  LEAD  TEAMS\n0 project(s)\n');
+  expect(empty.out).toBe('ID  NAME  ENTITY  LEAD  TEAMS\n0 projects\n');
   const ran = await projects(place, [], projectSources());
   expect(ran.out).toContain('TeamCLI');
   expect(ran.out).toContain(TEAM_A);
@@ -2071,7 +2071,7 @@ async function listed(place: Place, argv: string[], sources: ListSources): Promi
 const noTeam: ListSources = { sessions: () => [], roster: () => [], team: () => null };
 scene('list.invocation', async (place) => show(await listed(place, ['--nope'], noTeam), 'unknown option'), false);
 scene('list.herdr-down', async (place) => show(await listed(place, [], { ...noTeam, sessions: () => null }), 'herdr is not running'), false);
-scene('list.empty', async (place) => show(await listed(place, [], noTeam), 'no running sessions\n0 session(s)'), false);
+scene('list.empty', async (place) => show(await listed(place, [], noTeam), 'no running sessions\n0 sessions'), false);
 scene('list.shown', async (place) => show(await listed(place, [], {
   sessions: () => [{ name: 'acme', running: true }],
   roster: () => [],
@@ -2272,7 +2272,7 @@ scene('worktree.created', async (place) => {
 });
 scene('worktree.listed', async (place) => {
   approve(place, worktreeText());
-  return show(await worktree(place, ['list']), '0 worktree(s)');
+  return show(await worktree(place, ['list']), '0 worktrees');
 });
 scene('worktree.remove-task', async (place) => {
   approve(place, worktreeText());
@@ -2718,7 +2718,7 @@ async function issued(place: Place, argv: string[] = []): Promise<Ran> {
 scene('issues.none', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '[]\n');
-  return show(await issued(place), '0 issue(s)');
+  return show(await issued(place), '0 issues');
 });
 scene('issues.shown', async (place) => {
   write(place, TASKS);
@@ -2827,7 +2827,7 @@ scene('proc.done', async (place) => {
 });
 scene('proc.listed', async (place) => {
   write(place, TEAM);
-  return show(await proced(place, ['list']), '0 process(es)');
+  return show(await proced(place, ['list']), '0 processes');
 });
 scene('proc.caller', async (place) => {
   write(place, TEAM);
@@ -3130,7 +3130,7 @@ scene('plan.none', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '[]\n');
   recordLead(place);
-  return show(await planned(place), '0 task(s)');
+  return show(await planned(place), '0 tasks');
 });
 scene('plan.shown', async (place) => {
   write(place, TASKS);
@@ -3396,7 +3396,7 @@ async function fed(place: Place, argv: string[]): Promise<Ran> {
 
 scene('feed.ok', async (place) => {
   write(place, TEAM);
-  return show(await fed(place, []), '0 event(s)');
+  return show(await fed(place, []), '0 events');
 });
 scene('feed.unreadable', async (place) => {
   write(place, TEAM);

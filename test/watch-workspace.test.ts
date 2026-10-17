@@ -323,7 +323,7 @@ describe('`team check` and the heartbeat', () => {
     record({ pid: 4242, pane: 'w9:p1', workspace: 'w9', heartbeat: new Date(NOW.getTime() - 300_000).toISOString() });
     const { code, out } = check(NOW);
     expect(code).toBe(1);
-    expect(out).toContain(`difference: the watch's last pass was 5 minute(s) ago\n  repair: team watch --session ${SESSION}`);
+    expect(out).toContain(`difference: the watch's last pass was 5 minutes ago\n  repair: team watch --session ${SESSION}`);
   });
 
   test('the edge holds: exactly two cycles is not yet a difference', () => {

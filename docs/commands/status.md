@@ -55,7 +55,7 @@ pid <n>, last heartbeat <age>` — where it runs, whose process it is once a pas
 (`pid not recorded yet` in the moment between `up` and that first pass, `pane not recorded` for a
 watch that has not seen itself in a pane), and how old its last heartbeat is. When every seat is
 running and that heartbeat is older than two in-force intervals, the reading also carries the
-difference `the watch's last pass was <n> minute(s) ago`, repaired with `team watch --session
+difference `the watch's last pass was <n> minutes ago`, repaired with `team watch --session
 <session>`, which starts the watch in its workspace again.
 
 ## Synopsis
@@ -96,8 +96,8 @@ invocation refusal, exit 2.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| no difference | the seats table, the `budgets:` table when the file names an account or a reading is stored, one `note:` line per note, then `0 difference(s)` | 0 |
-| at least one difference | the same, then one `difference:` line with its `  repair:` and `  who:` lines under it per difference, and the count: `1 difference(s)`, or `2 difference(s), 1 for the owner` when a repair is the owner's | 1 |
+| no difference | the seats table, the `budgets:` table when the file names an account or a reading is stored, one `note:` line per note, then `no differences` | 0 |
+| at least one difference | the same, then one `difference:` line with its `  repair:` and `  who:` lines under it per difference, and the count: `1 difference`, or `2 differences, 1 for the owner` when a repair is the owner's | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | `--project` with a name no project holds | `team status: no project named "<name>"; nothing to show` | 1 |
 | `--project` covering a project | the project's name, id, entity and lead, then one line per team: its session, lifecycle and seat count, or `not registered` for a team no record holds | 0 |
@@ -229,12 +229,12 @@ note: watch: pane w9:p1, pid 4242, last heartbeat 0s ago
 difference: claude-keeper is in the file and is not running
   repair: team restart claude-keeper
   who: the team's lead
-1 difference(s)
+1 difference
 exit 1
 ```
 
 Each difference names both the repair command (`repair:`) and the role that runs it (`who:`).
-The `what 0.5.0 must not pretend:` block and its `Integrity, not authority` line live on
+The `what 0.5.0 must not pretend:` block and its first line live on
 `team --about` and [`team doctor`](doctor.md), not on every status read.
 
 `--project` covers the teams the registry lists under a project, wherever they run. A team no

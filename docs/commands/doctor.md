@@ -31,15 +31,15 @@ them are done; the last line counts those.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| nothing is missing; warnings do not change this | one line per finding, its level (`ok  `, `warn`, `MISS`, `--  `) first, then the count: `team doctor: nothing missing, 1 warning` | 0 |
-| at least one `MISS` | the same report, then the count — `team doctor: <n> missing, <w> warning(s)` — and `: <n> of them block \`up\` and \`add\`` when any missing one blocks | 1 |
+| nothing is missing; warnings do not change this | one line per finding, its level (`ok  `, `warn`, `MISS`, `note`) first, then the count: `team doctor: nothing missing, 1 warning` | 0 |
+| at least one `MISS` | the same report, then the count — `team doctor: <n> missing, <w> warning` / `<w> warnings` — and `: <n> of them block \`up\` and \`add\`` when any missing one blocks | 1 |
 | the invocation or the team file can't be read | `team doctor: <problem>`, with the usage for the invocation | 2 |
 
 Every line it prints is cleaned first: escape sequences, control characters and invisible format
 characters carried by the team file, a pane or a CLI's own output are removed, so a value can
 never move the cursor, paint the terminal or open a second line.
 
-A hold on the team ([team hold](hold.md)) is the last `--  ` line before the summary:
+A hold on the team ([team hold](hold.md)) is the last `note` line before the summary:
 `hold: <reason>`, or `hold until <instant>: <reason>`, naming `team hold --release` as what clears
 it. It is a note: the summary's counts do not move, and no exit changes. A hold past its `until`
 reads as none, so a lapsed one is not printed.
@@ -104,7 +104,7 @@ warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, 
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
---    session beacon is running
+note  session beacon is running
 ok    claude 2.1.288
 ok    claude-code: logged in
 ok    the watch is running

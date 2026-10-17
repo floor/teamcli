@@ -32,6 +32,7 @@ import { resolveLobby } from '../lobby/gate.ts';
 import {
   collapseNotes,
   contextLine,
+  pluralCount,
   renderDeprecationWarnings,
   renderDifferences,
   renderNotes,
@@ -367,8 +368,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     io.stdout(`${contextLine(team.project, session)}\n`);
     for (const warning of warnings) io.stdout(`${warning}\n`);
     for (const line of repaired) io.stdout(`repaired: ${line}\n`);
-    for (const line of renderNotes(notes)) io.stdout(`${line}\n`);
-    for (const line of renderDifferences(differences, style)) io.stdout(`${line}\n`);
+    for (const line of renderNotes(notes, { home: sources.home })) io.stdout(`${line}\n`);
+    for (const line of renderDifferences(differences, style, sources.home)) io.stdout(`${line}\n`);
     io.stdout(`${renderSummary(differences)}\n`);
   }
   if (differences.length > 0) {
@@ -527,7 +528,7 @@ function devModeDifferences(
       repair: `re-record the seat with the caller gate in force (team register ${seat.name})`,
     });
   }
-  return { differences: out, notes: marked > 0 ? [`${marked} seat(s) recorded under dev mode`] : [] };
+  return { differences: out, notes: marked > 0 ? [`${pluralCount(marked, 'seat')} recorded under dev mode`] : [] };
 }
 
 /**
@@ -944,9 +945,10 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
       }),
     );
     if (res.refused.some((r) => r.level === 'team')) {
+      const extra = team.deliveryOrder.filter((leg) => !res.value.includes(leg)).length;
       out.push({
         what: `delivery_order [${team.deliveryOrder.join(', ')}] in .agents/team.yaml is set aside; [${res.value.join(', ')}] stands`,
-        repair: 'drop the leg(s) not in the inherited delivery_order in .agents/team.yaml',
+        repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order in .agents/team.yaml`,
         owner: true,
       });
     }
@@ -962,9 +964,10 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
       }),
     );
     if (res.refused.some((r) => r.level === 'seat')) {
+      const extra = seat.deliveryOrder.filter((leg) => !res.value.includes(leg)).length;
       out.push({
         what: `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in .agents/team.yaml is set aside; [${res.value.join(', ')}] stands`,
-        repair: `drop the leg(s) not in the inherited delivery_order for ${seat.name} in .agents/team.yaml`,
+        repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order for ${seat.name} in .agents/team.yaml`,
         owner: true,
       });
     }

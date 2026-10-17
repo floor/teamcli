@@ -151,7 +151,7 @@ describe('the dialogs section the 0.4 line wrote', () => {
     );
     // A warning is not a difference: nothing to count, nothing to fail, no change to the exit.
     expect(out).not.toContain('difference:');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -159,7 +159,7 @@ describe('the dialogs section the 0.4 line wrote', () => {
     const { root, home } = place(teamYaml());
     const { code, out } = check(root, home);
     expect(out).not.toContain('warning:');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 

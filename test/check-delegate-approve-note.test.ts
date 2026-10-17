@@ -129,7 +129,7 @@ describe('a delegate entry naming approve', () => {
     expect(out).toContain(NOTE);
     // A note is not a difference: nothing to count, nothing to fail, no repair line of its own.
     expect(out).not.toContain('difference:');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -137,7 +137,7 @@ describe('a delegate entry naming approve', () => {
     const root = place(CLEAN);
     const { code, out } = check(root);
     expect(out).not.toContain('note:');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -149,7 +149,7 @@ describe('a delegate entry naming approve', () => {
     expect(out.indexOf('note: ')).toBeLessThan(out.indexOf('difference: '));
     // The drift is the one difference; the note is in neither the total nor the exit code.
     expect(out).toContain(`difference: lead: its herdr workspace label reads "stale title", the file says "${TITLE}"`);
-    expect(out).toContain('1 difference(s)');
+    expect(out).toContain('1 difference');
     expect(code).toBe(1);
   });
 
@@ -170,9 +170,28 @@ describe('a delegate entry naming approve', () => {
     });
     expect(code).toBe(1);
     expect(io.out).toContain('difference: lead: delivery_order [native, typed] in .agents/team.yaml is set aside; [typed] stands\n');
-    expect(io.out).toContain('  repair: drop the leg(s) not in the inherited delivery_order for lead in .agents/team.yaml\n');
+    expect(io.out).toContain('  repair: drop the 1 leg not in the inherited delivery_order for lead in .agents/team.yaml\n');
     expect(io.out).toContain('  who: the owner\n');
-    expect(io.out).toContain('1 difference(s), 1 for the owner\n');
+    expect(io.out).toContain('1 difference, 1 for the owner\n');
+    expect(io.out).not.toContain('(s)');
+
+    const withTwoExtraLegs = [
+      ...HEAD.trimEnd().split('\n'),
+      '    delivery_order: [native, mcp-inbox, typed]',
+      'delivery_order: [typed]',
+      '',
+    ].join('\n');
+    const root2 = place(withTwoExtraLegs);
+    const io2 = testIo(root2, { kind: 'owner' });
+    const code2 = runTeamCheck({}, io2, {
+      live: () => live(TITLE),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' }),
+      now: () => NOW,
+    });
+    expect(code2).toBe(1);
+    expect(io2.out).toContain('  repair: drop the 2 legs not in the inherited delivery_order for lead in .agents/team.yaml\n');
+    expect(io2.out).not.toContain('(s)');
 
     const jsonIo = testIo(root, { kind: 'owner' });
     const jsonCode = runTeamCheck({ json: true }, jsonIo, {

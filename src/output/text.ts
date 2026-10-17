@@ -1,7 +1,41 @@
+import { homedir } from 'node:os';
 import { GRANT_SCOPES } from '../file/types.ts';
 import { plainLine } from '../launch/plain.ts';
 import { COMMAND_GATES } from '../permissions/map.ts';
 import { ttyStyle, type TtyStyle } from './tty.ts';
+
+/**
+ * Formats a filesystem path or human-facing text so that any path under `home` (`$HOME`)
+ * is displayed with a `~` prefix (`~/.config/team/lobby` instead of `/Users/name/.config/team/lobby`),
+ * while JSON output keeps absolute paths.
+ */
+export function displayPath(text: string, home: string = homedir()): string {
+  const cleanHome = home.endsWith('/') && home.length > 1 ? home.slice(0, -1) : home;
+  if (!cleanHome || cleanHome === '/') return text;
+  if (text === cleanHome) return '~';
+  if (text.startsWith(`${cleanHome}/`)) return `~${text.slice(cleanHome.length)}`;
+  const escaped = cleanHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text.replace(new RegExp(`(?<=^|[\\s"'(\`[])${escaped}(?=$|/|[:\\s"',;.)\\]\`])`, 'g'), '~');
+}
+
+export interface PluralCountOptions {
+  readonly zero?: '0' | 'no';
+}
+
+/**
+ * Formats a count and noun using real plurals and plain words (`1 difference`, `3 differences`,
+ * `4 seats`, `no differences` when `options?.zero === 'no'`, or `0 seats` by default) — never `(s)`.
+ */
+export function pluralCount(
+  count: number,
+  singular: string,
+  plural: string = `${singular}s`,
+  options?: PluralCountOptions,
+): string {
+  if (count === 0 && options?.zero === 'no') return `no ${plural}`;
+  return count === 1 ? `1 ${singular}` : `${count} ${plural}`;
+}
+
 
 /**
  * Closed vocabulary for `who: <who>` on every difference repair:
@@ -180,8 +214,8 @@ export function collapseNotes(notes: readonly string[], opts?: CollapseNotesOpti
 }
 
 /** Formats notes as `note: <collapsed>` lines. */
-export function renderNotes(notes: readonly string[], opts?: CollapseNotesOptions): string[] {
-  return collapseNotes(notes, opts).map((note) => `note: ${note}`);
+export function renderNotes(notes: readonly string[], opts?: CollapseNotesOptions & { readonly home?: string }): string[] {
+  return collapseNotes(notes, opts).map((note) => `note: ${displayPath(note, opts?.home)}`);
 }
 
 const REPAIR_TEAM_COMMAND = /\bteam\s+([a-z][a-z0-9-]*)\b/;
@@ -249,9 +283,9 @@ export function whoOfDifference(diff: OutputDifference): DifferenceWho {
  * When `style.enabled` is true, only the `difference:` prefix is coloured red (`style.red('difference:')`);
  * `<what>`, `repair:`, and `who:` remain uncoloured plain text.
  */
-export function renderDifference(diff: OutputDifference, style: TtyStyle = ttyStyle(false)): string[] {
-  const what = plainLine(diff.what);
-  const repair = plainLine(diff.repair);
+export function renderDifference(diff: OutputDifference, style: TtyStyle = ttyStyle(false), home?: string): string[] {
+  const what = displayPath(plainLine(diff.what), home);
+  const repair = displayPath(plainLine(diff.repair), home);
   const who = plainLine(whoOfDifference(diff));
   const head = style.enabled ? `${style.red('difference:')} ${what}` : `difference: ${what}`;
   return [
@@ -262,8 +296,8 @@ export function renderDifference(diff: OutputDifference, style: TtyStyle = ttySt
 }
 
 /** Renders all differences in order. */
-export function renderDifferences(diffs: readonly OutputDifference[], style: TtyStyle = ttyStyle(false)): string[] {
-  return diffs.flatMap((diff) => renderDifference(diff, style));
+export function renderDifferences(diffs: readonly OutputDifference[], style: TtyStyle = ttyStyle(false), home?: string): string[] {
+  return diffs.flatMap((diff) => renderDifference(diff, style, home));
 }
 
 export interface DifferenceSummaryCounts {
@@ -291,14 +325,15 @@ export function summaryCounts(diffs: readonly OutputDifference[]): DifferenceSum
 
 /**
  * Renders the single closing summary line for a reading:
- * `0 difference(s)`, `<n> difference(s)`, or `<n> difference(s), <m> for the owner`.
+ * `no differences`, `<n> difference` / `<n> differences`, or `<n> difference` / `<n> differences, <m> for the owner`.
  */
 export function renderSummary(diffs: readonly OutputDifference[]): string {
   const { differences, owner_differences } = summaryCounts(diffs);
+  const head = pluralCount(differences, 'difference', 'differences', { zero: 'no' });
   if (owner_differences > 0) {
-    return `${differences} difference(s), ${owner_differences} for the owner`;
+    return `${head}, ${owner_differences} for the owner`;
   }
-  return `${differences} difference(s)`;
+  return head;
 }
 
 /**
@@ -321,7 +356,7 @@ export function formatRelativeTime(iso: string | null | undefined, now: Date): s
 
 /**
  * Single severity vocabulary for diagnostic/prerequisite rows (`team doctor`, `team mcp doctor`):
- * `ok` (`ok  `), `warn` (`warn`), `miss` (`MISS`), and `note` (`--  `).
+ * `ok` (`ok  `), `warn` (`warn`), `miss` (`MISS`), and `note` (`note`).
  */
 export const SEVERITY_LEVELS = ['ok', 'warn', 'miss', 'note'] as const;
 export type SeverityLevel = (typeof SEVERITY_LEVELS)[number];
@@ -330,7 +365,7 @@ export const SEVERITY_LABELS: Readonly<Record<SeverityLevel, string>> = {
   ok: 'ok  ',
   warn: 'warn',
   miss: 'MISS',
-  note: '--  ',
+  note: 'note',
 };
 
 export interface OutputFinding {
@@ -339,10 +374,11 @@ export interface OutputFinding {
 }
 
 /** Renders a diagnostic finding line (`<label>  <text>`) with optional TTY state colouring on the label. */
-export function renderFinding(finding: OutputFinding, style: TtyStyle = ttyStyle(false)): string {
+export function renderFinding(finding: OutputFinding, style: TtyStyle = ttyStyle(false), home?: string): string {
   const rawLabel = SEVERITY_LABELS[finding.level];
   const label = style.enabled ? style.styleState(rawLabel) : rawLabel;
-  const text = finding.text.includes('\n') ? finding.text.split('\n').map(plainLine).join('\n') : plainLine(finding.text);
+  const cleaned = finding.text.includes('\n') ? finding.text.split('\n').map(plainLine).join('\n') : plainLine(finding.text);
+  const text = displayPath(cleaned, home);
   return `${label}  ${text}`;
 }
 

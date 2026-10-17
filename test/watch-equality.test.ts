@@ -239,7 +239,7 @@ function oldPass(
     if (chosen) {
       nudge = { pane: chosen.pane, text: OLD_NUDGE_TEXT, pending: memory.pending.slice(), seat: chosen.seat, cli: chosen.cli };
     } else if (now - memory.pendingSince >= team.watch.nudgeWait * 1000) {
-      fallback = `no idle seat could be nudged for ${oldMinutes(now - memory.pendingSince)} minutes; ${memory.pending.length} report(s) wait: ${memory.pending.join('; ')}`;
+      fallback = `no idle seat could be nudged for ${oldMinutes(now - memory.pendingSince)} minutes; ${memory.pending.length} ${memory.pending.length === 1 ? 'report' : 'reports'} wait: ${memory.pending.join('; ')}`;
     }
     if (nudge || fallback) {
       memory.pending = [];

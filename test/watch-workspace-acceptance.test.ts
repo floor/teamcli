@@ -307,13 +307,13 @@ describe('the watch in its own workspace', () => {
     const stale = testIo(root, { kind: 'owner' });
     expect(runTeamCheck({ file: '.agents/team.yaml' }, stale, checkSources(live))).toBe(1);
     expect(`${stale.out}${stale.err}`).toContain(
-      `difference: the watch's last pass was 5 minute(s) ago\n  repair: team watch --session ${SESSION}\n`,
+      `difference: the watch's last pass was 5 minutes ago\n  repair: team watch --session ${SESSION}\n`,
     );
     // Inside the two intervals there is nothing to repair.
     seed(new Date(NOW.getTime() - 60_000).toISOString(), { pane: 'w9:p1', workspace: 'w9', pid: 4242 });
     const fresh = testIo(root, { kind: 'owner' });
     expect(runTeamCheck({ file: '.agents/team.yaml' }, fresh, checkSources(live))).toBe(0);
     expect(`${fresh.out}${fresh.err}`).not.toContain("the watch's last pass was");
-    expect(`${fresh.out}${fresh.err}`).toContain('0 difference(s)');
+    expect(`${fresh.out}${fresh.err}`).toContain('no differences');
   });
 });

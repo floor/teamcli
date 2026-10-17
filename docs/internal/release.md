@@ -174,7 +174,7 @@ package material, version 3.0.2
   github     pass     published release matches SemVer channel
   changelog  pass     changelog entry has a valid release date
 warn  npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next
-4 check(s), 1 missing
+4 checks, 1 missing
 exit 1
 ```
 
@@ -191,7 +191,7 @@ package widgets, version 3.0.2
   changelog  pass   changelog entry has a valid release date
   linear     pass   Linear milestone is complete and a qualifying status update exists
   activity   pass   public activity marker found
-6 check(s), 0 missing
+6 checks, 0 missing
 exit 0
 ```
 

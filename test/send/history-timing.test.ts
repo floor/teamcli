@@ -132,7 +132,7 @@ test('team feed names the path and the milliseconds, and leaves an unmeasured li
       '  TIME      KIND                              SEAT            DETAIL\n' +
       '  15:30:00  delivered (via socket in 812 ms)  lead -> helper  took the socket\n' +
       '  15:30:01  delivered                         helper -> lead  plain\n' +
-      '2 event(s)\n',
+      '2 events\n',
   );
 
   const json = testIo(root);

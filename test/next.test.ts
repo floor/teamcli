@@ -160,7 +160,7 @@ describe('team next', () => {
       'team acme, session "acme"\n' +
         '  ID  STATE  ASSIGNEE  TITLE\n' +
         '  m1  open   -         the task title\n' +
-        '1 issue(s)\n',
+        '1 issue\n',
     );
   });
 
@@ -334,7 +334,7 @@ describe('team next', () => {
       'team acme, session "acme"\n' +
         '  ID  STATE  ASSIGNEE  TITLE\n' +
         '  m1  open   -         first version\n' +
-        '1 issue(s)\n',
+        '1 issue\n',
     );
     expect(listed.err).toBe('team issues: m1 is not a task: its id repeats an earlier record\n');
     expect(await run(['--release'])).toEqual({ code: 0, out: `${CTX}team next: released m1\n`, err: '' });

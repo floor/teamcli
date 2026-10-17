@@ -122,12 +122,12 @@ describe("a file whose entity no longer derives the registry's lobby", () => {
     record(root, home, 'Acme');
     const { code, out } = check(root, home);
     expect(out).toContain(
-      `note: the file's entity derives the lobby ${join(home, '.config', 'team', 'lobbies', 'fleet')}, `
-      + `and the registry records ${join(home, '.config', 'team', 'lobbies', 'acme')}: the recorded lobby stands`,
+      'note: the file\'s entity derives the lobby ~/.config/team/lobbies/fleet, '
+      + 'and the registry records ~/.config/team/lobbies/acme: the recorded lobby stands',
     );
     // A note is not a difference: nothing to count, nothing to fail, no repair line of its own.
     expect(out).not.toContain('difference:');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -136,7 +136,7 @@ describe("a file whose entity no longer derives the registry's lobby", () => {
     record(root, home, 'Acme');
     const { code, out } = check(root, home);
     expect(out).not.toContain('note:');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -144,7 +144,7 @@ describe("a file whose entity no longer derives the registry's lobby", () => {
     const { root, home } = place(teamYaml('fleet'));
     const { code, out } = check(root, home);
     expect(out).not.toContain('note:');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -154,7 +154,7 @@ describe("a file whose entity no longer derives the registry's lobby", () => {
     record(root, home, 'Zeta', 'beta');
     const { code, out } = check(root, home);
     expect(out).not.toContain('note:');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 });

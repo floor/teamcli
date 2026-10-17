@@ -184,7 +184,7 @@ describe('only the owner runs the checks', () => {
       throw new Error('no check may run');
     });
     expect(ran).toEqual([]);
-    expect(io.out).toContain('--    the budget checks were not run: only the owner runs them');
+    expect(io.out).toContain('note  the budget checks were not run: only the owner runs them');
     expect(io.out).not.toContain('the check for openai reads');
     expect(io.out).not.toContain('team approve');
     expect(io.out).not.toContain('the file is the one the owner approved');
@@ -200,7 +200,7 @@ describe('only the owner runs the checks', () => {
       throw new Error('no check may run');
     });
     expect(ran).toEqual([]);
-    expect(io.out).toContain('--    the budget checks were not run: only the owner runs them');
+    expect(io.out).toContain('note  the budget checks were not run: only the owner runs them');
   });
 
   test('a file no account names a check for needs no such line', async () => {

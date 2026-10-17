@@ -9,6 +9,7 @@ import { plainLine } from '../launch/plain.ts';
 import {
   contextLine,
   hasJsonFlag,
+  pluralCount,
   renderTable,
   ttyStyle,
   writeJson,
@@ -500,7 +501,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       io.stdout(`\x1b[2J\x1b[H`);
       io.stdout(`Every 2s: team seats${all ? ' --all' : ''} (${plainLine(session)})  ${now.toISOString()}\n\n${rendered}`);
     } else {
-      io.stdout(`${contextLine(team.project, session)}\n${rendered}${rows.length} seat(s)\n`);
+      io.stdout(`${contextLine(team.project, session)}\n${rendered}${pluralCount(rows.length, 'seat')}\n`);
     }
     if (!watching) break;
     if (!(await wait(2))) break;

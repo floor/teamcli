@@ -46,7 +46,7 @@ const SHOWN = `team acme, session "acme"
 lead/m1:
 ${BODY}
 
-1 message(s)
+1 message
 `;
 
 let base: string;
@@ -99,7 +99,7 @@ describe('team messages', () => {
     const result = await run();
     expect(result).toEqual({
       code: 0,
-      out: 'team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 message(s)\n',
+      out: 'team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n',
       err: '',
     });
     expect(existsSync(messageKeyPath(home))).toBe(false);
@@ -144,7 +144,7 @@ describe('team messages', () => {
     const again = await run();
     expect(again).toEqual({
       code: 0,
-      out: 'team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 message(s)\n',
+      out: 'team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n',
       err: '',
     });
     expect(readFileSync(receiptFile(record.root, 'lead', 'm1'), 'utf8')).toBe(receipt);
@@ -164,7 +164,7 @@ difference: lead/m1 does not verify: the signature is not the message key's
   repair: remove .agents/messages/lead/m1.json, or have the sender re-send it
   who: any seat
 
-1 message(s)
+1 message
 `);
     expect(result.err).toBe('');
     expect(existsSync(receiptFile(record.root, 'lead', 'm1'))).toBe(false);
@@ -185,7 +185,7 @@ difference: lead/m2 does not verify: its id is m1, and the filename is the id
   repair: move .agents/messages/lead/m2.json to .agents/messages/lead/m1.json, or remove it
   who: any seat
 
-1 message(s)
+1 message
 `);
     expect(result.err).toBe('');
     expect(existsSync(receiptFile(record.root, 'lead', 'm2'))).toBe(false);
@@ -205,7 +205,7 @@ difference: worker/m1 does not verify: it is addressed to lead
   repair: move .agents/messages/worker/m1.json to .agents/messages/lead/m1.json, or remove it
   who: any seat
 
-1 message(s)
+1 message
 `);
     expect(result.err).toBe('');
     expect(existsSync(receiptFile(record.root, 'worker', 'm1'))).toBe(false);
@@ -225,7 +225,7 @@ difference: lead/m1 does not verify: it is bound to another checkout
   repair: remove .agents/messages/lead/m1.json: it is bound to another checkout
   who: any seat
 
-1 message(s)
+1 message
 `);
     expect(rootRefusal.err).toBe('');
     expect(existsSync(receiptFile(found, 'lead', 'm1'))).toBe(false);
@@ -240,7 +240,7 @@ difference: lead/m1 does not verify: it is bound to session "other"
   repair: remove .agents/messages/lead/m1.json: it is bound to another session
   who: any seat
 
-1 message(s)
+1 message
 `);
     expect(sessionRefusal.err).toBe('');
     expect(existsSync(receiptFile(found, 'lead', 'm1'))).toBe(false);
@@ -263,7 +263,7 @@ difference: lead/m1 does not verify: the record is not a message
   repair: remove .agents/messages/lead/m1.json, or restore it from the sender
   who: any seat
 
-1 message(s)
+1 message
 `);
     expect(result.err).toBe('');
     expect(existsSync(receiptFile(found, 'lead', 'm1'))).toBe(false);
@@ -283,7 +283,7 @@ difference: lead/m1 does not verify: the record is not a message
     const rows = seats.map((seat) => `  m1  harness  ${seat.padEnd(11)}  0s ago  shown`).join('\n');
     const bodies = seats.map((seat) => `${seat}/m1:\nbody from ${seat}\n`).join('\n');
     expect(result.out).toBe(
-      `team acme, session "acme"\n  ID  FROM     TO           SENT    STATUS\n${rows}\n\n${bodies}\n5 message(s)\n`,
+      `team acme, session "acme"\n  ID  FROM     TO           SENT    STATUS\n${rows}\n\n${bodies}\n5 messages\n`,
     );
   });
 

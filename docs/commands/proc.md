@@ -152,7 +152,7 @@ team beacon, session "beacon"
   NAME           BY           SINCE                     PID   NOTE
   release-build  claude-desk  2026-10-04T09:00:00.000Z  4243  the release build
   release-watch  owner        2026-10-04T09:00:00.000Z  -     the release CI run
-2 process(es)
+2 processes
 ```
 
 `--json` is the same records as a document, in the order the rows are printed:
@@ -200,7 +200,7 @@ team beacon, session "beacon"
   claude-desk    idle   Claude Opus 5.5  w2:p1  typed
 note: watch: pane w9:p1, pid 4242, last heartbeat 0s ago
 note: proc release-watch: owner since 2026-10-04T09:00:00.000Z
-0 difference(s)
+no differences
 ```
 
 The seats table's last column is the word for the channel a send would take to reach each seat —
@@ -239,7 +239,7 @@ proc release-watch: done
 $ team proc list
 team beacon, session "beacon"
   NAME  BY  SINCE  PID  NOTE
-0 process(es)
+0 processes
 $ team proc add build/step ; echo "exit $?"
 team proc: "build/step" is a name, not a path: lowercase letters, digits and hyphens
 Usage: team proc add <name> [--pid <pid>] [--note <text>] [--json]

@@ -50,7 +50,7 @@ level vocabulary every report uses:
 | `ok  ` | as it should be |
 | `warn` | worth knowing |
 | `MISS` | a leg is down; `status` exits 1 |
-| `--  ` | neither: a note |
+| `note` | neither: a note |
 
 ```console
 $ team mcp status ; echo "exit $?"

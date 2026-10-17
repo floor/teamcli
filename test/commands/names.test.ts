@@ -161,7 +161,7 @@ describe('the old spelling is the new run, one notice line first', () => {
           'difference: lead is in the file and is not running\n' +
           '  repair: the owner runs team up\n' +
           '  who: the owner\n' +
-          '1 difference(s), 1 for the owner\n',
+          '1 difference, 1 for the owner\n',
       );
       expect(ran.stderr).toBe('');
       // A standing that still says something keeps its row first, and the row marks the repairs
@@ -183,7 +183,7 @@ describe('the old spelling is the new run, one notice line first', () => {
           'difference: lead is in the file and is not running\n' +
           '  repair: the owner runs team up (after: the live file is what the commands read)\n' +
           '  who: the owner\n' +
-          '2 difference(s), 2 for the owner\n',
+          '2 differences, 2 for the owner\n',
       );
       expect(refused.stderr).toBe('');
     } finally {

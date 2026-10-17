@@ -95,7 +95,7 @@ describe('team doctor on a file of every model shape', () => {
         'warn  plain-voyager: its rules file is missing; run team reload plain-voyager',
         'warn  plain-reviewer: its rules file is missing; run team reload plain-reviewer',
         'ok    herdr 0.7.1',
-        '--    session pilot is not running',
+        'note  session pilot is not running',
         'ok    claude 2.1.288 (Claude Code)',
         'ok    claude-code: logged in',
         'warn  script-seat: the launch runs zsh, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
@@ -106,8 +106,8 @@ describe('team doctor on a file of every model shape', () => {
         'ok    antigravity: logged in',
         'ok    cursor-agent 2026.10.01',
         'ok    cursor: logged in',
-        `ok    the lobby ${home}/.config/team/lobby: will be created at the first launch`,
-        `--    the file is legacy: migrate to ${home}/.config/team/lobby by writing:`,
+        'ok    the lobby ~/.config/team/lobby: will be created at the first launch',
+        'note  the file is legacy: migrate to ~/.config/team/lobby by writing:',
         'trust:',
         '  - ~/.config/team/lobby',
         `  - ${root}`,
@@ -145,7 +145,7 @@ describe('team doctor on a file of every model shape', () => {
     await approve();
     const run = await doctor();
     // claude-code's screen names the seat's declared model, so the running seat is checked
-    expect(run.out).toContain('--    script-seat: the model is chosen by its launcher; checked on the running seat\n');
+    expect(run.out).toContain('note  script-seat: the model is chosen by its launcher; checked on the running seat\n');
     expect(run.out).not.toContain('script-seat: the launch');
     // the three message seats' rules files count with the one model warning, and the file's
     // notice counts too
@@ -210,8 +210,8 @@ describe('the note for a seat launched before team recorded its process', () => 
     expect(run.code).toBe(0);
     const notes = run.out.split('\n').filter((line) => line.includes('launched before team recorded its process'));
     expect(notes).toEqual([
-      '--    plain-codex: launched before team recorded its process; run `team register plain-codex` to record its process',
-      '--    other-model: launched before team recorded its process; run `team register other-model` to record its process',
+      'note  plain-codex: launched before team recorded its process; run `team register plain-codex` to record its process',
+      'note  other-model: launched before team recorded its process; run `team register other-model` to record its process',
     ]);
   });
 });

@@ -70,7 +70,7 @@ Anyone in the checkout may run it.
 
 A reading run prints one context line, `team <project>, session "<session>"` — omitted when the
 run names no single team, as `--all` and a run outside a checkout do — then the table, then one
-summary line, `<n> event(s)`. The table's columns are:
+summary line, `<n> event` or `<n> events`. The table's columns are:
 
 | Column | Meaning |
 | --- | --- |
@@ -79,14 +79,14 @@ summary line, `<n> event(s)`. The table's columns are:
 | SEAT | `<from> -> <to>` |
 | DETAIL | the body, folded to one line |
 
-An empty history prints the context line and `0 event(s)` — no table. `--follow` prints one
+An empty history prints the context line and `0 events` — no table. `--follow` prints one
 header, table and count each time a pass brings new entries, so a reader can tell one arrival
 from the next.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the feed was printed | the context line, the `TIME  KIND  SEAT  DETAIL` table, and `<n> event(s)` | 0 |
-| the history was empty | the context line and `0 event(s)` | 0 |
+| the feed was printed | the context line, the `TIME  KIND  SEAT  DETAIL` table, and `<n> event` or `<n> events` | 0 |
+| the history was empty | the context line and `0 events` | 0 |
 | the history log can't be read | `team feed: the history log cannot be read: <reason>` (with `--json`, a `team.error` document) | 1 |
 | the invocation can't be read (including `--follow` with `--json`), or this folder is not a git checkout, or the team file can't be read | `team feed: <problem>`, with the usage for the invocation (with `--json`, a `team.error` document) | 2 |
 
@@ -138,7 +138,7 @@ Before any message has been sent, `team feed` reports an empty history:
 ```console
 $ team feed ; echo "exit $?"
 team beacon, session "beacon"
-0 event(s)
+0 events
 exit 0
 ```
 
@@ -153,12 +153,12 @@ $ team feed ; echo "exit $?"
 team beacon, session "beacon"
   TIME      KIND                           SEAT                   DETAIL
   09:00:00  delivered (via typed in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
-1 event(s)
+1 event
 exit 0
 $ team feed --seat gpt-reviewer ; echo "exit $?"
 team beacon, session "beacon"
   TIME      KIND                           SEAT                   DETAIL
   09:00:00  delivered (via typed in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
-1 event(s)
+1 event
 exit 0
 ```

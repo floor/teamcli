@@ -136,7 +136,7 @@ describe('the feed\'s boundaries', () => {
         '  TIME      KIND       SEAT           DETAIL\n' +
         '  16:00:00  delivered  owner -> lead  one\n' +
         '  16:00:01  delivered  owner -> lead  two\n' +
-        '2 event(s)\n',
+        '2 events\n',
     );
 
     expect(statSync(logPath).mode & 0o777).toBe(0o600);
@@ -211,10 +211,10 @@ describe('the feed\'s boundaries', () => {
       'team acme, session "acme"\n' +
         '  TIME      KIND       SEAT           DETAIL\n' +
         '  16:00:00  delivered  owner -> lead  the first line\n' +
-        '1 event(s)\n' +
+        '1 event\n' +
         '  TIME      KIND       SEAT           DETAIL\n' +
         '  16:00:05  delivered  owner -> lead  the line the team wrote while it was followed\n' +
-        '1 event(s)\n',
+        '1 event\n',
     );
 
     const after = readFileSync(logPath, 'utf8');

@@ -12,7 +12,7 @@ import { entityGrantAdmits, isSameOrInside, readEntityCreateGrants } from '../gr
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
-import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { hasJsonFlag, pluralCount, refuse, writeJson } from '../output/index.ts';
 import { noteTeam } from '../registry/teams.ts';
 import { LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
@@ -351,7 +351,7 @@ export async function runInit(
   const added = exclude(root);
   writeFileSync(path, text, { flag: 'wx' });
   const what = args.flags.has('restore') ? 'restored the copy this machine stored' : 'wrote a skeleton';
-  logLine(dirname(path), 'init', describeCaller(caller), `${what} as ${TEAM_FILE}; excluded ${added.length} path(s)`);
+  logLine(dirname(path), 'init', describeCaller(caller), `${what} as ${TEAM_FILE}; excluded ${pluralCount(added.length, 'path')}`);
   // The registry is where the user-level state lives: the home the shipped command names, or the
   // one a test hands in. A caller that names neither leaves the machine's registry alone.
   const registryHome = sources.registryHome ?? home;

@@ -31,7 +31,7 @@ test('a long name widens its column and the later columns stay under their headi
   const ab = lines[1] ?? '';
   const long = lines[2] ?? '';
   expect(lines).toHaveLength(4);
-  expect(lines[3]).toBe('2 session(s)');
+  expect(lines[3]).toBe('2 sessions');
   expect(header.indexOf('PROJECT')).toBeGreaterThan('long-session-name'.length);
   expect(column(header, ab, 'TEAM', 'PROJECT')).toBe('ab');
   expect(column(header, long, 'TEAM', 'PROJECT')).toBe('long-session-name');
@@ -63,7 +63,7 @@ test('a newline or an escape in a session name stays one cell', async () => {
   expect(lines).toHaveLength(4);
   expect(lines[1]?.startsWith('prepost')).toBe(true);
   expect(lines[2]?.startsWith('two lines')).toBe(true);
-  expect(lines[3]).toBe('2 session(s)');
+  expect(lines[3]).toBe('2 sessions');
   expect(io.out).not.toContain('\x1b');
   expect(io.out).toContain('orphan');
 });

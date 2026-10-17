@@ -26,6 +26,7 @@ import { rulesOf } from '../launch/rules.ts';
 import {
   contextLine,
   hasJsonFlag,
+  pluralCount,
   projectContextLine,
   renderDifferences,
   renderNotes,
@@ -424,7 +425,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     });
   } else {
     const style = ttyStyle(io);
-    const rendered = render(team, session, comparison, budgets, all ? registryRows : undefined, style);
+    const rendered = render(team, session, comparison, budgets, all ? registryRows : undefined, style, sources.home);
     if (style.enabled) {
       io.stdout(rendered);
     } else {
@@ -476,7 +477,7 @@ export function approvalAndOverrideRows(
   const notes: string[] = [];
   if (reason !== null) notes.push(`${reason}; dev mode does not compare it`);
   if (report.differences.length > 0) {
-    notes.push(`${report.differences.length} override difference(s); dev mode does not compare them`);
+    notes.push(`${pluralCount(report.differences.length, 'override difference')}; dev mode does not compare them`);
   }
   return { differences: overrideDrift({ ...report, differences: [] }), notes };
 }
@@ -574,7 +575,7 @@ function projectReport(name: string, out: Io, io: Io, sources: StatusSources, js
     for (const team of teams) {
       lines.push(team.session === null
         ? `  ${plainLine(team.name)}  not registered`
-        : `  ${plainLine(team.name)}  session "${plainLine(team.session)}"  ${plainLine(team.lifecycle ?? '?')}  ${String(team.seats ?? '?')} seat(s)`);
+        : `  ${plainLine(team.name)}  session "${plainLine(team.session)}"  ${plainLine(team.lifecycle ?? '?')}  ${team.seats === null ? '? seats' : pluralCount(team.seats, 'seat')}`);
     }
     out.stdout(`${lines.join('\n')}\n`);
   }
@@ -589,6 +590,7 @@ function render(
   budgets: BudgetRow[],
   registryRows?: SeatRegistryRow[],
   style: TtyStyle = ttyStyle(false),
+  home?: string,
 ): string {
   const lines = [contextLine(team.project, session)];
   if (registryRows) {
@@ -616,8 +618,8 @@ function render(
     // The row carries its own reserve: the line and the JSON can't disagree (queue 79).
     for (const row of budgets) lines.push(`  ${plainLine(budgetLine(row))}`);
   }
-  lines.push(...renderNotes(comparison.notes));
-  lines.push(...renderDifferences(comparison.differences, style));
+  lines.push(...renderNotes(comparison.notes, { home }));
+  lines.push(...renderDifferences(comparison.differences, style, home));
   lines.push(renderSummary(comparison.differences));
   return `${lines.join('\n')}\n`;
 }
