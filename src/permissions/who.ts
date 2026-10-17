@@ -10,8 +10,8 @@
 // is about — a roster of this team that does not list the caller stands for no seat, and a
 // caller with no record is refused (the resolver's own rule). Where the registry holds NO
 // record of this team at all — a team the owner has not registered, which is how every team
-// starts life — the file's own declaration stands: the owner-approved file is then the record
-// of who its seats are, its `leads` mark decides `leads`, and the record carries no agent id,
+// starts life — the file's own declaration stands: the live file is then the record of who its
+// seats are, its `leads` mark decides `leads`, and the record carries no agent id,
 // so no grant can name it and no seat-record row admits it. A registry that cannot be read is
 // not a team the registry holds no record of: it fails closed, and a seat is refused with
 // "the registry cannot be read" rather than judged from the file.

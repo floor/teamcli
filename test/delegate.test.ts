@@ -155,7 +155,7 @@ describe('the audit line and the edit refusal', () => {
     );
     expect(ADD_DELEGATE_EDIT).toEqual({
       id: 'add.delegate-edit',
-      text: 'the approved delegate adds only a same-copy seat: the approved file\'s own stanza, hash for hash; a missing, stopped or changed seat is the owner\'s',
+      text: 'the approved delegate adds only a same-copy seat: the live file\'s own stanza, hash for hash; a missing, stopped or changed seat is the owner\'s',
     });
   });
 });

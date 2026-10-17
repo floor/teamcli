@@ -159,7 +159,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | `team add: the approved delegate must be an external non-seat pane` | 1 |
 | ``team add: the approved delegate <session>/<pane id> may not run `add`; its approved commands are <list>`` | 1 |
 | `team add: --<flag> is the owner's; the approved delegate cannot use it` — `--temporary`, `--like`, `--until`, `--worktree`, `--session` or `--file` | 1 |
-| `team add: the approved delegate adds only a same-copy seat: the approved file's own stanza, hash for hash; a missing, stopped or changed seat is the owner's` — any add that would edit the file or the approval, also on `--dry-run` | 1 |
+| `team add: the approved delegate adds only a same-copy seat: the live file's own stanza, hash for hash; a missing, stopped or changed seat is the owner's` — any add that would edit the file or the approval, also on `--dry-run` | 1 |
 | `team add: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat` — any caller but the owner; a temporary seat takes them from any caller | 1 |

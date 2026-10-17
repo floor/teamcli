@@ -46,7 +46,7 @@ export type DelegateSources = {
  *  file or the approval, or a seat whose stanza the last approval does not hold, hash for hash. */
 export const ADD_DELEGATE_EDIT: { id: 'add.delegate-edit'; text: string } = {
   id: 'add.delegate-edit',
-  text: 'the approved delegate adds only a same-copy seat: the approved file\'s own stanza, hash for hash; a missing, stopped or changed seat is the owner\'s',
+  text: 'the approved delegate adds only a same-copy seat: the live file\'s own stanza, hash for hash; a missing, stopped or changed seat is the owner\'s',
 };
 
 const PREFLIGHT = ['delegate-approval', 'delegate-evidence', 'delegate-placement'] as const;
