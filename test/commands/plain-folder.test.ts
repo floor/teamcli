@@ -424,7 +424,7 @@ describe('a folder with no git repository', () => {
     const seat = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'w9:p1', session: 'elsewhere' });
     const refused = await runAdd(['claude-coordinator-acme'], seat, addSources(home));
     expect(refused).toBe(1);
-    expect(seat.err).toContain('only the owner, the orchestrator or the operator');
+    expect(seat.err).toContain('only the owner or a standing grant (delegate)');
     expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
 
     const doctorIo = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'w9:p1' });

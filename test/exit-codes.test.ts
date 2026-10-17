@@ -583,22 +583,11 @@ scene('add.file-owner', async (place) => {
 });
 scene('add.caller', async (place) => {
   write(place, TWO);
-  return show(await added(place, ['worker'], other, addSources(place)), 'only the owner, the orchestrator or the operator');
-});
-scene('add.no-pane', async (place) => {
-  write(place, TWO);
-  return show(await added(place, ['worker'], leadSeat, addSources(place)), 'no pane is recorded for seat lead');
+  return show(await added(place, ['worker'], other, addSources(place)), 'only the owner or a standing grant (delegate)');
 });
 scene('add.session-owner', async (place) => {
   write(place, TWO);
   return show(await added(place, ['worker', '--session', 'other'], leadSeat, addSources(place)), "--session is the owner's");
-});
-scene('add.another-pane', async (place) => {
-  write(place, TWO);
-  updateState(join(place.root, '.agents'), (state) => {
-    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w2:p1' };
-  });
-  return show(await added(place, ['worker'], leadSeat, addSources(place)), 'the state records pane w2:p1 for seat lead');
 });
 scene('add.default-session', async (place) => {
   write(place, TWO);
@@ -751,11 +740,13 @@ scene('add.dry-run', async (place) => {
   return show(await added(place, ['worker', '--dry-run', '--file', place.file], owner, addSources(place)), 'dry run: nothing was run');
 });
 scene('add.override-owner', async (place) => {
-  approve(place, TWO);
-  updateState(join(place.root, '.agents'), (state) => {
-    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead' };
-  });
-  return show(await added(place, ['worker', '--model', 'claude-sonnet-5-5'], { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' }, addSources(place)), "--model and --effort on a declared seat are the owner's");
+  // The map's row refuses every seat, so the one caller who reaches the flags' own refusal in
+  // 0.5.0 is the approved delegate: the verdict below passes, the target is the approved copy's
+  // own live stanza (`lead`, never stopped), and the add still refuses the owner's flags.
+  approve(place, DELEGATED_ADD_REMOVE);
+  return show(await added(place, ['lead', '--model', 'claude-sonnet-5-5'], addRemoveCaller, addSources(place, {
+    delegateGate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
+  })), "--model and --effort on a declared seat are the owner's");
 });
 scene('add.model', async (place) => {
   approve(place, TWO);
@@ -818,7 +809,7 @@ const refused = (id: string, text: string) => ({ kind: 'refused' as const, id, t
 const ADD_GATE_REFUSALS: [suffix: string, sentence: string, needle: string][] = [
   ['delegate-evidence', "delegation cannot verify its placement or seats: herdr doesn't answer", 'placement or seats'],
   ['delegate-placement', 'the approved delegate must be an external non-seat pane', 'non-seat pane'],
-  ['delegate', 'only the owner, the orchestrator, the operator or the approved delegate runs it; this call is pilot', 'or the approved delegate runs it'],
+  ['delegate', 'only the owner or a standing grant (delegate) runs it; this call is pilot', 'or a standing grant (delegate)'],
   ['delegate-command', 'the approved delegate main/w1:p1 may not run `add`; its approved commands are remove', 'may not run'],
 ];
 for (const [suffix, sentence, needle] of ADD_GATE_REFUSALS) {
@@ -843,7 +834,7 @@ scene('add.delegate-edit', async (place) => {
   approve(place, DELEGATED_ADD_REMOVE);
   return show(await added(place, ['worker'], addRemoveCaller, addSources(place, {
     delegateGate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
-  })), 'cannot change the file or the approval');
+  })), 'only a same-copy seat');
 });
 
 async function checked(place: Place, argv: string[], caller: Caller, sources: CheckSources): Promise<Ran> {

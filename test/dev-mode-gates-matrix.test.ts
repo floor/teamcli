@@ -401,7 +401,7 @@ test('remove --abandon: unset, the owner-only gate refuses; set, it is a warning
 // refuses — which a run still standing at the gate could never say. The exact `1` is the mode;
 // `true` is not it.
 
-const ADD_LINE = 'only the owner, the orchestrator or the operator runs it; this call is unplaced (it runs under herdr)';
+const ADD_LINE = 'only the owner or a standing grant (delegate) runs it; this call is unplaced (it runs under herdr)';
 const RESTART_LINE = 'only the owner or `leads` restarts a seat; this call is unplaced (it runs under herdr)';
 const INIT_LINE = 'only the owner runs init, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
 

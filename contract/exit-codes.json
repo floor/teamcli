@@ -32,13 +32,6 @@
     {
       "code": 1,
       "command": "add",
-      "id": "add.another-pane",
-      "meaning": "the state records another pane for the caller's seat",
-      "trigger": "team add worker"
-    },
-    {
-      "code": 1,
-      "command": "add",
       "id": "add.branch-missing",
       "meaning": "the merged branch doesn't exist",
       "trigger": "team add --temporary --like lead --until merged:missing"
@@ -110,7 +103,7 @@
       "code": 1,
       "command": "add",
       "id": "add.delegate-edit",
-      "meaning": "the delegate's add would edit the file or the approval",
+      "meaning": "the delegate's add is not a same-copy seat: it would edit the file, or names a stanza the approval does not hold",
       "trigger": "team add worker"
     },
     {
@@ -203,13 +196,6 @@
       "id": "add.no-like",
       "meaning": "the file has no seat to copy",
       "trigger": "team add --temporary --like missing --until result:out.md"
-    },
-    {
-      "code": 1,
-      "command": "add",
-      "id": "add.no-pane",
-      "meaning": "the state records no pane for the caller's seat",
-      "trigger": "team add worker"
     },
     {
       "code": 1,

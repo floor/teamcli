@@ -155,7 +155,7 @@ describe('the audit line and the edit refusal', () => {
     );
     expect(ADD_DELEGATE_EDIT).toEqual({
       id: 'add.delegate-edit',
-      text: 'the approved delegate cannot change the file or the approval; the owner adds a missing or stopped seat',
+      text: 'the approved delegate adds only a same-copy seat: the approved file\'s own stanza, hash for hash; a missing, stopped or changed seat is the owner\'s',
     });
   });
 });
@@ -431,7 +431,7 @@ describe('commands and flags', () => {
       'only the owner, `leads` or the approved delegate stops the team; this call is owner',
     );
     expect(refused({ command: 'add', ancestors: terminal }).text).toBe(
-      'only the owner, the orchestrator, the operator or the approved delegate runs it; this call is owner',
+      'only the owner or a standing grant (delegate) runs it; this call is owner',
     );
     expect(refused({ command: 'remove', ancestors: terminal }).text).toBe(
       'only the owner, `leads` or the approved delegate removes a seat; this call is owner',

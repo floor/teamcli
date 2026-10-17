@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
+import { approvedFingerprints, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
+import { fingerprints } from '../approve/fingerprint.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
+import { describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -41,6 +42,7 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, shellQuote, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
@@ -245,7 +247,13 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     : judgeCallerIn(io, dir, team);
   const { caller, shown } = judged;
   const session = judged.session;
-  const mayChange = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
+  // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
+  // speak: the `add` row is the owner's alone in 0.5.0, so every seat is refused here whatever
+  // pane it sits on, and the delegate gate below is the one standing grant that opens a seat's
+  // run. The map's own rows are the judge; a caller it refuses is refused before any standing.
+  const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, sources.home, 'add', at, sources.now);
+  const mayChange = verdictOf(caller, standingOf(dir, session, caller));
   // A create-grant the record holds for this loaded root is the run's admission: the ordinary
   // rule's sentence is then not a refusal, and the delegate gate — which the ordinary refusal
   // alone summons — has nothing to replace. Asked only where the ordinary rule has just refused,
@@ -283,15 +291,15 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (verdict.kind === 'refused') return delegateRefused(out, verdict);
     delegatePane = verdict.pane;
   }
-  // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
-  // `1`, dev mode says this gate once, as a warning, and the edit continues — exactly as `up`
-  // does. Every other refusal stays a refusal: the target placement, the CLI, the records,
-  // the approvals and trust. The warning is logged where this call runs; a dry run says it
-  // beside the dry answer and decides nothing.
-  const mayRun = mayChange.kind === 'no-pane' && delegatePane === null ? noPaneRefusal(mayChange.name)
-    : mayChange.kind === 'another-pane' && delegatePane === null ? anotherPaneRefusal(mayChange.name, mayChange.recordedPane)
-      : mayChange.kind === 'refused' && delegatePane === null && !createGranted ? `only the owner, the orchestrator or the operator runs it; this call is ${plainLine(describeCaller(shown))}`
-        : null;
+  // The who-may-run-it gate: the map's `add` row, the owner's alone, with the standing grant the
+  // delegate gate above may have answered read as its opening. Set to exactly `1`, dev mode says
+  // this gate once, as a warning, and the edit continues — exactly as `up` does. Every other
+  // refusal stays a refusal: the target placement, the CLI, the records, the approvals and
+  // trust. The warning is logged where this call runs; a dry run says it beside the dry answer
+  // and decides nothing.
+  const mayRun = mayChange.kind === 'refused' && delegatePane === null && !createGranted
+    ? `only the owner or a standing grant (delegate) runs it; this call is ${plainLine(describeCaller(shown))}`
+    : null;
   if (mayRun !== null) {
     if (io.env.TEAMCLI_DEV_MODE === '1') {
       const said = `warning: ${mayRun}; dev mode continues`;
@@ -303,8 +311,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     } else {
       if (dry) out.stdout(`! add would refuse: ${plainText(mayRun)}\n! to unblock: ${plainText(ownerAddRun(argv))}\n`);
       else out.stderr(`team add: ${plainText(mayRun)}\n`);
-      // exit: add.no-pane
-      // exit: add.another-pane
       // exit: add.caller
       return 1;
     }
@@ -414,14 +420,30 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.already-running
     return 1;
   }
-  // A delegated add may start only a declared, not-stopped seat that is not running: one that
-  // would restore a missing seat or clear `stopped` edits the file, and that stays the owner's.
-  // Refused after the already-running refusal, before the write,
-  // the digest and any dry-run plan — so a delegated add writes neither file nor approval.
-  if (delegatePane !== null && built.edited !== original) {
-    out.stderr(`team add: ${plainText(ADD_DELEGATE_EDIT.text)}\n`);
-    // exit: add.delegate-edit
-    return 1;
+  // A delegated add is a copy and nothing else: the one seat it may start is one the last
+  // approval already holds, its stanza hash for hash as the approved copy wrote it, and the add
+  // must write nothing. A missing seat, a stopped seat or a stanza the approval does not hold
+  // would extend or edit the file, and that stays the owner's. Refused after the
+  // already-running refusal, before the write, the digest and any dry-run plan — so a
+  // non-copy delegated add writes neither file nor approval. Dev mode says the rule once, as a
+  // warning, and the run continues, exactly as the caller gate above.
+  if (delegatePane !== null) {
+    const stanza = fingerprints(team).seats[built.name];
+    const inCopy = standing.kind === 'verified' ? approvedFingerprints(standing.record).seats[built.name] : undefined;
+    if (built.edited !== original || inCopy === undefined || inCopy !== stanza) {
+      if (io.env.TEAMCLI_DEV_MODE === '1') {
+        const said = `warning: ${ADD_DELEGATE_EDIT.text}; dev mode continues`;
+        if (dry) out.stdout(`! ${said}\n`);
+        else {
+          out.stderr(`team add: ${plainText(said)}\n`);
+          logLine(dir, 'add', describeCaller(caller), said, sources.now());
+        }
+      } else {
+        out.stderr(`team add: ${plainText(ADD_DELEGATE_EDIT.text)}\n`);
+        // exit: add.delegate-edit
+        return 1;
+      }
+    }
   }
   const profile = profileFor(built.seat.cli);
   if (!profile) {
