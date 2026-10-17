@@ -1,23 +1,26 @@
 # team reload
 
 Closes one running seat and launches it again when the team file's model, version or effort
-differs from the model, version and effort recorded at its last launch. `team up` leaves a
-seat that is already ready as it is, so a later edit of the model or the effort never
-reaches that seat. This command names one seat and does only that swap.
+differs from the model, version and effort recorded at its last launch — or when a seat that
+takes its rules as a first message has a per-seat rules file that no longer holds the rules
+text the live team file gives it. `team up` leaves a seat that is already ready as it is, so a
+later edit of the model, the effort or the rules never reaches that seat. This command names
+one seat and does only that swap.
 
 The close happens at an idle prompt. A seat that is working, a seat whose input box holds
 unsent text, and a seat whose screen is not an idle prompt are left as they are: nothing is
 closed and nothing is launched. A seat whose launch record kept no model — one brought up
 before the record held one — still reloads: the model its screen shows is read first, the
 team file's declared model and effort stand when the screen names none, and the reading is
-said and recorded. A seat already running what that reading declares is recorded in place
-with no close. The next launch that reaches an idle prompt writes the record, and a later
-reload can read it.
+said and recorded. A seat already running what that reading declares, whose rules file (when
+it takes its rules in one) holds the live text, is recorded in place with no close. The next
+launch that reaches an idle prompt writes the record, and a later reload can read it.
 
 A matching seat exits without closing anything and without a log line. A close that passes
 is logged at that moment, before the workspace is closed. The owner's line names the seat
-and `model`, `effort`, or `model; effort`. A granted run names the granted seat, then the
-seat that was reloaded, then the same difference.
+and `model`, `effort`, `rules`, or the words joined with `; ` — `model; effort`, `model;
+rules`, `effort; rules`. A granted run names the granted seat, then the seat that was
+reloaded, then the same difference.
 
 ## Synopsis
 
@@ -25,9 +28,12 @@ seat that was reloaded, then the same difference.
 
 ## What it reads and writes
 
-Reads the team file and the session's seat record. Writes that record again when the new
-launch reaches its idle prompt: the model, the version, the effort word when the file sets
-one, and the launch line. A seat that already matches is not written. A refusal is not written.
+Reads the team file, the session's seat record and — for a seat that takes its rules as a
+first message — its per-seat rules file. Writes that record again when the new launch reaches
+its idle prompt: the model, the version, the effort word when the file sets one, and the
+launch line. A relaunched message seat also has its rules file written again and the one line
+pointing at it typed, as a fresh `up` does; an option seat's rules ride its launch line. A
+seat that already matches is not written. A refusal is not written.
 
 The log gains one line when the close happens, and no line when it does not.
 

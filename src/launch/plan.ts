@@ -523,7 +523,7 @@ export function upPlan(input: UpInput): Step[] {
           kind: 'run',
           argv: herdr(session, 'workspace', 'close', seat.repair.workspace),
           note: reload
-            ? 'closed without input, at an idle prompt: its declared model or effort differs from the launch'
+            ? 'closed without input, at an idle prompt: its declared model, effort or rules differ from the launch'
             : drift
               ? 'closed without input: its model drifted from the file'
               : 'closed without input: its pane no longer holds the process team launched',

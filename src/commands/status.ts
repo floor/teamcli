@@ -10,7 +10,7 @@ import { recall } from '../budgets/readings.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
-import type { Problem, TeamFile } from '../file/types.ts';
+import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
@@ -382,23 +382,33 @@ export function approvalCaseRow(reason: string | null): Difference[] {
  *  differs is a difference for the owner to repair with `team reload <seat>` — never rewritten
  *  here. An option seat has no file, and a seat whose rules can't travel at all is `up`'s to
  *  refuse. */
-export function rulesFileDifferences(standing: Standing, team: TeamFile, root: string, home: string | undefined): Difference[] {
-  // Like the overrides: no home set is a test that stands in for no store at all. The check
-  // runs only once a record exists, so a file that was never approved does not grow a
+/** The one seat's rules-file check, or null when the file holds exactly the rules the live file
+ *  gives that seat. The reading `rulesFileDifferences` makes per seat, shared with `team reload`
+ *  so a repair can never disagree with the check that named it: the same home rule, the same
+ *  live project, the same text. Null for a stopped seat (nothing wrote its file), an option seat
+ *  (its rules travel on the launch line), a seat with no typeable path, and no home at all (a
+ *  test standing in for no store). */
+export function rulesFileProblem(standing: Standing, team: TeamFile, seat: Seat, root: string, home: string | undefined): string | null {
+  // The check runs only once a record exists, so a file that was never approved does not grow a
   // difference for a file no launch has written.
+  if (home === undefined || standing.kind !== 'verified') return null;
+  // A stopped seat is not checked: `up` writes the file only at a delivery, so the repair
+  // below could not fix a stopped seat's file. An unstopped seat's file is rewritten the
+  // next time it launches, so no stale file outlives one.
+  if (seat.stopped) return null;
+  if (profileFor(seat.cli)?.rulesOption != null) return null;
+  const path = rulesFilePath(team.project, root, home, seat.name);
+  if (path === null) return null;
+  const check = checkRulesFile(path, rulesOf(team, seat, root));
+  return check.ok ? null : check.what;
+}
+
+export function rulesFileDifferences(standing: Standing, team: TeamFile, root: string, home: string | undefined): Difference[] {
   if (home === undefined || standing.kind !== 'verified') return [];
   const out: Difference[] = [];
   for (const seat of team.seats) {
-    // A stopped seat is not checked: `up` writes the file only at a delivery, so the repair
-    // below could not fix a stopped seat's file. An unstopped seat's file is rewritten the
-    // next time it launches, so no stale file outlives one.
-    if (seat.stopped) continue;
-    if (profileFor(seat.cli)?.rulesOption != null) continue;
-    const path = rulesFilePath(team.project, root, home, seat.name);
-    if (path === null) continue;
-    const text = rulesOf(team, seat, root);
-    const check = checkRulesFile(path, text);
-    if (!check.ok) out.push({ what: `${seat.name}: ${check.what}`, repair: `team reload ${seat.name}`, owner: true });
+    const problem = rulesFileProblem(standing, team, seat, root, home);
+    if (problem !== null) out.push({ what: `${seat.name}: ${problem}`, repair: `team reload ${seat.name}`, owner: true });
   }
   return out;
 }

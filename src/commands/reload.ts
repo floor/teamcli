@@ -19,32 +19,40 @@ import { grantGate, logGranted, type GrantVerdict } from '../grant.ts';
 import {
   agentList,
   agentRename,
+  agentStatus,
+  paneForeground,
   paneProcesses,
   paneRead,
   paneRun,
   paneShellBack,
+  pressEnter,
   reportDisplayAgent,
+  typeText,
   workspaceClose,
   workspaceCreate,
   workspacePanes,
 } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
+import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
+import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
+import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
+import { rulesFileProblem } from './status.ts';
 import type { Launch } from './up.ts';
 
 export const USAGE = 'Usage: team reload <seat> [--file <path>]\n';
@@ -55,6 +63,7 @@ export type ReloadSources = {
   now?: () => Date;
   grantGate?: typeof grantGate;
   logGranted?: typeof logGranted;
+  standing?: (root: string) => Standing;
 };
 
 function aim(session: string): string | undefined {
@@ -77,7 +86,10 @@ const realLaunch: Launch = {
   agents: (session) => agentList(aim(session)),
   workspacePanes: (session, workspace) => workspacePanes(workspace, aim(session)),
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
-  foreground: (session, pane) => null,
+  typeText: (session, pane, text) => typeText(pane, text, aim(session)),
+  pressEnter: (session, pane) => pressEnter(pane, aim(session)),
+  agentStatus: (session, pane) => agentStatus(pane, aim(session)),
+  foreground: (session, pane) => paneForeground(pane, aim(session)),
   processInfo: (session, pane) => paneProcesses(pane, aim(session)),
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
   sleep: (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)),
@@ -95,8 +107,9 @@ export default reload;
 
 /**
  * `team reload <seat>`: when the file's model, version or effort differs from the launch
- * record, close that seat at an idle prompt and launch the file's line. A ready seat `up`
- * leaves alone stays up. Nothing is closed while the seat is working or the box holds
+ * record — or a message seat's per-seat rules file no longer holds the live text — close that
+ * seat at an idle prompt and launch the file's line, delivering the rules again. A ready seat
+ * `up` leaves alone stays up. Nothing is closed while the seat is working or the box holds
  * unsent text. A seat launched before the record kept a model is read from its screen, or
  * from the file when the screen names none, and recorded in place when nothing drifts.
  */
@@ -142,6 +155,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
 
   const team = loaded.team;
   const dir = dirname(loaded.path);
+  const root = loaded.root;
+  const home = sources.home;
+  const standing = (sources.standing ?? approvalStanding)(root, home);
   const session = team.session;
   // Two doors for a seat: the map's `reload` row (the owner and the team's `leads`, standing on
   // their recorded pane) and the grant. A grant the file carries is a second gate, as it is for
@@ -226,7 +242,13 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     source = shown === null ? 'file' : 'screen';
   }
   const detail = driftOf(compared, seat);
-  if (detail === null && source === null) {
+  // The rules file is a launch input too: a seat whose per-seat file no longer holds the live
+  // text is not running what the file declares, however its model row reads. This is the same
+  // reading `team check` makes (`rulesFileProblem`), so the repair the check names can never
+  // leave the check red. A seat with no home to look under has no file to compare.
+  const rulesProblem = home === undefined ? null : rulesFileProblem(standing, team, seat, root, home);
+  const driftDetail = [detail, rulesProblem === null ? null : 'rules'].filter((part): part is string => part !== null).join('; ');
+  if (detail === null && rulesProblem === null && source === null) {
     out.stdout(`team reload: ${seat.name} is already running what the file declares\n`);
     // exit: reload.same
     return 0;
@@ -242,7 +264,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     return 1;
   }
   try {
-    if (detail === null) {
+    if (detail === null && rulesProblem === null) {
       updateState(dir, (file) => {
         const held = file.sessions[session]?.seats[seat.name];
         if (!held) return;
@@ -277,6 +299,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       }
     }
 
+    if (rulesProblem !== null) {
+      // Said before any model line: the file, not the status row, is what the repair is for.
+      // The line that follows (when the record held no model) already ends `; reloading`.
+      out.stdout(`team reload: ${seat.name}: ${rulesProblem}${source === null ? '; reloading' : ''}\n`);
+    }
     if (source !== null) {
       const effort = source === 'screen' ? effortFromFile(recorded, compared) : effortSaid(recorded, compared);
       out.stdout(source === 'screen'
@@ -284,7 +311,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         : `team reload: ${seat.name}: its launch record held no model; its screen names none, so the file's ${compared.model} ${compared.version}${effort} stand; reloading\n`);
     }
 
-    const root = loaded.root;
     const planned = {
       name: seat.name,
       cli: seat.cli,
@@ -298,12 +324,16 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       repairLine: relaunchRepair(team, seat.name, 'markdown'),
       stopped: false,
       rules: rulesOf(team, seat, root),
+      // The same delivery a fresh `up` gives the seat: a message seat needs its per-seat file
+      // and the one line to read, written and typed by the host below; an option seat needs
+      // nothing here (its rules ride the launch line).
+      ...(home === undefined ? {} : seatDeliveryOf(standing, team, seat, root, home, standing.kind !== 'verified' || owner)),
       repair: {
         pane: recorded.pane,
         workspace: recorded.workspace,
         launched: recorded.launched,
         cli: seat.cli,
-        reload: { detail },
+        reload: { detail: driftDetail },
       },
     };
     // The state hook lands before the plan types the launch line. A seat whose settings file did
@@ -351,6 +381,41 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       startServer: () => false,
       sessionUp: () => true,
       typeLine: () => false,
+      // The rules delivery a message seat needs after its relaunch: the file is written from
+      // the live text, then the one line is typed at an empty idle prompt and read back, with
+      // Enter only after the file still holds the hash the line names. The owner's live run and
+      // a run with no verified approval write under the live project name, as `restart` does.
+      ...(home === undefined ? {} : {
+        deliverRules: async (
+          current: string,
+          pane: string,
+          cli: string,
+          file: { text: string; path: string; line: string; seat: string },
+          seconds: number,
+        ) => {
+          const devProject = standing.kind !== 'verified' || owner ? team.project : undefined;
+          const written = writeRulesFile(standing, file.seat, root, home, file.text, rulesFileHash(file.text), undefined, devProject);
+          if (!written.ok) return fileRefusalOf(written);
+          if (!typeablePath(file.path)) {
+            return { stop: 'path', typed: false, sent: false, kind: 'unknown' as const, row: null };
+          }
+          const stopped: { why: Refusal | null } = { why: null };
+          const delivered = await deliverRules(cli, file.line, seconds, {
+            screen: () => launch.paneText(current, pane) ?? undefined,
+            status: () => launch.agentStatus?.(current, pane) ?? null,
+            type: (value) => launch.typeText?.(current, pane, value) ?? false,
+            enter: () => launch.pressEnter?.(current, pane) ?? false,
+            file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),
+            foreground: () => launch.foreground(current, pane),
+            report: (why) => {
+              stopped.why = why;
+            },
+            now: () => now().getTime(),
+            sleep: launch.sleep,
+          });
+          return delivered === false && stopped.why !== null ? stopped.why : delivered;
+        },
+      }),
       stopSession: () => false,
       kill: () => false,
       allow: () => null,
@@ -404,9 +469,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       sleep: (ms) => launch.sleep(ms),
       now: () => launch.now().getTime(),
       log(_who, what) {
-        if (what !== detail) return;
-        if (grantSeat !== null) (sources.logGranted ?? logGranted)(dir, grantSeat, 'reload', now(), `${seat.name} ${detail}`);
-        else logLine(dir, 'reload', describeCaller(caller), `${seat.name}: ${detail}`, now());
+        if (what !== driftDetail) return;
+        if (grantSeat !== null) (sources.logGranted ?? logGranted)(dir, grantSeat, 'reload', now(), `${seat.name} ${driftDetail}`);
+        else logLine(dir, 'reload', describeCaller(caller), `${seat.name}: ${driftDetail}`, now());
       },
     };
     const report = await executePlan(steps, session, host);
