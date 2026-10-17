@@ -801,7 +801,7 @@ Hidden: no
 
 Usage:
 
-    team reload <seat> [--file <path>]
+    team reload <seat> [--file <path>] [--json]
 
 ### Flags
 
@@ -809,6 +809,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

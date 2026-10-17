@@ -40,6 +40,7 @@ export {
   hasJsonFlag,
   jsonEnvelope,
   jsonError,
+  refuse,
   toJsonDifference,
   writeJson,
   writeJsonError,
@@ -50,6 +51,7 @@ export {
   type JsonErrorEnvelope,
   type JsonErrorPayload,
   type OutputSchemaTag,
+  type RefusalSpec,
 } from './json.ts';
 export {
   buildActionSchemaSpec,

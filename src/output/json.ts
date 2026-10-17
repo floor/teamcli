@@ -1,4 +1,5 @@
 import type { Io } from '../io.ts';
+import { plainText } from '../launch/plain.ts';
 import { whoOfDifference, type DifferenceWho, type OutputDifference, type PlanStep } from './text.ts';
 
 /** Top-level schema identifier required on every 0.5.0 `--json` document. */
@@ -132,4 +133,41 @@ export function writeJsonError(
   rule?: string | null,
 ): void {
   io.stdout(`${JSON.stringify(jsonError(id, message, repair, version, rule), null, 2)}\n`);
+}
+
+/** One command refusal, in the two shapes every action command prints it (§5.3). */
+export interface RefusalSpec {
+  /** The `contract/exit-codes.json` row id (e.g. `'reload.absent'`). */
+  id: string;
+  /** The human-readable failure text, without the leading `team <command>: ` prefix. */
+  message: string;
+  /** The actionable repair, or null when no automated repair command applies. */
+  repair: string | null;
+  /** The contract exit code for this refusal site. */
+  code: number;
+  /** The permission resolver's rule id (`PermissionRule`) when a caller gate refused. */
+  rule?: string | null;
+  /** Plain text after the prefix, when it differs from `message` (e.g. a full folder path). */
+  plain?: string;
+  /** Text printed after the plain refusal line (the `USAGE` on a bad invocation). */
+  usage?: string;
+}
+
+/**
+ * The one refusal path for a command: under `--json`, writes the structured `team.error`
+ * envelope to stdout (stderr stays empty); otherwise the plain `team <command>: <text>` line
+ * on stderr. Returns `spec.code`, so a command reads `return refuse(...)`.
+ */
+export function refuse(
+  io: Pick<Io, 'stdout' | 'stderr'>,
+  json: boolean,
+  command: string,
+  spec: RefusalSpec,
+): number {
+  if (json) {
+    writeJsonError(io, spec.id, plainText(spec.message), spec.repair, 1, spec.rule);
+  } else {
+    io.stderr(`team ${command}: ${plainText(spec.plain ?? spec.message)}\n${spec.usage ?? ''}`);
+  }
+  return spec.code;
 }

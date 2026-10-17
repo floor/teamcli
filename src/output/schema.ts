@@ -449,6 +449,18 @@ export const CHECK_OUTPUT_SCHEMA: CommandSchemaSpec = {
     summary: SUMMARY_SCHEMA_FRAGMENT,
   },
 };
+/** Published `--json` output schema for `team reload` (`schema/reload.schema.json`). */
+export const RELOAD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.reload',
+  fileName: 'reload.schema.json',
+  title: 'team reload --json output',
+  statuses: ['reloaded', 'same'],
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    pane: { type: ['string', 'null'] },
+  },
+});
 
 /** Published `--json` output schema for `team list` (`schema/list.schema.json`). */
 export const LIST_OUTPUT_SCHEMA: CommandSchemaSpec = {
@@ -664,6 +676,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   HOLD_OUTPUT_SCHEMA,
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
+  RELOAD_OUTPUT_SCHEMA,
 ];
 
 

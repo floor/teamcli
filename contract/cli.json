@@ -1340,6 +1340,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -1357,7 +1363,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team reload <seat> [--file <path>]"
+        "team reload <seat> [--file <path>] [--json]"
       ]
     },
     {
