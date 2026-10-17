@@ -186,7 +186,7 @@ describe('team send history log & team feed', () => {
     const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['body', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
+    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
     // The seat's send files the body under its header: the id admission admitted, and the rule.
     const seatHeader = 'from agt_68656c706572 (helper, helper@acme) — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
@@ -198,6 +198,12 @@ describe('team send history log & team feed', () => {
       outcome: 'delivered',
       ms: 0,
       via: 'typed',
+      // The walk landed on the typed leg through both legs ahead of it: the socket write this
+      // build does not make, and the mcp-inbox leg it does not carry.
+      failed: [
+        'native: unavailable; the frame path is a socket write this build does not make',
+        'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+      ],
     });
 
     // Team log in .agents/ keeps only byte counts, never the message body; lobbies stay empty.
@@ -211,6 +217,15 @@ describe('team send history log & team feed', () => {
     expect(feedIo.out).toBe(
       `15:30:00  helper -> lead  [delivered] via typed in 0 ms  ${seatHeader.split('\n')[0]}\n          \n          ${secret}\n`,
     );
+
+    // The formatted line keeps the channel; `--json` carries the legs that failed before it.
+    const jsonIo = testIo(root);
+    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
+    const jsonLine = JSON.parse(jsonIo.out) as Record<string, unknown>;
+    expect(jsonLine.failed).toEqual([
+      'native: unavailable; the frame path is a socket write this build does not make',
+      'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+    ]);
   });
 
   test('records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {

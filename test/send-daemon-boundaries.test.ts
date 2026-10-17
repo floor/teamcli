@@ -183,7 +183,22 @@ describe('the send daemon\'s boundaries', () => {
 
     const history = readHistory('acme', world.root, world.home);
     expect(history.ok && history.entries).toEqual([
-      { ts: NOW.toISOString(), from: 'owner', to: 'helper', body: filed('you serve another session'), id: expect.any(String), outcome: 'unreachable', ms: expect.any(Number) },
+      {
+        ts: NOW.toISOString(),
+        from: 'owner',
+        to: 'helper',
+        body: filed('you serve another session'),
+        id: expect.any(String),
+        outcome: 'unreachable',
+        ms: expect.any(Number),
+        // The walk reached the typed leg through the native and mcp-inbox legs, and the history
+        // line carries what each of them said: this build makes no socket write, and carries no
+        // mcp-inbox leg.
+        failed: [
+          'native: unavailable; the frame path is a socket write this build does not make',
+          'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+        ],
+      },
     ]);
   });
 
