@@ -195,7 +195,8 @@ export function planGrant(home: string, request: GrantRequest, options: GrantOpt
 /**
  * Writes one owner-signed revocation record, for the grant {@link planRevocation} accepts: the
  * grant's stem and generation together, so a typo is refused rather than left as a record that
- * revokes nothing. A revoked grant is not an edit: this appends, and the reader matches the pair.
+ * revokes nothing, and a record name that is a grant's file is refused by the plan, never written
+ * over it. A revoked grant is not an edit: this appends, and the reader matches the pair.
  */
 export function writeRevocation(home: string, request: RevocationRequest, options: GrantOptions = {}): RevocationWrite {
   const now = options.now ?? new Date();
@@ -215,7 +216,8 @@ export function writeRevocation(home: string, request: RevocationRequest, option
 /**
  * Validates one revocation against the folder and builds the record a write would sign —
  * generation 0, nothing written: both stems one safe file name, a positive integer generation,
- * and a grant of that exact stem and generation in the folder.
+ * a record name that is neither its grant's own nor another grant's file, and a grant of that
+ * exact stem and generation in the folder.
  */
 export function planRevocation(home: string, request: RevocationRequest, options: GrantOptions = {}): RevocationPlan {
   const now = options.now ?? new Date();
@@ -224,7 +226,22 @@ export function planRevocation(home: string, request: RevocationRequest, options
   if (!Number.isInteger(request.generation) || request.generation < 1) {
     return { ok: false, why: `"${request.generation}" is not a generation: a positive integer is expected` };
   }
-  const known = readGrants(home).grants.some(
+  // A revocation is a separate record, never a grant's file: the write names its own stem, so a
+  // stem that is the grant's own or another grant's would overwrite that grant instead of ending it.
+  if (request.name === request.grant) {
+    return {
+      ok: false,
+      why: `"${request.name}" is its grant's own name: a revocation is a separate record and never writes over the grant's file`,
+    };
+  }
+  const grants = readGrants(home).grants;
+  if (grants.some((grant) => grant.name === request.name)) {
+    return {
+      ok: false,
+      why: `"${request.name}" is another grant's name in ${grantsDir(home)}: a revocation is a separate record and never writes over a grant's file`,
+    };
+  }
+  const known = grants.some(
     (grant) => grant.name === request.grant && grant.generation === request.generation,
   );
   if (!known) {

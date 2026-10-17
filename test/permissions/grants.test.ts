@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { grantsDir } from '../../src/grant.ts';
-import { activeGrants, covers, readGrants, writeGrant, writeRevocation, type GrantRequest } from '../../src/permissions/grants.ts';
+import { activeGrants, covers, planRevocation, readGrants, writeGrant, writeRevocation, type GrantRequest } from '../../src/permissions/grants.ts';
 import { registerAgent, updateAgent } from '../../src/registry/agents.ts';
 
 const TEAM = 'aaaaaaaaaaaa';
@@ -264,5 +264,53 @@ describe('revocation: its own appended record', () => {
     expect(second.generation).toBeGreaterThan(first.generation);
     // The old revocation ends the old record alone: the new one admits.
     expect(activeGrants(world.home, NOON)).toEqual([second]);
+  });
+
+  test('a revocation named like its grant is refused at plan time; the grant file is untouched', () => {
+    const world = makeWorld();
+    const record = granted(world, {}, NOON);
+    const file = join(grantsDir(world.home), 'flag-gate.json');
+    const before = readFileSync(file);
+
+    const clash = { name: record.name, grant: record.name, generation: record.generation };
+    const plan = planRevocation(world.home, clash);
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) {
+      expect(plan.why).toContain(`"${record.name}" is its grant's own name`);
+      expect(plan.why).toContain('a revocation is a separate record');
+      expect(plan.why).toContain('never writes over');
+    }
+    // The write refuses on the same check: the grant's own file is exactly as it was, and still a grant.
+    expect(writeRevocation(world.home, clash, { now: NOON }).ok).toBe(false);
+    expect(readFileSync(file).equals(before)).toBe(true);
+    expect(readGrants(world.home).grants).toEqual([record]);
+    expect(readGrants(world.home).revocations).toEqual([]);
+    expect(activeGrants(world.home, NOON)).toEqual([record]);
+  });
+
+  test('a revocation whose record name another grant holds is refused at plan time; both files stay whole', () => {
+    const world = makeWorld();
+    const target = granted(world, {}, NOON);
+    // Another grant's file already holds the name a revocation of `flag-gate` would take.
+    const clash = granted(world, { name: 'revoke-flag-gate', capabilities: ['read'] }, NOON);
+    const targetFile = join(grantsDir(world.home), 'flag-gate.json');
+    const clashFile = join(grantsDir(world.home), 'revoke-flag-gate.json');
+    const targetBefore = readFileSync(targetFile);
+    const clashBefore = readFileSync(clashFile);
+
+    const request = { name: 'revoke-flag-gate', grant: target.name, generation: target.generation };
+    const plan = planRevocation(world.home, request);
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) {
+      expect(plan.why).toContain('"revoke-flag-gate" is another grant\'s name');
+      expect(plan.why).toContain('a revocation is a separate record');
+    }
+    expect(writeRevocation(world.home, request, { now: NOON }).ok).toBe(false);
+    expect(readFileSync(targetFile).equals(targetBefore)).toBe(true);
+    expect(readFileSync(clashFile).equals(clashBefore)).toBe(true);
+    expect(readGrants(world.home).grants).toEqual([target, clash]);
+    expect(readGrants(world.home).revocations).toEqual([]);
+    // Neither grant was ended by the refused write: both still admit.
+    expect(activeGrants(world.home, NOON)).toEqual([target, clash]);
   });
 });
