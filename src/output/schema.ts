@@ -387,6 +387,36 @@ export const PROJECTS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Reusable JSON Schema fragment for a `must_not_pretend` entry (`{ text, ref }`). */
+export const MUST_NOT_PRETEND_ENTRY_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['text', 'ref'],
+  properties: {
+    text: { type: 'string', minLength: 1 },
+    ref: { type: 'string', minLength: 1 },
+  },
+};
+
+/** Published `--json` output schema for `team --about` (`schema/about.schema.json`). */
+export const ABOUT_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.about',
+  fileName: 'about.schema.json',
+  title: 'team --about --json output',
+  required: ['format', 'version', 'description', 'licence', 'docs', 'must_not_pretend'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    version: { type: 'string', minLength: 1 },
+    description: { type: 'string', minLength: 1 },
+    licence: { type: 'string', minLength: 1 },
+    docs: { type: 'string', minLength: 1 },
+    must_not_pretend: {
+      type: 'array',
+      items: MUST_NOT_PRETEND_ENTRY_SCHEMA_FRAGMENT,
+    },
+  },
+};
+
 /** Published `--json` output schema for `team doctor` (`schema/doctor.schema.json`). */
 export const DOCTOR_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.doctor',
@@ -420,6 +450,10 @@ export const DOCTOR_OUTPUT_SCHEMA: CommandSchemaSpec = {
         warnings: { type: 'integer', minimum: 0 },
         blockers: { type: 'integer', minimum: 0 },
       },
+    },
+    must_not_pretend: {
+      type: 'array',
+      items: MUST_NOT_PRETEND_ENTRY_SCHEMA_FRAGMENT,
     },
   },
 };
@@ -1630,6 +1664,7 @@ export const USAGE_OUTPUT_SCHEMA: CommandSchemaSpec = {
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
+  ABOUT_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
   SEATS_OUTPUT_SCHEMA,
   PROJECTS_OUTPUT_SCHEMA,

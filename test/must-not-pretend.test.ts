@@ -16,21 +16,21 @@ import type { CheckSources } from '../src/check/team.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Io } from '../src/io.ts';
-import { INTEGRITY_NOT_AUTHORITY, NOT_PRETENDED } from '../src/permissions/must-not-pretend.ts';
+import { INTEGRITY_NOT_AUTHORITY, NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from '../src/permissions/must-not-pretend.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
-/** The record's five lines, under its heading, as `team doctor` and `team --about` print them. */
+/** The record's five plain lines, under its heading, as `team doctor` and `team --about` print them. */
 const LIST = [
   'what 0.5.0 must not pretend:',
-  '  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt',
-  '  Standing grants with an expiry, not leases',
-  '  No two-granter agreement, no `agree`, no `create` bounds',
-  '  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating',
-  '  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)',
+  '  The checks in 0.5.0 stop mistakes, not an agent on this machine that runs as you and sets out to get around those checks.',
+  '  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.',
+  '  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.',
+  '  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.',
+  '  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.',
 ];
 const BLOCK = `${LIST.join('\n')}\n`;
 
@@ -138,10 +138,26 @@ async function status(live: Live, ...argv: string[]) {
 }
 
 describe('team check omits the footer on every run; team doctor and team --about print NOT_PRETENDED', () => {
-  test('the module holds the record\'s lines, and the status footer is the first of them', () => {
+  test('the module holds the plain lines, keeps Kernel terms out of human lines, and carries refs for JSON and docs', () => {
     expect([...NOT_PRETENDED]).toEqual(LIST);
-    // The record's "every record and view says so": the view prints the check's own first line.
+    // The record's "every record and view says so": the first line is INTEGRITY_NOT_AUTHORITY.
     expect(INTEGRITY_NOT_AUTHORITY).toBe(LIST[1]!.slice(2));
+    for (const line of NOT_PRETENDED) {
+      expect(line).not.toContain('§');
+      expect(line).not.toContain('two-granter');
+      expect(line).not.toContain('`agree`');
+      expect(line).not.toContain('`act-as`');
+      expect(line).not.toContain('`use-broker`');
+      expect(line).not.toContain('`read`');
+      expect(line).not.toContain('`create`');
+    }
+    expect(NOT_PRETENDED_ENTRIES.map((e) => e.ref)).toEqual([
+      'Kernel §11, §12, §14',
+      'Kernel §7, §10, §14, §15 (standing grant vs lease; liveness walk)',
+      'Kernel §9, §10 (two-granter agreement, `agree`, `create`)',
+      'Kernel §3, §14 (`read` scope, `act-as`, `use-broker`, `deploy`)',
+      'Kernel §5, §9 (cardinality, mutual exclusion, separation of duties, cross-lab review)',
+    ]);
   });
 
   test('nothing wrong: ends with 0 difference(s) and omits NOT_PRETENDED and not known', async () => {

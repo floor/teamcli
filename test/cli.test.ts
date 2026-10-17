@@ -27,7 +27,25 @@ test('--version prints the package version and --about prints version, licence, 
   expect(about.out).toContain(`team ${version()}`);
   expect(about.out).toContain('licence: MIT');
   expect(about.out).toContain('what 0.5.0 must not pretend:');
-  expect(about.out).toContain('Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt');
+  expect(about.out).toContain('The checks in 0.5.0 stop mistakes, not an agent on this machine that runs as you and sets out to get around those checks.');
+
+  const aboutJson = io();
+  expect(await main(['--about', '--json'], aboutJson)).toBe(0);
+  expect(aboutJson.err).toBe('');
+  const parsed = JSON.parse(aboutJson.out) as {
+    schema: { name: string; version: number };
+    version: string;
+    licence: string;
+    must_not_pretend: Array<{ text: string; ref: string }>;
+  };
+  expect(parsed.schema).toEqual({ name: 'team.about', version: 1 });
+  expect(parsed.version).toBe(version());
+  expect(parsed.licence).toBe('MIT');
+  expect(parsed.must_not_pretend).toHaveLength(5);
+  expect(parsed.must_not_pretend[0]).toEqual({
+    text: 'The checks in 0.5.0 stop mistakes, not an agent on this machine that runs as you and sets out to get around those checks.',
+    ref: 'Kernel §11, §12, §14',
+  });
 });
 
 test('--help prints the usage and exits 0; no command exits 2', async () => {

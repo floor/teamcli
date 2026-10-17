@@ -298,6 +298,21 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
       'team.error': [
         jsonError('policy.refused', 'refused', 'team policy unset team dev-mode', 1, 'owner-only'),
       ],
+      'team.about': [
+        jsonEnvelope('team.about', {
+          format: 1 as const,
+          version: '0.5.0-rc.4',
+          description: 'Declarative multi-agent teams',
+          licence: 'MIT',
+          docs: 'https://github.com/floor/teamcli',
+          must_not_pretend: [
+            {
+              text: 'The checks in 0.5.0 stop mistakes, not an agent on this machine that runs as you and sets out to get around those checks.',
+              ref: 'Kernel §11, §12, §14',
+            },
+          ],
+        }),
+      ],
       'team.status': [
         jsonEnvelope('team.status', {
           format: 1 as const,

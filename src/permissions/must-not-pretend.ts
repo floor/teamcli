@@ -1,22 +1,46 @@
 // What 0.5.0 must not pretend, said plainly (decided-grants-minimum-2026-10-17, "What 0.5.0
-// must not pretend, said plainly"): the release's own honest limits, in the record's words. In
-// the 0.5.0 output contract (§2.3), this block is printed only by `team doctor` (full runs, not
-// `--login`) and `team --about`; routine operational commands (`team status` and `team check`)
-// omit it so repeated runs stay quiet by default.
+// must not pretend, said plainly", and briefs/teamcli-notes/must-not-pretend-plain.md): the
+// release's own honest limits in plain words for human output, with each line's Kernel reference
+// carried in `--json` (`ref`) and in the docs. In the 0.5.0 output contract (§2.3), this block is
+// printed only by `team doctor` (full runs, not `--login`) and `team --about`; routine operational
+// commands (`team status` and `team check`) omit it so repeated runs stay quiet by default.
 
-/** The first line of `NOT_PRETENDED`: the gates hold against a mistake, not against an attempt. */
+export interface NotPretendedEntry {
+  text: string;
+  ref: string;
+}
+
+/** The first line of `NOT_PRETENDED`: the checks hold against a mistake, not against an attempt. */
 export const INTEGRITY_NOT_AUTHORITY =
-  'Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt';
+  'The checks in 0.5.0 stop mistakes, not an agent on this machine that runs as you and sets out to get around those checks.';
 
-/** The closing block printed by `team doctor` and `team --about`: the heading and the record's five
- *  lines, in the record's order. The heading is the record's section title; the entry lines are
- *  its bullets as the record words them, its markdown emphasis dropped, the first joined the
- *  way the record joins a lead to its body (bullets 4 and 6's own `: `). */
+/** Each entry of `NOT_PRETENDED`, pairing the plain sentence with its Kernel section reference. */
+export const NOT_PRETENDED_ENTRIES: readonly NotPretendedEntry[] = [
+  {
+    text: INTEGRITY_NOT_AUTHORITY,
+    ref: 'Kernel §11, §12, §14',
+  },
+  {
+    text: 'A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.',
+    ref: 'Kernel §7, §10, §14, §15 (standing grant vs lease; liveness walk)',
+  },
+  {
+    text: 'Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.',
+    ref: 'Kernel §9, §10 (two-granter agreement, `agree`, `create`)',
+  },
+  {
+    text: 'Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.',
+    ref: 'Kernel §3, §14 (`read` scope, `act-as`, `use-broker`, `deploy`)',
+  },
+  {
+    text: 'Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.',
+    ref: 'Kernel §5, §9 (cardinality, mutual exclusion, separation of duties, cross-lab review)',
+  },
+];
+
+/** The closing block printed by `team doctor` and `team --about`: the heading and the five plain
+ *  lines, in the record's order. */
 export const NOT_PRETENDED: readonly string[] = [
   'what 0.5.0 must not pretend:',
-  `  ${INTEGRITY_NOT_AUTHORITY}`,
-  '  Standing grants with an expiry, not leases',
-  '  No two-granter agreement, no `agree`, no `create` bounds',
-  '  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating',
-  '  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)',
+  ...NOT_PRETENDED_ENTRIES.map((entry) => `  ${entry.text}`),
 ];

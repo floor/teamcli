@@ -2,7 +2,8 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Command, Io } from './io.ts';
-import { NOT_PRETENDED } from './permissions/must-not-pretend.ts';
+import { writeJson } from './output/index.ts';
+import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from './permissions/must-not-pretend.ts';
 import { description, homepage, license, version } from './version.ts';
 
 // Each command is loaded only when it is called. A slice adds its line here. The table is exported
@@ -106,8 +107,24 @@ export async function main(argv: string[], io: Io): Promise<number> {
     // exit: team.no-command
     return name ? 0 : 2;
   }
-  if (name === '--version' || name === '-V' || name === '--about') {
-    io.stdout(name === '--about' ? aboutText() : `${version()}\n`);
+  if (name === '--version' || name === '-V' || name === '--about' || (name === '--json' && rest.includes('--about'))) {
+    const isAbout = name === '--about' || rest.includes('--about');
+    const isJson = isAbout && (name === '--json' || rest.includes('--json'));
+    if (isJson) {
+      writeJson(io, 'team.about', {
+        format: 1,
+        version: version(),
+        description: description(),
+        licence: license(),
+        docs: homepage(),
+        must_not_pretend: NOT_PRETENDED_ENTRIES.map((entry) => ({
+          text: entry.text,
+          ref: entry.ref,
+        })),
+      });
+    } else {
+      io.stdout(isAbout ? aboutText() : `${version()}\n`);
+    }
     return 0; // exit: team.version
   }
   // Hidden: a port speaks this protocol. It is not a command in the help text.

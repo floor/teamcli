@@ -803,7 +803,7 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
 }
 
 import { contextLine, hasJsonFlag, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
-import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
+import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from '../permissions/must-not-pretend.ts';
 
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
   const out = cleanedIo(io);
@@ -898,6 +898,14 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
         warnings,
         blockers,
       },
+      ...(loginOnly
+        ? {}
+        : {
+            must_not_pretend: NOT_PRETENDED_ENTRIES.map((entry) => ({
+              text: entry.text,
+              ref: entry.ref,
+            })),
+          }),
     });
   } else {
     const style = ttyStyle(io);
