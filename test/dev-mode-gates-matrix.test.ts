@@ -36,11 +36,11 @@ const IDLE = CLAUDE_IDLE;
 const NOW = new Date('2026-10-15T12:00:00Z');
 const UNPLACED = { kind: 'unplaced' as const, reason: 'it runs under herdr' };
 
-test('the dev-mode scope is one list: exactly these eight commands', () => {
+test('the dev-mode scope is one list: exactly these nine commands', () => {
   // The one place the scope is written (`src/policy/types.ts`, re-exported by `src/dev_mode.ts`).
   // A command added here is a caller gate dev mode folds; a command left off stays owner-only in
   // every mode.
-  expect([...DEV_MODE_COMMANDS]).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init', 'reload']);
+  expect([...DEV_MODE_COMMANDS]).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init', 'reload', 'rename']);
 });
 
 let dirs: string[] = [];
