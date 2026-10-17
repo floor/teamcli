@@ -890,6 +890,33 @@ scene('check.session-owner', async (place) => {
   recordsLead(place);
   return show(await checked(place, ['--session', 'other'], leadSeat, checkSources(quiet)), "--session is the owner's");
 });
+scene('check.repair-owner', async (place) => {
+  write(place, TEAM);
+  recordsLead(place);
+  return show(await checked(place, ['--repair'], leadSeat, checkSources(quiet)), "--repair is the owner's");
+});
+scene('check.repaired', async (place) => {
+  write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.watch = { pid: 1, heartbeat: NOW.toISOString() };
+    session.seats.lead = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
+    // A record for a seat the file no longer declares, and one for a session herdr no longer
+    // runs: the owner's --repair drops both, and the state says what the file does.
+    session.seats.gone = { stage: 'ready', pane: 'w1:p2', workspace: 'w1' };
+    state.sessions.left = { seats: {}, worktrees: {} };
+  });
+  approve(place, TEAM);
+  const matched: Live = {
+    running: true,
+    agents: [agent('lead')],
+    workspaces: [{ id: 'w1', label: 'lead' }],
+    screens: { 'w1:p1': IDLE },
+  };
+  const sources = checkSources(matched, approvalStanding(place.root, place.home));
+  sources.sessionRuns = (name) => name === 'acme';
+  return show(await checked(place, ['--repair'], owner, sources), 'repaired:');
+});
 scene('check.not-yours', async (place) => {
   // A caller that does not pass learns nothing, even when the target does not load: the answer is
   // the one fixed sentence, byte for byte, on stderr, and nothing else anywhere.
