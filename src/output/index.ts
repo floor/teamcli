@@ -60,6 +60,7 @@ export {
   publishCommandOutputSchema,
   renderCommandOutputSchema,
   schemaTagFragment,
+  SEATS_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
   SUMMARY_SCHEMA_FRAGMENT,
   type ActionSchemaSpec,
