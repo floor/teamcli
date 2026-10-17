@@ -2,9 +2,12 @@
 
 Shows what this machine holds: every team it keeps a store for, read as one report — each
 team's accounts and windows, with what is left and used, when each figure was last read and from
-which source. The caller's own project is one of those teams, whether or not it holds a store.
-Anyone may run it, from anywhere, and it only reads: no check runs, no CLI is launched, no pane is
-read, and nothing is written anywhere.
+which source — then a quota view per lab and per account with the pace margin, the seats drawing
+on it and one advice line. The caller's own project is one of those teams, whether or not it
+holds a store. Anyone may run it, from anywhere, and it only reads: no check runs and nothing is
+written. It reads the seat panes herdr records and may run the CLI's own usage command where a
+seat runs a CLI that has one, bounded by a timeout; it opens no credential, key or CLI session
+file.
 
 ## Synopsis
 
@@ -127,13 +130,63 @@ the report is the restricted view:
 $ team usage ; echo "exit $?"
 usage on this machine, 1 team, 2 labs, 1 account
 
-anthropic  not known (no team declares an account for it yet)
+anthropic  not known: no account declared; declare it in ~/.config/team/accounts.yaml
 openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known
   beacon    session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known
+
+quota
+  openai  unknown
+    openai  unknown
+      not known: no reading yet
+advice: no readings yet: no seat status line and no CLI usage command has answered
 
 beacon
   claude-keeper  claude-code  anthropic
 exit 0
 ```
+
+The quota block has nothing to show here: this fixture holds a checked session reading in the
+team's own state, and the block reads the watch's machine-wide observations and the live sources,
+neither of which is present in an example run. On a machine where the watch has recorded a status
+row, the same account prints its windows, margin and state there.
+
+## The quota view
+
+After the account blocks, `team usage` prints `quota`: one block per lab and per account, and one
+advice line.
+
+    quota
+      anthropic  ok
+        anthropic  ok  seats: lead, coda
+          session  used 20%  left 80%  resets in 2h6m  margin +38%  (status line, read 1m ago)
+          weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)
+      xai  walled
+        xai  walled  resets at 3pm  seats: scout
+          weekly  used 100%  left 0%  resets unknown  margin not known  (machine reading, read 1m ago)
+    advice: swap scout off xai (walled) to anthropic (weekly used 12%, margin +13.3%)
+
+Each window line carries the percentage used and left, when it resets, the margin, and where the
+figure came from. The margin is the window's own clock minus the spend: 125h26m to reset leaves
+42h34m of a seven-day window gone, 25.3%, so 12% used reads `margin +13.3%`. A status row that
+prints its own margin (`W: 12% (+13.3%)`) is believed as printed; a row that prints none is read
+against the window's length (five hours for the session window, seven days for the weekly one). A
+figure older than five minutes, or one whose reset has passed, prints `stale` and carries no
+margin. A wall screen — `quota reached`, `out of usage`, `usage limit reached`, or the CLI's own
+rate-limit rejection — prints the account as `walled` with the reset words the screen showed.
+
+An account's state is `walled` at 100% used or on a live wall, `near cap` at 90% or above, `ok`
+below that, and `unknown` when nothing fresh has been observed. The one `advice:` line names the
+accounts with headroom (a fresh margin of at least +10%), or the walled seats and the healthiest
+account to move them to, or says that no readings have answered.
+
+The sources are all observable, and the block reads none of them from a credential, a key or a
+CLI session file: the watch's machine-wide readings
+(`~/.config/team/usage/readings.json`), the status row of each seat's pane through herdr, the
+CLI's own usage command where it has one (`agy --print /usage`, bounded by a 15-second timeout),
+and the quota screens above. A lab no account is declared for prints one line — `not known: no
+account declared; declare it in ~/.config/team/accounts.yaml` — and the block stays silent for it.
+An unreadable seat pane or an unanswered usage command is one counted note, however many seats
+hit it. In `--json` the block is the `quota` key: `format`, `accountsFile`, one entry per lab
+with its accounts, seats, states and windows, and `advice`.
 
 Rationale, behaviour, refusals and known limits: [docs/internal/usage.md](../internal/usage.md).

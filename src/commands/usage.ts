@@ -10,7 +10,9 @@ import {
   StoreUnreadable,
   viewFor,
   type MachineUsage,
+  type UsageView,
 } from '../information/usage.ts';
+import { realQuotaObservations, type QuotaLive } from '../information/quota-observe.ts';
 import type { Command, Io } from '../io.ts';
 
 export const USAGE = 'Usage: team usage [--json] [--all]\n';
@@ -19,14 +21,21 @@ export const USAGE = 'Usage: team usage [--json] [--all]\n';
  *  this command does not have, and it is a note with exit 0, not a refusal. */
 export const NO_PROJECT = 'no team file is found from this folder; there is no project block to show';
 
-/** What the command reads from outside itself: the home whose store it consults, and the clock. */
+/** What the command reads from outside itself: the home whose store it consults, the clock, and
+ *  the live quota observer — absent from a test's own sources, which then read no pane and run
+ *  no CLI, so every existing figure stays the file's own. */
 export type UsageSources = {
   /** The home whose approval store is read. Required, so no test can reach the owner's own. */
   home: string;
   now(): Date;
+  observe?(machine: MachineUsage, view: UsageView, now: number): QuotaLive;
 };
 
-export const realSources: UsageSources = { home: homedir(), now: () => new Date() };
+export const realSources: UsageSources = {
+  home: homedir(),
+  now: () => new Date(),
+  observe: (machine, view, now) => realQuotaObservations(machine, view, now),
+};
 
 export const usage: Command = (argv, io) => runUsage(argv, io, realSources);
 export default usage;
@@ -36,7 +45,9 @@ export default usage;
  * each, the caller's own project among them — resolved and printed under the caller's view, the
  * way the design note rules (§ 2.1-§ 2.3). Read-only: it writes nothing anywhere, not even the
  * `last_valid` copy `currentTeam` keeps, and it never answers from that copy when the file
- * breaks. Any caller may run it, from any folder, and a run outside every project is no refusal:
+ * breaks. The live quota sources it may read — a seat's own status row through herdr and a CLI's
+ * own usage command — are read, never written; no credential, key or CLI session file is opened.
+ * Any caller may run it, from any folder, and a run outside every project is no refusal:
  * `mine` is null and the whole report reads restricted. The caller is placed once (`viewFor`,
  * `caller.ts`): the owner at a terminal reads the full view — every team named, every root
  * carried, every team's own rows — and everyone else, the restricted view, whose shape is the one
@@ -89,7 +100,7 @@ export async function runUsage(argv: string[], io: Io, sources: UsageSources): P
     // exit: usage.store
     return 2;
   }
-  const report = reportOf(machine, view, now.getTime(), mineNotes, allTeams);
+  const report = reportOf(machine, view, now.getTime(), mineNotes, allTeams, sources.observe === undefined ? null : sources.observe(machine, view, now.getTime()));
   io.stdout(json ? `${JSON.stringify(report, null, 2)}\n` : reportText(report));
   // exit: usage.block
   return 0;

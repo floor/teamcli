@@ -77,7 +77,9 @@ transcript or input box is not a reading. The supported screen grammars are:
 
 Antigravity's screen fixtures do not provide a quota percentage. Accounts without a supported
 screen grammar or a recorded figure print `not readable from a CLI screen`. Readable accounts
-without an observation print `unknown`. The command emits no account-declaration notes.
+without an observation print `unknown`. A lab no account is declared for prints one line —
+`not known: no account declared; declare it in ~/.config/team/accounts.yaml` — and the quota
+block below stays silent for it, so the sentence appears once.
 
 The watch merges observations into `~/.config/team/usage/readings.json` under a machine lock and
 replaces the file atomically. Each record contains account, optional pool, window, left/used
@@ -90,19 +92,69 @@ separate confirmation, source-order or reserve rules. Existing team check readin
 participate in the report, and an older machine observation does not replace a newer team
 reading. Machine observations older than five minutes or past their reset are marked stale.
 
+## The quota view
+
+After the account blocks the report prints `quota`: one block per visible lab, one line per
+account under it, one line per window, and one `advice:` line. The model lives in
+`information/quota.ts`; the live readers in `information/quota-observe.ts`; `reportOf` builds the
+block from the labs it already shows, so a lab or account this view hides can never reach it.
+
+A window line prints the used and left percentages, the reset (a countdown, or the words a wall
+screen showed), the margin, and the source with the reading's age. Observations are stamped when
+read, and the newest observation per account, pool and window wins. Two sources print no
+percentage: the watch's machine cache (`source: machine reading`) and the live readers.
+
+The margin is `expected minus used`, in percentage points: the share of the window that has
+already elapsed minus the share spent. The session window is five hours (the length the
+Antigravity usage print names as `Five Hour Limit`); the weekly window is seven days. A status row
+that prints its own margin — Claude Code's `W: 12% (+13.3%)` — is believed as printed; otherwise
+the figure is computed from the reset when it is known and still ahead. A reading older than five
+minutes, or one whose reset has passed, is `stale`: it prints marked and carries no margin. States
+are `walled` (a live wall screen, or 100% used), `near cap` (90% and above), `ok` below that, and
+`unknown` when nothing fresh is observed.
+
+The advice line is built only from what the block already shows. With walls, it names the seats
+on each walled account (up to two) and the account with the best fresh margin at or above +10% as
+the destination, or says that no other account has headroom. With no walls, it names the accounts
+with that headroom; when figures exist but none has it, it says so; when nothing has answered, it
+says that. A restricted caller's advice can only name accounts and seats the restricted view
+already shows: another team's seats are counted (`+N on another team`), never named.
+
+The live readers are observable only, and none opens a credential, key or CLI session file:
+
+- the status row of each recorded seat pane, read once through herdr (`paneRead`, the
+  classifier's `statusRow`, and the profile quota grammars); a claude-family row's `L`/`W` labels
+  are read with their printed margin, which the profile grammar's single parenthesised field
+  cannot carry;
+- the CLI's own usage command where one exists — `agy --print /usage`, with a 15-second timeout
+  and stderr discarded — parsed only in the tab-separated shape a real run produced
+  ("Remaining" is the left percentage);
+- quota screens: the profile's own rate-limit classifier first, then the phrases `quota reached`,
+  `out of usage`, `usage limit reached`, and the CLI's 429/403 rejection. A wall is never given an
+  invented percentage; the reset words it printed ride the account line.
+
+An unreadable pane or an unanswered usage command is one counted note (`1 seat pane could not be
+read`, `a CLI usage command did not answer`) however many seats hit it. The restricted view reads
+only the caller's own team's panes; the full view reads every team's. The machine reading cache is
+machine-wide, as the report's own machine lines already are.
+
 ## Output and privacy
 
 Text and JSON use the same report. `--json` has format 1, a read timestamp, view, caller project,
-counts, account rows grouped by lab, unknown reasons, notes, and `teams` with seat mappings.
-Subscription rows carry the window, left/used percentages, reset countdown and reading age;
-Antigravity pool rows add `pool`. A machine account counts once even with multiple windows or
-pools.
+counts, account rows grouped by lab, the `quota` block, unknown reasons, notes, and `teams` with
+seat mappings. Subscription rows carry the window, left/used percentages, reset countdown and
+reading age; Antigravity pool rows add `pool`. A machine account counts once even with multiple
+windows or pools. The `quota` block carries `format: 1`, the accounts file the declaration line
+points at, one lab per entry with its accounts, seats, states and windows (each with its source,
+age, staleness, wall flag and margin), and the one advice sentence.
 
 The full view belongs to the owner at a terminal. Every other caller receives the restricted
 view: its approved team names and rows, shared machine subscriptions, and anonymized counts or
 fixed notes for other teams. Raw state errors and unbound state strings do not cross that
 boundary. `--all` does not elevate an agent's permissions.
 
-`usage` itself is read-only: it runs no check, starts no CLI, reads no pane or CLI session file,
-and writes no state. Missing project data is a note and exit 0. Invalid arguments or an unreadable
-store directory return exit 2. A missing or malformed machine reading cache supplies no figures.
+`usage` itself is read-only: it runs no check, writes no state, and opens no credential, key or
+CLI session file. It reads the seat panes herdr records, and it starts the CLI's own usage print
+only for a seat that already runs that CLI, bounded by a timeout. Missing project data is a note
+and exit 0. Invalid arguments or an unreadable store directory return exit 2. A missing or
+malformed machine reading cache supplies no figures.

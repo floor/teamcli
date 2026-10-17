@@ -83,6 +83,18 @@ const REPORT = [
   'openai  weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h  (no watch is recording for acme)',
   '  acme    weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h',
   '',
+  // The quota block: this machine's watch store holds no reading and no live source answers a
+  // test's own run (`observe` is absent from its sources), so both declared accounts read unknown
+  // and the advice says so. The seats are the file's own: the lead pays `anthropic` by its vendor.
+  'quota',
+  '  anthropic  unknown',
+  '    anthropic  unknown  seats: lead',
+  '      not known: no reading yet',
+  '  openai  unknown',
+  '    openai  unknown',
+  '      not known: no reading yet',
+  'advice: no readings yet: no seat status line and no CLI usage command has answered',
+  '',
   'acme',
   '  lead  claude-code  anthropic',
 ].join('\n');
@@ -444,6 +456,26 @@ describe('team usage', () => {
       ],
       unknown: [],
       notes: [],
+      // The quota view: no machine reading and no live source in a test's own run, so both
+      // declared accounts are unknown, the lead is the one seat on its vendor's account, and the
+      // advice says what is missing rather than inventing a figure.
+      quota: {
+        format: 1,
+        accountsFile: '~/.config/team/accounts.yaml',
+        labs: [
+          {
+            lab: 'anthropic',
+            state: 'unknown',
+            accounts: [{ account: 'anthropic', state: 'unknown', windows: [], seats: ['lead'], wallResets: null }],
+          },
+          {
+            lab: 'openai',
+            state: 'unknown',
+            accounts: [{ account: 'openai', state: 'unknown', windows: [], seats: [], wallResets: null }],
+          },
+        ],
+        advice: 'no readings yet: no seat status line and no CLI usage command has answered',
+      },
       teams: [{ team: 'acme', seats: [{ seat: 'lead', cli: 'claude-code', account: 'anthropic' }] }],
     });
   });
@@ -505,7 +537,7 @@ describe('team usage', () => {
     // team row and a spend reading — so a key that does cross fails here by name, not only by
     // plant. A machine's optional tail (`watch`, `team`, `seat`) varies with the line, so its
     // fixed head is pinned in order and the whole object by the `--json` document test above.
-    expect(Object.keys(report)).toEqual(['format', 'at', 'view', 'mine', 'counts', 'labs', 'unknown', 'notes', 'teams']);
+    expect(Object.keys(report)).toEqual(['format', 'at', 'view', 'mine', 'counts', 'labs', 'quota', 'unknown', 'notes', 'teams']);
     for (const block of report.teams) {
       expect(Object.keys(block)).toEqual(['team', 'seats']);
       for (const seat of block.seats) expect(Object.keys(seat)).toEqual(['seat', 'cli', 'account']);
@@ -696,6 +728,15 @@ describe('team usage', () => {
       '  acme    unknown  pace not known',
       '  (acme: no pattern can read this account)',
       '',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      '  openai  unknown',
+      '    openai  unknown',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
+      '',
       'acme',
       '  lead  claude-code  anthropic',
       'note: acme: .agents/team.state.json is not valid JSON; move it aside and run the command again',
@@ -721,7 +762,10 @@ describe('team usage', () => {
     expect(bare.out).toBe([
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'anthropic  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      '',
+      'quota',
+      'advice: no lab is declared on this machine: declare an account first',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -739,7 +783,10 @@ describe('team usage', () => {
     expect(mine.out).toBe([
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'anthropic  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      '',
+      'quota',
+      'advice: no lab is declared on this machine: declare an account first',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -758,7 +805,10 @@ describe('team usage', () => {
     expect(owner.out).toBe([
       'usage on this machine, 1 team, 1 lab, 1 account',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'anthropic  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      '',
+      'quota',
+      'advice: no lab is declared on this machine: declare an account first',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -778,7 +828,10 @@ describe('team usage', () => {
     expect(bare.out).toBe([
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'anthropic  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      '',
+      'quota',
+      'advice: no lab is declared on this machine: declare an account first',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -794,7 +847,10 @@ describe('team usage', () => {
     expect(mine.out).toBe([
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'anthropic  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      '',
+      'quota',
+      'advice: no lab is declared on this machine: declare an account first',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -811,7 +867,10 @@ describe('team usage', () => {
     expect(owner.out).toBe([
       'usage on this machine, 1 team, 1 lab, 1 account',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'anthropic  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      '',
+      'quota',
+      'advice: no lab is declared on this machine: declare an account first',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -915,7 +974,14 @@ describe('team usage', () => {
     const text = await usageAt(elsewhere);
     expect(text.code).toBe(0);
     expect(text.err).toBe('');
-    expect(text.out).toBe(`usage on this machine, 1 team, 2 labs, 2 accounts\n\nnote: ${NO_PROJECT}\n`);
+    expect(text.out).toBe([
+      'usage on this machine, 1 team, 2 labs, 2 accounts',
+      '',
+      'quota',
+      '  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      'advice: no lab is declared on this machine: declare an account first',
+      `note: ${NO_PROJECT}`,
+    ].join('\n') + '\n');
     const json = await usageAt(elsewhere, undefined, '--json');
     expect(JSON.parse(json.out)).toEqual({
       format: 1,
@@ -926,6 +992,12 @@ describe('team usage', () => {
       labs: [],
       unknown: [],
       notes: [{ scope: 'mine', why: NO_PROJECT }],
+      quota: {
+        format: 1,
+        accountsFile: '~/.config/team/accounts.yaml',
+        labs: [],
+        advice: 'no lab is declared on this machine: declare an account first',
+      },
       teams: [],
     });
   });
@@ -960,6 +1032,9 @@ describe('team usage', () => {
     expect(mine.out).toBe([
       'usage on this machine, 1 team, 0 labs, 0 accounts',
       '',
+      'quota',
+      '  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      'advice: no lab is declared on this machine: declare an account first',
       'note: .agents/team.yaml does not load (line 1): the owner reads the reason',
       'note: 1 team has no figures (its file could not be read)',
     ].join('\n') + '\n');
@@ -991,6 +1066,9 @@ describe('team usage', () => {
     expect(mine.out).toBe([
       'usage on this machine, 1 team, 0 labs, 0 accounts',
       '',
+      'quota',
+      '  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      'advice: no lab is declared on this machine: declare an account first',
       'note: .agents/team.yaml cannot be read: the owner reads the reason',
       'note: 1 team has no figures (its file could not be read)',
     ].join('\n') + '\n');
@@ -1079,9 +1157,10 @@ describe('team usage', () => {
     expect(mine.code).toBe(0);
     expect(mine.out).toContain(`\n${name}  not readable from a CLI screen\n  acme    unknown  pace not known\n`);
     // The name is the only absolute-looking string in either face, however often it repeats in
-    // the document — once in the text, at each place the document names the account — and no
-    // string the tool derived stands anywhere near it.
-    expect(absoluteTokens(mine.out)).toEqual([name]);
+    // the document — in the text, at each place the document names the account: the lab's own
+    // line, and the quota block's lab and account lines — and no string the tool derived stands
+    // anywhere near it.
+    expect(absoluteTokens(mine.out)).toEqual([name, name, name]);
     expect(absoluteTokens(raw).length).toBeGreaterThan(0);
     expect(absoluteTokens(raw).filter((token) => token !== name)).toEqual([]);
     expectNoDerivedPath([mine.out, raw], undefined, [name]);
@@ -1133,7 +1212,10 @@ describe('team usage', () => {
     expect(mine.out).toBe([
       'usage on this machine, 1 team, 1 lab, 0 accounts',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'anthropic  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      '',
+      'quota',
+      'advice: no lab is declared on this machine: declare an account first',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -1187,12 +1269,21 @@ describe('team usage', () => {
     expect(mine.out).toBe([
       'usage on this machine, 1 team, 3 labs, 3 accounts',
       '',
-      `${LIVE_VENDOR}  not known (no team declares an account for it yet)`,
+      `${LIVE_VENDOR}  not known: no account declared; declare it in ~/.config/team/accounts.yaml`,
       'anthropic  unknown',
       '  acme    unknown  pace not known',
       'openai  unknown',
       '  acme    unknown  pace not known',
       '  (acme: no pattern can read this account)',
+      '',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      '  openai  unknown',
+      '    openai  unknown',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -1206,7 +1297,7 @@ describe('team usage', () => {
     const owner = await usageAt(root, OWNER);
     const ownerRaw = (await usageAt(root, OWNER, '--json')).out;
     expect(owner.code).toBe(0);
-    expect(owner.out).toContain(`${LIVE_VENDOR}  not known (no team declares an account for it yet)\n`);
+    expect(owner.out).toContain(`${LIVE_VENDOR}  not known: no account declared; declare it in ~/.config/team/accounts.yaml\n`);
     expect(owner.out).toContain(`${LIVE_VENDOR}  not known`);
     expect(ownerRaw).toContain(LIVE_VENDOR);
     for (const face of [owner.out, ownerRaw]) expect(face).not.toContain('not shown');
@@ -1243,6 +1334,15 @@ describe('team usage', () => {
       '  acme    unknown  pace not known',
       'openai  weekly  left 5%  used 95%  resets in 44m  ghost  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known  (no watch is recording for acme)',
       '  acme    weekly  left 5%  used 95%  resets in 44m  ghost  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known',
+      '',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead, ghost',
+      '      not known: no reading yet',
+      '  openai  unknown',
+      '    openai  unknown',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
       '  lead  claude-code  anthropic',
@@ -1405,6 +1505,15 @@ describe('team usage', () => {
       'openai  weekly  left 5%  used 95%  resets in 44m  -  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known  (no watch is recording for acme)',
       '  acme    weekly  left 5%  used 95%  resets in 44m  -  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known',
       '',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      '  openai  unknown',
+      '    openai  unknown',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
+      '',
       'acme',
       '  lead  claude-code  anthropic',
       `note: acme: ${UNBOUND_SHAPE}`,
@@ -1558,6 +1667,15 @@ describe('team usage', () => {
       'anthropic: 1 other account',
       'openai  weekly  left 88%  used 12%  resets in 44m  read by another team, 1m ago  status line  fresh  (no watch is recording for it)',
       '  acme-7QK    weekly  left 5%  used 95%  resets in 44m  lead  changed 10m ago  status line  fresh, inside reserve 20%  pace not known',
+      '',
+      'quota',
+      '  acme-only-8ZKQ  unknown',
+      '    acme-only-8ZKQ  unknown',
+      '      not known: no reading yet',
+      '  openai  unknown',
+      '    openai  unknown',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme-7QK',
       '  lead  claude-code  anthropic',

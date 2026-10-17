@@ -79,8 +79,15 @@ test('a watch persists a Grok zero without team budgets; usage counts machine su
   expect(usage.out).toContain('lead  grok  xai');
   // The seat's own vendor forms a lab with no account under it, and says so; the machine's
   // readings are counted, so the "nothing is counted" sentence never prints.
-  expect(usage.out).toContain('wrong-vendor  not known (no team declares an account for it yet)');
+  expect(usage.out).toContain('wrong-vendor  not known: no account declared; declare it in ~/.config/team/accounts.yaml');
   expect(usage.out).not.toContain('nothing is counted');
+  // The persisted zero is a wall in the quota view: the reading the watch wrote is the one the
+  // block reads, it names no reset so the margin has no clock to read, and the advice names the
+  // seat drawing on the walled account rather than inventing a destination.
+  expect(usage.out).toContain('  xai  walled\n');
+  expect(usage.out).toContain('    xai  walled  seats: lead\n');
+  expect(usage.out).toContain('      weekly  used 100%  left 0%  resets unknown  margin not known  (machine reading, read 2m ago)');
+  expect(usage.out).toContain('advice: swap lead off xai (walled): no other account has headroom');
 });
 
 test('machine subscriptions and a persisted reading remain visible outside any team', () => {

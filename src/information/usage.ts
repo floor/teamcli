@@ -2,6 +2,8 @@
 // say about its labs, accounts and windows, in the rows `status` already prints. It reads files
 // only — the live team file, the state beside it, the store — and writes nothing at all:
 // no `last_valid` copy, no log line, no lock, no state. It runs nothing, reads no pane, no vendor file, no vendor key.
+// The live quota sources (a seat's status line, a CLI's usage command, a quota screen) live in
+// `quota-observe.ts` and are handed in as observations; nothing here reaches a pane itself.
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { budgetsInForceOf, notInForce, watchInForceOf } from '../approve/approval.ts';
@@ -19,6 +21,7 @@ import { readMachineReadings, type MachineReading } from './machine-readings.ts'
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
 import type { WindowName } from '../profiles/quota.ts';
+import { quotaOf, quotaText, PANE_UNREAD, USAGE_UNANSWERED, type QuotaLabInput, type QuotaObservation, type ReportQuota } from './quota.ts';
 import { readState, type State } from '../state.ts';
 import { approvalStanding, readApproval, storesFolder, type ApprovalRecord, type Standing } from '../store/store.ts';
 
@@ -58,6 +61,10 @@ export function viewFor(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSo
  *  ruled after their real run on this command. */
 export const NOTHING_COUNTED = "not known: this team's file declares no account, so nothing is counted";
 
+/** The machine's own account list: the file a lab with no account declaration points at, so the
+ *  one line the owner asked for tells them where to declare it. */
+export const ACCOUNTS_FILE = '~/.config/team/accounts.yaml';
+
 /** The line a team's rows read when its live file cannot be read. */
 export const NO_FIGURES = 'no figures (the file could not be read)';
 
@@ -96,8 +103,10 @@ export type UsageRow = { row: BudgetRow; changedAt: number | null; pace: number 
  *  as fallbacks so an explicit declaration in any team takes precedence. */
 export type DeclaredAccount = { account: string; kind: 'subscription' | 'spend'; lab: string; fallback?: true };
 
-/** One row of the per-team breakdown: a seat, its CLI, and the account that pays for it. */
-export type SeatAccountRow = { seat: string; cli: string; account: string; pool?: 'gemini' | 'claude-gpt' };
+/** One row of the per-team breakdown: a seat, its CLI, and the account that pays for it. `pane`
+ *  is the seat's recorded herdr pane, when the state has one: the live quota observer reads it,
+ *  and `reportOf` never carries it (each field of `ReportSeatRow` is copied by name). */
+export type SeatAccountRow = { seat: string; cli: string; account: string; pool?: 'gemini' | 'claude-gpt'; pane?: string | null };
 
 /** Why nothing counts for an account, in the tool's own kinds — the words are the renderer's
  *  (`doctor.ts:154`, `:187`, `gate.ts:90`), never a message a read produced. `first-sight` is the
@@ -139,6 +148,9 @@ export type ProjectUsage = {
   /** The per-seat breakdown: every seat in force with the account that pays for it, in file
    *  order. The report prints it for the caller's own team, and for every team under `--all`. */
   seatAccounts: SeatAccountRow[];
+  /** The team file's own herdr session: the live quota observer reads the seats' panes under it.
+   *  Null when the file cannot be read; the observer then reads no pane for this team. */
+  session: string | null;
   /** The borrowing this team does: one entry per account a seat of its own pays with that the
    *  machine's `accounts.yaml` gives to another entity — sorted by account, the owner resolved by
    *  the file's own order (`ownerEntityOf`). A team whose file names no `entity:` borrows every
@@ -221,7 +233,7 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     // plus the state's own problem when there is one.
     const problems: TeamProblem[] = [{ kind: 'no-figures', text: NO_FIGURES }];
     if (stateProblem !== null) problems.push(stateProblem);
-    return { project: null, rows: [], whyNotCounted: null, spend: [], watch: 'not-known', staleAfter: defaultBudgets().staleAfter, accounts: [], seatAccounts: [], borrows: [], quotaAccounts: [], vendors: [], whys: [], problems, notes };
+    return { project: null, rows: [], whyNotCounted: null, spend: [], watch: 'not-known', staleAfter: defaultBudgets().staleAfter, accounts: [], seatAccounts: [], session: null, borrows: [], quotaAccounts: [], vendors: [], whys: [], problems, notes };
   }
   // The live file is the record for every caller: the budgets in force, the project name and
   // the seats all read from it, the owner and a caller who is not the owner alike. Before any
@@ -242,6 +254,10 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
   if (whyNotCounted !== null) problems.push(problemOf(standing, whyNotCounted));
   else if (project === null) problems.push({ kind: 'no-figures', text: NO_FIGURES });
   if (stateProblem !== null) problems.push(stateProblem);
+  // The seat's recorded pane, when the state holds one: the live quota observer's only handle on
+  // a seat's screen. A read state that failed leaves every pane absent, and the observer then
+  // reads nothing for this team — never a pane number invented from another session.
+  const sessionState = state?.sessions[team.session];
   return {
     project,
     rows,
@@ -250,7 +266,8 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     watch: recordedWatch(state, team, watchInForceOf(standing, team), now),
     staleAfter: budgets.staleAfter,
     accounts: declaredOf(budgets, seats, machine),
-    seatAccounts: seats.map((seat) => ({ seat: seat.name, cli: seat.cli, account: payingAccountOf(seat), ...(payingPoolOf(seat) ? { pool: payingPoolOf(seat) } : {}) })),
+    seatAccounts: seats.map((seat) => ({ seat: seat.name, cli: seat.cli, account: payingAccountOf(seat), ...(payingPoolOf(seat) ? { pool: payingPoolOf(seat) } : {}), pane: sessionState?.seats[seat.name]?.pane ?? null })),
+    session: team.session,
     borrows: borrowedBy(team, seats, home),
     quotaAccounts: [...new Set(seats.flatMap((seat) => quotaWith(seat.cli, patterns)
       .flatMap((one) => [one.account, payingAccountOf(seat)])))].sort(),
@@ -568,7 +585,9 @@ function isStoreName(name: string): boolean {
   return /-[0-9a-f]{12}$/.test(name);
 }
 
-function realKey(path: string): string {
+/** A path's real form, so two stores recording one root compare equal. Exported for the live
+ *  quota observer, which matches the caller's own team by the same rule the report does. */
+export function realKey(path: string): string {
   try {
     return realpathSync(path);
   } catch {
@@ -902,6 +921,14 @@ export type ReportSeatRow = SeatAccountRow;
  *  carries the caller's own team; `--all` under the full view carries every team's. */
 export type ReportTeamBlock = { team: string; root?: string; seats: ReportSeatRow[] };
 
+/** The live observations a caller made before the filter ran: `observeQuota`'s output, or none
+ *  when the command has no live source (a test's own sources, a run outside herdr). `notes` are
+ *  already collapsed to one entry per distinct why with its count. */
+export type QuotaFacts = {
+  observations: QuotaObservation[];
+  notes: Array<{ why: string; count: number }>;
+};
+
 /** The one report both renderers print (design § 2.3, restricted shape). */
 export type UsageReport = {
   format: 1;
@@ -910,6 +937,10 @@ export type UsageReport = {
   mine: string | null;
   counts: { teams: number; labs: number; accounts: number };
   labs: ReportLab[];
+  /** The quota view: the same visible labs and accounts with their window figures, margins,
+   *  states, seats and the one advice line. Built from observations the caller handed in and the
+   *  machine's own reading store; never from a team the view hides. */
+  quota: ReportQuota;
   unknown: ReportWhy[];
   notes: ReportNote[];
   /** The per-team seat breakdowns this view prints: the caller's own team by default, every
@@ -972,6 +1003,14 @@ const ANON: Array<{ why: string; sentence: (count: number) => string }> = [
     why: 'a store on this machine cannot be read',
     sentence: (n) => (n === 1 ? 'a store on this machine cannot be read: the owner reads the reason' : `${n} stores on this machine cannot be read: the owner reads the reason`),
   },
+  {
+    why: PANE_UNREAD,
+    sentence: (n) => (n === 1 ? '1 seat pane could not be read' : `${n} seat panes could not be read`),
+  },
+  {
+    why: USAGE_UNANSWERED,
+    sentence: (n) => (n === 1 ? 'a CLI usage command did not answer' : `${n} CLI usage commands did not answer`),
+  },
 ];
 
 /** The anonymized words for one problem: the fragment `--json` carries and the text's sentence. */
@@ -1004,7 +1043,7 @@ function anonOf(problem: TeamProblem): { why: string; sentence: (count: number) 
  * `allTeams` is the command's `--all`: under the full view it widens the breakdown blocks to
  * every team; a caller the view does not widen gets one note saying so, and no other team's name.
  */
-export function reportOf(machine: MachineUsage, view: UsageView, now: number, mineNotes: readonly string[], allTeams = false): UsageReport {
+export function reportOf(machine: MachineUsage, view: UsageView, now: number, mineNotes: readonly string[], allTeams = false, live: QuotaFacts | null = null): UsageReport {
   const mineEntry = view.mine === null ? null : machine.teams.find((team) => realKey(team.root) === realKey(view.mine as string)) ?? null;
   const mineName = mineEntry?.usage.project ?? null;
   const nameOf = (team: TeamEntry) => team.usage.project ?? team.root;
@@ -1085,6 +1124,54 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     withFigure.add(reading.account);
   }
 
+  // The quota block: the same visible labs and accounts, joined with the seats this view may name
+  // on each account and with every observation the caller could make. The store's readings are
+  // observations like any other — the watch wrote them from the same status rows — and a live
+  // read of the same account and window is newer, so it wins the merge inside `quotaOf`. A wall
+  // screen is a fact of its own and rides beside the figures. An account this view hides is never
+  // built here, so no aggregate can leak a walled account from another team.
+  const observations: QuotaObservation[] = machine.readings.map((reading) => ({
+    account: reading.account,
+    ...(reading.pool ? { pool: reading.pool } : {}),
+    window: reading.window === 'daily' ? null : reading.window,
+    left: reading.left,
+    used: reading.used,
+    resetsAt: reading.resetsAt,
+    resetText: null,
+    observedAt: reading.observedAt,
+    source: 'machine reading' as const,
+    seat: null,
+    margin: null,
+    wall: false,
+  }));
+  if (live !== null) observations.push(...live.observations);
+  const quotaLabs: QuotaLabInput[] = labs.map((lab) => {
+    const seenAccounts = new Set<string>();
+    const accounts: QuotaLabInput['accounts'] = [];
+    for (const entry of lab.accounts) {
+      if (entry.kind !== 'subscription') continue;
+      const key = `${entry.account}\0${entry.pool ?? ''}`;
+      if (seenAccounts.has(key)) continue;
+      seenAccounts.add(key);
+      const seats: string[] = [];
+      let seatsOther = 0;
+      for (const team of machine.teams) {
+        for (const seat of team.usage.seatAccounts) {
+          if (seat.account !== entry.account) continue;
+          // A seat whose model names no pool draws on the account as a whole, so it stands on
+          // every pool's entry; a seat with a pool stands only on its own.
+          if (seat.pool !== undefined && entry.pool !== undefined && seat.pool !== entry.pool) continue;
+          if (team === mineEntry) seats.push(seat.seat);
+          else if (view.full) seats.push(`${seat.seat} (${nameOf(team)})`);
+          else seatsOther += 1;
+        }
+      }
+      accounts.push({ account: entry.account, ...(entry.pool ? { pool: entry.pool } : {}), seats, ...(seatsOther > 0 ? { seatsOther } : {}) });
+    }
+    return { lab: lab.lab, accounts };
+  });
+  const quota = quotaOf({ labs: quotaLabs, observations, accountsFile: ACCOUNTS_FILE, now });
+
   // Every why-line, the caller's own first, then by the words and the account: the order holds
   // in both views, so hiding a name cannot reshuffle the lines around it.
   const mineWhys = (mineEntry?.usage.whys ?? []).map((one) => ({ team: mineEntry as TeamEntry, ...one }));
@@ -1104,6 +1191,10 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   }));
 
   const notes: ReportNote[] = [];
+  // The live source's own problems, already collapsed to one entry per distinct why: a pane that
+  // would not read and a CLI usage command that did not answer each print one counted note, never
+  // one per seat.
+  if (live !== null) for (const note of live.notes) notes.push({ scope: 'usage', why: note.why, ...(note.count > 1 ? { count: note.count } : {}) });
   for (const text of mineNotes) notes.push({ scope: mineName ?? 'mine', why: text });
   const teamOrder = [...machine.teams].sort(byName);
   if (mineEntry !== null) {
@@ -1161,6 +1252,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     // machine's counts grows later must not reach the DTO by reference (the `reportRowOf` rule).
     counts: { teams: machine.counts.teams, labs: machine.counts.labs, accounts: machine.counts.accounts },
     labs,
+    quota,
     unknown,
     notes,
     teams: breakdowns,
@@ -1328,11 +1420,20 @@ export function reportText(report: UsageReport): string {
       at = end;
     }
     if (lab.accounts.length === 0 && lab.others === undefined) {
-      lines.push(`${lab.lab}  not known (no team declares an account for it yet)`);
+      // One line per lab with no account declared, in the owner's words: the file it points at
+      // is where the declaration belongs. The quota block stays silent for such a lab, so the
+      // line appears once.
+      lines.push(`${lab.lab}  not known: no account declared; declare it in ${report.quota.accountsFile}`);
     } else if (lab.others !== undefined) {
       lines.push(`${lab.lab}: ${lab.others} other account${lab.others === 1 ? '' : 's'}`);
     }
   }
+  // The actionable view: per lab and per account the window figures, margin, state, seats and the
+  // one advice line, then the existing account lines (provenance, borrowing, per-team rows). One
+  // blank separates it from whatever precedes it — a machine with no lab at all has the header's
+  // own blank already, and the block must not open on a second one.
+  if (lines[lines.length - 1] !== '') lines.push('');
+  lines.push(...quotaText(report.quota));
   for (const block of report.teams) {
     lines.push('', block.team);
     for (const seat of block.seats) lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}${seat.pool ? ` (${seat.pool})` : ''}`);
