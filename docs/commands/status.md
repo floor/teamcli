@@ -226,7 +226,7 @@ exit 1
 
 Each difference names both the repair command (`repair:`) and the role that runs it (`who:`).
 The `what 0.5.0 must not pretend:` block and its `Integrity, not authority` line live on
-`team --about`, [`team check`](check.md), and [`team doctor`](doctor.md), not on every status read.
+`team --about` and [`team doctor`](doctor.md), not on every status read.
 
 `--project` covers the teams the registry lists under a project, wherever they run. A team no
 record holds reads as `not registered`; `--json` prints the project record and each team's

@@ -56,7 +56,8 @@ not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim
 ## Rows
 
     team beacon, session "beacon"
-      claude-keeper  missing  Claude Opus 5.5  -     typed
+      SEAT           STATE    MODEL            PANE   REACH
+      claude-keeper  missing  Claude Opus 5.5  -      typed
       claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 
 The columns are the seat, its state, the model, the pane, and the word for the channel a send would
@@ -193,27 +194,24 @@ what blocks a launch is `team doctor`'s
 to report. When at least one repair is the owner's, the summary line reports
 `N difference(s), M for the owner`.
 
-The plain reading closes with the decision record's own footer, in its words
-(`decided-grants-minimum-2026-10-17`, "every record and view says so"):
-
-    Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
-
-The line stands under the count, whatever the count says; it is the plain reading's, not the
-document's, and `team check` prints the same sentence first under its block of the limits 0.5.0
-does not close.
+The reading stops at its count: the `what 0.5.0 must not pretend:` block and its
+`Integrity, not authority` line live on `team --about` and `team doctor`, not on every status
+read; `team doctor` prints the whole block under its summary, and `team check` no longer quotes
+it at the end of a run.
 
 ## The JSON
 
-`--json` prints the same reading as one document, format 1 (without the plain reading's footer
-line):
+`--json` prints the same reading as one `team.status` v1 document, its `schema` tag first:
 
     {
+      "schema": { "name": "team.status", "version": 1 },
       "format": 1,
       "project": "beacon",
       "session": "beacon",
       "rows": [{ "name": "claude-keeper", "state": "missing", "model": "Claude Opus 5.5", "pane": "-", "seat_state": "done", "seat_state_source": "process" }],
       "notes": [],
-      "differences": [{ "what": "claude-keeper is in the file and is not running", "repair": "team add claude-keeper" }],
+      "differences": [{ "what": "claude-keeper is in the file and is not running", "repair": "team add claude-keeper", "who": "the owner" }],
+      "summary": { "differences": 1, "owner_differences": 0 },
       "notice": null
     }
 
@@ -228,8 +226,10 @@ when the budgets table would be printed, one object per row (`account`, `window`
 `resetsIn`, `seat`, `age`, `source`, `fallback`, `state`, `inside`, `reserve`). `inside` is true
 when a subscription's left figure is at or inside its reserve, `fallback` when the figure did not
 come from the first source the account names, and `reserve` the reserve that row was read against —
-the same figure the table's line names, null when the account has none. The exit
-code is the same as without `--json`, and the file's warnings still go to stderr. A caller who
+the same figure the table's line names, null when the account has none. `summary` counts the
+differences (`differences`, `owner_differences`), the plain `<n> difference(s)` line's own
+figures. The exit code is the same as without `--json`; the file's own warnings are `team
+doctor`'s to print, never this document's. A caller who
 may not read the team gets the fixed sentence on stderr and nothing on stdout, with or without
 `--json`: not a JSON document.
 
@@ -245,11 +245,12 @@ may not read the team gets the fixed sentence on stderr and nothing on stdout, w
 | `team status: team.yaml line <n>: <message>` | 2 |
 | `team status: herdr doesn't answer; is it installed and running?` | 2 |
 
-A team file that loads with warnings prints them on stderr as
-`team status: warning, line <n>: <message>` and goes on. One warning reads the disk at load
-time, not the file's history: the credential scan exempts an absolute path only while it is a
-real directory, so a `trust` path whose directory is later removed starts warning on an
-unchanged file. That is a true advisory about this machine, not drift.
+`status` prints no warning the team file loads with — the `coordinator:` notice included: a
+file's own warnings are `team doctor`'s to report, as `warn` findings. One of them reads the
+disk rather than the file's history: the credential scan exempts an absolute path only while it
+is a real directory, so a `trust` path whose directory is later removed starts warning on an
+unchanged file. That is a true advisory about this machine, not drift, and it is said in
+`doctor`, not here.
 
 ## Examples, moved here whole
 
@@ -345,27 +346,31 @@ never reported — that one too comes from the status line, so its row marks it 
 
 ```console
 $ team status ; echo "exit $?"
-team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 team beacon, session "beacon"
-  claude-keeper  missing  Claude Opus 5.5  -
-  claude-beacon  working  Claude Opus 5.5  w1:p1
+  SEAT           STATE    MODEL            PANE   REACH
+  claude-keeper  missing  Claude Opus 5.5  -      typed
+  claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 difference: claude-keeper is in the file and is not running
   repair: team add claude-keeper
+  who: the owner
 1 difference(s)
-Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 1
 ```
 
-`--json` prints that reading as one document, for a script to read instead of the table:
+`--json` prints that reading as one `team.status` v1 document, for a script to read instead of
+the table:
 
 ```console
 $ team status --json ; echo "exit $?"
-team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 {
+  "schema": {
+    "name": "team.status",
+    "version": 1
+  },
   "format": 1,
   "project": "beacon",
   "session": "beacon",
@@ -394,6 +399,10 @@ team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's 
       "repair": "team add claude-keeper"
     }
   ],
+  "summary": {
+    "differences": 1,
+    "owner_differences": 0
+  },
   "notice": null,
   "budgets": [
     {
@@ -454,16 +463,15 @@ Now nothing disagrees:
 
 ```console
 $ team status ; echo "exit $?"
-team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 team beacon, session "beacon"
-  claude-keeper  idle     Claude Opus 5.5  w2:p1
-  claude-beacon  working  Claude Opus 5.5  w1:p1
+  SEAT           STATE    MODEL            PANE   REACH
+  claude-keeper  idle     Claude Opus 5.5  w2:p1  typed
+  claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 0 difference(s)
-Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 0
 ```
 
@@ -475,17 +483,16 @@ in `notes` in the same place:
 
 ```console machine="small-swap"
 $ team status ; echo "exit $?"
-team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 team beacon, session "beacon"
-  claude-keeper  idle     Claude Opus 5.5  w2:p1
-  claude-beacon  working  Claude Opus 5.5  w1:p1
+  SEAT           STATE    MODEL            PANE   REACH
+  claude-keeper  idle     Claude Opus 5.5  w2:p1  typed
+  claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
 0 difference(s)
-Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 0
 ```
 

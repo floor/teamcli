@@ -184,6 +184,16 @@ A watch that has not run, or whose heartbeat is old, is `MISS` here but not a re
 refuse: `up` starts the watch itself. A recorded pane the session no longer has is `MISS` too.
 This miss is not a reason for `up` to refuse.
 
+Under `--json` the run writes one `team.doctor` v1 document on stdout, its `schema` tag first:
+`format`, `project`, `session`, `login_only`, every finding as `{ level, text, blocks_launch }` —
+the same levels and lines the plain report prints, with `blocks_launch` the `up`/`add` rule — and
+`summary` with `missing`, `warnings` and `blockers`, the plain closing line's own figures. The
+`what 0.5.0 must not pretend:` block is the plain run's alone: the document carries the findings
+and the counts, never the block. An invocation or file refusal under `--json` writes a
+`team.error` v1 document on stdout instead — `id` `doctor.invocation`, `doctor.not-a-repo`,
+`doctor.file` or `doctor.file-invalid`, its `message` and a null `repair` — and stderr stays
+empty. The exit code is the same as without `--json`.
+
 ## Refusals
 
 | Message | Exit |
