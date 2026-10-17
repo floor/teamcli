@@ -597,15 +597,15 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const io = ownerIo(w.root);
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     expect(io.err).toContain('held: the screen reads question');
-    expect(io.err).toContain('a running watch retries it when the seat is idle');
+    // The daemon's drop folder is not the one a watch scans, so its line promises no retry.
+    expect(io.err).not.toContain('a running watch retries it');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
 
-    // The record beside the daemon's drop is what a watch's retry reads.
+    // The drop is on disk in the daemon's own folder, with no pending record beside it.
     const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'lead');
-    const records = readPending(drops);
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ from: 'owner', to: 'lead', tries: 0 });
+    expect(readPending(drops)).toHaveLength(0);
+    expect(readdirSync(drops).filter((name) => !name.endsWith('.pending'))).toHaveLength(1);
   });
 
   test('single-Enter discipline: does not press a second Enter when screen is unknown and trigger is not in box', async () => {

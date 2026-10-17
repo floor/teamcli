@@ -39,7 +39,6 @@ import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
 import { appendHistory, type HistoryEntry } from './history.ts';
 import { bindPane, deliverTrigger } from './deliver.ts';
-import { markPending } from './pending.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
@@ -859,6 +858,9 @@ async function executeQueuedSend(
     };
   }
   const stateDropDir = dropLadder.leaf;
+  // This is the store's drop folder, not the project's `.agents/send-drops/<session>/<seat>`
+  // that a running watch scans, so no pending record is written beside it and these lines
+  // promise no retry. When the daemon is wired in, write the record where the watch reads.
   const candidateDropPath = join(stateDropDir, msgId);
   const trigger = triggerLine(candidateDropPath);
   if (trigger === null) {
@@ -886,7 +888,6 @@ async function executeQueuedSend(
     };
   }
 
-  const RETRY_NOTE = 'a running watch retries it when the seat is idle';
   const recordHeld = (detail: string, via?: 'typed'): DaemonSendResponse => {
     const entry: HistoryEntry = {
       ts: host.now().toISOString(),
@@ -901,9 +902,9 @@ async function executeQueuedSend(
     // The path is named only once the trigger had been typed, never for a refusal before it.
     if (via !== undefined) entry.via = via;
     appendHistory(team.project, root, host.home, entry);
-    // A held drop is the watch's to deliver once the seat is free; the marker is what it reads.
-    markPending(stateDropDir, { id: msgId, from, to: seatName, body, ts: entry.ts });
-    return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail: `${detail}; ${RETRY_NOTE}`, drop_path: dropPath };
+    // No pending record: the store's drop folder is not where a watch reads, so the line says
+    // what happened and promises no retry.
+    return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail, drop_path: dropPath };
   };
 
   const recordUnreachable = (detail: string, via?: 'typed'): DaemonSendResponse => {
@@ -1004,16 +1005,15 @@ async function executeQueuedSend(
         via: 'typed',
         failed: request.failed,
       });
-      // The trigger was typed and not taken: the drop is still the message, and the watch's
-      // next free pass is what delivers it.
-      markPending(stateDropDir, { id: msgId, from, to: seatName, body, ts: host.now().toISOString() });
+      // The trigger was typed and not taken: the drop is still the message, but nothing in
+      // this folder is what a watch scans, so the line promises no retry.
       return {
         v: 1,
         ok: false,
         id: msgId,
         seat: seatName,
         outcome: 'not-submitted',
-        detail: `the seat did not take the trigger; ${where}; ${RETRY_NOTE}`,
+        detail: `the seat did not take the trigger; ${where}`,
         box: result.box ?? null,
         tries: result.tries,
         drop_path: dropPath,

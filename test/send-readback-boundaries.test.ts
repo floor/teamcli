@@ -231,11 +231,10 @@ describe('the composer read-back at its boundaries', () => {
     expect(outcomes(world)).toEqual(['not-submitted']);
 
     // The daemon typed the trigger and the seat did not take it: its own drop folder holds the
-    // message and the record a watch's retry reads.
+    // message, and no pending record — a watch does not scan this folder, so none is promised.
     const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'lead');
-    const records = readPending(drops);
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ from: 'owner', to: 'lead', tries: 0 });
+    expect(readPending(drops)).toHaveLength(0);
+    expect(readdirSync(drops).filter((name) => !name.endsWith('.pending'))).toHaveLength(1);
   });
 
   test('a dialog between typing and the first Enter is never a read-back mismatch', async () => {
