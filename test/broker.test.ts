@@ -605,14 +605,43 @@ function claimBudgets(bootPaceMs: number): { stepMs: number; runBudgetMs: number
   };
 }
 
+/** The two burst scenes' budgets, from the same BOOT pace the claim lane uses — round start →
+ *  every start's `ready`, plus its reap — never from the release window, so a regressed broker
+ *  cannot inflate the budget meant to catch it. The ready step is twice the pace, never under
+ *  the pin's ten seconds and never past its two-minute cap; the release step stays fixed at
+ *  ten seconds; the run budget is twice the extrapolated total, floored and capped. The cap's
+ *  margin is not decoration: bun 1.4.2 does not cancel a timed-out test body, so a body that
+ *  outlived its test runs on against the fixture world the after-each has already removed, and
+ *  its later rejection surfaces as an unhandled error between tests (probe on bun 1.4.2: a
+ *  100 ms test whose body awaits a waiter that throws at 650 ms, with a later test holding the
+ *  runner open, prints "# Unhandled error between tests"; an internal catch on the awaited
+ *  waiter changes nothing — the rejection reported is the body's own). Four starts: fifteen
+ *  minutes of run inside a thirty-minute test; six: forty inside fifty, the claim lane's own
+ *  margins. Each body therefore ends inside its timeout by construction, and a machine that
+ *  cannot finish stops first, naming its round and step — never at the timeout with no name. */
+const BURST_STEP_FLOOR_MS = 10_000;
+const BURST_STEP_CAP_MS = 120_000;
+const BURST_OUTCOMES_STEP_MS = 10_000;
+const BURST4_RUN_FLOOR_MS = 120_000;
+const BURST4_RUN_CAP_MS = 900_000;
+const BURST6_RUN_FLOOR_MS = 300_000;
+const BURST6_RUN_CAP_MS = 2_400_000;
+
+function burstBudgets(rounds: number, bootPaceMs: number, runFloorMs: number, runCapMs: number): { stepMs: number; runBudgetMs: number } {
+  return {
+    stepMs: Math.min(BURST_STEP_CAP_MS, Math.max(BURST_STEP_FLOOR_MS, Math.ceil(bootPaceMs * 2))),
+    runBudgetMs: Math.min(runCapMs, Math.max(runFloorMs, Math.ceil(bootPaceMs * rounds * 2))),
+  };
+}
+
 /** One step of a round, bounded by its own budget: a step that runs out kills and reaps its
  *  round's starts at once and fails naming the step and the budget it overran, never the child
- *  it waited on. */
-async function withinStep<T>(label: string, roundKids: ClaimChild[], budgetMs: number, fn: () => Promise<T>): Promise<T> {
+ *  it waited on. The label carries the scene's own name, so a failure names where it happened. */
+async function withinStep<T>(label: string, roundKids: FixtureChild[], budgetMs: number, fn: () => Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`the claim lane: step "${label}" outlived its ${budgetMs} ms budget; its starts were killed and reaped`)),
+      () => reject(new Error(`step "${label}" outlived its ${budgetMs} ms budget; its starts were killed and reaped`)),
       budgetMs,
     );
   });
@@ -1237,14 +1266,46 @@ describe('the start protocol', () => {
     // never waited (the review lab measured the same, 47/120 and 6/25). Every round's tuple
     // must be exactly one serving with the corpse cleared plus three busy that cleared
     // nothing; any other tuple — a `bind-failed`, a second serving, a cleared loser — is the
-    // breach this pin names. The timeout is the pin's own: thirty rounds of four processes
-    // outrun the runner's five-second default.
+    // breach this pin names.
+    //
+    // The body is bounded the way the claim lane's below is: each round is two steps with
+    // their own budgets (the ready step scaled from the measured boot pace, the release step
+    // fixed at ten seconds), its starts are killed and reaped before the next round begins,
+    // the live set never passes the four a round holds, and the run's own budget stops a
+    // machine that cannot finish with the round and step named. The test timeout's margin
+    // over the run cap is the other half of that bound: a body bun abandons at the timeout
+    // runs on against the teardown's removed fixtures, and its later rejection is reported as
+    // an unhandled error between tests. A run that cannot finish inside its budget stops
+    // itself first, with every start reaped and the leftover count asserted on that path.
     project();
     record();
+    const ROUNDS = 30;
+    const ROUND_SIZE = 4;
+    const WARMUP_ROUNDS = 5;
     const breaches: string[] = [];
-    const kids: FixtureChild[] = [];
+    const live = new Set<FixtureChild>();
+    /** A start joins the live set on spawn and leaves it when it is reaped. */
+    const track = (kid: FixtureChild): FixtureChild => {
+      live.add(kid);
+      void kid.exited.then(() => live.delete(kid));
+      return kid;
+    };
+    /** The round's own end: every start it made is killed and reaped before the next begins. */
+    const reap = async (roundKids: FixtureChild[]): Promise<void> => {
+      for (const kid of roundKids) kid.kill();
+      await Promise.all(roundKids.map((kid) => kid.exited));
+    };
+    let stepMs = BURST_STEP_FLOOR_MS;
+    let runBudgetMs = BURST4_RUN_FLOOR_MS;
+    let warmupBootMs = 0;
+    let failure: unknown;
+    const runStart = Date.now();
     try {
-      for (let round = 0; round < 30; round++) {
+      for (let round = 0; round < ROUNDS; round++) {
+        if (Date.now() - runStart > runBudgetMs) {
+          throw new Error(`the four-start burst: the run outlived its ${runBudgetMs / 1000} s budget before round ${round} (step: start); its starts were killed and reaped`);
+        }
+        const bootStart = Date.now();
         const roundRoot = join(base, `burst-${round}`);
         mkdirSync(join(roundRoot, '.agents'), { recursive: true });
         writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
@@ -1254,22 +1315,41 @@ describe('the start protocol', () => {
         if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
         writeFileSync(`${at}.lock`, `${dead.pid}\n`);
         const go = join(base, `go-${round}`);
-        const roundKids = Array.from({ length: 4 }, () => burstFixture(roundRoot, go));
-        kids.push(...roundKids);
-        await Promise.all(roundKids.map((kid) => readyOf(kid)));
+        const roundKids = Array.from({ length: ROUND_SIZE }, () => track(burstFixture(roundRoot, go)));
+        if (live.size > ROUND_SIZE) {
+          throw new Error(`the four-start burst: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+        }
+        await withinStep(`the four-start burst: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+        const bootMs = Date.now() - bootStart;
         writeFileSync(go, 'go\n');
-        const outcomes = await Promise.all(roundKids.map((kid) => outcomeOf(kid)));
+        const outcomes = await withinStep(`the four-start burst: round ${round}: outcomes`, roundKids, BURST_OUTCOMES_STEP_MS, () =>
+          Promise.all(roundKids.map((kid) => outcomeOf(kid, BURST_OUTCOMES_STEP_MS + 5_000))),
+        );
         const serving = outcomes.filter((outcome) => outcome.kind === 'serving' && outcome.cleared);
         const busy = outcomes.filter((outcome) => outcome.kind === 'busy' && !outcome.cleared);
         if (serving.length !== 1 || busy.length !== 3) {
           breaches.push(`round ${round}: [${outcomes.map((outcome) => `${outcome.kind}${outcome.cleared ? '+cleared' : ''}`).join(' ')}]`);
         }
+        const reapStart = Date.now();
+        await reap(roundKids);
+        if (round < WARMUP_ROUNDS) warmupBootMs += bootMs + (Date.now() - reapStart);
+        if (round === WARMUP_ROUNDS - 1) ({ stepMs, runBudgetMs } = burstBudgets(ROUNDS, warmupBootMs / WARMUP_ROUNDS, BURST4_RUN_FLOOR_MS, BURST4_RUN_CAP_MS));
       }
-    } finally {
-      for (const kid of kids) kid.kill();
+    } catch (error) {
+      failure = error;
     }
+    // The teardown is the pin's own, whichever way the body ended — a pass, a failure, or a
+    // step's timeout: every start still alive is killed and reaped, and the leftover count is
+    // asserted, so no run can leave a process behind.
+    for (const kid of live) kid.kill();
+    await Promise.all([...live].map((kid) => kid.exited));
+    const leftBehind = live.size;
+    if (leftBehind !== 0) {
+      throw new Error(`the four-start burst: ${leftBehind} start${leftBehind === 1 ? '' : 's'} still alive after teardown${failure === undefined ? '' : ` (the run had already failed: ${String(failure)})`}`);
+    }
+    if (failure !== undefined) throw failure;
     expect(breaches).toEqual([]);
-  }, 120_000);
+  }, 1_800_000);
 
   test('the dead-lock burst, sized: six starts released together onto a dead start\'s lock, one serves and every other busy', async () => {
     // The sized twin of the corpse burst above, on the dead-lock shape alone — sized from a
@@ -1287,14 +1367,42 @@ describe('the start protocol', () => {
     // pin after seeing a result: a pin-only head whose CI misses is re-run, both runs quoted.
     // Every round's tuple must be exactly one serving that cleared nothing plus five busy
     // that cleared nothing — a `bind-failed` at any seat, a second serving, a cleared loser,
-    // is the breach this pin names. The timeout is the pin's own: 275 rounds of six real
-    // processes outrun the runner's five-second default by orders.
+    // is the breach this pin names.
+    //
+    // The body is bounded like the four-start scene's above: each round's ready step is scaled
+    // from the measured boot pace (the release step fixed at ten seconds), its starts are
+    // killed and reaped before the next round begins — never 275 rounds of survivors — and the
+    // run's own budget stops a machine that cannot finish with the round and step named, inside
+    // a test timeout whose margin over the cap is what keeps bun from ever abandoning the body.
     project();
     record();
+    const ROUNDS = 275;
+    const ROUND_SIZE = 6;
+    const WARMUP_ROUNDS = 10;
     const breaches: string[] = [];
-    const kids: FixtureChild[] = [];
+    const live = new Set<FixtureChild>();
+    /** A start joins the live set on spawn and leaves it when it is reaped. */
+    const track = (kid: FixtureChild): FixtureChild => {
+      live.add(kid);
+      void kid.exited.then(() => live.delete(kid));
+      return kid;
+    };
+    /** The round's own end: every start it made is killed and reaped before the next begins. */
+    const reap = async (roundKids: FixtureChild[]): Promise<void> => {
+      for (const kid of roundKids) kid.kill();
+      await Promise.all(roundKids.map((kid) => kid.exited));
+    };
+    let stepMs = BURST_STEP_FLOOR_MS;
+    let runBudgetMs = BURST6_RUN_FLOOR_MS;
+    let warmupBootMs = 0;
+    let failure: unknown;
+    const runStart = Date.now();
     try {
-      for (let round = 0; round < 275; round++) {
+      for (let round = 0; round < ROUNDS; round++) {
+        if (Date.now() - runStart > runBudgetMs) {
+          throw new Error(`the dead-lock burst: the run outlived its ${runBudgetMs / 1000} s budget before round ${round} (step: start); its starts were killed and reaped`);
+        }
+        const bootStart = Date.now();
         const roundRoot = join(base, `lockburst-${round}`);
         mkdirSync(join(roundRoot, '.agents'), { recursive: true });
         writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
@@ -1303,22 +1411,41 @@ describe('the start protocol', () => {
         if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
         writeFileSync(`${at}.lock`, `${dead.pid}\n`);
         const go = join(base, `lockgo-${round}`);
-        const roundKids = Array.from({ length: 6 }, () => burstFixture(roundRoot, go));
-        kids.push(...roundKids);
-        await Promise.all(roundKids.map((kid) => readyOf(kid)));
+        const roundKids = Array.from({ length: ROUND_SIZE }, () => track(burstFixture(roundRoot, go)));
+        if (live.size > ROUND_SIZE) {
+          throw new Error(`the dead-lock burst: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+        }
+        await withinStep(`the dead-lock burst: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+        const bootMs = Date.now() - bootStart;
         writeFileSync(go, 'go\n');
-        const outcomes = await Promise.all(roundKids.map((kid) => outcomeOf(kid)));
+        const outcomes = await withinStep(`the dead-lock burst: round ${round}: outcomes`, roundKids, BURST_OUTCOMES_STEP_MS, () =>
+          Promise.all(roundKids.map((kid) => outcomeOf(kid, BURST_OUTCOMES_STEP_MS + 5_000))),
+        );
         const serving = outcomes.filter((outcome) => outcome.kind === 'serving' && !outcome.cleared);
         const busy = outcomes.filter((outcome) => outcome.kind === 'busy' && !outcome.cleared);
         if (serving.length !== 1 || busy.length !== 5) {
           breaches.push(`round ${round}: [${outcomes.map((outcome) => `${outcome.kind}${outcome.cleared ? '+cleared' : ''}`).join(' ')}]`);
         }
+        const reapStart = Date.now();
+        await reap(roundKids);
+        if (round < WARMUP_ROUNDS) warmupBootMs += bootMs + (Date.now() - reapStart);
+        if (round === WARMUP_ROUNDS - 1) ({ stepMs, runBudgetMs } = burstBudgets(ROUNDS, warmupBootMs / WARMUP_ROUNDS, BURST6_RUN_FLOOR_MS, BURST6_RUN_CAP_MS));
       }
-    } finally {
-      for (const kid of kids) kid.kill();
+    } catch (error) {
+      failure = error;
     }
+    // The teardown is the pin's own, whichever way the body ended — a pass, a failure, or a
+    // step's timeout: every start still alive is killed and reaped, and the leftover count is
+    // asserted, so no run can leave a process behind.
+    for (const kid of live) kid.kill();
+    await Promise.all([...live].map((kid) => kid.exited));
+    const leftBehind = live.size;
+    if (leftBehind !== 0) {
+      throw new Error(`the dead-lock burst: ${leftBehind} start${leftBehind === 1 ? '' : 's'} still alive after teardown${failure === undefined ? '' : ` (the run had already failed: ${String(failure)})`}`);
+    }
+    if (failure !== undefined) throw failure;
     expect(breaches).toEqual([]);
-  }, 600_000);
+  }, 3_000_000);
 
   test('the claim lane, sized and instrumented: six starts released together onto a dead start\'s lock never unlink a live lock or claim', async () => {
     // The pin for the claim path's own residual, carrying the delta-2 lab's finding instrument:
@@ -1421,11 +1548,11 @@ describe('the start protocol', () => {
         if (live.size > ROUND_SIZE) {
           throw new Error(`the claim lane: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
         }
-        await withinStep(`round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+        await withinStep(`the claim lane: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
         const bootMs = Date.now() - bootStart;
         writeFileSync(go, 'go\n');
         const outcomesStart = Date.now();
-        const outcomes = await withinStep(`round ${round}: outcomes`, roundKids, CLAIM_OUTCOMES_STEP_MS, () => Promise.all(roundKids.map((kid) => outcomeOf(kid, CLAIM_OUTCOMES_STEP_MS + 5_000))));
+        const outcomes = await withinStep(`the claim lane: round ${round}: outcomes`, roundKids, CLAIM_OUTCOMES_STEP_MS, () => Promise.all(roundKids.map((kid) => outcomeOf(kid, CLAIM_OUTCOMES_STEP_MS + 5_000))));
         outcomesTotalMs += Date.now() - outcomesStart;
         const serving = outcomes.filter((outcome) => outcome.kind === 'serving' && !outcome.cleared);
         const busy = outcomes.filter((outcome) => outcome.kind === 'busy' && !outcome.cleared);
@@ -1508,7 +1635,7 @@ describe('the start protocol', () => {
       expect(budgets.stepMs).toBeLessThan(STALL_MS);
       writeFileSync(go, 'go\n');
       const releaseStart = Date.now();
-      const failure = await withinStep('round stall: outcomes', kids, CLAIM_OUTCOMES_STEP_MS, () =>
+      const failure = await withinStep('the claim lane: round stall: outcomes', kids, CLAIM_OUTCOMES_STEP_MS, () =>
         Promise.all(kids.map((kid) => outcomeOf(kid, CLAIM_OUTCOMES_STEP_MS + 5_000))),
       ).then(
         () => undefined,
@@ -1516,7 +1643,7 @@ describe('the start protocol', () => {
       );
       const elapsed = Date.now() - releaseStart;
       expect(failure).toBeInstanceOf(Error);
-      expect(String((failure as Error).message)).toContain(`step "round stall: outcomes" outlived its ${CLAIM_OUTCOMES_STEP_MS} ms budget`);
+      expect(String((failure as Error).message)).toContain(`step "the claim lane: round stall: outcomes" outlived its ${CLAIM_OUTCOMES_STEP_MS} ms budget`);
       expect(elapsed).toBeGreaterThanOrEqual(CLAIM_OUTCOMES_STEP_MS);
       expect(elapsed).toBeLessThan(CLAIM_OUTCOMES_STEP_MS + 5_000);
     } finally {
