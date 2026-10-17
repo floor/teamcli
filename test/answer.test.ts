@@ -1456,28 +1456,29 @@ describe('team answer', () => {
     expect(again.err).toBe('lead: use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)\n');
   });
 
-  test('a refusal log names the caller class the caller check returned', async () => {
+  test('a refusal log names the caller’s own seat, never its role', async () => {
     const { root, home, lobby, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
 
-    // The operator's seat, neither owner nor coordinator: not logged as the owner.
+    // A seat that is not the coordinator logs by its own name, never as the owner or a class.
     const seat = testIo(root, { kind: 'seat', name: 'helper', pane: 'w1:p2' });
     expect(await runAnswer(['lead', 'trust'], seat, host)).toBe(1);
     expect(host.keys).toEqual([]);
-    expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain('answer [seat] lead: refused trust: caller');
+    expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain('answer [helper] lead: refused trust: caller');
 
     const lost = testIo(root, { kind: 'unplaced', reason: 'it doesn\'t run on a terminal' });
     expect(await runAnswer(['lead', 'trust'], lost, host)).toBe(1);
     expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain('answer [unplaced] lead: refused trust: caller');
 
-    // The authorized caller keeps its own class, and the owner keeps its.
+    // The coordinator's seat is the seat's own name too: the role never stands in for it.
     const coordinator = testIo(root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
     expect(await runAnswer(['lead', 'trust'], coordinator, host)).toBe(0);
     const log = readFileSync(join(dir, 'team.log'), 'utf8');
-    expect(log).toContain('answer [orchestrator] lead: trust answered');
+    expect(log).toContain('answer [lead] lead: trust answered');
+    expect(log).not.toContain('[orchestrator]');
     expect(log).not.toContain('answer [owner] lead: refused trust: caller');
   });
 

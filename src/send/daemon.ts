@@ -779,7 +779,8 @@ async function executeQueuedSend(
 ): Promise<DaemonSendResponse> {
   const seatName = request.to;
   const from = request.from;
-  const who = from === 'owner' ? 'owner' : from === team.orchestrator ? 'orchestrator' : 'seat';
+  // The log names the caller as it is: `owner`, or the seat that asked — never the seat's role.
+  const who = from;
   const body = request.body;
   const msgId = request.id ?? randomUUID();
   // The address as written and the id it resolved to, when the caller wrote a form rather than

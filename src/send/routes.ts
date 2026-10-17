@@ -43,7 +43,7 @@ export type RouteAddress = { socket: string | null; state: SocketState };
 export type RouteRecord = {
   /** ISO-8601, the run's own clock. */
   ts: string;
-  /** The caller as the log words it — `logWho`'s bracket (`orchestrator`, `seat`, `owner`). */
+  /** The caller as the log names it — `logTag`'s bracket: `owner`, or the caller's own seat name. */
   from: string;
   /** The sender's agent id, or null for a declared seat the registry holds no record for. */
   from_id: string | null;

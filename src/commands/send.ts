@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
-import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
@@ -309,7 +309,7 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
   // reader for the session's agents, so a fake host answers it in tests.
   const judged = judgeCallerIn(io, dir, team);
   const { caller } = judged;
-  const who = logWho(caller, team);
+  const who = logTag(caller);
   const from = caller.kind === 'seat' ? caller.name : 'owner';
   const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
   // An ambiguous spec is refused wherever it is written, not only when it looks like a registry
@@ -352,7 +352,7 @@ function homeless(io: Io, host: SendHost, seatName: string): Prologue | Ended {
     fileTeamId,
     loaded,
     caller: judged.caller,
-    who: logWho(judged.caller, team),
+    who: logTag(judged.caller),
     from: 'owner',
     standing: standingOf(dir, judged.session, judged.caller),
     hit: resolved,
@@ -1419,14 +1419,6 @@ function socketPathFor(host: SendHost, to: Aim, pane: string): { path: string; r
   if (processes === null) return null;
   const path = socketOf(host, processes);
   return path === null ? null : { path, recorded: false };
-}
-
-/** The caller class the caller check returned, as the log's bracket: `answer`'s own. */
-export function logWho(caller: Caller, team: TeamFile): string {
-  if (caller.kind === 'owner' || caller.kind === 'owner-no-tty') return 'owner';
-  if (caller.kind === 'unplaced') return 'unplaced';
-  if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
-  return caller.name === team.orchestrator ? 'orchestrator' : 'seat';
 }
 
 /**

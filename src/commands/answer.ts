@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
@@ -161,7 +161,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
         io,
         json,
         local.ok ? dirname(local.path) : undefined,
-        logWho(walked, local.ok ? local.team : undefined),
+        logTag(walked),
         seatName,
         host,
         {
@@ -190,7 +190,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     : judgeCallerIn(io, dir, team);
   const { caller } = judged;
   const session = judged.session;
-  const who = logWho(caller, team);
+  const who = logTag(caller);
 
   const refused = (reason: Refusal): number => refuse(io, json, dir, who, seatName, host, reason);
 
@@ -297,17 +297,6 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   } finally {
     lock.release();
   }
-}
-
-/** The caller class the caller check returned, as the log's bracket. With no team file yet, a seat
- *  stays a seat: telling an orchestrator from any other seat would read that file. */
-function logWho(caller: Caller, team?: TeamFile): string {
-  // `owner-no-tty` is refused before anything logs (it is not on a terminal), but the bracket
-  // it would carry is the owner's, as everywhere else.
-  if (caller.kind === 'owner' || caller.kind === 'owner-no-tty') return 'owner';
-  if (caller.kind === 'unplaced') return 'unplaced';
-  if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
-  return team !== undefined && caller.name === team.orchestrator ? 'orchestrator' : 'seat';
 }
 
 function callerProblemOf(caller: Caller, team: TeamFile, seat: string, at: SeatStanding): Refusal | null {

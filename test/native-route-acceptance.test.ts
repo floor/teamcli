@@ -220,7 +220,7 @@ describe('native acceptance: the route half', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({
       ts: NOW.toISOString(),
-      from: 'orchestrator',
+      from: 'lead',
       from_id: lead.id,
       to: 'helper',
       to_id: helper.id,

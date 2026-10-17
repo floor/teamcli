@@ -19,7 +19,7 @@
 
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
-import { callerOf, detachedRefusal, judgeCallerIn, standingOf } from '../caller.ts';
+import { callerOf, detachedRefusal, judgeCallerIn, logTag, standingOf } from '../caller.ts';
 import { PROFILES, processNameMatches } from '../clis.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
@@ -30,7 +30,7 @@ import { contextLine, hasJsonFlag, renderDryRunPlan, writeJson, writeJsonError, 
 import { resolveTarget } from '../send/resolve.ts';
 import { appendRoute, readRouteAddress, ROUTES_FILE, type RouteAddress, type RouteRecord } from '../send/routes.ts';
 import { storePath } from '../store/store.ts';
-import { admissionOf, logWho, realHost, type SendHost } from './send.ts';
+import { admissionOf, realHost, type SendHost } from './send.ts';
 
 export const USAGE = `Usage: team route <seat> [--json] [--dry-run]
 
@@ -91,7 +91,7 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   const fileTeamId = teamIdOf(root);
   const judged = judgeCallerIn(io, dir, team);
   const { caller } = judged;
-  const who = logWho(caller, team);
+  const who = logTag(caller);
 
   // The registry's own answer, and only it: a spec the store holds no record for is refused
   // with the reading's own words (which name the commands that write the record), never

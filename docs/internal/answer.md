@@ -87,7 +87,7 @@ Every refusal line is `<seat>: <reason>` except an unplaced caller's, which is i
 
 ## Log lines
 
-Every transition writes one line to `team.log`: `<ISO timestamp> answer [<who>] <seat>: <message>`. `<who>` is the class the caller check returned — `owner`, `orchestrator`, `seat`, or `unplaced` — never the owner for a caller that is not the owner. No line holds pane text, a pane id, a folder, or an unplaced reason.
+Every transition writes one line to `team.log`: `<ISO timestamp> answer [<who>] <seat>: <message>`. `<who>` is the caller as the log names it — `owner`, the caller's own seat name, or `unplaced` — never the caller's role (the orchestrator's seat logs as its name) and never the owner for a caller that is not the owner. No line holds pane text, a pane id, a folder, or an unplaced reason.
 
 | Message | When |
 | --- | --- |
