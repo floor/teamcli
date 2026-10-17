@@ -11,12 +11,40 @@ import { screenData, statusRow } from '../watch/screen.ts';
 
 export type Running = { model: string; version: string };
 
-/** The screen names a model, and it is not the file's. Unread is never a difference. */
+function words(text: string): string[] {
+  return text.toLowerCase().split(/\s+/).filter((word) => word !== '');
+}
+
+/** The words of a model name, lowercased and in one set: the order a CLI or a file writes the
+ *  name in is display, not identity — agy's footer reads `Gemini 4 Argon`, the profile splits it
+ *  into model `Gemini Argon`, version `4`, and a file may write either. The side's own version
+ *  words are taken out first, because where the version is spelled inside the model name it is
+ *  compared as the version, not as a name word. */
+function modelWords(model: string, version: string): Set<string> {
+  const name = new Set(words(model));
+  for (const word of words(version)) name.delete(word);
+  return name;
+}
+
+/** The version as the comparison reads it: trimmed, case-insensitive. */
+function versionOf(version: string): string {
+  return version.trim().toLowerCase();
+}
+
+/**
+ * The screen names a model, and it is not the file's: its words as a set, plus its version — the
+ * same name in another order is not a difference, and neither is the version spelled inside one
+ * side's model name, but another word or another version is. Unread is never a difference.
+ */
 export function modelDiffers(
   running: Running | null,
   declared: { model: string; version: string },
 ): running is Running {
-  return running !== null && (running.model !== declared.model || running.version !== declared.version);
+  if (running === null) return false;
+  if (versionOf(running.version) !== versionOf(declared.version)) return true;
+  const shown = modelWords(running.model, running.version);
+  const file = modelWords(declared.model, declared.version);
+  return shown.size !== file.size || [...shown].some((word) => !file.has(word));
 }
 
 export function runningModel(cli: string, screen: string): Running | null {

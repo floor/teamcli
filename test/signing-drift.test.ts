@@ -130,6 +130,15 @@ describe('the signing drift', () => {
     expect(out).toContain('codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol');
   });
 
+  test('a record spelling the same model in another word order is no finding', () => {
+    // The record carries the display order with the version written into the model name; the
+    // pane runs the split spelling. The words and the version are the same, so no drift.
+    record('codex-acme', { model: 'GPT Terra 5.6', version: '5.6', role: 'implementer' }, 'w2:p1');
+    const live = { ...built(), screens: { ...built().screens, 'w2:p1': codexScreen('idle') } };
+    const { out } = check(live);
+    expect(out).not.toContain('signs as codex-acme');
+  });
+
   test('a record that signs another model than the pane runs is a finding, and nothing is written', () => {
     record('codex-acme', { model: 'GPT Sol', version: '6', role: 'implementer' }, 'w2:p1');
     const before = registryOnDisk();

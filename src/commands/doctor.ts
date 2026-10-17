@@ -27,7 +27,7 @@ import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
 import { holdText, liveHold, readState, type SeatState } from '../state.ts';
-import { canShowModel, seatModel } from '../status/statusline.ts';
+import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
@@ -302,7 +302,9 @@ function cliFindings(cli: string, seats: Seat[], sources: DoctorSources): Findin
     if (named === null) {
       const finding = modelFlagFinding(seat, profile);
       if (finding) findings.push(finding);
-    } else if (named.model !== seat.model || named.version !== seat.version) {
+    } else if (modelDiffers(named, { model: seat.model, version: seat.version })) {
+      // The same comparison `team check` and `status` use: a name in another word order, or a
+      // version spelled inside the launch's model name, is the model the file declares.
       findings.push({
         level: 'warn',
         text: `${seat.name}: the launch starts ${named.model} ${named.version}, the file says ${declaredModel(seat)}`,
