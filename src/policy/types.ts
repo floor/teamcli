@@ -6,7 +6,14 @@
 // policies come from a closed, release-owned vocabulary; advised policies may be from the
 // catalogue or a project's own text.
 
-import { DELIVERY_LEGS, type DeliveryLeg } from '../settings/inherit.ts';
+import {
+  DEFAULT_STATE_THRESHOLDS,
+  DELIVERY_LEGS,
+  DELIVERY_ORDER,
+  SEATS_CROSS_TEAMS,
+  STATE_THRESHOLDS,
+  type DeliveryLeg,
+} from '../settings/inherit.ts';
 
 /** The four inheritance levels of Kernel amendment 02 §2.2, outermost first. */
 export type PolicyLevel = 'entity' | 'project' | 'team' | 'seat';
@@ -76,6 +83,8 @@ export const ENFORCED_POLICY_NAMES = [
   'state-trace-window-seconds',
   'state-blind-after-seconds',
   'state-hook-working-seconds',
+  'liveness-idle-lead-seconds',
+  'liveness-idle-owner-seconds',
   'delivery-order',
 ] as const;
 
@@ -99,8 +108,20 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   dev_mode: 'dev-mode',
   seats_cross_teams: 'seats-cross-teams',
   state_trace_window_seconds: 'state-trace-window-seconds',
+  trace_window_seconds: 'state-trace-window-seconds',
+  'trace-window-seconds': 'state-trace-window-seconds',
   state_blind_after_seconds: 'state-blind-after-seconds',
+  blind_after_seconds: 'state-blind-after-seconds',
+  'blind-after-seconds': 'state-blind-after-seconds',
   state_hook_working_seconds: 'state-hook-working-seconds',
+  hook_working_seconds: 'state-hook-working-seconds',
+  'hook-working-seconds': 'state-hook-working-seconds',
+  liveness_idle_lead_seconds: 'liveness-idle-lead-seconds',
+  idle_lead_seconds: 'liveness-idle-lead-seconds',
+  'idle-lead-seconds': 'liveness-idle-lead-seconds',
+  liveness_idle_owner_seconds: 'liveness-idle-owner-seconds',
+  idle_owner_seconds: 'liveness-idle-owner-seconds',
+  'idle-owner-seconds': 'liveness-idle-owner-seconds',
   delivery_order: 'delivery-order',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
@@ -120,6 +141,8 @@ export type PolicySpec<V extends PolicyValue = PolicyValue> = {
   kind: PolicyKind;
   /** Levels permitted to set this policy (`dev-mode` excludes `'seat'`). */
   levels: readonly PolicyLevel[];
+  /** Levels permitted to loosen this setting in the legacy settings surface (`src/settings/inherit.ts`). */
+  looseningLevels?: readonly PolicyLevel[];
   /** Release default when no level in the chain sets a value (`'off'` for gate-lifting). */
   defaultValue: V;
   /** True for gate-lifting policies (§2.7), where absent or expired means `'off'`. */
@@ -131,6 +154,8 @@ export type PolicySpec<V extends PolicyValue = PolicyValue> = {
   lowerLevelChooses?: boolean;
   /** Validates and normalizes a raw value for this policy, returning null if invalid. */
   parseValue: (raw: unknown) => V | null;
+  /** Optional custom refusal reason when `parseValue(raw)` returns null. */
+  valueProblem?: (raw: unknown) => string | null;
   /**
    * Returns true when `lower` (with `lowerExpiry`) is within (tighter than or equal to)
    * `higher` (with `higherExpiry`).
@@ -158,16 +183,19 @@ function parsePositiveSeconds(raw: unknown): number | null {
   return null;
 }
 
+function rawDeliveryItems(raw: unknown): unknown[] | null {
+  if (typeof raw === 'string') {
+    return raw
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+  }
+  if (Array.isArray(raw)) return raw;
+  return null;
+}
+
 function parseDeliveryOrder(raw: unknown): readonly DeliveryLeg[] | null {
-  const items =
-    typeof raw === 'string'
-      ? raw
-          .split(',')
-          .map((part) => part.trim())
-          .filter(Boolean)
-      : Array.isArray(raw)
-        ? raw
-        : null;
+  const items = rawDeliveryItems(raw);
   if (!items || items.length === 0) return null;
   const out: DeliveryLeg[] = [];
   for (const item of items) {
@@ -179,8 +207,17 @@ function parseDeliveryOrder(raw: unknown): readonly DeliveryLeg[] | null {
   return out;
 }
 
+function deliveryOrderProblem(raw: unknown): string | null {
+  const items = rawDeliveryItems(raw);
+  if (items && items.some((item) => item === 'socket-accepted')) {
+    return 'socket-accepted is not available in this release';
+  }
+  return null;
+}
+
 /**
- * Catalogue of policies known to TeamCLI 0.5.0 (amendment 02 `catalogue.md`).
+ * Catalogue of policies known to TeamCLI 0.5.0 (amendment 02 `catalogue.md`), with defaults
+ * sourced directly from `src/settings/inherit.ts`.
  */
 export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<any>>> = {
   'dev-mode': {
@@ -203,7 +240,8 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     name: 'seats-cross-teams',
     kind: 'enforced',
     levels: ['entity', 'project', 'team', 'seat'],
-    defaultValue: 'off',
+    looseningLevels: SEATS_CROSS_TEAMS.looseningLevels as readonly PolicyLevel[],
+    defaultValue: SEATS_CROSS_TEAMS.fallback ? 'on' : 'off',
     gateLifting: false,
     parseValue: parseOnOff,
     // 'off' is tighter than 'on'.
@@ -213,7 +251,8 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     name: 'state-trace-window-seconds',
     kind: 'enforced',
     levels: ['entity', 'project', 'team', 'seat'],
-    defaultValue: 120,
+    looseningLevels: STATE_THRESHOLDS.trace_window_seconds.looseningLevels as readonly PolicyLevel[],
+    defaultValue: DEFAULT_STATE_THRESHOLDS.trace_window_seconds,
     gateLifting: false,
     parseValue: parsePositiveSeconds,
     // Shorter or equal window is tighter.
@@ -223,7 +262,8 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     name: 'state-blind-after-seconds',
     kind: 'enforced',
     levels: ['entity', 'project', 'team', 'seat'],
-    defaultValue: 1800,
+    looseningLevels: STATE_THRESHOLDS.blind_after_seconds.looseningLevels as readonly PolicyLevel[],
+    defaultValue: DEFAULT_STATE_THRESHOLDS.blind_after_seconds,
     gateLifting: false,
     parseValue: parsePositiveSeconds,
     // Shorter or equal threshold is tighter.
@@ -233,7 +273,30 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     name: 'state-hook-working-seconds',
     kind: 'enforced',
     levels: ['entity', 'project', 'team', 'seat'],
-    defaultValue: 120,
+    looseningLevels: STATE_THRESHOLDS.hook_working_seconds.looseningLevels as readonly PolicyLevel[],
+    defaultValue: DEFAULT_STATE_THRESHOLDS.hook_working_seconds,
+    gateLifting: false,
+    parseValue: parsePositiveSeconds,
+    // Shorter or equal window is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  'liveness-idle-lead-seconds': {
+    name: 'liveness-idle-lead-seconds',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    looseningLevels: STATE_THRESHOLDS.idle_lead_seconds.looseningLevels as readonly PolicyLevel[],
+    defaultValue: DEFAULT_STATE_THRESHOLDS.idle_lead_seconds,
+    gateLifting: false,
+    parseValue: parsePositiveSeconds,
+    // Shorter or equal window is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  'liveness-idle-owner-seconds': {
+    name: 'liveness-idle-owner-seconds',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    looseningLevels: STATE_THRESHOLDS.idle_owner_seconds.looseningLevels as readonly PolicyLevel[],
+    defaultValue: DEFAULT_STATE_THRESHOLDS.idle_owner_seconds,
     gateLifting: false,
     parseValue: parsePositiveSeconds,
     // Shorter or equal window is tighter.
@@ -243,9 +306,10 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     name: 'delivery-order',
     kind: 'enforced',
     levels: ['entity', 'project', 'team', 'seat'],
-    defaultValue: DELIVERY_LEGS,
+    defaultValue: DELIVERY_ORDER.fallback,
     gateLifting: false,
     parseValue: parseDeliveryOrder,
+    valueProblem: deliveryOrderProblem,
     // Dropping or reordering channels present in `higher` is within; adding one excluded by `higher` is not.
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0 && lower.every((leg, idx) => higher.includes(leg) && lower.indexOf(leg) === idx),

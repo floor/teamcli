@@ -41,6 +41,36 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(delivery.effective.value).toEqual(['native', 'mcp-inbox', 'typed']);
       expect(delivery.effective.level).toBe('default');
     }
+
+    expect(POLICY_CATALOGUE['state-trace-window-seconds'].defaultValue).toBe(120);
+    expect(POLICY_CATALOGUE['state-blind-after-seconds'].defaultValue).toBe(300);
+    expect(POLICY_CATALOGUE['state-hook-working-seconds'].defaultValue).toBe(120);
+    expect(POLICY_CATALOGUE['liveness-idle-lead-seconds'].defaultValue).toBe(300);
+    expect(POLICY_CATALOGUE['liveness-idle-owner-seconds'].defaultValue).toBe(900);
+  });
+
+  test('delivery-order naming socket-accepted is refused at load with a plain message naming the level', () => {
+    const result = resolvePolicy('delivery-order', [
+      {
+        name: 'delivery-order',
+        value: ['socket-accepted', 'typed'],
+        level: 'team',
+        setter: 'owner',
+        date: '2026-10-17T10:00:00Z',
+        kind: 'enforced',
+      },
+    ]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.refusals).toHaveLength(1);
+      expect(result.refusals[0]).toMatchObject({
+        kind: 'invalid-policy',
+        level: 'team',
+        policy: 'delivery-order',
+        why: 'socket-accepted is not available in this release',
+        message: 'team: socket-accepted is not available in this release',
+      });
+    }
   });
 
   test('a loosening is refused at load and names both levels', () => {

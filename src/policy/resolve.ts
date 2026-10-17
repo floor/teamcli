@@ -176,12 +176,14 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
         }
         const parsed = spec.parseValue(decl.value);
         if (parsed === null) {
+          const customWhy = spec.valueProblem?.(decl.value) ?? null;
+          const why = customWhy ?? `invalid value "${formatPolicyValue(decl.value)}" for policy "${name}"`;
           refusals.push({
             kind: 'invalid-policy',
             level,
             policy: name,
-            why: `invalid value "${formatPolicyValue(decl.value)}" for policy "${name}"`,
-            message: `${level}: invalid value "${formatPolicyValue(decl.value)}" for policy "${name}"`,
+            why,
+            message: `${level}: ${why}`,
           });
           continue;
         }
