@@ -23,6 +23,7 @@ import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
+import { rosterOf } from '../permissions/who.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
@@ -165,6 +166,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...signingDifferences(team, live, root, sources.home),
     ...attentionDifferences(team, state, live),
     ...labelDifferences(team, state, live),
+    ...rosterDifferences(team, state, live, root, sources.home),
     ...registryDifferences(team, root, sources.home),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same row `status` prints: a legacy record or one the verification refused still says what
@@ -299,6 +301,46 @@ function labelDifferences(team: TeamFile, state: SessionState, live: Live): Diff
         repair: `team register ${seat.name}`,
       });
     }
+  }
+  return out;
+}
+
+/**
+ * A seat this project's state holds ready, running on the pane it recorded, that the team
+ * registry's record does not list in its roster. The roster line is the seat's identity for
+ * the permission bridge (`src/permissions/who.ts`): where the registry holds a record of the
+ * team, the roster is the record of who its seats are, and a seat it does not list has none —
+ * every gate wired to the bridge refuses the seat what the approved file says it holds. A team
+ * the registry holds no record of is not this difference: the bridge reads the file's own
+ * declaration then, and the seat is served. A seat still launching is not one either: the line
+ * is written when the seat reaches ready, and `team register <seat>` writes it for a seat that
+ * is ready without one, its repair here.
+ */
+function rosterDifferences(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  root: string,
+  home: string | undefined,
+): Difference[] {
+  if (home === undefined) return [];
+  const roster = rosterOf(home, root);
+  if (roster === null) return [];
+  const listed = new Set(roster.map((line) => line.seat));
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    if (listed.has(seat.name)) continue;
+    const held = state.seats[seat.name];
+    if (held?.stage !== 'ready') continue;
+    // The live pane the state recorded for the seat, as the label differences read it: a pane
+    // herdr lists the name on anywhere else is a stale record, and `team register` would refuse
+    // it, so it is not repaired from here.
+    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    if (!agent || agent.pane !== held.pane) continue;
+    out.push({
+      what: `${seat.name}: ready and running, and the team registry's roster does not list it`,
+      repair: `team register ${seat.name}`,
+    });
   }
   return out;
 }

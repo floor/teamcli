@@ -20,8 +20,13 @@ too is one as well — `the project <name> has <n> lead teams: <names>`, repaire
 `take "project_lead: true" off all but one of them`. The two herdr sidebar lines each file seat
 carries are compared on the same pass: a workspace label or display line that reads as neither the
 file's own text nor a line the watch may paint is a difference repaired with
-`team register <seat>`, which re-applies both lines from the file without a relaunch. A seat no
-source has heard from past the blind threshold reads `unknown (blind)` in
+`team register <seat>`, which re-applies both lines from the file without a relaunch. A live seat
+the state holds ready that the team registry's record does not list in its roster is a difference
+too, repaired with the same `team register <seat>`: where the registry holds a record of the team,
+its roster is the record of who its seats are for the permission bridge, and a seat the roster does
+not list has none. A team the registry holds no record of is not this difference — the bridge reads
+the file's own declaration then. A seat no source has heard from past the blind threshold reads
+`unknown (blind)` in
 [`team seats`](seats.md) and counts as not working: `<seat>: unknown for over <threshold> — blind,
 and it counts as not working`, repaired with the owner's look at the pane.
 
