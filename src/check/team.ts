@@ -54,6 +54,7 @@ import { compare, orderAndAnnotateDifferences, type Difference, type Live } from
 import { observeLabel } from '../labels/observe.ts';
 import { modelDiffers, seatModel } from '../status/statusline.ts';
 import type { Standing } from '../store/store.ts';
+import { plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -156,12 +157,13 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     if (!current.ok || !mayReadTeam(current, io, sources)) {
       return notYours(io, args.json);
     }
+    const fallbackNotice = current.notice ? plainText(current.notice) : undefined;
     // The caller passes and is not the owner: the flags aim nothing, and one aimed meets the
     // refusal every other command gives it — after the gate, never before it.
     if (args.file !== undefined) {
       const msg = fileOwnerRefusal(io, args.file) ?? "--file is the owner's";
       if (args.json) {
-        writeJsonError(io, 'check.file-owner', msg, null, 1, undefined, current.notice);
+        writeJsonError(io, 'check.file-owner', msg, null, 1, undefined, fallbackNotice);
       } else {
         io.stderr(`team check: ${msg}\n`);
       }
@@ -171,7 +173,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     if (args.session !== undefined) {
       const msg = sessionOwnerRefusal(walked);
       if (args.json) {
-        writeJsonError(io, 'check.session-owner', msg, null, 1, undefined, current.notice);
+        writeJsonError(io, 'check.session-owner', msg, null, 1, undefined, fallbackNotice);
       } else {
         io.stderr(`team check: ${msg}\n`);
       }
@@ -183,7 +185,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     if (args.repair === true) {
       const msg = "--repair is the owner's";
       if (args.json) {
-        writeJsonError(io, 'check.repair-owner', msg, null, 1, undefined, current.notice);
+        writeJsonError(io, 'check.repair-owner', msg, null, 1, undefined, fallbackNotice);
       } else {
         io.stderr(`team check: ${msg}\n`);
       }
@@ -192,6 +194,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     }
   }
   const { team, root, dir } = current;
+  const notice = current.notice ? plainText(current.notice) : undefined;
+  if (!args.json && notice !== undefined) io.stdout(`${notice}\n`);
   const session = owner ? (args.session ?? team.session) : team.session;
   // The one read of the approval store: the drift, and the values in force, all derive from it.
   const standing = sources.standing(root);
@@ -202,7 +206,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (args.json) {
-      writeJsonError(io, 'check.state', msg, null, 1, undefined, current.notice);
+      writeJsonError(io, 'check.state', msg, null, 1, undefined, notice);
     } else {
       io.stderr(`team check: ${msg}\n`);
     }
@@ -218,7 +222,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   if (!live) {
     const msg = "herdr doesn't answer; is it installed and running?";
     if (args.json) {
-      writeJsonError(io, 'check.herdr', msg, null, 1, undefined, current.notice);
+      writeJsonError(io, 'check.herdr', msg, null, 1, undefined, notice);
     } else {
       io.stderr(`team check: ${msg}\n`);
     }
@@ -272,11 +276,11 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // file works, it just carries a key this build no longer acts on.
   const shown = shownTeamFile(current.path, root);
   const deprecationWarnings: DeprecationWarning[] = [
-    ...current.warnings.map((w) => ({
-      line: w.line || undefined,
-      message: w.message,
-      ...(w.repair !== undefined ? { repair: w.repair } : {}),
-    })),
+    ...current.warnings.flatMap((w): DeprecationWarning[] => {
+      const repair = deprecationRepairOf(w.message, shown);
+      if (repair === undefined) return [];
+      return [{ line: w.line || undefined, message: w.message, repair }];
+    }),
     ...(current.deprecations ?? []).map((deprecation) => ({
       line: deprecation.line || undefined,
       message: deprecation.message,
@@ -295,6 +299,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       format: 1,
       project: team.project,
       session,
+      ...(notice !== undefined ? { notice } : {}),
       warnings,
       repaired,
       notes,
@@ -822,3 +827,22 @@ function printProblems(io: Io, problems: Problem[]): void {
     io.stderr(`team check: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${problem.message}\n`);
   }
 }
+
+/**
+ * The repair command for a deprecated field warning in `current.warnings` (`coordinator:`,
+ * `watch.quota_marks`, `budgets.marks`). Non-deprecation warnings (such as `effort`) return
+ * `undefined` so `team check` emits only deprecation warnings.
+ */
+function deprecationRepairOf(message: string, shownFile: string): string | undefined {
+  if (message.startsWith('`coordinator:` is now `leads: true`')) {
+    return `set \`leads: true\` on the lead's seat and remove \`coordinator:\` from ${shownFile}`;
+  }
+  if (message.startsWith('watch.quota_marks is now budgets.marks')) {
+    return `move \`watch.quota_marks\` to \`budgets.marks\` in ${shownFile}`;
+  }
+  if (message.startsWith('budgets.marks replaces watch.quota_marks')) {
+    return `remove \`watch.quota_marks\` from ${shownFile} and keep \`budgets.marks\``;
+  }
+  return undefined;
+}
+

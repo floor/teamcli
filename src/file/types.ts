@@ -1,4 +1,4 @@
-export type Problem = { line: number; message: string; repair?: string };
+export type Problem = { line: number; message: string };
 
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';

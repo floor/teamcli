@@ -242,9 +242,40 @@ describe('a delegate entry naming approve', () => {
     const doc = assertMatchesOutputSchema<{ warnings: string[] }>(io.out, CHECK_OUTPUT_SCHEMA);
     expect(doc.warnings).toEqual([
       "warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml",
-      'warning: the file, line 17: `dialogs.trust: coordinator` is now `orchestrator`, and is still read; repair: set `dialogs.trust: orchestrator` in .agents/team.yaml',
       'warning: the file, line 19: watch.quota_marks is now budgets.marks, and is still read; repair: move `watch.quota_marks` to `budgets.marks` in .agents/team.yaml',
       'warning: the file, line 21: budgets.marks replaces watch.quota_marks; repair: remove `watch.quota_marks` from .agents/team.yaml and keep `budgets.marks`',
+      'warning: the file, line 16: `dialogs:` is deprecated and grants nothing; repair: remove dialogs: from .agents/team.yaml; trust answering is now an owner grant: team grant @team --capabilities dialogs.trust',
     ]);
+  });
+
+  test('team check on a fallback copy emits the fallback notice in plain text and in the team.check JSON envelope', () => {
+    const root = place(CLEAN);
+    const sources = {
+      live: () => live(TITLE),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' as const }),
+      now: () => NOW,
+    };
+    // Seed last_valid as status/watch/hold do (team check itself never writes last_valid).
+    updateState(join(root, '.agents'), (s) => {
+      s.last_valid = { read_at: NOW.toISOString(), file: CLEAN };
+    });
+    // Break team.yaml so currentTeam falls back to last_valid with a notice.
+    writeFileSync(join(root, '.agents', 'team.yaml'), 'format: [\n', 'utf8');
+
+    const plainIo = testIo(root, { kind: 'owner' });
+    expect(runTeamCheck({}, plainIo, sources)).toBe(0);
+    const lines = plainIo.out.split('\n');
+    expect(lines[0]).toBe(
+      'team.yaml is invalid (line 1: "[" is not closed on its line); using the copy of 2026-10-17T11:00:00.000Z',
+    );
+    expect(lines[1]).toBe('team acme, session "acme"');
+
+    const jsonIo = testIo(root, { kind: 'owner' });
+    expect(runTeamCheck({ json: true }, jsonIo, sources)).toBe(0);
+    const doc = assertMatchesOutputSchema<{ notice?: string }>(jsonIo.out, CHECK_OUTPUT_SCHEMA);
+    expect(doc.notice).toBe(
+      'team.yaml is invalid (line 1: "[" is not closed on its line); using the copy of 2026-10-17T11:00:00.000Z',
+    );
   });
 });

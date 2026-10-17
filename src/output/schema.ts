@@ -432,6 +432,7 @@ export const CHECK_OUTPUT_SCHEMA: CommandSchemaSpec = {
     format: { type: 'integer', const: 1 },
     project: { type: 'string', minLength: 1 },
     session: { type: 'string', minLength: 1 },
+    notice: { type: ['string', 'null'] },
     warnings: {
       type: 'array',
       items: { type: 'string' },
