@@ -726,7 +726,7 @@ export const POLICY_OUTPUT_SCHEMA: CommandSchemaSpec = {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['name', 'value', 'level', 'setter', 'date', 'expiry', 'kind'],
+            required: ['name', 'value', 'level', 'setter', 'date', 'expiry', 'kind', 'set'],
             properties: {
               name: { type: 'string', minLength: 1 },
               value: {},
@@ -735,6 +735,7 @@ export const POLICY_OUTPUT_SCHEMA: CommandSchemaSpec = {
               date: { type: ['string', 'null'] },
               expiry: { type: ['string', 'null'] },
               kind: { type: 'string', enum: ['enforced', 'advised'] },
+              set: { type: 'boolean' },
             },
           },
         },

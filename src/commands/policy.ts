@@ -39,6 +39,7 @@ import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, getAgent, isAgentId } from '../registry/agents.ts';
 import { ofTeam as projectOfTeam, projectIdOf } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { seatNumberingOf } from '../settings/inherit.ts';
 
 export const USAGE = `Usage: team policy [--seat <name>] [--file <path>] [--json]
        team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
@@ -113,10 +114,38 @@ export async function runPolicy(
   return 0; // exit: policy.done
 }
 
-function formatValueCell(value: PolicyValue): string {
+function formatValueCell(value: PolicyValue, name?: string): string {
+  if (name === 'seat-numbering') {
+    const numbering = seatNumberingOf(value);
+    if (numbering !== null) {
+      return `width ${String(numbering.width)}, separator ${numbering.separator || 'none'}`;
+    }
+  }
   if (Array.isArray(value)) return value.join(', ');
   if (value === '') return '-';
   return String(value);
+}
+
+function isPolicySet(item: EffectivePolicy): boolean {
+  if (item.kind === 'advised' && item.level === 'default') {
+    if (item.value === '') return false;
+    if (Array.isArray(item.value) && item.value.length === 0) return false;
+  }
+  return true;
+}
+
+function policyValuesMatch(a: PolicyValue, b: PolicyValue): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((entry, idx) => entry === b[idx]);
+  }
+  return a === b;
+}
+
+function differsFromTeam(item: EffectivePolicy, teamPolicies: Record<string, EffectivePolicy> | null): boolean {
+  if (!teamPolicies) return false;
+  const teamItem = teamPolicies[item.name];
+  if (!teamItem) return true;
+  return !policyValuesMatch(item.value, teamItem.value);
 }
 
 function orderedEffectivePolicies(policies: Record<string, EffectivePolicy>): EffectivePolicy[] {
@@ -299,28 +328,70 @@ function executePolicyView(
         date: item.date,
         expiry: item.expiry,
         kind: item.kind,
+        set: isPolicySet(item),
       })),
     });
     return 'ok';
   }
 
+  const teamResolved = seat
+    ? loadAndResolvePolicyChain(
+        {
+          home,
+          entity: team.entity,
+          projectId,
+          teamRoot: root,
+          team,
+          agentId: null,
+          seat: null,
+        },
+        {
+          now,
+          upToLevel: 'team',
+        },
+      )
+    : null;
+  const teamPolicies = teamResolved && teamResolved.ok ? teamResolved.policies : null;
+  const setItems = items.filter((item) => isPolicySet(item));
+  const unsetItems = items.filter((item) => !isPolicySet(item));
+  const hasSeatDiffs = seat !== null && items.some((item) => differsFromTeam(item, teamPolicies));
+
   const style = ttyStyle(rawIo);
-  const lines = [
-    contextLine(team.project, team.session),
-    ...renderTable({
-      headers: ['POLICY', 'VALUE', 'LEVEL', 'SETTER', 'EXPIRY', 'KIND'],
-      rows: items.map((item) => [
-        item.name,
-        formatValueCell(item.value),
-        item.level,
-        item.setter ?? '-',
-        item.expiry ?? '-',
-        item.kind,
-      ]),
-      indent: '  ',
-      style,
-    }),
-  ];
+  const headerLine = seat
+    ? `${contextLine(team.project, team.session)} · seat ${seat.name}`
+    : contextLine(team.project, team.session);
+  const lines: string[] = [headerLine];
+  if (seat !== null && !hasSeatDiffs) {
+    lines.push('  same as the team');
+  } else {
+    lines.push(
+      ...renderTable({
+        headers: ['POLICY', 'VALUE', 'LEVEL', 'SETTER', 'EXPIRY', 'KIND'],
+        rows: setItems.map((item) => {
+          const teamItem = teamPolicies?.[item.name];
+          const teamValueText =
+            teamItem && isPolicySet(teamItem) ? formatValueCell(teamItem.value, teamItem.name) : 'not set';
+          const kindCell =
+            seat !== null && differsFromTeam(item, teamPolicies)
+              ? `${item.kind} (differs from team: ${teamValueText})`
+              : item.kind;
+          return [
+            item.name,
+            formatValueCell(item.value, item.name),
+            item.level,
+            item.setter ?? '-',
+            item.expiry ?? '-',
+            kindCell,
+          ];
+        }),
+        indent: '  ',
+        style,
+      }),
+    );
+  }
+  if (unsetItems.length > 0) {
+    lines.push(`  not set: ${unsetItems.map((item) => item.name).join(', ')}`);
+  }
   const rendered = `${lines.join('\n')}\n`;
   if (style.enabled) {
     rawIo.stdout(rendered);

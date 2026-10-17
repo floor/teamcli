@@ -1296,5 +1296,103 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       fx.cleanup();
     }
   });
+
+  test('scene: seat-numbering prints "width 2, separator -" by default and "width auto, separator ..." when set to auto...', async () => {
+    const fx = makeFixture();
+    try {
+      const io1 = testIo(fx.root, { kind: 'owner' });
+      expect(await runPolicy(['--file', '.agents/team.yaml'], io1, { home: fx.home, now: () => NOW })).toBe(0);
+      expect(io1.out).toContain('width 2, separator -');
+      expect(io1.out).not.toMatch(/seat-numbering\s+2-\s+/);
+
+      writePolicySet(
+        fx.home,
+        {
+          level: 'team',
+          target: fx.teamId,
+          teamRoot: fx.root,
+          name: 'seat-numbering',
+          value: 'auto...',
+        },
+        { now: NOW },
+      );
+
+      const io2 = testIo(fx.root, { kind: 'owner' });
+      expect(await runPolicy(['--file', '.agents/team.yaml'], io2, { home: fx.home, now: () => NOW })).toBe(0);
+      expect(io2.out).toContain('width auto, separator ...');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test('scene: unset advised policies (board, review-terms) are left out of the table with footer "not set: board, review-terms" while --json keeps every policy with set: boolean', async () => {
+    const fx = makeFixture();
+    try {
+      const io1 = testIo(fx.root, { kind: 'owner' });
+      expect(await runPolicy(['--file', '.agents/team.yaml'], io1, { home: fx.home, now: () => NOW })).toBe(0);
+      expect(io1.out).not.toMatch(/^\s*board\s+-\s+default/m);
+      expect(io1.out).not.toMatch(/^\s*review-terms\s+-\s+default/m);
+      expect(io1.out).toContain('  not set: board, review-terms\n');
+
+      const jsonIo1 = testIo(fx.root, { kind: 'owner' });
+      expect(await runPolicy(['--file', '.agents/team.yaml', '--json'], jsonIo1, { home: fx.home, now: () => NOW })).toBe(0);
+      const doc1 = JSON.parse(jsonIo1.out) as {
+        policies: Array<{ name: string; value: unknown; set: boolean }>;
+      };
+      expect(doc1.policies.find((p) => p.name === 'board')).toMatchObject({ name: 'board', value: '', set: false });
+      expect(doc1.policies.find((p) => p.name === 'review-terms')).toMatchObject({ name: 'review-terms', value: '', set: false });
+      expect(doc1.policies.find((p) => p.name === 'seat-numbering')).toMatchObject({ name: 'seat-numbering', value: '2-', set: true });
+
+      // Setting board moves it into the table and leaves only review-terms in the footer.
+      writePolicySet(
+        fx.home,
+        {
+          level: 'project',
+          target: 'beacon',
+          name: 'board',
+          value: 'https://board.floor/beacon',
+        },
+        { now: NOW },
+      );
+      const io2 = testIo(fx.root, { kind: 'owner' });
+      expect(await runPolicy(['--file', '.agents/team.yaml'], io2, { home: fx.home, now: () => NOW })).toBe(0);
+      expect(io2.out).toMatch(/board\s+https:\/\/board\.floor\/beacon\s+project\s+owner\s+-\s+advised/);
+      expect(io2.out).toContain('  not set: review-terms\n');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test('scene: team policy --seat X prints "same as the team" when no policy differs and marks each differing row when overrides exist', async () => {
+    const fx = makeFixture();
+    try {
+      // 1. No seat differences -> prints "same as the team" instead of repeating the team table unchanged.
+      const sameIo = testIo(fx.root, { kind: 'owner' });
+      expect(await runPolicy(['--seat', 'worker', '--file', '.agents/team.yaml'], sameIo, { home: fx.home, now: () => NOW })).toBe(0);
+      expect(sameIo.out).toContain('team beacon, session "beacon" · seat worker');
+      expect(sameIo.out).toContain('  same as the team\n');
+      expect(sameIo.out).not.toContain('POLICY');
+
+      // 2. Seat override that differs from the team's resolution marks the differing row.
+      const diffIo = testIo(fx.root, { kind: 'owner' });
+      expect(
+        await runPolicy(
+          ['set', 'seat:worker', 'delivery-order', 'typed', '--file', '.agents/team.yaml'],
+          diffIo,
+          { home: fx.home, now: () => NOW },
+        ),
+      ).toBe(0);
+
+      const seatIo = testIo(fx.root, { kind: 'owner' });
+      expect(await runPolicy(['--seat', 'worker', '--file', '.agents/team.yaml'], seatIo, { home: fx.home, now: () => NOW })).toBe(0);
+      expect(seatIo.out).toContain('team beacon, session "beacon" · seat worker');
+      expect(seatIo.out).toMatch(
+        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: native, mcp-inbox, typed\)/,
+      );
+      expect(seatIo.out).not.toContain('same as the team');
+    } finally {
+      fx.cleanup();
+    }
+  });
 });
 

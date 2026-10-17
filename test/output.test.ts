@@ -495,6 +495,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
               date: null,
               expiry: null,
               kind: 'enforced',
+              set: true,
             },
           ],
         }),
