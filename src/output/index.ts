@@ -1,0 +1,42 @@
+export { ttyStyle, type TtyStyle } from './tty.ts';
+export {
+  collapseNotes,
+  contextLine,
+  formatTable,
+  projectContextLine,
+  renderDifference,
+  renderDifferences,
+  renderNotes,
+  renderSummary,
+  renderTable,
+  summaryCounts,
+  whoOfDifference,
+  type DifferenceSummaryCounts,
+  type DifferenceWho,
+  type OutputDifference,
+  type TableSpec,
+} from './text.ts';
+export {
+  jsonEnvelope,
+  jsonError,
+  toJsonDifference,
+  writeJson,
+  writeJsonError,
+  type JsonDifference,
+  type JsonEnvelope,
+  type JsonErrorEnvelope,
+  type JsonErrorPayload,
+  type OutputSchemaTag,
+} from './json.ts';
+export {
+  buildCommandOutputSchema,
+  COMMAND_OUTPUT_SCHEMAS,
+  DIFFERENCE_SCHEMA_FRAGMENT,
+  ERROR_OUTPUT_SCHEMA,
+  publishCommandOutputSchema,
+  renderCommandOutputSchema,
+  schemaTagFragment,
+  STATUS_OUTPUT_SCHEMA,
+  SUMMARY_SCHEMA_FRAGMENT,
+  type CommandSchemaSpec,
+} from './schema.ts';

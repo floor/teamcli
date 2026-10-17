@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SECTIONS } from '../src/file/sections/index.ts';
 import type { JsonSchema } from '../src/file/sections/section.ts';
+import { COMMAND_OUTPUT_SCHEMAS, publishCommandOutputSchema } from '../src/output/schema.ts';
 
 export const NAME = 'schema/team.schema.json';
 
@@ -65,9 +66,13 @@ function firstDifference(current: string, wanted: string): string {
 
 if (import.meta.main) {
   const rendered = renderSchema();
-  if (process.argv.includes('--write')) {
+  const writeMode = process.argv.includes('--write');
+  if (writeMode) {
     writeFileSync(target, rendered);
-    process.stdout.write(`schema: wrote ${NAME}\n`);
+    for (const spec of COMMAND_OUTPUT_SCHEMAS) {
+      publishCommandOutputSchema(root, spec, 'write');
+    }
+    process.stdout.write(`schema: wrote ${NAME} and ${COMMAND_OUTPUT_SCHEMAS.length} output schema(s)\n`);
   } else if (!existsSync(target)) {
     process.stderr.write(`schema: ${NAME} is missing: run \`bun scripts/schema.ts --write\`\n`);
     process.exitCode = 1;
@@ -77,7 +82,17 @@ if (import.meta.main) {
       process.stderr.write(`schema: ${NAME} is out of date with the section modules (${firstDifference(current, rendered)}): run \`bun scripts/schema.ts --write\`\n`);
       process.exitCode = 1;
     } else {
-      process.stdout.write(`schema: ${NAME} is current\n`);
+      for (const spec of COMMAND_OUTPUT_SCHEMAS) {
+        const check = publishCommandOutputSchema(root, spec, 'check');
+        if (!check.ok) {
+          process.stderr.write(`schema: ${check.message}: run \`bun scripts/schema.ts --write\`\n`);
+          process.exitCode = 1;
+        }
+      }
+      if (!process.exitCode) {
+        process.stdout.write(`schema: ${NAME} is current\n`);
+      }
     }
   }
 }
+
