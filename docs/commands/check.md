@@ -1,9 +1,10 @@
 # team check
 
 One answer to one question: **is anything wrong with this team that someone should act on?**
-It reads the team file, the approval, the state, herdr and the registries, and changes nothing
-except the repairs the owner's `--repair` makes — the state's two leftovers dropped, the dev-mode
-mark an agent's registration left cleared, and herdr's drifted sidebar lines set back from the
+It reads the team file, the record this machine holds of it, the state, herdr and the registries,
+and changes nothing except the repairs the owner's `--repair` makes — the state's two leftovers
+dropped, the dev-mode mark an agent's registration left cleared, and herdr's drifted sidebar
+lines set back from the
 file — no git is needed, so it answers as well in a plain folder as in a repository. Where
 [`team status`](status.md) says what the team is, the check says what to act on: the differences
 alone, each with its repair.

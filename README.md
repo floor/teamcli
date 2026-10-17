@@ -72,9 +72,9 @@ team --version            # 0.4.8
 
 `team init` keeps `.agents/team.yaml` out of git through `.git/info/exclude`, never by editing
 `.gitignore`: a public repository shouldn't carry its roster. A fresh clone therefore has no team
-file. Run `team init` to write one, or `team init --restore` to bring back the copy you last
-approved on this machine. A file you receive from someone else runs nothing until you approve it
-yourself.
+file. Run `team init` to write one, or `team init --restore` to bring back the copy this machine
+recorded for the project, where it holds one. A file you receive from someone else is read as it
+stands; read it before you run `team up`.
 
 ## The file's format
 
@@ -184,7 +184,7 @@ budgets:                      # the owner's: reserve or floor per account, marks
 - `seats[*].cli` picks the launch profile; `claude-code`, `codex`, `cursor`, `antigravity` and `grok` are available, and `team
   doctor` says what the others still need. `vendor`, `model` and `version` spell one seat's model.
   `account` names the budget account the seat spends when one lab has two; without it, the seat
-  spends its `vendor`, and changing either is an edit the owner re-approves.
+  spends its `vendor`, and changing either is an edit only the owner makes.
 - `launch` is the plain command, without approval flags: the profile adds them. It runs in the
   folder the seat starts in — the team's lobby, or the project folder for a lead — and `team` never
   rewrites it: `team doctor` checks its first word there — one fully quoted literal with its quotes
@@ -203,7 +203,7 @@ budgets:                      # the owner's: reserve or floor per account, marks
   `~/.config/team/lobby`. `trust` lists that lobby's entry — `~/…` under the home, absolute
   otherwise — along with the project root. `up` and `add` refuse a seat
   whose own folder is a protected checkout, and a legacy `trust` (project-relative patterns, or
-  none) cannot launch until it is rewritten as those absolute paths and approved.
+  none) cannot launch until it is rewritten as those absolute paths.
 
 ### Naming seats
 
@@ -255,10 +255,9 @@ read.
 account's reserve or floor. An account's `shared` key is informational; `team` does not act
 on it. A seat spends its own `account:` when the file names one, its `vendor`
 when it doesn't, so one lab's two accounts are two buckets; a pattern names the account it
-measures, not the seat's. A `check` command is resolved to a file and hashed when the
-owner approves. A change to that file leaves that account's check unapproved: it is
-not run, and the account reads unknown, until the owner approves again. The rest of
-the file still runs. `watch.quota_marks` is still read, with a warning, until you move it to
+measures, not the seat's. A `check` command is resolved to a file and hashed in the record
+this machine keeps. A change to that file leaves that account's check unapproved: it is
+not run, and the account reads unknown. The rest of the file still runs. `watch.quota_marks` is still read, with a warning, until you move it to
 `budgets.marks`. A figure first seen on one seat does not count until it changes or a
 second seat shows the same number. It goes stale from the moment it last changed, and
 the last readings are kept in the state file beside the team file. `team status` prints
@@ -316,7 +315,7 @@ check, and this build acts on what the commands below read.
 | `team commits check <ref>` | checks one commit or a `a..b` range against the signature rule, `--since <ref>` skipping history already checked; exit 1 when one is refused | anyone; read only |
 | `team pr check <file>` | checks a pull request's body against the signature rule (`-` reads stdin), needing no repository; exit 1 when it is refused | anyone; read only |
 | `team doctor` | checks this machine for what the file needs: herdr, each CLI, login, launch line, model, watch heartbeat; `--login` checks only CLI sign-ins | anyone; read only |
-| `team status` | prints the file's seats against the running session, each difference with its repair; `--json` outputs a stable JSON document (`format: 1`) for scripts; exit 1 when they differ | the owner, a seat of that team on its recorded pane, or a pane the approved file names; `--file` and `--session` are the owner's; read only |
+| `team status` | prints the file's seats against the running session, each difference with its repair; `--json` outputs a stable JSON document (`format: 1`) for scripts; exit 1 when they differ | the owner, a seat of that team on its recorded pane, or a pane the live file's `delegates` names; `--file` and `--session` are the owner's; read only |
 | `team list` | lists the herdr sessions on this machine, running ones by default; `--all` includes stopped sessions; `--json` prints a stable array, empty when there is nothing; an orphan session and an unreadable seat do not fail it | anyone, from any folder; read only |
 | `team projects` | lists the registry's projects — each one's immutable id, display name, entity, lead by agent id and teams; `--json` prints the records as one document; a team that names no project reads as its own project | anyone, from any folder; read only |
 | `team up` / `team down` | starts / stops the session and its seats | `up`: the owner or the team's lead seat, or a delegate entry naming `up`; a verified grant admits the orchestrator's seat where the map's row does not; `down`: the owner or the team's lead seat, or a delegate entry |
@@ -329,7 +328,7 @@ check, and this build acts on what the commands below read.
 | `team next` | claims one record from the team's one task source, with a lease in this clone. The source is a file the owner committed, or a tracker the owner's broker reads. On a broker source, `team next` asks the broker; with no broker running it refuses and claims nothing. The broker holds the tracker credential; this command never reads it. The broker runs as the same OS principal as the seat: that is integrity, not authenticity, and this command does not isolate anything. A lease is a file in this clone. Two live leases in this clone do not cover one id. Another clone, and another machine, are outside that promise. An expired lease returns the record to the queue. Another seat may take it, and the work may be done twice. The file is the intake for a file source; for a broker source it is the tracker's read, with the team's policy deciding which fields cross. That is not the owner-set intake rule. `team plan` prints the takeable queue and claims nothing. `title` and `description` are the owner's text. They are not scrubbed. A record with `blocked-by`, `repos`, or `needs` is listed by `team issues` and is not taken. A deadline is printed and not read as a time. A missed deadline is not decided here. `--wait` re-reads the source every `tasks.cadence` while a pass finds nothing takeable; without `tasks.cadence` it refuses. The wait polls at a constant pace; a refused read ends it — back-off is not implemented. Releasing a lease records no progress. The watch's ring is unchanged: `Team: run team messages` | a seat of this team, on the pane the state records for it |
 | `team plan` | prints the queue a claim would consider, in the order `team next` would consider it. A plan is a listing: it claims nothing and writes no lease, and a record another seat holds can still appear. The queue is this clone's view of one source read. A deadline the clock has passed is marked `(overdue)`; the mark decides nothing — an overdue record is still takeable and is never dropped, blocked, reordered or released by lateness, and an unparseable deadline is printed as written and unmarked. On a broker source it asks the broker the same read `team next` asks, and claims nothing. Writes nothing: no lease file, no renewal, no state write, no tracker write | a seat of this team, on the pane the state records for it |
 | `team broker` | `team broker` holds the tracker credential and answers `team next` over a local socket — the one process that reads the key. Owner-run, in a foreground terminal, one per clone; the key is read from the macOS Keychain once, at start, and the team file's `tasks.policy` filters every record before it crosses. It reads the tracker and never writes it. | the owner |
-| `team add <name>` | starts one declared seat, or puts one back from the approved copy; `--temporary --like <seat> --until <end>` starts a seat the file does not hold | the owner, or a delegate entry (same-copy seats only), or a caller a create-grant's runner names |
+| `team add <name>` | starts one declared seat, clearing a `stopped: true` mark the file carries; `--temporary --like <seat> --until <end>` starts a seat the file does not hold | the owner, or a delegate entry (same-copy seats only), or a caller an active create-grant names by registry id |
 | `team register <seat>` | writes the record for a seat that is already running — a pane herdr places under that name, holding a CLI at the seat's prompt — so `team send`, `team seats`, `team watch` and `team down` can address it; it types nothing into the pane, and never overwrites a record that names another pane; `--dry-run` prints the line the real run would print and writes nothing | the owner or a seat of this team, a delegate the file names for `up`, or the seat a grant names for it |
 | `team answer <seat> trust` | presses the one recorded key of a seat's folder-trust dialog, when a `dialogs.trust` team grant is in force; every check passes on two fresh reads of the pane, and anything else sends nothing | the owner, or the coordinator from its own seat |
 | `team release check <package@version>` | checks one release's public npm and GitHub records: the version and its checksums, the tag, the release, the changelog entry; warns, without running it, when npm's `next` dist-tag points below `latest` | anyone; read only |
@@ -444,7 +443,7 @@ own output, the log lines it wrote to `.agents/team.log`, and the seat records i
 It is local only: CI has no herdr, so `bun run ci` does not run it. It refuses to start when herdr
 is not on the PATH, when the machine is over its gate (load under 60, 25 % memory free, swap not
 growing over a minute), or when a session named `team-test-e2e` already exists. It works in a fresh
-folder under the system's temporary directory — the project, the approval store and the fake seats'
+folder under the system's temporary directory — the project, the record store and the fake seats'
 input logs — and prints that path; it never writes the owner's home. It reads the default herdr
 session's agent list before and after, and fails when the count changes.
 

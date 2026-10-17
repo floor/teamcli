@@ -124,7 +124,7 @@ Diagnostic commands that inspect machine or bridge prerequisites use one closed 
 |---|---|---|---|
 | `'ok'` | `ok  ` | Prerequisite is present, verified, or within the tested version range | No |
 | `'warn'` | `warn` | Untested CLI version, missing model flag, rules drift, or file deprecation warning | No (exits `0` if no `miss`) |
-| `'miss'` | `MISS` | Missing binary, not logged in, herdr unreachable, refused/legacy approval, or stale watch | Yes (except watch findings, which `up` starts itself) |
+| `'miss'` | `MISS` | Missing binary, not logged in, herdr unreachable, refused/legacy record, or stale watch | Yes (except watch findings, which `up` starts itself) |
 | `'note'` | `--  ` | Informational state (session running/not running, login unchecked, active hold, `model_from: launcher`) | No |
 
 ### 1.5 Differences, Repairs, and `who`
@@ -384,7 +384,7 @@ Every action command (`up`, `down`, `add`, `remove`, `restart`, `reload`, `regis
   - `project`: `string | null` (present on team-scoped actions)
   - `session`: `string | null` (present on session-scoped actions)
   - `plan`: `PlanStep[]` (`{ step: string, detail: string, seat?: string | null, prefix?: "+" | "!" | "skip" }`, present when `dry_run: true`)
-  - `notice`: `string | null` (fallback notice, e.g. when `team.yaml` is invalid and the stored approved copy is used)
+  - `notice`: `string | null` (fallback notice, e.g. when `team.yaml` is invalid and the last copy that validated is used)
 - **Commands without `--dry-run` (`remove`, `reload`, `init`)**:
   - `remove`, `reload`, and `init` do **not** take `--dry-run`; no `--dry-run` flag or `plan` array is added to them (`dry_run` is always `false`, and `plan` is omitted).
   - `register --dry-run` has no multi-step plan today; its `plan` array under `--dry-run --json` contains a single `PlanStep` (`{ step: "register", seat, detail, prefix: "+" }`) whose `detail` is the line the real run would print.

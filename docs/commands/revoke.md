@@ -37,9 +37,9 @@ file: a record name that is the grant's own, or another grant's stem, is refused
 is written, so a revocation never overwrites a grant.
 
 Removal withdraws the named record only. Another independent grant, delegate or intrinsic lead
-capability can still authorize an operation. The next admission check uses the live record or
-refuses because it differs from the approved copy; an older approval does not restore the removed
-record. Existing runtime requirements still apply. Running seats stay running.
+capability can still authorize an operation. The next admission check reads the live file and the
+records that remain; an older record does not restore the removed one. Existing runtime
+requirements still apply. Running seats stay running.
 
 ## Output and exit codes
 

@@ -1,17 +1,17 @@
 # team watch
 
 Watches a running team. Every `watch.interval` seconds it reads the session — the seats, their
-screens, the file, the approval, the machine — prints what is wrong, and removes a merged worktree
+screens, the file, the record, the machine — prints what is wrong, and removes a merged worktree
 whose end holds. A temporary seat is left as it is: the owner removes it. When a report is
 waiting, it types one fixed line into an idle seat — the nudge —
-so that seat reads the log. The operator is not that seat. A missing approval does not
+so that seat reads the log. The operator is not that seat. A missing record does not
 stop that line. It types nothing into a
 screen it can't read as an empty idle prompt, so a permission dialog and a half-typed sentence are
 left alone. `watch.nudge`, when the file sets it, is sent to each idle worker once
 `idle_first` has passed and again every `idle_repeat` when that is set. The body goes to the
 same drop file `team send` uses, and the pane receives one short line naming that file.
 When `watch.nudge` is omitted, that body is the report line. The text is taken from the
-live file, so it does not wait for an approval. The operator, the orchestrator, and the
+live file, so it does not wait for a record. The operator, the orchestrator, and the
 pane the watch itself is running in are never the target, and neither is a pane that is in
 a dialog or already holds unsent text. A box that already holds the nudge's own line is sent, not typed into twice — and only
 by the watch process that typed it: the same text from anyone else, or found after a restart, is
@@ -26,7 +26,7 @@ accepts; a hatch is trusted package code, not a sandbox.
 ## What it reads and writes
 
 Reads the team file — again on every pass, so a seat parked or stopped since is seen — this
-machine's approval store, the session's state (`.agents/team.state.json`) and herdr: the session's
+machine's record store, the session's state (`.agents/team.state.json`) and herdr: the session's
 agents, each pane's screen and status. With no `--file`, that file is `.agents/team.yaml` of the
 repository's main checkout, found through git's common directory; a folder that is not a git
 repository is read from `.agents/team.yaml` in that folder only, not from a parent, and a link at
@@ -206,12 +206,11 @@ tighten-only check, so `relaxed` lengthens the resolved window and is never read
 
 Each report is addressed to the owner or to the operator. The operator's is what the nudge stands
 for, and `--no-notify` can drop its desktop notification. The owner's — a permission prompt, a
-vendor notice, an approval difference, a
-machine figure, an account inside its reserve or at its floor, an idle seat past `idle_owner` — is notified anyway, and so are the
-watch's own notices: the file can't be read, herdr doesn't answer, no idle seat could be nudged,
-a typed nudge was not sent, and the watch stopped. Neither flag
-removes the log line, and neither reaches `team status`: a reserve still shows on the budgets
-table, and an approval difference is still a difference.
+vendor notice, a machine figure, an account inside its reserve or at its floor, an idle seat past
+`idle_owner` — is notified anyway, and so are the watch's own notices: the file can't be read,
+herdr doesn't answer, no idle seat could be nudged, a typed nudge was not sent, and the watch
+stopped. Neither flag removes the log line, and neither reaches `team status`: a reserve still
+shows on the budgets table, and a record that is not in force still shows there.
 
 A report that is the operator's to act on is also what the nudge stands for. The lines around it:
 
@@ -228,7 +227,7 @@ A report that is the operator's to act on is also what the nudge stands for. The
 | `message <id> for <seat> has been waiting <n> minutes` | that message is older than `nudge_wait` and the seat's box was not free; said once, to the owner, and nothing is typed |
 | `herdr doesn't answer; the watch keeps trying` | the pass is skipped and the watch goes on |
 | `<account>: its check is unreadable` | the check command failed, timed out, or printed something other than one to three lines for a subscription or one line for a spend account; its output is never logged |
-| `the check for <account> is unapproved; that account reads unknown` | the check's file changed since the approval, or was never approved: it is not run |
+| `the check for <account> is unapproved; that account reads unknown` | the check's file changed since the record was written, or no record holds it: it is not run |
 | `the session "<session>" is not this file's "<session>": its readings are not saved` | `--session` names a session other than the file's own; said once, on the first pass that sees it |
 | `team.yaml can't be read (<problem>); watching with the team as it was` | the file broke and no copy of it validated |
 | `liveness_<setting>: the <level> declared <n>, longer than the <n> in force — a liveness threshold may be tightened, never loosened, unless the level above allows it` | a liveness word in the chain would loosen a threshold: it is set aside, the value in force stands, and the line is said once per setting |
@@ -257,12 +256,12 @@ line for a spend account (`12.40 USD`, in its `floor`'s currency). `check_every`
 zero: a value that measures to zero is refused, `budgets.check_every must be greater than zero`.
 Only their state is ever logged, never a line of what they printed — a failure is `<account>: its
 check is unreadable`, a timeout and a contract break alike. A check whose file changed since the
-approval, or that was never approved, is not run at all. The money a spend check reads is kept in
-the state with the pass's screen figures, so `up` and `add` measure the account's floor against
-it; a reading that is stale by then reads unknown there.
+record was written, or that no record holds, is not run at all. The money a spend check reads is
+kept in the state with the pass's screen figures, so `up` and `add` measure the account's floor
+against it; a reading that is stale by then reads unknown there.
 
 The live file supplies the reserves, floors, marks, cadence, accounts and seat assignments.
-Edits take effect without another approval once an approval is in force; otherwise the
+Edits take effect on the next pass once a verified record is in force; otherwise the
 budget defaults contain no accounts. The same values drive the status table and launch gates.
 
 `budget` is a check like the others: `watch.checks` turns it off. It reports, and never refuses a
@@ -416,7 +415,7 @@ exit 0
 ```
 
 The file is part of the same pass. The live file is the record, so a `trust` line changed since the
-owner approved it logs no difference, and the team keeps running:
+last pass logs no difference, and the team keeps running:
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -459,9 +458,9 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-The watch reads its timings and nudge settings from the live file on each pass once an
-approval is in force. Edits take effect without another approval. A file with no verified
-approval uses the default timings.
+The watch reads its timings and nudge settings from the live file on each pass once a
+verified record is in force. Edits take effect on the next pass. A file with no verified
+record uses the default timings.
 By default an idle seat is reported to its lead once per idle period (`idle_repeat` is off).
 A team that wants repeated idle reports turns them on by setting `watch.idle_repeat` to the
 repeat interval (such as `idle_repeat: 20m`), repeating every 20 minutes while the seat stays
@@ -473,7 +472,7 @@ it again — and the machine and the team's entity declare their own words above
 
 A check the team doesn't want is turned off in `watch.checks`. Edits to that list take effect
 on the next pass. The machine below sits at 8% free memory, and the live file turns that
-report off even though the last approval left the check on.
+report off even though the record left the check on.
 
 ```yaml file=.agents/team.yaml
 format: 1

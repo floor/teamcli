@@ -45,9 +45,8 @@ concurrent file change is refused. `--dry-run` validates the proposed edit witho
 The second form writes one signed record into the grants folder in the owner's home; the team file
 is read for the project's root and team, never changed. A revocation is not restored: a new grant
 under the same name is a new record, and [team revoke](revoke.md) appends the revocation record
-that ends it. Runtime admission still requires a verified approval; `approve` and `reload` also
-apply their existing checks against the approved copy. Writing either record does not perform an
-approval.
+that ends it. Runtime admission still requires a verified record of the team file on this machine;
+`reload` reads the live file's grant. Writing either record does not change the team file.
 
 ## Output and exit codes
 

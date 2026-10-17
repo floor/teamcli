@@ -3,7 +3,7 @@
 Reads the machine and says what the team needs before it can run: whether herdr and each seat's CLI
 are installed, at the tested version and logged in,
 whether each launch names the model the file says, whether a watch has run for the session, and what
-each approved budget check reads right now. `up` and `add` refuse until the missing ones that block
+each recorded budget check reads right now. `up` and `add` refuse until the missing ones that block
 them are done; the last line counts those.
 
 ## Synopsis
@@ -59,7 +59,7 @@ trust:
 workspace:
   mode: shared
 
-budgets:                       # owner-only; the checks run from the approved copy
+budgets:                       # owner-only; the checks run from the live file
   accounts:
     openai: { kind: subscription, reserve: 10%, sources: [check], check: .agents/openai-quota }
 
@@ -83,7 +83,7 @@ seats:
     launch: claude --model claude-opus-5-5
 ```
 
-The account's check is a script of the owner's, hashed at approval; a fake one stands in here:
+The account's check is a script of the owner's, hashed in the record; a fake one stands in here:
 
 ```file file=.agents/openai-quota exec=1
 #!/bin/sh

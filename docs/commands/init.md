@@ -1,7 +1,7 @@
 # team init
 
-Writes the team file: a skeleton for this project, or with `--restore` the copy of
-`.agents/team.yaml` you last approved on this machine. It also lists the team file and its runtime
+Writes the team file: a skeleton for this project, or with `--restore` the last copy of
+`.agents/team.yaml` this machine recorded. It also lists the team file and its runtime
 files in `.git/info/exclude`, so git never sees them and a fresh clone never carries them. The owner
 runs it, from a terminal outside herdr; a seat whose own registry record an active create-grant
 names may run it as well. A file that already exists is never overwritten.
@@ -14,7 +14,7 @@ names may run it as well. A file that already exists is never overwritten.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--restore` | — | write the copy of the team file this machine last approved, instead of a skeleton |
+| `--restore` | — | write the last copy of the team file this machine recorded, instead of a skeleton |
 | `--json` | — | the same outcome as one JSON document (`team.init`) instead of the line |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -73,12 +73,12 @@ one does.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| a skeleton was written, or the approved copy was restored | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.` | 0 |
+| a skeleton was written, or the recorded copy was restored | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.` | 0 |
 | refused: not the owner, the file is tracked or already there, or there is nothing to restore | `team init: <reason>` | 1 |
 | it can't run: not inside a git repository, or a bad option | `team init: <problem>`, with the usage for a bad option | 2 |
 
 `--json` prints one `team.init` document instead: `file` (`.agents/team.yaml`), `restored`
-(`false` for a skeleton, `true` for the approved copy), the outcome as `status` (`wrote` or
+(`false` for a skeleton, `true` for the recorded copy), the outcome as `status` (`wrote` or
 `restored`), any collapsed notes, and the closing line as `action_summary`. A refusal under
 `--json` prints the `team.error` document on stdout — its `id` is the contract row for that
 refusal (`init.not-owner`, `init.exists`, …) — and nothing on stderr.

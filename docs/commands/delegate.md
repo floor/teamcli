@@ -11,7 +11,9 @@ their values and order.
 `<session/pane>` identifies a pane outside the team's own session. Both components are
 required, with one slash and no whitespace. At most eight delegates may be recorded.
 `--commands` is a nonempty comma-separated list of distinct words: `up`, `down`, `add`,
-`remove`, `approve`, `swap`. Their existing admission checks and limits still apply.
+`remove`, `approve`, `swap`. Their existing admission checks and limits still apply. `approve`
+is accepted and acts on nothing: `team approve` was removed, and the word stays so a file that
+already names it loads unchanged; `team check` asks for it to be dropped.
 
 ## Who may run it
 
@@ -26,9 +28,9 @@ Other sections keep their original text. An invalid file, target, command list, 
 concurrent file change is refused. `--dry-run` validates the proposed edit without writing.
 
 This command manages existing team-file records. It does not create a machine-wide grant
-store or add new powers. Runtime admission still requires a verified approval, and delegated
-`approve` retains its restrictions on changes to owner sections. Writing the record does
-not perform an approval.
+store or add new powers. Runtime admission still requires a verified record of the team file on
+this machine, and the `approve` word an older entry carries admits nothing. Writing the entry
+changes the file alone.
 
 ## Output and exit codes
 
