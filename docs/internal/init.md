@@ -49,10 +49,10 @@ named. A run with no terminal is refused with one sentence, before the repositor
 ## What it prints
 
 `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.`, or
-`Restored .agents/team.yaml from the copy you last approved on this machine.`, followed by the
+`Restored .agents/team.yaml from the copy this machine stored.`, followed by the
 privacy paragraph: the file is private to this clone, listed in `.git/info/exclude` and never in
 `.gitignore`, so git doesn't see it and a fresh clone doesn't carry it; a collaborator writes
-their own, or receives one and approves it themselves.
+their own, or receives one and uses it as their own.
 
 Under `--json` the run writes one `team.init` v1 document on stdout, its `schema` tag first:
 `format`, `dry_run` (always false), `status` (`wrote`, or `restored`), `action_summary` — the
@@ -111,7 +111,7 @@ Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.
 
 The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or
-receives one and approves it themselves.
+receives one and uses it as their own.
 ```
 
 Running it again never touches the file:

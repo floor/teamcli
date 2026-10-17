@@ -26,7 +26,7 @@ export const EXCLUDED = [TEAM_FILE, `.agents/${STATE_FILE}`, `.agents/${LOG_FILE
 
 export const PRIVACY = `The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or
-receives one and approves it themselves.`;
+receives one and uses it as their own.`;
 
 /** A folder's real path where it can be read, its resolved spelling otherwise. */
 function realOf(path: string): string {
