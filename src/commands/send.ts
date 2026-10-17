@@ -567,6 +567,12 @@ function recordRun(args: Args, io: Io, host: SendHost): number {
     };
   }
   report.seat = to.seat;
+  // A stopped seat takes no record either: the same file read and the same refusal as a real
+  // send, before a dry run or a history line exists. `--record` reaches here before the
+  // delivery path's own check.
+  const receiving = to.cross ? loadTeamFile(to.root, { home: host.home }) : loaded;
+  const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
+  if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
   const msgId = randomUUID();
   if (args.flags.has('dry-run')) return recordDryRun(io, to.seat, ms, report);
   const written = appendHistory(to.project, to.root, host.home, {

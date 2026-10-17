@@ -1005,6 +1005,28 @@ describe('team send: native drop', () => {
     expect(existsSync(join(dir, 'send-drops'))).toBe(true);
   });
 
+  test('a --record to a stopped seat is refused, and nothing is recorded', async () => {
+    const { root, dir, sockets } = world();
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('  - role: reviewer', '  - role: reviewer\n    stopped: true'));
+    const host = fake(sockets);
+
+    for (const argv of [
+      ['--record', 'native', '--channel', 'native', '--ms', '812'],
+      ['--record', 'native', '--channel', 'native', '--ms', '812', '--dry-run'],
+    ]) {
+      const io = owner(root);
+      expect(await runSend(argv, io, host)).toBe(1);
+      expect(io.err).toBe('team send: native: unreachable: native is stopped\n');
+      expect(io.out).toBe('');
+    }
+    const json = owner(root);
+    expect(await runSend(['--record', 'native', '--channel', 'native', '--ms', '812', '--json'], json, host)).toBe(1);
+    expect(JSON.parse(json.out)).toEqual({ seat: 'native', status: 'stopped', exit: 1, error: 'native is stopped', ids: { sent: null, reply: null } });
+    expect(existsSync(join(dir, 'send-drops'))).toBe(false);
+    expect(existsSync(historyPath('acme', root, host.home))).toBe(false);
+  });
+
   test('a pane that rejects the trigger is unreachable and the file remains', async () => {
     const { root, dir, sockets } = world();
     const host = fake(sockets, {

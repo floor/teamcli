@@ -549,6 +549,18 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName}: it is not a declared seat; the file's seats are ${seatList}`,
       });
     }
+    // Defence in depth for a caller that reaches the daemon directly: the file's stopped seat
+    // takes nothing, and no worker is started. The CLI refuses earlier, with the same words.
+    if (configured.stopped === true) {
+      return Promise.resolve({
+        v: 1,
+        ok: false,
+        id: request.id ?? null,
+        seat: seatName,
+        outcome: 'refused',
+        detail: `${seatName} is stopped`,
+      });
+    }
     let queue = queues.get(seatName);
     if (!queue) {
       queue = [];
