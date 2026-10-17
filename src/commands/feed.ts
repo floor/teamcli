@@ -28,7 +28,7 @@ Options:
   --audit <path>   include Desk or bridge audit JSONL lines from <path>
   --briefs <dir>   include <from>-to-<to>.md brief files from <dir>
   --follow         keep reading as new lines arrive, across log rotations
-  --json           one JSON object per line ({ts, from, to, body, id, outcome, ms?, via?})
+  --json           one JSON object per line ({ts, from, to, body, id, outcome, ms?, via?, failed?})
 `;
 
 export const DEFAULT_FEED_LIMIT = 50;
@@ -538,6 +538,7 @@ function formatEntry(entry: HistoryEntry, json: boolean): string {
     // Present only when the send recorded them, so older readers see the same object.
     if (entry.ms !== undefined) obj.ms = entry.ms;
     if (entry.via !== undefined) obj.via = entry.via;
+    if (entry.failed !== undefined) obj.failed = entry.failed;
     return `${JSON.stringify(obj)}\n`;
   }
   const lines = entry.body.split('\n');
