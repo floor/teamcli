@@ -168,12 +168,12 @@ describe('a lead written role: coordinator', () => {
     const dry = testIo(root, coordinator);
     const code = await runAdd(['worker', '--dry-run'], dry, addSources(home));
     expect(code, `${dry.out}${dry.err}`).toBe(1);
-    expect(dry.out).toContain('! add would refuse: only the owner or a standing grant (delegate) runs it; this call is coordinator');
+    expect(dry.out).toContain('! add would refuse: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is coordinator');
     expect(dry.out).toContain('! to unblock: the owner runs `team add worker`');
     expect(dry.err).toBe('');
     const real = testIo(root, coordinator);
     expect(await runAdd(['worker'], real, addSources(home))).toBe(1);
-    expect(real.err).toBe('team add: only the owner or a standing grant (delegate) runs it; this call is coordinator\n');
+    expect(real.err).toBe('team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is coordinator\n');
     rmSync(base, { recursive: true, force: true });
   });
 

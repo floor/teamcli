@@ -28,6 +28,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--like",
           "repeatable": false,
           "takesValue": true
@@ -80,8 +86,8 @@
       ],
       "subcommands": [],
       "usage": [
-        "team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]",
-        "team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]"
+        "team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]",
+        "team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]"
       ]
     },
     {

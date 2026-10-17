@@ -714,6 +714,20 @@ export const UP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** Published `--json` output schema for `team add` (`schema/add.schema.json`). */
+export const ADD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.add',
+  fileName: 'add.schema.json',
+  title: 'team add --json output',
+  statuses: ['ready', 'dry-run'],
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    pane: { type: ['string', 'null'] },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
 /** Published `--json` output schema for `team remove` (`schema/remove.schema.json`). */
 export const REMOVE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.remove',
@@ -761,6 +775,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   RESTART_OUTPUT_SCHEMA,
   DOWN_OUTPUT_SCHEMA,
   UP_OUTPUT_SCHEMA,
+  ADD_OUTPUT_SCHEMA,
   REMOVE_OUTPUT_SCHEMA,
   REGISTER_OUTPUT_SCHEMA,
 ];

@@ -12,9 +12,9 @@ needs it, and refuses the same folders `up` refuses, before it writes anything.
 
 ## Synopsis
 
-    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>]
-             [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+             [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
 
 ## What it reads and writes
 
@@ -36,7 +36,7 @@ through herdr: the workspace, the launch, and the name.
 
 The owner. A seat of the team is refused before anything else is read: adding a seat is the
 owner's in 0.5.0, where no `agree` or `grant` holders stand, so every seat meets the map's own
-line — `team add: only the owner or a standing grant (delegate) runs it; this call is <caller>` —
+line — `team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is <caller>` —
 whatever pane it sits on and whatever the state records. The one standing that opens a seat's run
 is the file's own `delegates` section, below. A run with no terminal is refused before the file is
 read, unless the record below names the caller: `team add: only the owner runs this, from a
@@ -81,6 +81,7 @@ that proceeds is attributed in the log before its effects, as
 | `--session <name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--dry-run` | print whether this seat would launch or be refused. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) |
 | `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--json` | one `team.add` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | the usage, and exit 0 |
 
 The temporary seat's name is the `--like` seat's, with `-tmp-<n>`: the first `n` that is free.
@@ -146,6 +147,15 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 - `add.locked`, the locked edit does not validate (`src/commands/add.ts:706`)
 - `add.not-ready`, the launch finished without a ready seat; `add.server`, the server did not start (`src/commands/add.ts:743-744`)
 
+`--json` prints one `team.add` document instead: `project`, `session`, the seat name as `seat`,
+the pane the launch made as `pane`, the working lines the run printed as `notes`, and the final
+record as `action_summary`; `dry_run` is `false` and `status` is `ready`. On `--dry-run` the
+document carries `dry_run: true`, `status: "dry-run"`, `action_summary: "dry run: nothing was
+run"`, and a `plan` of the steps the real run would take, each the line it would print with its
+`+`, `!` or `skip` prefix. A refusal under `--json` prints the `team.error` document on stdout —
+its `id` is the contract row for that refusal (`add.caller`, `add.seat-name`, `add.budget`, …) —
+and nothing on stderr: the run's own lines ride in the document's `notes`.
+
 ## Refusals
 
 | Message | Exit |
@@ -153,7 +163,7 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | `team add: unknown option --x` / `team add: a seat name is required` / `team add: --like needs a value` (each with the usage) | 2 |
 | `team add: --like, --until and --worktree are for --temporary` | 2 |
 | `team add: line <n>: <message>` / `team add: <message>` | 2 |
-| `team add: only the owner or a standing grant (delegate) runs it; this call is <caller>` | 1 |
+| `team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is <caller>` | 1 |
 | ``team add: delegation needs a verified approval: <reason>`` — the delegate gate. A fingerprint difference is not a refusal; the live file names the delegate | 1 |
 | ``team add: delegation cannot verify its placement or seats: <reason>`` | 1 |
 | `team add: the approved delegate must be an external non-seat pane` | 1 |
@@ -250,7 +260,7 @@ like every other, whatever pane it is placed on and whatever the state records, 
 
 ```console caller=claude-keeper
 $ team add claude-beacon ; echo "exit $?"
-team add: only the owner or a standing grant (delegate) runs it; this call is claude-keeper
+team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is claude-keeper
 exit 1
 ```
 
@@ -280,7 +290,7 @@ An implementer's seat adds nothing either — not even itself:
 
 ```console caller=claude-beacon
 $ team add claude-keeper ; echo "exit $?"
-team add: only the owner or a standing grant (delegate) runs it; this call is claude-beacon
+team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is claude-beacon
 exit 1
 ```
 
@@ -327,8 +337,10 @@ team add: --like, --until and --worktree are for --temporary
 exit 2
 $ team add ; echo "exit $?"
 team add: a seat name is required
-Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
-       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+
+Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is refused or launch fails, 2 when the invocation or team file can't be read.
 exit 2
 ```
 

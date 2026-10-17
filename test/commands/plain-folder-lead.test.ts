@@ -201,7 +201,7 @@ describe('a lead in the lobby of a plain folder', () => {
     // The recorded file is read — the run is not refused for the lobby's plain folder — and the
     // lead's add stops at the map's own row: adding a seat is the owner's in 0.5.0.
     expect(added.err).not.toContain(NOT_A_REPO);
-    expect(added.err).toBe(`team add: only the owner or a standing grant (delegate) runs it; this call is ${LEAD}\n`);
+    expect(added.err).toBe(`team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is ${LEAD}\n`);
     expect(addCode).toBe(1);
 
     const down = testIo(lobby, lead);

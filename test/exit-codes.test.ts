@@ -808,7 +808,7 @@ const refused = (id: string, text: string) => ({ kind: 'refused' as const, id, t
 const ADD_GATE_REFUSALS: [suffix: string, sentence: string, needle: string][] = [
   ['delegate-evidence', "delegation cannot verify its placement or seats: herdr doesn't answer", 'placement or seats'],
   ['delegate-placement', 'the approved delegate must be an external non-seat pane', 'non-seat pane'],
-  ['delegate', 'only the owner or a standing grant (delegate) runs it; this call is pilot', 'or a standing grant (delegate)'],
+  ['delegate', 'only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is pilot', 'or a standing grant (delegate)'],
   ['delegate-command', 'the approved delegate main/w1:p1 may not run `add`; its approved commands are remove', 'may not run'],
 ];
 for (const [suffix, sentence, needle] of ADD_GATE_REFUSALS) {
@@ -2348,9 +2348,12 @@ scene('team.version', async (place) => show(await entry(['--version'], testIo(pl
 scene('team.unknown', async (place) => show(await entry(['nosuch'], testIo(place.root, owner)), 'unknown command'));
 scene('team.command-help', async (place) => show(await entry(['status', '--help'], testIo(place.root, owner)), 'Usage: team status'));
 scene('team.command-threw', async (place) => {
-  const root = join(place.base, 'a b');
+  // An invalid skeleton is `init`'s own refusal now; a plain file where its folder goes still
+  // throws from the write, and the process entry point reports it on the one `team:` line.
+  const root = join(place.base, 'threw');
   mkdirSync(root);
   git(root, 'init', '-q', '-b', 'main');
+  writeFileSync(join(root, '.agents'), 'not a folder\n');
   return show(await entry(['init'], testIo(root, owner)), 'team:');
 });
 

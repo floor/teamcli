@@ -24,7 +24,7 @@ import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00.000Z');
 // The map's own refusal, in the words the add prints it: one sentence for every seat.
-const ADD_LINE = 'only the owner or a standing grant (delegate) runs it; this call is op';
+const ADD_LINE = 'only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is op';
 
 /** The team's operator: a seat of the team's own session, refused `add` by the map's row like
  *  every other seat, whatever its standing. */

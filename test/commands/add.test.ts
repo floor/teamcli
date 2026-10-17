@@ -237,7 +237,7 @@ describe('team add', () => {
     const io = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
     io.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runAdd(['worker'], io, sources(made))).toBe(0);
-    expect(io.err).toContain('team add: warning: only the owner or a standing grant (delegate) runs it; this call is helper; dev mode continues\n');
+    expect(io.err).toContain('team add: warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is helper; dev mode continues\n');
     // The launch's write says the run was folded and who it admitted: the record a later
     // `team check` reads names the helper, and the owner's own write is what takes it off.
     const record = readAgents(home).find((agent) => agent.reach.seat === 'worker');
@@ -549,7 +549,7 @@ describe('team add', () => {
     const before = logged();
     expect(await runAdd(['worker'], io, sources(world()))).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs it; this call is stranger\n');
+    expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is stranger\n');
     expect(logged()).toBe(before);
   });
 
@@ -1217,7 +1217,7 @@ describe('team add delegated', () => {
       delegateGate: () => { asked += 1; return passed; },
     }));
     expect(code).toBe(1);
-    expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs it; this call is pilot\n');
+    expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is pilot\n');
     expect(asked).toBe(0);
   });
 

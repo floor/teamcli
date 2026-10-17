@@ -636,7 +636,7 @@ describe("a create-grant's runner and the team's other commands", () => {
       const under = walkIo(v9, UNDER_HERDR);
       expect(await runAdd(['builder-2'], under, addSources(sb.home))).toBe(1);
       expect(under.err).toBe(
-        'team add: only the owner or a standing grant (delegate) runs it; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
+        'team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
       );
       const underRemove = walkIo(v9, UNDER_HERDR);
       expect(await runRemove(['builder-2'], underRemove, stopSources(sb.home, stopped))).toBe(1);
@@ -699,7 +699,7 @@ describe("a create-grant's named seat", () => {  test('the named seat is admitte
       ]) {
         const add = testIo(one.cwd, one.who);
         expect(await runAdd(['builder-3'], add, addSources(sb.home)), one.name).toBe(1);
-        expect(add.err, one.name).toContain('only the owner or a standing grant (delegate) runs it');
+        expect(add.err, one.name).toContain('only the owner or a standing grant (delegate) runs this, from a terminal outside herdr');
         const remove = testIo(one.cwd, one.who);
         expect(await runRemove(['builder-1'], remove, stopSources(sb.home, stopped)), one.name).toBe(1);
         expect(remove.err, one.name).toContain('only the owner or `leads` removes a seat');
@@ -765,7 +765,7 @@ describe("a create-grant's named seat", () => {  test('the named seat is admitte
       // never for a seat that leads.
       const add = walkIo(v9, OUTSIDE_HERDR);
       expect(await runAdd(['orchestrator'], add, addSources(sb.home))).toBe(1);
-      expect(add.err).toContain('only the owner or a standing grant (delegate) runs it');
+      expect(add.err).toContain('only the owner or a standing grant (delegate) runs this, from a terminal outside herdr');
       const remove = walkIo(v9, OUTSIDE_HERDR);
       expect(await runRemove(['orchestrator'], remove, stopSources(sb.home, { n: 0 }))).toBe(1);
       expect(remove.err).toContain('only the owner removes the orchestrator\'s or the operator\'s seat');

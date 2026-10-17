@@ -317,7 +317,7 @@ describe("a project lead over another team of its project", () => {
     const io = testIo(here.b.root, leadA);
     const code = await runAdd(['builder-b'], io, addSources(here.home));
     expect(code).toBe(1);
-    expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs it; this call is lead-a\n');
+    expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is lead-a\n');
   });
 
   test('`team remove` at the other team: refused, in the placement words', async () => {
