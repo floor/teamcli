@@ -164,8 +164,9 @@ export function seatRegistryRows(
     const hook = !untrusted && traceSources?.stateDir !== undefined && supportsCliHook(cli)
       ? readCliHook(traceSources.stateDir, row.name)
       : null;
-    // The seat-state reading: the CLI's own screen first, then herdr, then the traces (a fresh
-    // one even over an idle word) — and the certainties the comparison already judged. The
+    // The seat-state reading: the CLI's own hook when its launch keeps one, the CLI's own
+    // screen, then herdr, then the traces (a fresh one even over an idle word) — and the
+    // certainties the comparison already judged. The
     // comparison's own 'missing'/'stopped' is such a certainty — it read the pane's processes —
     // and is done, not judged blind. The file's `stopped` and a retained record say the same,
     // but only while herdr names no agent there: a live agent is the observation, and the file's
