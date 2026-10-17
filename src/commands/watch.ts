@@ -6,6 +6,7 @@ import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } 
 import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
+import { isParseError } from '../file/load.ts';
 import { saveMachineReadings } from '../information/machine-readings.ts';
 import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
@@ -14,6 +15,7 @@ import { join } from 'node:path';
 import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, typeText, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
+import { hasJsonFlag, writeJsonError } from '../output/index.ts';
 import { emptySession, readState, updateState } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
 import type { Live } from '../status/compare.ts';
@@ -140,7 +142,17 @@ export const realWatchSources: WatchSources = {
 export const watch: Command = (argv, io) => runWatch(argv, io, realWatchSources);
 export default watch;
 
-export const USAGE = 'Usage: team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]\n';
+export const USAGE = `Usage: team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]
+
+Watches a running team. Every \`watch.interval\` seconds it reads the session — the seats,
+their screens, the file, the approval, the machine — prints what is wrong, and nudges an
+idle seat when a report waits. The owner starts it from a terminal outside herdr; \`up\`
+starts one when a session needs it. It runs in the foreground until Ctrl-C, and every line
+it prints goes to \`.agents/team.log\`.
+
+Exits 0 when the watch starts or stops cleanly, 1 when it is refused or fails, 2 when
+the invocation or team file can't be read.
+`;
 
 /** The file `up` recorded for this session's watch, or a refusal for any other non-owner.
  *  Absent when this folder records none: a flagless watch then reads what it always did.
@@ -195,12 +207,27 @@ async function admittedWatchdog(
 const READINGS_EVERY = 600;
 
 export async function runWatch(argv: string[], io: Io, sources: WatchSources): Promise<number> {
+  // Raw argv, before the parser: `--json` is not a flag this daemon takes, and its refusal
+  // must still answer with the structured error document when the flag is present.
+  const json = hasJsonFlag(argv);
   const args = readArgs(argv, ['session', 'file'], ['no-nudge', 'no-notify']);
   if (args.error || args.rest.length) {
-    io.stderr(`team watch: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
+    const why = args.error ?? `unexpected "${args.rest[0]}"`;
+    if (json) {
+      writeJsonError(io, 'watch.invocation', why, null);
+    } else {
+      io.stderr(`team watch: ${why}\n${USAGE}`);
+    }
     // exit: watch.invocation
     return 2;
   }
+  // The loop itself prints no document: `--json` is refused above. A refusal before the loop
+  // still takes the error document when the flag was read (a `--file --json` value reads as
+  // the flag, as the shared helper defines it), and its plain line otherwise.
+  const refuse = (id: string, why: string): void => {
+    if (json) writeJsonError(io, id, why, null);
+    else io.stderr(`team watch: ${why}\n`);
+  };
   const detached = detachedRefusal(callerOf(io));
   // The `--file` check is the walk's too, and it runs before `currentTeam` reads that file or
   // writes beside it: a non-owner aiming `--file` must not make this command read and validate
@@ -211,7 +238,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // process a pass records — may read it.
   const fileRefusal = fileOwnerRefusal(io, args.values.file);
   if (fileRefusal !== undefined) {
-    io.stderr(`team watch: ${fileRefusal}\n`);
+    refuse('watch.file-owner', fileRefusal);
     // exit: watch.file-owner
     return 1;
   }
@@ -220,19 +247,29 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // A run with no terminal is refused: the watch lives in a pane of its own now, so no process
   // outside a terminal is ever the watch and none has to be admitted to the file.
   if (detached !== undefined) {
-    io.stderr(`team watch: ${detached}\n`);
+    refuse('watch.caller', detached);
     // exit: watch.caller
     return 1;
   }
   if (grant && 'refuse' in grant) {
-    io.stderr(`team watch: ${grant.refuse}\n`);
+    refuse('watch.watchdog', grant.refuse);
     // exit: watch.watchdog
     return 1;
   }
   const aimed = args.values.file ?? (grant && 'file' in grant ? grant.file : undefined);
   const first = currentTeam(io.cwd, aimed, sources.now(), sources.home, false);
   if (!first.ok) {
-    for (const problem of first.errors) io.stderr(`team watch: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${problem.message}\n`);
+    if (json) {
+      const id = first.errors[0]?.message.includes('not inside a git repository')
+        ? 'watch.not-a-repo'
+        : first.errors.some(isParseError)
+          ? 'watch.file-invalid'
+          : 'watch.file';
+      const message = first.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${p.message}`).join('; ');
+      writeJsonError(io, id, message, null);
+    } else {
+      for (const problem of first.errors) io.stderr(`team watch: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${problem.message}\n`);
+    }
     // exit: watch.not-a-repo
     // exit: watch.file
     // exit: watch.file-invalid
@@ -248,7 +285,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // report addressed to the owner: those are routed below.
   if (args.flags.has('no-nudge') || args.flags.has('no-notify')) {
     if (!isOwner(placed)) {
-      io.stderr(`team watch: --no-nudge and --no-notify are the owner's, from a terminal outside herdr; this call is ${describeCaller(placed)}\n`);
+      const message = `--no-nudge and --no-notify are the owner's, from a terminal outside herdr; this call is ${describeCaller(placed)}`;
+      refuse(args.flags.has('no-nudge') ? 'watch.no-nudge' : 'watch.no-notify', message);
       // exit: watch.no-nudge
       // exit: watch.no-notify
       return 1;
@@ -281,7 +319,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   });
   if (otherRunning) {
     const where = other.pid !== undefined ? `pid ${other.pid}` : `pane ${other.pane ?? 'not recorded'}`;
-    io.stderr(`team watch: a watch already runs for the session "${session}" (${where})\n`);
+    refuse('watch.already', `a watch already runs for the session "${session}" (${where})`);
     // exit: watch.already
     return 1;
   }
@@ -329,7 +367,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         });
       }
     }
-    io.stderr('team watch: the watch did not start in its workspace\n');
+    refuse('watch.workspace', 'the watch did not start in its workspace');
     // exit: watch.workspace
     return 1;
   }
