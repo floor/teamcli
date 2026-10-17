@@ -102,12 +102,13 @@ describe('a seat\'s effort', () => {
     const message = loaded.warnings.map((warning) => warning.message).join('\n');
     expect(message).toContain(`effort "${bogus}" is not one of ${lab}'s:`);
     for (const word of words) expect(message).toContain(word);
-    const line = loaded.warnings.find((warning) => warning.message.includes('effort'))?.line;
     const team = loaded.team;
 
     // The file-invalid exit is 2; an unlaunched team always has its ordinary differences (the
-    // seat is not running yet), so the claim is the exit the file's shape decides — and that no
-    // line of the answer is about the effort.
+    // seat is not running yet), so the claim is the exit the file's shape decides — and that the
+    // effort is never a difference. The converted check prints the file's warnings above its
+    // differences, so the warning naming the effort prints there; only the differences must stay
+    // clear of it.
     const check = testIo(root, { kind: 'owner' });
     expect(runTeamCheck({ file: '.agents/team.yaml' }, check, {
       live: () => ({ running: false, agents: [], workspaces: [], screens: {} }),
@@ -116,7 +117,9 @@ describe('a seat\'s effort', () => {
       now: () => NOW,
       home,
     }), `${check.out}${check.err}`).not.toBe(2);
-    expect(`${check.out}${check.err}`).not.toContain('effort');
+    const answers = check.out.split('\n');
+    expect(answers.filter((line) => line.startsWith('difference:')).join('\n')).not.toContain('effort');
+    expect(answers.filter((line) => line.startsWith('warning:')).join('\n')).toContain(`effort "${bogus}"`);
 
     const approve = testIo(root, { kind: 'owner' });
     expect(await runApprove(['--file', '.agents/team.yaml'], approve, {
@@ -125,7 +128,9 @@ describe('a seat\'s effort', () => {
       now: () => NOW,
       home,
     }), `${approve.out}${approve.err}`).toBe(0);
-    expect(approve.err).toContain(`warning, line ${line}: seat "lead": effort "${bogus}" is not one of ${lab}'s: ${words.join(', ')}`);
+    // Approve approves; the check is the one command that names a deprecated field's warning, so
+    // nothing it prints is about the effort.
+    expect(approve.err).not.toContain('effort');
 
     expect(approvalDifferences(team, root, home)).toEqual([]);
     const up = testIo(root, { kind: 'owner' });

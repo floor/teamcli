@@ -9,8 +9,13 @@ const result = validateTeamFile(example);
 if (!result.ok) throw new Error(`examples/team.yaml is refused: ${JSON.stringify(result.errors)}`);
 const { team, warnings } = result;
 
-// The notice examples/team.yaml carries for its legacy `coordinator:` key, on line 6.
-const notice = { line: 6, message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read' };
+// The notice examples/team.yaml carries for its legacy `coordinator:` key, on line 6, with the
+// repair the loader states beside it.
+const notice = {
+  line: 6,
+  message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
+  repair: "set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml",
+};
 
 describe('the fictional example file', () => {
   test('is accepted, carrying only the legacy key\'s notice', () => {
