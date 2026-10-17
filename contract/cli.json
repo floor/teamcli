@@ -1453,6 +1453,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -1475,7 +1481,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>]"
+        "team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]"
       ]
     },
     {

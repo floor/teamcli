@@ -850,7 +850,7 @@ Hidden: no
 
 Usage:
 
-    team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>]
+    team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
 
 ### Flags
 
@@ -860,6 +860,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

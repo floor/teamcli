@@ -674,6 +674,20 @@ export const UNLOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** Published `--json` output schema for `team restart` (`schema/restart.schema.json`). */
+export const RESTART_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.restart',
+  fileName: 'restart.schema.json',
+  title: 'team restart --json output',
+  statuses: ['ready', 'dry-run'],
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    pane: { type: ['string', 'null'] },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -691,6 +705,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   UNLOCK_OUTPUT_SCHEMA,
   RELOAD_OUTPUT_SCHEMA,
   INIT_OUTPUT_SCHEMA,
+  RESTART_OUTPUT_SCHEMA,
 ];
 
 
