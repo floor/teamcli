@@ -14,22 +14,40 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { connect as tlsConnect } from 'node:tls';
 import { readArgs } from '../args.ts';
 import type { Command, Io } from '../io.ts';
+import { plainLine } from '../launch/plain.ts';
 import { lobbyDir } from '../lobby/gate.ts';
+import {
+  renderFinding,
+  renderTable,
+  SEVERITY_LABELS,
+  ttyStyle,
+  writeJson,
+  writeJsonError,
+  type SeverityLevel,
+} from '../output/index.ts';
 
 export const USAGE = `Usage: team mcp status [--json]
        team mcp doctor [--json]
 Read-only: reports the MCP bridge's state and diagnoses what is missing.
-\`status\` exits 0 when every observed leg is up, 1 when one is down or the
-bridge was never set up. \`doctor\` exits 0 when nothing is missing, 1 with
-findings. Owner-gated fixes are marked [owner]. The mutating setup commands
-(enable, disable, key generation) are not in this build yet.
+\`status\` prints one table per leg and the state they add up to; \`doctor\`
+turns the same surface into findings, each missing one with a one-line fix.
+Owner-gated fixes are marked [owner]. The mutating setup commands (enable,
+disable, key generation) are not in this build yet. --json prints one
+document instead of the lines: {format, lobby_dir, helper, bridges, guards,
+front, state} for status, {format, lobby_dir, findings, missing, warnings}
+for doctor. A run that exits 2 writes the structured error document instead
+— {error: {id, message, repair}} — and stderr stays empty.
+
+Exits 0 when every observed leg is up (status) or nothing is missing (doctor),
+1 when a leg is down, the bridge is not set up, or doctor finds something
+missing, 2 when the invocation can't be read.
 `;
 
 /** Where the helper lives on the Mac (the layout the MCP bring-up fixes). Read-only access
  *  only: keys/, queue/ and state/ belong to the helper uid and are not readable from here. */
 export const HELPER_ROOT = '/usr/local/teamcli-helper';
 
-export type Level = 'ok' | 'warn' | 'miss' | 'note';
+export type Level = SeverityLevel;
 
 /** One doctor finding: the level, the sentence, and the one-line fix (null when nothing needs
  *  doing). A fix that needs the owner or privileged access starts with "[owner]". */
@@ -505,8 +523,6 @@ export function parseAuditTail(text: string, limit: number): AuditEntry[] {
 // last audit line with one of these is worth a doctor warning.
 const AUDIT_FAULTS = new Set(['invalid_reply', 'uncorrelated_reply', 'late_reply', 'send_failed', 'invalid_bridge_frame']);
 
-const LEVEL_LABEL: Record<Level, string> = { ok: 'ok  ', warn: 'warn', miss: 'MISS', note: '--  ' };
-
 function octal(mode: number): string {
   return mode.toString(8).padStart(4, '0');
 }
@@ -647,7 +663,7 @@ function helperChecks(sources: McpSources, socket: HelperCheck | null): HelperCh
 }
 
 function rowOf(check: HelperCheck): McpRow {
-  return { name: check.name, state: LEVEL_LABEL[check.level], detail: check.detail };
+  return { name: check.name, state: SEVERITY_LABELS[check.level], detail: check.detail };
 }
 
 function findingOf(check: HelperCheck): McpFinding {
@@ -669,7 +685,7 @@ async function bridgeReport(sources: McpSources, dir: string): Promise<BridgeRep
   const configPath = join(dir, 'bridge.json');
   const rows: McpRow[] = [];
   const row = (name: string, level: Level, detail: string): void => {
-    rows.push({ name, state: LEVEL_LABEL[level], detail });
+    rows.push({ name, state: SEVERITY_LABELS[level], detail });
   };
   const json: McpBridgeJson = {
     dir, config: 'ok', problem: null, wss_url: null, seats: [],
@@ -763,7 +779,7 @@ async function probeFront(sources: McpSources, wssUrl: string): Promise<FrontRep
   const certificate = await sources.certExpiry(url.hostname);
   const rows: McpRow[] = [];
   const row = (name: string, level: Level, detail: string): void => {
-    rows.push({ name, state: LEVEL_LABEL[level], detail });
+    rows.push({ name, state: SEVERITY_LABELS[level], detail });
   };
   row('mcp endpoint', mcp === 401 ? 'ok' : mcp === null ? 'miss' : 'warn',
     mcp === 401 ? '401, OAuth required (the front answers)' : mcp === null ? 'no answer' : `HTTP ${mcp}`);
@@ -803,7 +819,7 @@ interface GuardReport {
 function guardReport(sources: McpSources, dir: string): GuardReport {
   const rows: McpRow[] = [];
   const row = (name: string, level: Level, detail: string): void => {
-    rows.push({ name, state: LEVEL_LABEL[level], detail });
+    rows.push({ name, state: SEVERITY_LABELS[level], detail });
   };
   const json: McpGuardJson = { dir, config: 'invalid', problem: null, enabled: null, last_audit: null };
   const fail = (problem: string): GuardReport => {
@@ -836,14 +852,19 @@ function guardReport(sources: McpSources, dir: string): GuardReport {
   return { dir, json, rows, view, problems };
 }
 
+/** The context line every report opens on: the lobby whose bridge configs are read. */
+function mcpContext(lobby: string): string {
+  return `mcp ${plainLine(lobby)}`;
+}
+
 function renderSections(sections: Array<{ title: string; detail: string; rows: McpRow[] }>): string {
   const lines: string[] = [];
   for (const section of sections) {
-    lines.push(`${section.title}  ${section.detail}`);
-    const width = Math.max(0, ...section.rows.map((row) => row.name.length));
-    for (const row of section.rows) {
-      lines.push(`  ${row.name.padEnd(width)}  ${row.state.padEnd(4)}  ${row.detail}`.trimEnd());
-    }
+    lines.push(`${plainLine(section.title)}  ${plainLine(section.detail)}`);
+    lines.push(...renderTable({
+      headers: ['NAME', 'STATE', 'DETAIL'],
+      rows: section.rows.map((row) => [row.name, row.state, row.detail]),
+    }));
   }
   return lines.join('\n');
 }
@@ -885,19 +906,19 @@ export async function runMcpStatus(io: Io, json: boolean, sources: McpSources): 
   };
 
   if (json) {
-    io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
+    writeJson(io, 'team.mcp', { ...doc });
   } else {
     const sections: Array<{ title: string; detail: string; rows: McpRow[] }> = [
       { title: 'helper', detail: helperRoot, rows: helperRows },
     ];
     if (bridges.length === 0) {
-      sections.push({ title: 'bridge', detail: lobby, rows: [{ name: 'config', state: LEVEL_LABEL.miss, detail: NO_SETUP }] });
+      sections.push({ title: 'bridge', detail: lobby, rows: [{ name: 'config', state: SEVERITY_LABELS.miss, detail: NO_SETUP }] });
     } else {
       for (const bridge of bridges) sections.push({ title: 'bridge', detail: bridge.dir, rows: bridge.rows });
       if (front !== null) sections.push({ title: 'front', detail: front.json.origin ?? '', rows: front.rows });
     }
     for (const guard of guards) sections.push({ title: 'guard', detail: guard.dir, rows: guard.rows });
-    io.stdout(`${renderSections(sections)}\nstate: ${state}\n`);
+    io.stdout(`${mcpContext(lobby)}\n${renderSections(sections)}\nstate: ${state}\n`);
   }
   if (state === 'not-set-up') {
     // exit: mcp.not-set-up
@@ -1025,15 +1046,18 @@ export async function runMcpDoctor(io: Io, json: boolean, sources: McpSources): 
   const warnings = findings.filter((finding) => finding.level === 'warn').length;
   if (json) {
     const doc: McpDoctorJson = { format: 1, lobby_dir: lobby, findings, missing, warnings };
-    io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
+    writeJson(io, 'team.mcp', { ...doc });
   } else {
-    for (const finding of findings) {
-      io.stdout(`${LEVEL_LABEL[finding.level]}  ${finding.text}\n`);
-      if (finding.fix !== null) io.stdout(`      fix: ${finding.fix}\n`);
-    }
+    const style = ttyStyle(io);
     const plural = warnings === 1 ? '' : 's';
-    io.stdout(missing ? `team mcp doctor: ${missing} missing, ${warnings} warning${plural}\n`
-      : `team mcp doctor: nothing missing, ${warnings} warning${plural}\n`);
+    const lines = [mcpContext(lobby)];
+    for (const finding of findings) {
+      lines.push(renderFinding({ level: finding.level, text: finding.text }, style));
+      if (finding.fix !== null) lines.push(`      fix: ${plainLine(finding.fix)}`);
+    }
+    lines.push(missing ? `team mcp doctor: ${missing} missing, ${warnings} warning${plural}`
+      : `team mcp doctor: nothing missing, ${warnings} warning${plural}`);
+    io.stdout(`${lines.join('\n')}\n`);
   }
   // exit: mcp.clear
   // exit: mcp.missing
@@ -1044,7 +1068,11 @@ export async function runMcp(argv: string[], io: Io, sources: McpSources = realS
   const args = readArgs(argv, [], ['json']);
   const sub = args.rest[0];
   const fail = (message: string): number => {
-    io.stderr(`team mcp: ${message}\n\n${USAGE}`);
+    if (args.flags.has('json')) {
+      writeJsonError(io, 'mcp.invocation', message, null);
+    } else {
+      io.stderr(`team mcp: ${message}\n\n${USAGE}`);
+    }
     // exit: mcp.invocation
     return 2;
   };

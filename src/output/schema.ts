@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
 import { DELIVERY_LEGS } from '../settings/inherit.ts';
-import { DIFFERENCE_WHO_VALUES, SEVERITY_LEVELS } from './text.ts';
+import { DIFFERENCE_WHO_VALUES, SEVERITY_LABELS, SEVERITY_LEVELS } from './text.ts';
 
 export interface CommandSchemaSpec {
   /** Schema identifier, e.g. `'team.status'` or `'team.error'`. */
@@ -707,6 +707,177 @@ export const ANSWER_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** Published `--json` output schema for `team mcp` (`schema/mcp.schema.json`): the status
+ *  report (the helper rows, each bridge, each guard, the front and the state they add up to)
+ *  and the doctor report (the findings and their counts). A run whose invocation cannot be
+ *  read writes the `team.error` envelope instead. */
+export const MCP_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.mcp',
+  fileName: 'mcp.schema.json',
+  title: 'team mcp --json output',
+  required: [],
+  properties: {},
+  oneOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['schema', 'format', 'lobby_dir', 'helper', 'bridges', 'guards', 'front', 'state'],
+      properties: {
+        schema: schemaTagFragment('team.mcp', 1),
+        format: { type: 'integer', const: 1 },
+        lobby_dir: { type: 'string', minLength: 1 },
+        helper: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['root', 'present', 'rows'],
+          properties: {
+            root: { type: 'string', minLength: 1 },
+            present: { type: 'boolean' },
+            rows: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['name', 'state', 'detail'],
+                properties: {
+                  name: { type: 'string', minLength: 1 },
+                  state: { type: 'string', enum: [...Object.values(SEVERITY_LABELS)] },
+                  detail: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        bridges: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['dir', 'config', 'problem', 'wss_url', 'seats', 'signer_socket', 'bridge_process', 'mailbox', 'inbox_outbox', 'audit'],
+            properties: {
+              dir: { type: 'string', minLength: 1 },
+              config: { type: 'string', enum: ['ok', 'invalid'] },
+              problem: { type: ['string', 'null'] },
+              wss_url: { type: ['string', 'null'] },
+              seats: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['alias', 'route', 'key_id'],
+                  properties: {
+                    alias: { type: 'string', minLength: 1 },
+                    route: { type: 'string', minLength: 1 },
+                    key_id: { type: 'string', minLength: 1 },
+                  },
+                },
+              },
+              signer_socket: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                required: ['path', 'state'],
+                properties: {
+                  path: { type: 'string', minLength: 1 },
+                  state: { type: 'string', enum: ['ok', 'refused', 'missing', 'unknown'] },
+                },
+              },
+              bridge_process: { type: 'string', enum: ['up', 'down', 'unknown'] },
+              mailbox: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                required: ['outbound_ready', 'inbound_ready'],
+                properties: {
+                  outbound_ready: { type: ['integer', 'null'], minimum: 0 },
+                  inbound_ready: { type: ['integer', 'null'], minimum: 0 },
+                },
+              },
+              inbox_outbox: { type: ['string', 'null'] },
+              audit: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                required: ['path', 'last'],
+                properties: {
+                  path: { type: 'string', minLength: 1 },
+                  last: {
+                    type: ['object', 'null'],
+                    additionalProperties: false,
+                    required: ['ts', 'event'],
+                    properties: {
+                      ts: { type: 'string', minLength: 1 },
+                      event: { type: 'string', minLength: 1 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        guards: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['dir', 'config', 'problem', 'enabled', 'last_audit'],
+            properties: {
+              dir: { type: 'string', minLength: 1 },
+              config: { type: 'string', enum: ['ok', 'invalid'] },
+              problem: { type: ['string', 'null'] },
+              enabled: { type: ['boolean', 'null'] },
+              last_audit: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                required: ['ts', 'event'],
+                properties: {
+                  ts: { type: 'string', minLength: 1 },
+                  event: { type: 'string', minLength: 1 },
+                },
+              },
+            },
+          },
+        },
+        front: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['origin', 'mcp_status', 'connector_status', 'tls_valid_to', 'tls_authorized'],
+          properties: {
+            origin: { type: ['string', 'null'] },
+            mcp_status: { type: ['integer', 'null'] },
+            connector_status: { type: ['integer', 'null'] },
+            tls_valid_to: { type: ['string', 'null'] },
+            tls_authorized: { type: ['boolean', 'null'] },
+          },
+        },
+        state: { type: 'string', enum: ['up', 'down', 'not-set-up'] },
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['schema', 'format', 'lobby_dir', 'findings', 'missing', 'warnings'],
+      properties: {
+        schema: schemaTagFragment('team.mcp', 1),
+        format: { type: 'integer', const: 1 },
+        lobby_dir: { type: 'string', minLength: 1 },
+        findings: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['level', 'text', 'fix'],
+            properties: {
+              level: { type: 'string', enum: [...SEVERITY_LEVELS] },
+              text: { type: 'string', minLength: 1 },
+              fix: { type: ['string', 'null'] },
+            },
+          },
+        },
+        missing: { type: 'integer', minimum: 0 },
+        warnings: { type: 'integer', minimum: 0 },
+      },
+    },
+  ],
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -721,5 +892,6 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ROUTE_OUTPUT_SCHEMA,
   SEND_OUTPUT_SCHEMA,
   ANSWER_OUTPUT_SCHEMA,
+  MCP_OUTPUT_SCHEMA,
 ];
 
