@@ -591,6 +591,24 @@ describe('team restart <seat>', () => {
     expect(realDoc.notes.some((note) => note.startsWith('team restart:'))).toBe(false);
   });
 
+  test('--json: the owner-or-leads repair names the owner\'s command without this run\'s --json', async () => {
+    const fixture = makeFixture();
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+
+    expect(await runRestart(['worker', '--json'], io, sources)).toBe(1);
+    expect(io.err).toBe('');
+    const doc = assertJsonErrorShape(io.out, { id: 'restart.caller', messageContains: 'only the owner or `leads` restarts a seat' });
+    expect(doc.error.repair).toContain('`team restart worker`');
+    expect(doc.error.repair).not.toContain('--json');
+
+    // The dry answer's line is the same command, without the dry run's own flag.
+    const dry = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    expect(await runRestart(['worker', '--dry-run'], dry, sources)).toBe(1);
+    expect(dry.out).toContain('! to unblock: the owner runs `team restart worker` from this folder');
+    expect(dry.out).not.toContain('--dry-run`');
+  });
+
   test('--json: a refusal is the team.error document and leaves stderr empty', async () => {
     const fixture = makeFixture();
     const { sources } = makeHarness(fixture);

@@ -1478,11 +1478,17 @@ function hostOf(input: {
 }
 
 /** The one command that unblocks an `add` this caller cannot run: the owner's own, in this
- *  folder, at a terminal outside herdr. The caller's words are kept, the dry run's own flag
- *  dropped, so the printed line is a command that runs. */
+ *  folder, at a terminal outside herdr. The caller's words are kept, the dry run's and the
+ *  document's own flags dropped, so the printed line is a command that runs. */
 function ownerAddRun(argv: string[]): string {
-  const words = ['team', 'add', ...argv.filter((word) => word !== '--dry-run').map(shellQuote)];
+  const words = ['team', 'add', ...withoutOutputFlags(argv).map(shellQuote)];
   return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+}
+
+/** The caller's words without this run's own output flags: the repair names a command that
+ *  runs on a terminal, so neither the dry run nor the document belongs in it. */
+function withoutOutputFlags(argv: string[]): string[] {
+  return argv.filter((word) => word !== '--dry-run' && word !== '--json' && !word.startsWith('--json='));
 }
 
 function refusePretrust(io: Io, json: boolean, name: string, line: string, dry: boolean): number {

@@ -238,8 +238,17 @@ describe('team add --json', () => {
     const io = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
     expect(await runAdd(['worker', '--json'], io, sources(made))).toBe(1);
     expect(io.err).toBe('');
-    assertJsonErrorShape(io.out, { id: 'add.caller', messageContains: 'only the owner or a standing grant' });
+    const doc = assertJsonErrorShape(io.out, { id: 'add.caller', messageContains: 'only the owner or a standing grant' });
     expect(made.creates).toEqual([]);
+    // The repair names a command the owner runs: this run's --json is not part of it.
+    expect(doc.error.repair).toBe('the owner runs `team add …` from a terminal outside herdr');
+    expect(doc.error.repair).not.toContain('--json');
+
+    // The dry answer's line is the command itself, without the dry run's own flag.
+    const dry = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+    expect(await runAdd(['worker', '--dry-run'], dry, sources(world()))).toBe(1);
+    expect(dry.out).toContain('! to unblock: the owner runs `team add worker` from this folder');
+    expect(dry.out).not.toContain('--dry-run`');
   });
 
   test('a read-at-start warning is a note of its own sentence, on a dry run and a real one', async () => {

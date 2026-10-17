@@ -862,8 +862,14 @@ function detachedExit(out: Io, json: boolean, message: string): number {
  *  folder, at a terminal outside herdr. The caller's words are kept, the dry run's own flag
  *  dropped, so the printed line is a command that runs. */
 function ownerRestartRun(argv: string[]): string {
-  const words = ['team', 'restart', ...argv.filter((word) => word !== '--dry-run').map(shellQuote)];
+  const words = ['team', 'restart', ...withoutOutputFlags(argv).map(shellQuote)];
   return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+}
+
+/** The caller's words without this run's own output flags: the repair names a command that
+ *  runs on a terminal, so neither the dry run nor the document belongs in it. */
+function withoutOutputFlags(argv: string[]): string[] {
+  return argv.filter((word) => word !== '--dry-run' && word !== '--json' && !word.startsWith('--json='));
 }
 
 /** The gate's refusal: the sentence on stderr, or, with `dryAnswer`, the dry run's own words on
