@@ -57,7 +57,12 @@ export const realSeatsSources: SeatsSources = {
   branch: (path) => realStatusSources.branch(path),
   standing: (root) => realStatusSources.standing(root),
   now: () => realStatusSources.now(),
-  home: realStatusSources.home,
+  // A getter, not a value: `status.ts` and this module import each other, and reading the value
+  // while the imports initialize throws when `status.ts` is the entry (its `realSources` is
+  // still in its temporal dead zone). A run reads it after both modules have initialized.
+  get home() {
+    return realStatusSources.home;
+  },
   wait: waitOrStop,
 };
 
