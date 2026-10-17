@@ -322,4 +322,46 @@ describe('the send glue names the seat\'s own origin as the repo', () => {
     expect(pane.created).toEqual([SANDBOX]);
     expect(pane.deleted).toBe(false);
   });
+
+  test('a non-lead seat started in the lobby still sends to its project\'s repo', async () => {
+    // `team up` starts a non-lead seat in the lobby, and the TUI never leaves that folder, so
+    // the pane's foreground cwd has no git origin. The seat's record carries the project, and
+    // its origin is the repo the brief is created on.
+    const base = mkdtempSync(join(tmpdir(), 'jules-seat-'));
+    made.push(base);
+    execFileSync('git', ['init', '-q', base], { stdio: 'ignore' });
+    execFileSync('git', ['-C', base, 'remote', 'add', 'origin', 'git@github.com:floor/jules-sandbox.git'], { stdio: 'ignore' });
+    const lobby = mkdtempSync(join(tmpdir(), 'jules-lobby-'));
+    made.push(lobby);
+
+    const scriptDir = mkdtempSync(join(tmpdir(), 'jules-repos-'));
+    made.push(scriptDir);
+    const script = join(scriptDir, 'repos.ts');
+    writeFileSync(script, `console.log(${JSON.stringify(REPOS.join('\n'))});`);
+
+    const pane = new FakeJules();
+    const native: NativePane = {
+      typeText: (_session, _pane, text) => pane.type(text),
+      pressEnter: () => pane.key('enter'),
+      status: () => 'unknown',
+      wait: async () => {},
+      paneText: () => pane.text(),
+      sendKey: (_session, _pane, key) => pane.key(key),
+      foregroundCwd: () => lobby,
+    };
+    const shipped = profileFor('jules')?.compose;
+    if (!shipped) throw new Error('the jules profile carries no compose module');
+    const result = await deliverCompose(native, {
+      profile: { ...shipped, repos: [script, ...shipped.repos] },
+      binary: 'bun',
+      session: 'session',
+      pane: 'pane',
+      seatCwd: base,
+      idleTimeout: 1,
+      message: MESSAGE,
+    });
+    expect(result).toEqual({ outcome: 'delivered', evidence: PROOF });
+    expect(pane.created).toEqual([SANDBOX]);
+    expect(pane.deleted).toBe(false);
+  });
 });

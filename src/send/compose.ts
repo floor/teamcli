@@ -4,10 +4,12 @@
 // the repo its folder names, and the repos the CLI itself lists — and turns the module's
 // answer into the send's three outcomes.
 //
-// The seat's folder is the pane's foreground cwd when herdr can name it, else the folder the
-// seat's record carries. `git -C <folder> remote get-url origin` names the repo, and the
-// profile's `reposArgs` run with its binary list the account's repos; both are read here,
-// never by the module, which may not run a command.
+// The seat's folder is the pane's foreground cwd when herdr can name it and that folder has a
+// git origin, else the folder the seat's record carries: a non-lead seat is started in the
+// lobby, and a TUI that never changes folder keeps the lobby as its foreground cwd. `git -C
+// <folder> remote get-url origin` names the repo, and the profile's `reposArgs` run with its
+// binary list the account's repos; both are read here, never by the module, which may not run
+// a command.
 import { execFileSync } from 'node:child_process';
 import { stripSgr } from '../ansi.ts';
 import { ComposeError, type ComposeIo, type ComposeProfile, type ComposeSeat } from '../profiles/compose.ts';
@@ -82,10 +84,12 @@ export function listedRepos(binary: string, args: readonly string[], dir: string
  * the module's repair line, so the operator reads what to do next in the same sentence.
  */
 export async function deliverCompose(native: NativePane, run: ComposeRun): Promise<ComposeResult> {
-  const cwd = native.foregroundCwd?.(run.session, run.pane) ?? run.seatCwd;
+  const foreground = native.foregroundCwd?.(run.session, run.pane) ?? null;
+  const foregroundRepo = foreground === null ? null : originRepo(foreground);
+  const cwd = foreground !== null && foregroundRepo !== null ? foreground : run.seatCwd;
   const seat: ComposeSeat = {
     cwd,
-    repo: originRepo(cwd),
+    repo: foregroundRepo ?? originRepo(run.seatCwd),
     repos: run.profile.repos.length === 0 ? null : listedRepos(run.binary, run.profile.repos, cwd),
   };
   const io: ComposeIo = {
