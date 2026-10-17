@@ -977,8 +977,8 @@ function leadRefused(out: Io, json: boolean, callerText: string): number {
 function signedOffRefused(out: Io, json: boolean, name: string): number {
   refuse(out, json, 'restart', {
     id: 'restart.signed-off',
-    message: `${name} is signed off; the owner approves the seat back and runs team up`,
-    repair: 'the owner approves the seat back, then runs team up',
+    message: `${plainLine(name)} is signed off; the owner takes the sign-off off in the file and runs team up`,
+    repair: 'the owner takes the sign-off off in the file, then runs team up',
   });
   // exit: restart.signed-off
   return 1;

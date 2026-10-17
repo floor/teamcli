@@ -326,9 +326,9 @@ export async function runInit(
     if (copy === null) {
       refuse(io, json, 'init', {
         id: 'init.nothing',
-        message: 'nothing to restore: no team file was approved for this folder on this machine',
+        message: 'nothing to restore: no copy of a team file was stored for this folder on this machine',
         repair: 'team init writes a skeleton',
-        plain: 'nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.',
+        plain: 'nothing to restore: no copy of a team file was stored for this folder on this machine. Run team init for a skeleton.',
       });
       // exit: init.nothing
       return 1;
@@ -350,7 +350,7 @@ export async function runInit(
   mkdirSync(dirname(path), { recursive: true });
   const added = exclude(root);
   writeFileSync(path, text, { flag: 'wx' });
-  const what = args.flags.has('restore') ? 'restored the approved copy' : 'wrote a skeleton';
+  const what = args.flags.has('restore') ? 'restored the copy this machine stored' : 'wrote a skeleton';
   logLine(dirname(path), 'init', describeCaller(caller), `${what} as ${TEAM_FILE}; excluded ${added.length} path(s)`);
   // The registry is where the user-level state lives: the home the shipped command names, or the
   // one a test hands in. A caller that names neither leaves the machine's registry alone.
@@ -369,7 +369,7 @@ export async function runInit(
   // The existing closing line is the action summary; the privacy paragraph is plain-only prose
   // the document has no field for.
   const action_summary = restored
-    ? `Restored ${TEAM_FILE} from the copy you last approved on this machine.`
+    ? `Restored ${TEAM_FILE} from the copy this machine stored.`
     : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run the seats.`;
   if (json) {
     writeJson(io, 'team.init', {

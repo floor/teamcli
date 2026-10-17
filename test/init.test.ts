@@ -311,7 +311,7 @@ describe('team init', () => {
     expect(existsSync(join(project, '.agents'))).toBe(false);
   });
 
-  test('--restore brings back the copy last approved on this machine', async () => {
+  test('--restore brings back the copy this machine stored', async () => {
     const home = join(base, 'home');
     const text = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
     const result = validateTeamFile(text);

@@ -45,7 +45,7 @@ Exits 0 when the trust dialog is answered and the seat is ready, 1 when the answ
 refused or does not complete, 2 when the invocation or team file can't be read.
 `;
 
-const OUTSIDE = 'ask the owner to approve this exact folder and answer through team up';
+const OUTSIDE = 'ask the owner to add this exact folder to trust and answer through team up';
 
 export type AnswerHost = {
   version(binary: string): string | null;

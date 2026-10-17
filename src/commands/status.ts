@@ -443,7 +443,7 @@ export function emptyOverrides(): OverrideForce {
 export function overrideDrift(report: OverrideForce): Difference[] {
   return [
     ...report.differences.map((line): Difference => ({
-      what: `the overrides differ from the approved copy: ${line}`,
+      what: `the overrides differ from the stored copy: ${line}`,
       repair: APPROVAL_REPAIR,
       approval: true,
       owner: true,

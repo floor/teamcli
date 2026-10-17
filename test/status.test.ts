@@ -1391,13 +1391,13 @@ profiles:
 `);
 
     const forced = await status();
-    expect(forced.out).toContain('difference: the overrides differ from the approved copy: `overrides` changed');
+    expect(forced.out).toContain('difference: the overrides differ from the stored copy: `overrides` changed');
     expect(forced.out).toContain('  who: the owner');
 
     setDevMode('on');
     const dev = await statusDev();
     expect(dev.out).toContain('note: 1 override difference(s); dev mode does not compare them');
-    expect(dev.out).not.toContain('difference: the overrides differ from the approved copy');
+    expect(dev.out).not.toContain('difference: the overrides differ from the stored copy');
   });
 
   test('a governing off retires the variable: the state row stays a difference under TEAMCLI_DEV_MODE=1', async () => {

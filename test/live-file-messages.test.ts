@@ -31,24 +31,12 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // or that changed after it. The watch runs the record's checks, so this is not the file's case.
   { literal: /^the check for .* is unapproved; that account reads unknown$/, why: "a check whose file no longer hashes to the record's digest" },
   { literal: /^the check for .* changed after approval and was not run; that account reads unknown$/, why: "a check whose file changed after the record was written: it is not run" },
-  // The overrides are the owner's own file, held against the copy the record stored, by design.
-  { literal: /^the overrides differ from the approved copy: /, why: "the owner's overrides, held against the copy the record stored" },
-  // The record is written by the owner's own `team up`: this sentence asks for exactly that.
-  { literal: /^ask the owner to approve this exact folder and answer through team up$/, why: "the record is written by the owner's own `team up`, which this asks for" },
   // A grant gate's refusal id (`a grant needs a verified approval: …`), compared by `up` and
   // `register` and never printed: a grant's own approval-state key, not an approved copy.
   // A grant's own word: a delegate the owner granted `swap` to is an approved one.
   { literal: /an approved delegate swaps/, why: "the delegate grant's word: a delegate granted `swap` is an approved one" },
   // Seat membership in the file: the note names a pane the file does not carry.
   { literal: /^.*: its record is not an approved seat; left (?:running|as it is) \(the owner cleans it: team remove .*\)$/, why: "'approved' is the note's word for a seat of the file in force" },
-  // A sign-off, taken off in the file; the owner's `team up` is what reads it. The repair line
-  // says the same act the message names.
-  { literal: /is signed off; the owner approves the seat back and runs team up/, why: 'a sign-off is taken off in the file; the owner\'s `team up` reads it' },
-  { literal: /^the owner approves the seat back, then runs team up$/, why: 'the sign-off refusal\'s repair line: the owner\'s `team up` reads it' },
-  // The restore path reads the record's stored copy — the only archive of a file on this machine.
-  { literal: /^nothing to restore: no team file was approved for this folder on this machine(?:\. Run team init for a skeleton\.)?$/, why: 'there is no stored copy to restore from: the message and its terminal form' },
-  { literal: /^restored the approved copy$/, why: "the file written is the record's own stored copy" },
-  { literal: /^Restored \$\{TEAM_FILE\} from the copy you last approved on this machine\./, why: "the copy the record stored, restored onto disk" },
   { literal: /^# the command and its model options; no approval flags$/, why: 'a line of the skeleton `init` writes: it carries no approval flags' },
   // A filter over the doctor's own lines: a finding that names the approval command, or the
   // never-approved case, is skipped by `add`, `restart` and `up` — never printed by them.

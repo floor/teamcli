@@ -488,7 +488,7 @@ describe('team restart <seat>', () => {
 
     const ioStopped = testIo(fixture.root, { kind: 'owner' });
     expect(await runRestart(['parked-seat'], ioStopped, sources)).toBe(1);
-    expect(ioStopped.err).toBe('team restart: parked-seat is signed off; the owner approves the seat back and runs team up\n');
+    expect(ioStopped.err).toBe('team restart: parked-seat is signed off; the owner takes the sign-off off in the file and runs team up\n');
 
     // Dry run
     const ioDry = testIo(fixture.root, { kind: 'owner' });

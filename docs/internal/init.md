@@ -7,8 +7,8 @@ codes stay on the page.
 
 ## What the run does: the skeleton, the restore, the exclude lines
 
-Writes the team file: a skeleton for this project, or the copy of `.agents/team.yaml` you last
-approved on this machine. It also lists the team file and its runtime files in `.git/info/exclude`,
+Writes the team file: a skeleton for this project, or the copy of `.agents/team.yaml` this machine
+stored. It also lists the team file and its runtime files in `.git/info/exclude`,
 so git never sees them and a fresh clone never carries them.
 
 ## What it reads and writes
@@ -70,7 +70,7 @@ exit code is the same as without `--json`.
 | `team init: not inside a git repository` | 2 |
 | `team init: .agents/team.yaml is tracked by git, and a team file is private. Untrack it, keeping the file:` … | 1 |
 | `team init: .agents/team.yaml exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.` | 1 |
-| `team init: nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.` | 1 |
+| `team init: nothing to restore: no copy of a team file was stored for this folder on this machine. Run team init for a skeleton.` | 1 |
 | `team init: nothing was restored: the record for this folder was approved before records were signed.` — the record was written by an earlier `team`; the same shape, with the case, for a record that does not verify | 1 |
 | `team init: unknown option --<name>` (with the usage) | 2 |
 
@@ -94,11 +94,11 @@ team init: only the owner runs this, from a terminal outside herdr; this call is
 exit 1
 ```
 
-With nothing approved on this machine yet, `--restore` has nothing to bring back:
+With nothing stored on this machine yet, `--restore` has nothing to bring back:
 
 ```console
 $ team init --restore ; echo "exit $?"
-team init: nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.
+team init: nothing to restore: no copy of a team file was stored for this folder on this machine. Run team init for a skeleton.
 exit 1
 ```
 

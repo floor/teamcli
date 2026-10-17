@@ -54,7 +54,7 @@ Every refusal line is `<seat>: <reason>` except an unplaced caller's, which is i
 | version | `this version has no trust answer` |
 | screen | `the pane is not the trust dialog` |
 | label | `the trust choice is not the recorded one` |
-| folder | `the dialog does not show exactly one folder`; `the dialog does not show the lobby as written: the owner answers it through team up`; `the pane's folder cannot be read`; `the pane's folder is not the lobby as written`; `the lobby's parent folder cannot be read`; `the lobby's parent folder holds a name that differs from the lobby's by whitespace alone`; `this folder is not an exact trust entry`; `ask the owner to approve this exact folder and answer through team up` |
+| folder | `the dialog does not show exactly one folder`; `the dialog does not show the lobby as written: the owner answers it through team up`; `the pane's folder cannot be read`; `the pane's folder is not the lobby as written`; `the lobby's parent folder cannot be read`; `the lobby's parent folder holds a name that differs from the lobby's by whitespace alone`; `this folder is not an exact trust entry`; `ask the owner to add this exact folder to trust and answer through team up` |
 | action | `the recorded key is not one this version sends` |
 | process | `the process in its pane is not the one team launched`; `its pane could not be read`; `<reason>; rules were typed, not sent` |
 
