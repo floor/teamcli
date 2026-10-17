@@ -74,7 +74,8 @@ test('--json not-submitted writes the error document naming the box and the drop
   expect(doc.error.message).toContain('the box could not be read');
   expect(doc.error.repair).toBeNull();
   const drops = dropDir(made.dir);
-  const ids = readdirSync(drops);
+  // The drop is the message; the record beside it is the watch's retry, not a second drop.
+  const ids = readdirSync(drops).filter((name) => !name.endsWith('.pending'));
   expect(ids.length).toBe(1);
   const path = join(drops, ids[0] ?? '');
   expect(doc.error.message).toContain(path);
