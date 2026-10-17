@@ -106,18 +106,6 @@ export function showsHeldFrameDialog(screen: string | null): boolean {
   return flat.includes(HELD_FRAME_DIALOG);
 }
 
-/** How many bottom rows a send looks for the held-frame dialog in. The dialog is drawn where the
- *  composer is — at the foot of the pane — so the same sentence scrolled up in the transcript,
- *  or quoted by the seat itself above a live box, is not the dialog. */
-const HELD_FRAME_ROWS = 12;
-
-/** Whether the foot of the pane shows the held-frame dialog: a live one replaces the composer
- *  and sits in the last rows, where the box would be. */
-function endsAtHeldFrame(screen: string): boolean {
-  const rows = screen.split('\n');
-  return showsHeldFrameDialog(rows.slice(Math.max(0, rows.length - HELD_FRAME_ROWS)).join('\n'));
-}
-
 type Look =
   | { state: 'unread' }
   | { state: 'dialog'; kind: string }
@@ -129,13 +117,16 @@ type Look =
 function look(host: DeliverHost, pane: string, line: string, profile: string): Look {
   const screen = host.readAnsi?.(pane) ?? null;
   if (screen === null) return { state: 'unread' };
-  // The held-frame dialog at the foot of the pane is a dialog like any other: the box under it is
-  // blocked until a person lets the frame through, and its framed title must never read as an
-  // empty composer.
-  if (endsAtHeldFrame(screen)) return { state: 'dialog', kind: HELD_FRAME_KIND };
+  const read = readScreen(profile, screen);
+  // The held-frame dialog is drawn in the composer's place, so a screen that shows it and has no
+  // live box to read (kind unknown) is stopped at it. A seat whose own transcript quotes the
+  // sentence above a live composer is at its box, not at that dialog: the send goes through.
+  if (read.kind === 'unknown' && showsHeldFrameDialog(screen)) {
+    return { state: 'dialog', kind: HELD_FRAME_KIND };
+  }
   const dialog = dialogKind(profile, screen);
   if (dialog !== null) return { state: 'dialog', kind: dialog };
-  if (readScreen(profile, screen).kind !== 'unsent') return { state: 'empty', screen };
+  if (read.kind !== 'unsent') return { state: 'empty', screen };
   if (boxHoldsText(profile, line, screen)) return { state: 'trigger' };
   return { state: 'other', text: boxText(profile, screen) };
 }

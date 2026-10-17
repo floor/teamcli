@@ -342,8 +342,8 @@ transcript can show that seat took this line. An unverified send writes one line
 for the orchestrator.
 
 `unreachable` is the seat not reached: no live agent of that name, a screen that is one of the
-dialogs listed above, the held-message dialog at the foot of the pane where the box would be, no
-socket file for a waited Claude Code seat, a connection that would not
+dialogs listed above, the held-message dialog — the sentence on a screen with no live composer to
+read — no socket file for a waited Claude Code seat, a connection that would not
 take that frame, or a pane that would not take the trigger — the socket reasons return with the
 leg — and a walk that ran out of legs is unreachable too, printing `no leg of its delivery order
 took the send` with the legs that failed. `timeout`

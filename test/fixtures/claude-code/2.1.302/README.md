@@ -18,7 +18,14 @@ styling was stripped, as in the 2.1.299 folder.
 - `permission.txt`: `claude --permission-mode manual`. `Do you want to create synthetic-note.txt?`
   with `1. Yes` and `Esc to cancel · Tab to amend`. Escape dismissed it; the file was not created.
 - `exit.txt`: after `/exit`. `Resume this session with:` and `claude --resume <session-id>`.
+- `held.txt`: captured the same way on 2026-10-18, newer binary (`claude --version` again
+  `2.1.302`). An unattested frame was written to the idle session's own socket
+  (`/tmp/cc-socks/<pid>.sock`), and the bypass-mode session held it: the transcript row naming the
+  held message, then the dialog's title, sender, body and its two choices (`❯ Deny — drop it and
+  tell the sender it was declined`, `Deliver this message to Claude`), with no composer under it.
+  The sending pid is swapped for `<pid>` and the probe body for `HELLO`; nothing else changed.
 
 ## Not produced
 
-Every baseline kind is captured at this version.
+Every baseline kind is captured at this version; `held.txt` is not a baseline kind but the
+cross-session held-message dialog, captured with the rest.

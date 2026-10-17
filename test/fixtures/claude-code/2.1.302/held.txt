@@ -1,0 +1,23 @@
+⏺ Held peer message — from an unidentified
+  session [verified pid <pid>]; preview:
+  «HELLO» — not delivered to
+  Claude (1 held). The sender did not attest
+  its permission mode and this session
+  bypasses prompts. Review it below, or set
+  "crossSessionInbound" to "accept".
+
+─────────────────────────────────────────────────────
+ Held message from another session
+
+ Another Claude session sent a message: from an
+ unidentified session [verified pid <pid>]
+
+ The sender did not attest its permission mode, and
+ this session bypasses permission prompts.
+
+ Message body (this is what will be delivered):
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ HELLO
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ ❯ Deny — drop it and tell the sender it was declined
+   Deliver this message to Claude
