@@ -92,6 +92,22 @@ commands read them.
   carries `spec` and `resolved` (`agt_…`), and `team send --list` prints each seat's `NICKNAME`
   — `-`, an `@<nickname>` in the file's own roster, a `<nickname>@<team>` in another's.
 
+- **A held send is retried, not abandoned.** When a typed send leaves its drop because the
+  seat's composer held text, the seat did not take the trigger, or a dialog was up — `held`,
+  `not-submitted`, or an `unreachable` that is a dialog — send writes a pending record beside
+  the drop, and a running watch delivers it on a later pass: only when the pane reads `idle` or
+  `done`, its box is free or holds nothing but that send's own trigger line, and under the
+  seat's lock, so a retry cannot interleave with a new send. A trigger line the failed send left
+  unsent is submitted with the Enter and never typed over. The retry is bounded to three tries
+  within thirty minutes; a delivered retry is written into the history, and a give-up names the
+  sender and the recipient seat, says why, points at the drop while it is still there and asks
+  the sender to send it again. A record whose drop file was moved or removed is given up on
+  rather than typed, and the age bound is applied before the pane is looked for, so a vanished
+  seat's record still ages out. The send's held, not-submitted and dialog lines name the drop
+  and the retry — a dialog's reads `unreachable now (the screen reads <kind>); a running watch
+  retries it when the seat is idle; the drop file is at <path>` — while a send through the
+  daemon keeps no record a watch reads, so its not-submitted line promises no retry.
+
 - **Projects.** Entity, then project, then team, then seat. A team names its project in its team
   file, a team that names none is its own project, and a team two projects name is refused by
   `team check`, naming both. `team projects` lists the registry's projects — immutable id,
