@@ -274,7 +274,7 @@ ok    the lobby ~/.config/team/lobby: verified
 ok    the lobby ~/.config/team/lobby: .claude/scheduled_tasks.lock is claude-code's
 ```
 
-The machine's own swap is read for one case only: the check in force — the 2GB default, or the
+The machine's own swap is read for one case only: the check in force — the 100MB default, or the
 file's own `swap_free_min` — asks for more free swap than this reading says the machine has in
 total. One warning names both figures and the repair, the key to write and the approval a change
 needs, and it speaks of the reading it was made from: on macOS the total moves with pressure, so a
@@ -291,7 +291,7 @@ ok    claude 2.1.288
 ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
-warn  the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
+warn  the machine check asks for 0.1 GB free swap; at this reading the machine has 0.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
 team doctor: nothing missing, 3 warnings
 exit 0
 ```

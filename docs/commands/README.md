@@ -39,7 +39,7 @@ A `console` fence may carry:
 | `waiting="1"` | the terminal has a line of input already waiting when `team approve` would write, for this block |
 | `reply="<text>"` | what the seat answers a waited `team send` in this block: with it, the wait prints the reply; without it, the seat stays silent and the wait times out |
 | `screens="<seat>=<screen>[,…]"` | what those seats' panes show for this block: `idle`, `working`, `permission`, `trust`, `question`, `unsent`, `unknown` |
-| `machine=<calm\|tight\|small-swap>` | the machine's load, free memory, free disk and swap, for this block (`small-swap`: a 1GB swap in total, under the default check) |
+| `machine=<calm\|tight\|small-swap>` | the machine's load, free memory, free disk and swap, for this block (`small-swap`: a swap total under the 100MB default floor) |
 | `tools="<cli>=<state>[,…]"` | one CLI's install and login state for this block: `fine`, `missing`, `old`, `logged-out`, `unread` |
 | `herdr=<running\|absent\|stopped\|none>` | the session's state in herdr for this block |
 

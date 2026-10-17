@@ -64,7 +64,7 @@ const busy = `✶ Transfiguring… (9m 34s · ↓ 64.5k tokens)\n\n${RULE}\n❯ 
 const permission = 'Bash command\n\n  chmod +x run.sh\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No, and tell Claude what to do differently\n\nEsc to cancel · Tab to amend\n';
 
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
-const tight: Machine = { loadPerCore: 6.5, memoryFree: 10, diskFree: 5e9, swapTotal: 23.3e9, swapFree: 0.3e9, swapUsed: 23e9 };
+const tight: Machine = { loadPerCore: 6.5, memoryFree: 10, diskFree: 5e9, swapTotal: 23.3e9, swapFree: 20e6, swapUsed: 23.28e9 };
 
 function agent(name: string | null, workspace: string, status: string, kind = 'claude'): HerdrAgent {
   return { name, agent: kind, pane: `${workspace}:p1`, workspace, status, cwd: null };
@@ -149,18 +149,18 @@ describe('a pass with checks turned off', () => {
       'the load is 6.5 per core, above 6',
       'free memory is 10%, below 15%',
       'free disk is 5.0 GB, below 10.0 GB',
-      'free swap is 0.3 GB, below 2.0 GB',
+      'free swap is 0.0 GB, below 0.1 GB',
     ]);
     const off = teamFile('  checks:\n    disk: off\n');
     expect(texts(pass({ team: off, watch: off.watch, state: emptySession(), live: live(), machine: tight, now: 0, memory: newMemory(), approval: APPROVED }))).toEqual([
       'the load is 6.5 per core, above 6',
       'free memory is 10%, below 15%',
-      'free swap is 0.3 GB, below 2.0 GB',
+      'free swap is 0.0 GB, below 0.1 GB',
     ]);
     const both = teamFile('  checks:\n    disk: off\n    memory: off\n');
     expect(texts(pass({ team: both, watch: both.watch, state: emptySession(), live: live(), machine: tight, now: 0, memory: newMemory(), approval: APPROVED }))).toEqual([
       'the load is 6.5 per core, above 6',
-      'free swap is 0.3 GB, below 2.0 GB',
+      'free swap is 0.0 GB, below 0.1 GB',
     ]);
   });
 

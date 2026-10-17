@@ -335,7 +335,7 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
       ? { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 16e9, swapFree: 8e9, swapUsed: 0 }
       : machineKind === 'tight'
         ? { loadPerCore: 1.2, memoryFree: 8, diskFree: 120e9, swapTotal: 16e9, swapFree: 8e9, swapUsed: 0 }
-        : { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 1e9, swapFree: 0.5e9, swapUsed: 0.5e9 };
+        : { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 40e6, swapFree: 20e6, swapUsed: 20e6 };
 
   const action = {
     sessionState: () => (herdr === 'none' ? null : sessionState()),

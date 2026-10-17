@@ -17,12 +17,12 @@ const FILE = ['--file', '.agents/team.yaml'];
 const OWNER: Caller = { kind: 'owner' };
 const NOW = new Date('2026-10-04T09:00:00Z');
 
-// The file declares no `swap_free_min`, so the check in force is the 2GB default.
+// The file declares no `swap_free_min`, so the check in force is the 100MB floor.
 const SENTENCE =
-  'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep';
+  'the machine check asks for 0.1 GB free swap; at this reading the machine has 0.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep';
 
-// A machine reading whose 1GB of swap in total cannot hold the 2GB the check wants.
-const SMALL: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 1e9, swapFree: 0.5e9, swapUsed: 0.5e9 };
+// A machine reading whose 40MB of swap in total cannot hold the 100MB the check wants.
+const SMALL: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 40e6, swapFree: 20e6, swapUsed: 20e6 };
 // The same machine with room in total and none of it free right now: the check can pass in
 // principle, `up` refuses today, and nothing new is said — that is `up`'s line and the watch's.
 const ROOMY: Machine = { ...SMALL, swapTotal: 16e9 };

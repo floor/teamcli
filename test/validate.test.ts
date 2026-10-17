@@ -90,7 +90,7 @@ describe('the complete example of the RFC', () => {
     expect(team.watch).toMatchObject({ interval: 120, idleFirst: 600, idleRepeat: 1200, unsentAfter: 60, quotaMarks: [50, 75, 90] });
     expect(team.machine).toEqual({
       loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
-      swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,
+      swapFreeMin: 100e6, swapGrowthMax: 1e9, swapGrowthWindow: 600,
     });
     expect(team.limits).toEqual({ seats: 6, temporary: 2, vendors: { openai: 1, deepseek: 3 } });
   });

@@ -116,10 +116,10 @@ test('budgets.check_every refuses a zero pause too', () => {
   expect(clean.team.budgets.checkEvery).toBe(600);
 });
 
-// An approval record written by main's code today (test/fixtures/approval-main.json, its
-// fingerprints taken with main's own reader) still verifies the same file on this branch: the
-// modules produce the digests main's monolith does. The record carries its own copy of the
-// approved text, so the fixture is the proof.
+// An approval record written by main (test/fixtures/approval-main.json, its fingerprints taken
+// with main's own reader). The file leaves `swap_free_min` unset, and the floor that means is
+// 100MB now, where that record approved 2GB, so `machine` differs and nothing else does. The
+// record carries its own copy of the approved text, so the fixture is the proof.
 describe('an approval written by main', () => {
   const root = '/flo632a/root';
 
@@ -143,19 +143,18 @@ describe('an approval written by main', () => {
     return dir;
   }
 
-  test('still verifies the file it approved', () => {
+  test('the free-swap floor is the one difference', () => {
     const where = home();
     const checked = validateTeamFile(record().file);
     if (!checked.ok) throw new Error('unreachable: home() validated the same text');
-    expect(approvalDifferences(checked.team, root, where)).toEqual([]);
+    expect(approvalDifferences(checked.team, root, where)).toEqual(['`machine` changed']);
   });
 
   // The record's sections map was written by a reader that called the lead's bucket
   // `coordinator`; this reader compares `orchestrator`. The bucket the record lacks is
   // refilled from the copy the record stores, so rewriting the file to the mark — the
-  // conversion a team will run once the key is gone — prints no line and needs no new
-  // approval.
-  test('a conversion to the mark prints no difference', () => {
+  // conversion a team will run once the key is gone — adds no line of its own.
+  test('a conversion to the mark adds no further difference', () => {
     const where = home();
     const converted = record().file
       .replace('coordinator: coordinator-seat\n', '')
@@ -163,20 +162,20 @@ describe('an approval written by main', () => {
     const checked = validateTeamFile(converted);
     if (!checked.ok) throw new Error('the converted fixture does not validate; a behaviour change');
     expect(checked.team.orchestrator).toBe('coordinator-seat');
-    expect(approvalDifferences(checked.team, root, where)).toEqual([]);
+    expect(approvalDifferences(checked.team, root, where)).toEqual(['`machine` changed']);
   });
 
   test('a lead move is the `orchestrator` difference', () => {
     const where = home();
     const checked = validateTeamFile(record().file.replace('coordinator: coordinator-seat', 'coordinator: operator-seat'));
     if (!checked.ok) throw new Error('the moved fixture does not validate; a behaviour change');
-    expect(approvalDifferences(checked.team, root, where)).toEqual(['`orchestrator` changed']);
+    expect(approvalDifferences(checked.team, root, where)).toEqual(['`machine` changed', '`orchestrator` changed']);
   });
 
   test('and the comparison is live: a watch edit still reads as a difference', () => {
     const where = home();
     const checked = validateTeamFile(record().file.replace('interval: 2m', 'interval: 5m'));
     if (!checked.ok) throw new Error('the edited fixture does not validate');
-    expect(approvalDifferences(checked.team, root, where)).toEqual(['`watch` changed']);
+    expect(approvalDifferences(checked.team, root, where)).toEqual(['`machine` changed', '`watch` changed']);
   });
 });
