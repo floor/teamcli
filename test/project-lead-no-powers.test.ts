@@ -326,7 +326,7 @@ describe("a project lead over another team of its project", () => {
     const io = testIo(here.b.root, leadA);
     const code = await runRemove(['builder-b'], io, idleSources(here.home));
     expect(code).toBe(1);
-    expect(io.err).toBe('team remove: only the owner, the orchestrator or the operator runs it; this call is lead-a\n');
+    expect(io.err).toBe('team remove: only the owner or `leads` removes a seat; this call is lead-a\n');
   });
 
   test('`team grant` at the other team: the owner-only refusal, standing and all', async () => {
