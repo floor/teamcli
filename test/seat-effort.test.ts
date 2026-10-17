@@ -106,9 +106,9 @@ describe('a seat\'s effort', () => {
 
     // The file-invalid exit is 2; an unlaunched team always has its ordinary differences (the
     // seat is not running yet), so the claim is the exit the file's shape decides — and that the
-    // effort is never a difference. The converted check prints the file's warnings above its
-    // differences, so the warning naming the effort prints there; only the differences must stay
-    // clear of it.
+    // effort is never a difference. The check prints the file's deprecation warnings above its
+    // differences; a plain validation warning such as the effort's is not printed there, so the
+    // effort stays out of the check's report entirely.
     const check = testIo(root, { kind: 'owner' });
     expect(runTeamCheck({ file: '.agents/team.yaml' }, check, {
       live: () => ({ running: false, agents: [], workspaces: [], screens: {} }),
@@ -119,7 +119,7 @@ describe('a seat\'s effort', () => {
     }), `${check.out}${check.err}`).not.toBe(2);
     const answers = check.out.split('\n');
     expect(answers.filter((line) => line.startsWith('difference:')).join('\n')).not.toContain('effort');
-    expect(answers.filter((line) => line.startsWith('warning:')).join('\n')).toContain(`effort "${bogus}"`);
+    expect(answers.filter((line) => line.startsWith('warning:')).join('\n')).not.toContain('effort');
 
     const approve = testIo(root, { kind: 'owner' });
     expect(await runApprove(['--file', '.agents/team.yaml'], approve, {
@@ -128,9 +128,9 @@ describe('a seat\'s effort', () => {
       now: () => NOW,
       home,
     }), `${approve.out}${approve.err}`).toBe(0);
-    // Approve approves; the check is the one command that names a deprecated field's warning, so
-    // nothing it prints is about the effort.
-    expect(approve.err).not.toContain('effort');
+    // Approve approves, and prints the loader's warning for the effort: the word is a warning,
+    // never a refusal, and the exit stays 0.
+    expect(approve.err).toContain(`effort "${bogus}"`);
 
     expect(approvalDifferences(team, root, home)).toEqual([]);
     const up = testIo(root, { kind: 'owner' });
