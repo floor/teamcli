@@ -13,12 +13,17 @@ import type { CheckSources } from '../../src/check/team.ts';
 import { commits, USAGE as COMMITS_USAGE } from '../../src/commands/commits.ts';
 import { pr } from '../../src/commands/pr.ts';
 import type { Io } from '../../src/io.ts';
+import { NOT_PRETENDED } from '../../src/permissions/must-not-pretend.ts';
 import { config, PR_SIGNATURE, SIGNATURE } from '../check/fixtures.ts';
 import { createRepository, type Repository } from '../check/repository.ts';
 
 /** The notice the old spelling prints, and the twin the `--pr` form adds after it. */
 const NOTICE = 'team check: `team check` is now `team commits check`, and is still read through 0.3.3\n';
 const TWIN = 'team check: `team check --pr` is now `team pr check`, and is still read through 0.3.3\n';
+
+/** The record's honesty block the team check prints under both of its answers; the sentences
+ *  themselves are pinned in test/must-not-pretend.test.ts. */
+const NOT_PRETENDED_BLOCK = `${NOT_PRETENDED.join('\n')}\n`;
 
 /** A standing the verification refused: it still says what it is, and still carries the
  *  approval repair. A machine with no record at all carries neither. */
@@ -154,7 +159,8 @@ describe('the old spelling is the new run, one notice line first', () => {
         'difference: lead is in the file and is not running\n' +
           '  repair: the owner runs team up\n' +
           'team check: 1 difference(s), 1 for the owner\n' +
-          'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n',
+          'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n' +
+          NOT_PRETENDED_BLOCK,
       );
       expect(ran.stderr).toBe('');
       // A standing that still says something keeps its row first, and the row marks the repairs
@@ -173,7 +179,8 @@ describe('the old spelling is the new run, one notice line first', () => {
           'difference: lead is in the file and is not running\n' +
           '  repair: the owner runs team up (after: the live file is what the commands read)\n' +
           'team check: 2 difference(s), 2 for the owner\n' +
-          'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n',
+          'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n' +
+          NOT_PRETENDED_BLOCK,
       );
       expect(refused.stderr).toBe('');
     } finally {

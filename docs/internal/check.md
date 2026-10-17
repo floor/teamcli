@@ -108,14 +108,24 @@ table, no budget block and no notes:
 The closing line counts the differences and, after a comma, how many of their repairs are the
 owner's. With nothing to act on it is `team check: nothing wrong`.
 
-Under either answer stands the one line that names what the check cannot see:
+Under either answer stand the one line that names what the check cannot see and, under it, the
+grants decision record's block of what 0.5.0 must not pretend — its list, in its words
+(`decided-grants-minimum-2026-10-17`, "What 0.5.0 must not pretend, said plainly"): the limits
+this release does not close, said where the check runs rather than left to be discovered.
 
     not known: work sent and unread, a lead waiting on a seat, a landing not recorded
+    what 0.5.0 must not pretend:
+      Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+      Standing grants with an expiry, not leases
+      No two-granter agreement, no `agree`, no `create` bounds
+      No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+      No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
+      No policy object yet (amendment 02)
 
 The readers are agents too, so this text is the contract: one `difference:` line per finding,
-its `  repair:` line under it, the closing count line, and the `not known:` line. A finding
-never quotes a seat's screen text beyond the profile's fixed words for the kind of screen it
-is.
+its `  repair:` line under it, the closing count line, the `not known:` line, and the block
+under both answers. A finding never quotes a seat's screen text beyond the profile's fixed
+words for the kind of screen it is.
 
 ## Examples, moved here whole
 
@@ -165,6 +175,13 @@ The team runs as the file and the state say, so there is nothing to act on:
 $ team check ; echo "exit $?"
 team check: nothing wrong
 not known: work sent and unread, a lead waiting on a seat, a landing not recorded
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
+  No policy object yet (amendment 02)
 exit 0
 ```
 
@@ -174,6 +191,13 @@ A seat of the team runs it too, and reads the same answer:
 $ team check ; echo "exit $?"
 team check: nothing wrong
 not known: work sent and unread, a lead waiting on a seat, a landing not recorded
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
+  No policy object yet (amendment 02)
 exit 0
 ```
 
@@ -188,6 +212,13 @@ difference: claude-beacon is in the file and is not running
   repair: the owner runs team up
 team check: 2 difference(s), 2 for the owner
 not known: work sent and unread, a lead waiting on a seat, a landing not recorded
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
+  No policy object yet (amendment 02)
 exit 1
 ```
 
