@@ -26,30 +26,44 @@ commands read them.
   address it. It types nothing into the pane, and a pane change re-records the same agent rather
   than a second one: a record's identity is the file's seat under its team, never the pane.
   Records are appended, never deleted — a removed seat is marked ended and its history stays
-  readable — and a record confers no right. The record also carries a claude-code seat's
-  cross-session socket address, so a send can address the seat without re-reading herdr.
+  readable — and a record confers no right. The record also carries the seat's pane, so a send
+  addresses the seat without re-reading herdr, the live read being the fallback for a record that
+  carries none; a claude-code seat's cross-session socket address is recorded for `team route`.
 
 - **`team send`, and the channels a seat is reached on.** One message to one seat, ending in one
   confirmed outcome: `delivered`, `answered`, `held`, `not-submitted`, `timeout`, `unreachable`
-  or `refused`. A plain send gives the seat the body whole in a mode-0600 drop file and types one
-  short trigger line naming it — the body is never typed, and never split — for every seat,
-  Claude Code's included: a socket write to a busy session can land at its held-message dialog,
-  where the box is blocked, so no path opens a cross-session socket at all. `--wait`, which would
-  ride one, is refused for every seat — a Claude Code seat's refusal names the native leg
+  or `refused`. A send walks the receiving seat's delivery order — `native`, `mcp-inbox`, then
+  `typed` when no level of the seat's chain changes it: the entity, the project's registry
+  record, the team file's `delivery_order` and the seat's own each may drop a leg or reorder the
+  ones it keeps, never add one — and this build carries no `mcp-inbox` leg and opens no socket,
+  so every delivery it makes goes by the typed leg, and each leg the walk could not take is
+  recorded `unavailable` on the history line. A plain send gives the seat the body whole in a
+  mode-0600 drop file and types one short trigger line naming it — the body is never typed, and
+  never split — for every seat, Claude Code's included: a socket write to a busy session can land
+  at its held-message dialog, where the box is blocked, so no path opens a cross-session socket
+  at all. `--wait`, which would ride one, is refused for every seat — a Claude Code seat's
+  refusal names the native leg
   (`team route` and the caller's own `SendMessage`) that will carry a waited send, and any other
-  seat gets its own reason — and nothing is written.
+  seat gets its own reason — and nothing is written. A seat the receiving team file marks
+  `stopped: true` is not addressed at all: the send, its dry run and `team route` refuse it as
+  stopped, with its own exit id, before a drop file exists, a leg is walked or a history line is
+  written.
   `--json`, `--file`, `--dry-run` and `--list` round it out. The native channel is the sender's
   own half: `team route <seat>` answers the address a delivery from the sender's cross-session
   tool uses — the recipient's agent id, session, CLI and pane, and its socket — and
   `team send --record <seat> --channel native --ms <n>` writes that delivery down, one
-  `via native` history line, the body not passing through the CLI. A message's body is written down in
-  the project's history, which
-  `team feed` reads, with the send-to-outcome milliseconds and the path it took; the refusal for
-  a seat no record covers names the command that writes one (`team up`, `team register <seat>`).
+  `via native` history line, the body not passing through the CLI. A message's body is written
+  down in the project's history, which `team feed` reads, with the send-to-outcome milliseconds
+  and the path it took; the refusal for a seat no record covers names the command that writes
+  one (`team up`, `team register <seat>`).
   A seat its file marks `assistant: true` — one per file, never a seat with `count` — is its
   entity's assistant, and the routing admits it to the entity's main coordinator: the first mark
   found walking the entity's teams in chain order, the entity's own team first and then its other
-  teams by team id, never a role's name.
+  teams by team id, never a role's name. Send is denied by default: the owner may send to any
+  agent; an orchestrator to an orchestrator of its own team or of a team in its entity, never
+  across entities; a team's orchestrator or operator to any seat of its own team; an assistant
+  to its entity's main coordinator; any seat to its own team's orchestrator; and an owner-signed
+  `send` grant to what it names.
 
 - **Projects.** Entity, then project, then team, then seat. A team names its project in its team
   file, a team that names none is its own project, and a team two projects name is refused by
@@ -61,16 +75,30 @@ commands read them.
   teams within its project. Within a project the project lead and its teams' leads are admitted
   to each other, by capability, never by a role's name.
 
+- **The lobby, recorded per session.** A team's seats work in its lobby: the file's explicit
+  `lobby:`, else the lobby the registry recorded for the session, else
+  `~/.config/team/lobbies/<entity>` for a team that names an entity, else
+  `~/.config/team/lobby`. The record keeps one entry per session — `up --session alt` records
+  its own, and neither replaces another's — and once a session is recorded, editing the file's
+  `entity:` never moves it; a record written before the map reads as one entry.
+
 - **Seat state, and the words beside it.** `team seats` prints the seat registry: one row per
   seat with its stable handle (`seat_<12 hex>`), role, CLI, model, effort, status, state, source,
-  last active time and pane. STATE is the word — `working`, `idle`, `blocked`, `done`, `held`,
-  `unreachable`, `unknown` — and SOURCE is where it was read: the pane's screen, herdr's word,
-  the seat's newest trace (a commit, an ack or a message) or its process; a seat no source has
-  heard from past the blind threshold reads `unknown (blind)`, and counts as not working.
+  last active time and pane; `--all` adds the stopped rows, and `--watch` refreshes the table
+  every two seconds. STATE is the word — `working`, `idle`, `blocked`, `done`, `held`,
+  `unreachable`, `unknown` — and SOURCE is where it was read: the pane's screen, the CLI's own
+  hook files (`cli-hook`, valid 24 hours; a working reading carries the 120-second window),
+  herdr's word, the seat's newest trace (a commit, an ack or a message) or its process; a seat
+  no source has heard from past the blind threshold reads `unknown (blind)`, and counts as not
+  working.
   `team status`'s rows end in the word a send would use — `socket` or `typed` — and
   `team status --all` prints the expanded columns. The pane's two sidebar lines — its workspace
   label and the display line under it — are the file's own text, re-applied from the file by
   `team register` without a relaunch, and `team check` reports one that reads as neither.
+
+- **Three more launch profiles.** `grok`, `gemini` and `muse` join `claude-code`, `codex`,
+  `cursor` and `antigravity`, each with its own screen reading, unattended flags, login check
+  where the CLI offers one, and tested range.
 
 - **Grants, and delegates, the owner's alone.** `team grant <seat> --scope <acts>` sets the team
   file's one grant — the seat the file's orchestrator marks, and the complete scope it may run; a
@@ -83,18 +111,27 @@ commands read them.
   are signed and read fresh at every use: a revoked or expired grant admits nothing, and
   revocation is its own appended record, never an edit of the grant — `team revoke <name>`
   appends it. `team delegate <session/pane> --commands <acts>` records one pane outside the
-  team, up to eight, and `team revoke delegate` removes one. Every one of these is the owner's,
+  team, up to eight, and `team revoke delegate` removes one. A create-grant — a record in
+  `~/.config/team/grants/` naming its `runner` and the paths it covers — admits that runner,
+  outside herdr and before the record expires, to `init`, `up`, `add` and `remove` under those
+  paths; a caller under herdr is never admitted this way. Every one of these is the owner's,
   from a terminal outside herdr, with a `--dry-run`, and none can widen its own entry.
 
 - **The work queue.** `team issues` lists the typed records in the one file the team file names;
-  `team next` claims one, held by a lease in this clone; `team plan` prints the queue a claim
-  would consider and claims nothing; and `team broker` — the owner's foreground process, one per
-  clone — holds the tracker credential and answers `team next` over a local socket, with the
+  `team next` claims one, held by a lease in this clone (`--mine`, `--release`, and `--wait` at
+  the file's `tasks.cadence`); `team plan` prints the queue a claim would consider and claims
+  nothing, a passed deadline marked `(overdue)` and never dropped or reordered; and `team broker`
+  — the owner's foreground process, one per clone — holds the tracker credential and answers
+  `team next` over a local socket, with the
   file's `tasks.policy` filtering every record before it crosses. A broker runs as the same OS
   principal as the seats: that is integrity, not authenticity, and it isolates nothing.
 
-- **Around the seats.** `team feed` reads and follows the project's message history; `team proc`
-  keeps the processes the seats started as a register in the team's state; `team usage --all`
+- **Around the seats.** `team list` shows the herdr sessions on this machine — the running ones
+  unless `--all`, `--seats` for the active breakdown, `--watch` to refresh every two seconds;
+  `team feed` reads and follows the project's message history, `--all` merging every project on
+  the machine; `team messages` verifies a waiting message, prints its body and writes the
+  receipt; `team proc` keeps the processes the seats started as a register in the team's state;
+  `team usage --all`
   reads every team's seat-to-account breakdown for the owner, and machine-wide shared
   subscriptions are listed once in `~/.config/team/accounts.yaml`; `team hold <reason>` places a
   note on the team's work (`--release` clears it) that `status` and `doctor` show; `team tempo`
@@ -107,8 +144,13 @@ commands read them.
 - **`team check` is integrity, not authority.** It reads the file, the state, herdr, the
   registries and the agents' records, and reports the differences alone, each with its repair: a
   reading of whether the records agree, never a grant. No approval, no launch and no right
-  follows from a clean answer, and the check writes nothing at all, for every caller, the owner
-  included.
+  follows from a clean answer. The owner's `--repair` is its one write: it drops the state's
+  leftovers — a record for a seat the file no longer declares, with the pane it claims, and a
+  session the state holds with no seat of the team in it — re-checks each against the state on
+  disk, prints one `repaired:` line per drop and logs it. Herdr is not asked which records are
+  leftovers: the state's own claims are the subject. The repair still waits on the live read, so a
+  check whose herdr cannot answer drops nothing; a temporary seat is never a leftover, and neither
+  is the file's own session or the one the run checks.
 
 ### Changed
 
@@ -117,18 +159,27 @@ commands read them.
   names for `up`, or a `delegates` entry whose commands include `up`; anyone else is told `deny`
   and exits 1, and a dry run says what the real one would (`! up would refuse:` with the reason,
   `! to unblock:` with the owner's run of this folder, then the plan).
-- `team up` gains `--serial`, launching and waiting on one seat at a time; a fresh orchestrator
-  or operator seat starts in the project folder and every other seat in the team's lobby; and
-  the watch runs as a background process rather than a pane.
+- `team up` gains `--serial`, launching and waiting on one seat at a time, and a fresh
+  orchestrator or operator seat starts in the project folder and every other seat in the team's
+  lobby.
+- The watch runs in a herdr workspace of its own, labelled `Watch · <project>`: `up` ends its
+  plan by creating it and running the watch in its pane, and a bare `team watch` from the owner's
+  terminal hands itself there and returns — a `--no-nudge` or `--no-notify` run stays in the
+  caller's terminal. The state records the pane, the pid and the heartbeat; `team status` shows
+  them, and `team check` flags a heartbeat older than two in-force cycles.
 - `team down --wait` gives a working seat up to 120 seconds to come free and leaves one that
   never does running; an agent still in the session keeps it up, and a pane is closed only where
   the state records it for one seat.
 - `team status` is gated like the other commands (`team status: this team is not yours to read`),
   prints a hold as its first note, and marks a rate-limited row `(rate limit on <account>, resets
-  at <time>)`. `team doctor` prints a hold line and cleans every line it prints of escape
-  sequences and invisible characters.
+  at <time>)`; its drift line reports the effort on its own when the model matches and only the
+  effort differs (`<seat>: effort <seen>, file says <effort>`), and an effort the file never
+  declares is never a drift. `team doctor` prints a hold line and cleans every line it prints of
+  escape sequences and invisible characters.
 - `team watch` nudges any idle seat, not the operator's alone, and announces a waiting message
-  with `Team: run team messages`; a temporary seat is left as it is for the owner to remove.
+  with `Team: run team messages`; it reports a seat stopped on its provider's connection error or
+  at a rate limit, naming the account and the reset time, and types into neither screen; a
+  temporary seat is left as it is for the owner to remove.
 - `team add` takes `--model` and `--effort` (the owner's, on a declared seat) and starts a
   temporary seat from `--temporary --like <seat> --until <end>`; `team remove <lead> --keep` then
   `team add <lead>` replaces the agent on a lead's seat without stopping the team, and a removal
