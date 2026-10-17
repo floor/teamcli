@@ -338,7 +338,9 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
     const now = sources.now();
     writeApproval(
       store,
-      { approval: { ...approvalOf(team, root, now, resolved.checks), overrides: live.text }, file: text },
+      // `pane` is the approved delegate's on a delegated approval: the record names it as the
+      // actor beside the owner's signature, and the signed payload covers it.
+      { approval: { ...approvalOf(team, root, now, resolved.checks, pane), overrides: live.text }, file: text },
       team.seats,
       sources.home,
       now,

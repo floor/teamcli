@@ -36,11 +36,22 @@ export type AgentReach = {
   address: string | null;
 };
 
+/** The delegation a record's last write ran under: the owner signed it out of band — the file's
+ *  `delegates` section — and the named pane is the actor that ran the command. A delegate
+ *  authorizes nothing by itself: this says what the write ran under, for the one command it
+ *  names, and confers no right on anyone. */
+export type AgentDelegation = {
+  signer: 'owner';
+  actor: string;
+  command: string;
+};
+
 /** Who wrote the record and when. `registered_by` and `registered_at` are the first
  *  registration's and never change; `dev_mode` says whether the run that last wrote the record's
  *  registration had dev mode on — the caller gate folded into a warning — and is set and cleared
  *  by the writers that know, so a record a dev-mode run made says so until a run in force
- *  rewrites it. */
+ *  rewrites it. `delegated` is the delegation the last write ran under, when one did: the owner
+ *  as signer, the pane that ran it as actor, and the one command the mark speaks for. */
 export type AgentProvenance = {
   registered_by: string;
   registered_at: string;
@@ -52,6 +63,10 @@ export type AgentProvenance = {
   dev_mode?: boolean;
   dev_mode_by?: string;
   dev_mode_at?: string;
+  /** The delegation the last write ran under. A delegated run states it; the owner's own write
+   *  in force takes an earlier mark off; another caller's routine write leaves it, as it leaves
+   *  the dev-mode mark. */
+  delegated?: AgentDelegation;
 };
 
 export type Agent = {
@@ -75,17 +90,25 @@ export type Agent = {
   seat_handle?: string | null;
 };
 
-export type AgentInit = Omit<Agent, 'id' | 'provenance'> & { by: string; devMode?: boolean };
+export type AgentInit = Omit<Agent, 'id' | 'provenance'> & {
+  by: string;
+  devMode?: boolean;
+  delegated?: AgentDelegation;
+};
 
 /** What `updateAgent` accepts. The nested records merge field by field, so a relaunch can re-point
  *  `reach.pane` alone; `id`, `provenance.registered_by` and `provenance.registered_at` are never
  *  changed. `provenance.dev_mode` is the mark a writer may state — true marks the record as one a
  *  dev-mode run wrote, false takes the mark off — and `provenance.dev_mode_by`, with it, names
- *  the caller that run admitted: the writer states who, `updateAgent` stamps when. */
+ *  the caller that run admitted: the writer states who, `updateAgent` stamps when.
+ *  `provenance.delegated` is the delegation the write ran under; null takes an earlier mark off. */
+export type AgentProvenancePatch = Omit<Partial<AgentProvenance>, 'delegated'> & {
+  delegated?: AgentDelegation | null;
+};
 export type AgentPatch = Partial<Omit<Agent, 'id' | 'signing' | 'reach' | 'provenance'>> & {
   signing?: Partial<AgentSigning>;
   reach?: Partial<AgentReach>;
-  provenance?: Partial<AgentProvenance>;
+  provenance?: AgentProvenancePatch;
 };
 
 export function agentsDir(home: string): string {
@@ -132,7 +155,7 @@ export function registerAgent(home: string, init: AgentInit): Agent {
     let id = mintAgentId();
     while (existsSync(agentFile(home, id))) id = mintAgentId();
     const now = new Date().toISOString();
-    const { by, devMode, ...fields } = init;
+    const { by, devMode, delegated, ...fields } = init;
     const agent: Agent = {
       ...fields,
       id,
@@ -143,6 +166,7 @@ export function registerAgent(home: string, init: AgentInit): Agent {
         registered_at: now,
         updated_at: now,
         ...(devMode === true ? { dev_mode: true, dev_mode_by: by, dev_mode_at: now } : {}),
+        ...(delegated !== undefined ? { delegated } : {}),
       },
     };
     const problem = invalid(agent);
@@ -153,8 +177,8 @@ export function registerAgent(home: string, init: AgentInit): Agent {
 }
 
 /** Applies the patch and rewrites the file atomically. `id`, `registered_by` and `registered_at`
- *  never change; `updated_at` is set to now, and `dev_mode` follows the patch when it states one.
- *  Throws when there is no such agent. */
+ *  never change; `updated_at` is set to now, and `dev_mode` follows the patch when it states one,
+ *  as `delegated` does (null taking an earlier mark off). Throws when there is no such agent. */
 export function updateAgent(home: string, id: string, patch: AgentPatch): Agent {
   if (!isAgentId(id)) throw new Error(`"${id}" is not an agent id`);
   return withLock(agentsDir(home), () => {
@@ -175,6 +199,8 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
       delete nextProvenance.dev_mode_by;
       delete nextProvenance.dev_mode_at;
     }
+    if (provenance?.delegated === null) delete nextProvenance.delegated;
+    else if (provenance?.delegated !== undefined) nextProvenance.delegated = provenance.delegated;
     const next: Agent = {
       ...current,
       ...definedOnly(rest),
@@ -291,6 +317,17 @@ function text(value: YamlValue | undefined): string | null {
   return null;
 }
 
+/** A delegation mark read from a file: all three fields, the signer `owner`, or nothing — a
+ *  partial or foreign mark is not one this version writes. */
+function delegationOf(value: YamlValue | undefined): AgentDelegation | null {
+  if (!isObj(value)) return null;
+  const signer = str(value.signer);
+  const actor = str(value.actor);
+  const command = str(value.command);
+  if (signer !== 'owner' || !actor || !command) return null;
+  return { signer, actor, command };
+}
+
 function fromValue(value: YamlValue): Agent | null {
   if (!isObj(value)) return null;
   const signing = value.signing;
@@ -317,6 +354,7 @@ function fromValue(value: YamlValue): Agent | null {
   const registeredBy = str(provenance.registered_by);
   const registeredAt = str(provenance.registered_at);
   const updatedAt = str(provenance.updated_at);
+  const delegated = delegationOf(provenance.delegated);
   const lifecycle = value.lifecycle;
   if (
     id === null || name === null || model === null || version === null || role === null ||
@@ -353,6 +391,7 @@ function fromValue(value: YamlValue): Agent | null {
             ...(typeof provenance.dev_mode_at === 'string' ? { dev_mode_at: provenance.dev_mode_at } : {}),
           }
         : {}),
+      ...(delegated !== null ? { delegated } : {}),
     },
   };
   if (handle !== null) agent.seat_handle = handle;
@@ -422,6 +461,14 @@ function emit(agent: Agent): string {
     lines.push('  dev_mode: true');
     if (agent.provenance.dev_mode_by !== undefined) lines.push(`  dev_mode_by: ${quote(agent.provenance.dev_mode_by)}`);
     if (agent.provenance.dev_mode_at !== undefined) lines.push(`  dev_mode_at: ${quote(agent.provenance.dev_mode_at)}`);
+  }
+  // The delegation the last write ran under, likewise: a record no delegated run wrote carries
+  // no mark, and the mark names the owner as signer, the pane as actor and the one command.
+  if (agent.provenance.delegated !== undefined) {
+    lines.push('  delegated:');
+    lines.push(`    signer: ${quote(agent.provenance.delegated.signer)}`);
+    lines.push(`    actor: ${quote(agent.provenance.delegated.actor)}`);
+    lines.push(`    command: ${quote(agent.provenance.delegated.command)}`);
   }
   if (agent.seat_handle != null) lines.push(`seat_handle: ${quote(agent.seat_handle)}`);
   return `${lines.join('\n')}\n`;

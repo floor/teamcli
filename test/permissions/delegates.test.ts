@@ -10,18 +10,20 @@
 //
 // A scene whose wiring the base already holds is real, pinned at the seam that decides it —
 // the gate (src/delegate.ts) for a file's own words and the file they stand in, the command
-// (src/commands/add.ts) for a delegated add that would write. The rest are `test.todo`, their
-// names the rules they will pin: each flips to a real scene as its wiring lands. A delegated
-// run's record naming its signer and its actor — (a) — has no field on this base; the
-// same-copy boundary of (b) is the command's own scenes below — a copy started, a changed
-// stanza refused, and dev mode saying the rule and continuing; (c)'s protected removal is a
+// (src/commands/add.ts) for a delegated add that would write, and the registry and the signed
+// store for the record a delegated run leaves — (a): the registry provenance names the owner as
+// signer and the pane as actor, and a delegated approval stores its actor inside the signed
+// bytes. The same-copy boundary of (b) is the command's own scenes below — a copy started, a
+// changed stanza refused, and dev mode saying the rule and continuing; (c)'s protected removal is a
 // real scene, both halves pinned by runs: the removal gate clamps the lead's seats itself
 // (src/commands/remove.ts), and the owner's own attempt meets the file's validation, which
 // refuses the dangling `operator:` — a lead seat is never taken out of the file.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { approvalOf } from '../../src/approve/approval.ts';
+import { runApprove, type ApproveSources } from '../../src/approve/command.ts';
 import { fingerprints } from '../../src/approve/fingerprint.ts';
 import type { Caller } from '../../src/caller.ts';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
@@ -35,7 +37,7 @@ import type { TeamFile } from '../../src/file/types.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, type State, updateState } from '../../src/state.ts';
-import { type Standing } from '../../src/store/store.ts';
+import { approvalStanding, readApproval, storePath, writeApproval, type Standing } from '../../src/store/store.ts';
 import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00.000Z');
@@ -176,14 +178,78 @@ describe("a file's words are its own, and they are all a delegate holds", () => 
 });
 
 describe('the record a delegated run leaves', () => {
-  test.todo('a delegated run records the owner as signer and the delegate pane as actor — never the pane as signer', () => {
-    // Flipped when the record lands: run a delegated `up`/`add` and read the record it leaves —
-    // its signer is the owner whose approval admitted the run, its actor the pane that ran it.
+  test('a delegated run records the owner as signer and the delegate pane as actor — never the pane as signer', async () => {
+    const place = layout();
+    // The approved file declares `worker` and stops it nowhere: a same-copy add the delegate may
+    // run, so the registry record the launch writes is the record this scene reads.
+    const text = addFile(place, entry('main/w1:p1', 'add')).replace('    stopped: true\n', '');
+    writeFileSync(place.file, text);
+    const launch = launching();
+    const sources = addSources(place, {
+      launch,
+      standing: () => verified(parsed(text), text),
+      delegateGate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
+    });
+    const ran = await added(place, ['worker'], pilot, sources);
+    expect(ran.code).toBe(0);
+    // The audit line docs pin keeps its shape: the act is the delegate's, and the pane that ran
+    // it is named as the caller.
+    const log = readFileSync(join(place.root, '.agents', 'team.log'), 'utf8');
+    expect(log.startsWith(`${NOW.toISOString()} delegate [delegate] main/w1:p1 add\n`)).toBe(true);
+    // The registry provenance the launch wrote names both: the owner signed the delegation out
+    // of band, the pane ran it, and the mark speaks for `add` alone.
+    const registry = join(place.home, '.config', 'team', 'agents');
+    const files = readdirSync(registry).filter((name) => name.endsWith('.yaml'));
+    expect(files).toHaveLength(1);
+    const record = readFileSync(join(registry, files[0]!), 'utf8');
+    expect(record).toContain('  delegated:\n    signer: "owner"\n    actor: "main/w1:p1"\n    command: "add"\n');
+    // Never the pane as signer: the owner is the only signer the record names — neither the
+    // delegate's seat nor its pane is written there.
+    expect(record.match(/signer:/g)).toHaveLength(1);
+    expect(record).not.toContain('signer: "pilot"');
+    expect(record).not.toContain('signer: "main/w1:p1"');
   });
 
-  test.todo('a delegated approval keeps the owner as the signer and the pane as the actor that submitted it', () => {
-    // Flipped when the approval record names its actor beside its signer: the approving word is
-    // the owner's and the submission is the pane's.
+  test('a delegated approval keeps the owner as the signer and the pane as the actor that submitted it', async () => {
+    const place = layout();
+    // A file the owner approved, with an entry naming the pane this call stands in.
+    const text = addFile(place, entry('main/w1:p1', 'approve'));
+    writeFileSync(place.file, text);
+    const judged = parsed(text);
+    const store = storePath(judged.project, place.root, place.home);
+    writeApproval(store, { approval: approvalOf(judged, place.root, NOW), file: text }, judged.seats, place.home);
+    const io = testIo(place.root, pilot);
+    const code = await runApprove([], io, {
+      // The delegated run asks no question and reads no terminal: its record is the audit line
+      // and the signed approval, not an answer.
+      ask: async () => {
+        throw new Error('the delegated approval asked a question');
+      },
+      waiting: () => {
+        throw new Error('the delegated approval read the terminal');
+      },
+      now: () => NOW,
+      home: place.home,
+      delegate: { state: () => empty, agents: () => [] },
+      gate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
+    });
+    expect(code).toBe(0);
+    // The record names the submission beside the approving word, and the owner's key signs both.
+    expect(readApproval(store)?.approval.actor).toBe('main/w1:p1');
+    expect(approvalStanding(place.root, place.home).kind).toBe('verified');
+    // Changed after approval, the actor breaks the signature: it is inside the signed bytes.
+    const path = join(store, 'approval.json');
+    const stored = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    stored.actor = 'main/w9:p9';
+    writeFileSync(path, `${JSON.stringify(stored, null, 2)}\n`);
+    expect(approvalStanding(place.root, place.home)).toMatchObject({
+      kind: 'refused',
+      why: 'the record does not carry a valid signature: it was changed after approval, or written without the key',
+    });
+    // The audit line says the same, in the shape docs pin: the delegate's act, the pane named.
+    expect(readFileSync(join(place.root, '.agents', 'team.log'), 'utf8')).toBe(
+      `${NOW.toISOString()} delegate [delegate] main/w1:p1 approve\n`,
+    );
   });
 });
 
