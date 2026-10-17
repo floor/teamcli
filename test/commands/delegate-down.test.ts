@@ -430,7 +430,7 @@ describe('a refused gate', () => {
     const real = rig({ gate: refusing('down.delegate', GATE_DOWN) });
     expect(await real.run()).toBe(1);
     expect(real.io.err).toBe(`team down: ${GATE_DOWN}\n`);
-    expect(real.io.err).not.toContain('only the owner, the orchestrator or the operator');
+    expect(real.io.err).not.toContain(ORDINARY);
     expect(real.typed).toEqual([]);
 
     const dry = rig({ gate: refusing('down.delegate', GATE_DOWN) });
