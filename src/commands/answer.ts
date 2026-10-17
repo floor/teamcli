@@ -548,7 +548,8 @@ async function finish(
     recorded.stage = 'ready';
     recorded.pane = pane;
     if (workspace) recorded.workspace = workspace;
-    if (profile?.rulesOption === null) recorded.rules = 'message';
+    const mode = profile?.rulesMode;
+    if (mode === 'message' || mode === 'prepend') recorded.rules = mode;
     current.seats[name] = recorded;
   });
   logLine(dir, 'answer', who, `${name}: trust answered`, host.now());
@@ -589,7 +590,7 @@ async function recover(
   if (!(await waitIdle(host, session, pane, profile))) return 'idle';
   const named = host.agents(session)?.some((agent) => agent.name === name && agent.pane === pane) === true;
   if (!named && !host.rename(session, pane, name)) return 'rule delivery';
-  if (profile.rulesOption !== null) return true;
+  if (profile.rulesMode !== 'message') return true;
   // The rules are delivered exactly as `up` delivers them: written to the seat's per-seat
   // file first — from the live file, as `up`'s are — then the one line that points at it,
   // the only shape of rules a read-back can prove; this command shares that delivery.

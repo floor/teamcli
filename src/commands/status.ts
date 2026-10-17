@@ -497,7 +497,8 @@ export function rulesFileProblem(standing: Standing, team: TeamFile, seat: Seat,
   // below could not fix a stopped seat's file. An unstopped seat's file is rewritten the
   // next time it launches, so no stale file outlives one.
   if (seat.stopped) return null;
-  if (profileFor(seat.cli)?.rulesOption != null) return null;
+  // A seat whose rules ride a launch option or a brief has no file of its own to check.
+  if ((profileFor(seat.cli)?.rulesMode ?? 'message') !== 'message') return null;
   const path = rulesFilePath(team.project, root, home, seat.name);
   if (path === null) return null;
   const check = checkRulesFile(path, rulesOf(team, seat, root));

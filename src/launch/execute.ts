@@ -31,6 +31,11 @@ export type ScreenKind = 'idle' | 'working' | 'permission' | 'trust' | 'question
  *  says what is in the box now. */
 export type ExitTyping = boolean | 'no-agent' | 'cleared' | { left: string };
 
+/** What one live key exit ended in. `true`: every key was pressed at the seat's idle screen.
+ *  `false`: the screen was not the CLI's idle one and nothing was pressed — the step's own
+ *  line. `'no-agent'`: the CLI was not the pane's foreground process when a key was due. */
+export type ExitKeys = boolean | 'no-agent';
+
 export type Host = {
   startServer(session: string): boolean;
   sessionUp(session: string): boolean | null;
@@ -50,6 +55,9 @@ export type Host = {
   /** The live exit typing; see `ExitTyping`. May wait: the pane draws typed text late, and the
    *  reading that decides the Enter or the clearing key waits for it. */
   typeLine(session: string, pane: string, text: string): ExitTyping | Promise<ExitTyping>;
+  /** The live key exit, for a CLI whose TUI takes no exit text: the profile's keys, pressed at
+   *  the seat's idle screen only; see `ExitKeys`. Present where a seat can be stopped. */
+  pressKeys?(session: string, pane: string, cli: string, keys: readonly string[]): ExitKeys | Promise<ExitKeys>;
   /** `false` is a delivery that stopped without a reading worth reporting (no host, or no live
    *  pane); a `Refusal` is one that stopped on a screen the report can name. `file` is the
    *  seat's rules delivery: the text the file holds, the file's path, the one line typed, and
@@ -103,7 +111,7 @@ export type Host = {
       stage: 'launched' | 'named' | 'ready';
       pane?: string;
       workspace?: string;
-      rules?: 'option' | 'message';
+      rules?: 'option' | 'message' | 'prepend';
       createdWorkspace?: boolean;
       launched?: LaunchedIdentity;
       /** The agent session read with the process, stored beside `launched`. */
@@ -689,6 +697,29 @@ export async function executePlan(
     }
     if (!op) return;
 
+    // A seat this run asked, whose exit could not be typed or confirmed, cannot be asked.
+    // `--abandon` closes its workspace in this same run, the close a not-free seat gets at
+    // planning. Without it the seat stays, and the line names that close.
+    const unasked = (
+      asked: { seat: string; closeUnasked?: boolean; workspace?: string; unasked?: string },
+      heldLine: string,
+      closedLine: string,
+    ) => {
+      if (asked.closeUnasked && asked.workspace) {
+        if (!host.closeWorkspace(session, asked.workspace)) {
+          held = true;
+          finish(asked.seat, `${closedLine}; its workspace did not close`);
+        } else {
+          host.drop(asked.seat);
+          finish(asked.seat, closedLine);
+        }
+      } else {
+        held = true;
+        finish(asked.seat, asked.unasked ? `${heldLine} (${asked.unasked})` : heldLine);
+      }
+      dropped.add(asked.seat);
+    };
+
     switch (op.do) {
       case 'server': {
         if (!host.startServer(op.session)) {
@@ -1069,10 +1100,12 @@ export async function executePlan(
           ...(here.workspace ? { workspace: here.workspace } : {}),
           ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
         });
-        if (op.rules === 'option') {
+        // Rules carried on the launch line, or prepended to each brief: there is nothing left
+        // to deliver, so the seat is ready at its name.
+        if (op.rules !== 'message') {
           host.record(op.seat, {
             stage: 'ready',
-            rules: 'option',
+            rules: op.rules,
             pane: here.pane,
             ...(here.workspace ? { workspace: here.workspace } : {}),
             ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
@@ -1149,42 +1182,47 @@ export async function executePlan(
         break;
       }
       case 'type': {
-        // A seat this run asked, whose exit could not be typed or confirmed, cannot be asked.
-        // `--abandon` closes its workspace in this same run, the close a not-free seat gets at
-        // planning. Without it the seat stays, and the line names that close.
-        const unasked = (heldLine: string, closedLine: string) => {
-          if (op.closeUnasked && op.workspace) {
-            if (!host.closeWorkspace(session, op.workspace)) {
-              held = true;
-              finish(op.seat, `${closedLine}; its workspace did not close`);
-            } else {
-              host.drop(op.seat);
-              finish(op.seat, closedLine);
-            }
-          } else {
-            held = true;
-            finish(op.seat, op.unasked ? `${heldLine} (${op.unasked})` : heldLine);
-          }
-          dropped.add(op.seat);
-        };
         const typed = await host.typeLine(session, op.pane, op.text);
         if (typed === 'no-agent') {
-          unasked('no live agent in its pane; its exit was not typed', 'no live agent in its pane; its workspace was closed');
+          unasked(op, 'no live agent in its pane; its exit was not typed', 'no live agent in its pane; its workspace was closed');
           break;
         }
         if (typed === 'cleared') {
           unasked(
+            op,
             'its exit was not confirmed; the text was cleared; left running',
             'its exit was not confirmed; its workspace was closed',
           );
           break;
         }
         if (typeof typed === 'object') {
-          unasked(typed.left, 'its exit was not confirmed; its workspace was closed');
+          unasked(op, typed.left, 'its exit was not confirmed; its workspace was closed');
           break;
         }
         if (!typed) {
-          unasked('its exit was not typed; left as it is', 'its exit was not typed; its workspace was closed');
+          unasked(op, 'its exit was not typed; left as it is', 'its exit was not typed; its workspace was closed');
+        }
+        break;
+      }
+      case 'keys': {
+        // A key-exit profile: the seat leaves on its own keys at its idle screen. A run with no
+        // way to press one — a command that only closes panes — reports the seat as it does a
+        // failed typing, naming the key it could not press.
+        if (!host.pressKeys) {
+          unasked(
+            op,
+            `its CLI leaves on a key (${op.keys.join(' then ')}); this run cannot press one; left as it is`,
+            `its CLI leaves on a key (${op.keys.join(' then ')}); its workspace was closed`,
+          );
+          break;
+        }
+        const pressed = await host.pressKeys(session, op.pane, op.cli, op.keys);
+        if (pressed === 'no-agent') {
+          unasked(op, 'no live agent in its pane; its exit key was not pressed', 'no live agent in its pane; its workspace was closed');
+          break;
+        }
+        if (!pressed) {
+          unasked(op, 'its exit key was not pressed; left as it is', 'its exit key was not pressed; its workspace was closed');
         }
         break;
       }

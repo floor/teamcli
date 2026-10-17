@@ -27,7 +27,7 @@ import { profileFor } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { emptySession, readState, updateState, withLock } from '../state.ts';
 import { registerEnd } from '../registry/sync.ts';
-import { paneStillRunning, realSources as downSources, stateOf, stateOfPane, typeExit, type DownSources } from './down.ts';
+import { keyExit, paneStillRunning, realSources as downSources, stateOf, stateOfPane, typeExit, type DownSources } from './down.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { removeRulesFile } from '../launch/rules-file.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
@@ -489,6 +489,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       processNames: profile?.processNames ?? [],
     });
     const holdsExit = where === 'unsent' && profile !== null
+      && profile.exit !== null
       && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
     const clearable = holdsExit && profile?.exitClear !== null;
     // A lead is never left running under another name: its swap stops a free seat or nothing.
@@ -566,7 +567,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,
         processNames: profile?.processNames ?? [],
       });
-      const exitInBox = where === 'unsent' && profile !== null && profile.exitClear !== null
+      const exitInBox = where === 'unsent' && profile !== null && profile.exitClear !== null && profile.exit !== null
         && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
       const stopped = await stopRunning({
         io: noteIo,
@@ -788,6 +789,21 @@ export async function stopRunning(input: {
         sleep: sources.sleep ?? launch.sleep,
         now: () => sources.now().getTime(),
       }, seat.cli, text);
+    },
+    async pressKeys(sessionName, pane, cli, keys) {
+      // As in `down`: the whole key sequence is `keyExit`'s.
+      return keyExit({
+        typeText: (line) => launch.typeText(sessionName, pane, line),
+        sendKey: (key) => launch.sendKey(sessionName, pane, key),
+        pressEnter: () => launch.pressEnter(sessionName, pane),
+        screen: () => sources.screenText(sessionName, pane, cli),
+        status: () => sources.status(sessionName, pane),
+        foreground: () => sources.foreground(sessionName, pane),
+        foregroundCwd: () => (sources.foregroundCwd ? sources.foregroundCwd(sessionName, pane) : null),
+        home: sources.home,
+        sleep: sources.sleep ?? launch.sleep,
+        now: () => sources.now().getTime(),
+      }, cli, keys);
     },
     renameAgent: () => false,
     closeWorkspace: launch.closeWorkspace,

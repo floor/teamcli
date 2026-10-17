@@ -567,6 +567,7 @@ function inspectSeat(
   });
   const holdsExit = where === 'unsent'
     && profile !== null
+    && profile.exit !== null
     && boxHoldsText(declared.cli, profile.exit, sources.screenText(session, agent.pane, declared.cli), {
       cwd: liveCwd ?? undefined,
       home: sources.home,

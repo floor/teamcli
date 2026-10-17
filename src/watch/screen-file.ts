@@ -1,17 +1,12 @@
 // A profile file, in team's YAML subset, checked as it is loaded. The JSON Schema
 // next to the profiles describes the same shape; this is what actually refuses a file,
 // because the package does not carry a schema validator.
-import { existsSync, realpathSync, statSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { isAbsolute, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { DialectError, compilePattern } from './dialect.ts';
+import { loadProfileModule } from '../profiles/module-loader.ts';
 import type { BlockStep, Border, Composer, FallbackRule, LinePattern, Placeholder, Rule, ScreenData, Stage, StatusBelow, VersionRange, Wrap } from './screen-data.ts';
 import type { ScreenProfile } from './screen-profile.ts';
 import type { Screen } from './screen.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
-
-const require = createRequire(import.meta.url);
 
 const STAGES = ['unknown', 'trust', 'permission', 'exit_question', 'question', 'vendor_notice', 'provider_error', 'rate_limit', 'working'] as const;
 const KINDS = ['idle', 'working', 'unsent', 'permission', 'trust', 'question', 'vendor notice', 'provider error', 'rate limit', 'unknown'] as const;
@@ -52,7 +47,7 @@ export function loadScreen(text: string, baseDir?: string, profileFile?: string)
   const root = parseYaml(text);
   const entries = mapping(root, 'a profile');
   // Launch keys are read by profile.ts. A screen-only snippet, as in the tests, omits them.
-  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'exit', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model']);
+  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'exit', 'exit_keys', 'compose_module', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model']);
   const format = required(entries, 'format', root.line);
   if (format.value.kind !== 'scalar' || format.value.value !== 1) fail(format.line, '"format" must be 1');
   const cli = required(entries, 'cli', root.line);
@@ -77,129 +72,7 @@ function deepFreeze<T>(obj: T): T {
 
 function loadScreenModule(specifier: string, baseDir: string | undefined, line: number, profileFile?: string): ScreenProfile {
   const label = profileFile ? `profile "${profileFile}"` : 'profile';
-
-  // 1. Refuse empty string
-  if (!specifier || specifier.trim() === '') {
-    fail(line, `${label}: "screen_module" cannot be an empty string`);
-  }
-
-  // 2. Refuse current directory "."
-  if (specifier === '.' || specifier === './' || specifier === '.\\') {
-    fail(line, `${label}: "screen_module" cannot be current directory "."`);
-  }
-
-  // 3. Refuse absolute path
-  if (isAbsolute(specifier) || specifier.startsWith('/') || specifier.startsWith('\\')) {
-    fail(line, `${label}: "screen_module" cannot be an absolute path: "${specifier}"`);
-  }
-
-  // 4. Refuse home directory path
-  if (specifier.startsWith('~')) {
-    fail(line, `${label}: "screen_module" cannot be a home directory path: "${specifier}"`);
-  }
-
-  // 5. Refuse URL or other scheme
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(specifier)) {
-    fail(line, `${label}: "screen_module" cannot be a URL or scheme: "${specifier}"`);
-  }
-
-  // 6. Refuse ".." segment
-  if (specifier.split(/[/\\]/).includes('..') || /%2[eE]%2[eE]/.test(specifier)) {
-    fail(line, `${label}: "screen_module" cannot contain ".." segments: "${specifier}"`);
-  }
-
-  const defaultDir = fileURLToPath(new URL('../profiles', import.meta.url));
-  const dir = baseDir ? resolve(baseDir) : defaultDir;
-  const resolvedDir = resolve(dir);
-
-  // 7. Refuse paths in the project outside profiles
-  const projectSegments = ['test', 'src', 'dist', 'scripts', 'examples', 'node_modules', 'worktrees', '.github'];
-  const stripped = specifier.replace(/^(?:\.[/\\])+/, '');
-  const firstSegment = stripped.split(/[/\\]/)[0] ?? '';
-  if (
-    projectSegments.includes(firstSegment) ||
-    (existsSync(resolve(process.cwd(), specifier)) && !resolve(process.cwd(), specifier).startsWith(resolvedDir + sep))
-  ) {
-    fail(line, `${label}: "screen_module" cannot be a path in the project: "${specifier}"`);
-  }
-
-  // 8. Must resolve inside profiles directory
-  let target = resolve(resolvedDir, specifier);
-  if (!target.startsWith(resolvedDir + sep) && target !== resolvedDir) {
-    fail(line, `${label}: "screen_module" must resolve inside profiles directory: "${specifier}"`);
-  }
-
-  // Check if target exists and if it is a directory or symlink loop
-  let st;
-  try {
-    st = statSync(target);
-  } catch (err: any) {
-    if (err && err.code === 'ELOOP') {
-      fail(line, `${label}: "screen_module" contains a symlink loop: "${specifier}"`);
-    }
-  }
-
-  if (st && st.isDirectory()) {
-    fail(line, `${label}: "screen_module" cannot be a directory: "${specifier}"`);
-  }
-
-  // 9. Refuse bare names or paths without a script extension (.ts, .js, .cjs, .mjs)
-  if (!/\.(ts|js|cjs|mjs)$/.test(specifier)) {
-    if (!specifier.includes('/') && !specifier.includes('\\') && !/\.[^/\\]+$/.test(specifier)) {
-      fail(line, `${label}: "screen_module" cannot be a bare name: "${specifier}"`);
-    }
-    fail(line, `${label}: "screen_module" must have a script extension (.ts, .js, .cjs, .mjs): "${specifier}"`);
-  }
-
-  let fileTarget = target;
-  if (!existsSync(fileTarget)) {
-    if (fileTarget.endsWith('.ts') && existsSync(fileTarget.slice(0, -3) + '.js')) {
-      fileTarget = fileTarget.slice(0, -3) + '.js';
-    } else if (fileTarget.endsWith('.js') && existsSync(fileTarget.slice(0, -3) + '.ts')) {
-      fileTarget = fileTarget.slice(0, -3) + '.ts';
-    }
-  }
-
-  let fileStat;
-  try {
-    fileStat = statSync(fileTarget);
-  } catch (err: any) {
-    if (err && err.code === 'ELOOP') {
-      fail(line, `${label}: "screen_module" contains a symlink loop: "${specifier}"`);
-    }
-    fail(line, `${label}: cannot load "screen_module": Cannot find module "${specifier}"`);
-  }
-
-  if (!fileStat.isFile()) {
-    if (fileStat.isDirectory()) {
-      fail(line, `${label}: "screen_module" cannot be a directory: "${specifier}"`);
-    }
-    fail(line, `${label}: cannot load "screen_module": Cannot find module "${specifier}"`);
-  }
-
-  // Symlink check: realpath must be inside profiles directory
-  let realTarget: string;
-  let realDir: string;
-  try {
-    realTarget = realpathSync(fileTarget);
-    realDir = realpathSync(resolvedDir);
-  } catch (err: any) {
-    if (err && err.code === 'ELOOP') {
-      fail(line, `${label}: "screen_module" contains a symlink loop: "${specifier}"`);
-    }
-    fail(line, `${label}: cannot load "screen_module": ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  if (!realTarget.startsWith(realDir + sep) && realTarget !== realDir) {
-    fail(line, `${label}: "screen_module" symlink leads outside profiles directory: "${specifier}"`);
-  }
-
-  let mod: any;
-  try {
-    mod = require(realTarget);
-  } catch (error) {
-    fail(line, `${label}: cannot load "screen_module": ${error instanceof Error ? error.message : String(error)}`);
-  }
+  const mod: any = loadProfileModule(specifier, baseDir, line, profileFile, 'screen_module');
 
   try {
     const defaultExport =

@@ -33,7 +33,7 @@ import {
   type PaneProcesses,
 } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import type { ExitTyping, Host } from '../launch/execute.ts';
+import type { ExitKeys, ExitTyping, Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
@@ -387,6 +387,36 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
   const after = await settle('unsent');
   if (after === 'idle' && resting()) return 'cleared';
   return { left: `its exit was not confirmed; the clearing key (${key}) left the screen reading ${after}; left running` };
+}
+
+/**
+ * The live key exit for one pane: a CLI whose TUI takes no exit text leaves on its own key at
+ * its idle screen. The caller check that precedes every key precedes each one, and the screen
+ * is read fresh right before it: a key goes only to a screen that reads idle, so a prompt that
+ * appeared between the planning and the key takes nothing. Every key is pressed at such a
+ * screen; once one is pressed the seat counts as asked, and the wait after the step says
+ * whether it left.
+ */
+export async function keyExit(io: ExitIo, cli: string, keys: readonly string[]): Promise<ExitKeys> {
+  const names = profileFor(cli)?.processNames ?? [];
+  // The caller check that precedes every key: the CLI itself must be the pane's foreground
+  // process at the key, not when the seat was read.
+  const live = () => reportedLiveAgent(io.foreground(), names);
+  const resting = () => {
+    const status = io.status();
+    return status === 'idle' || status === 'done';
+  };
+  const kindOf = () =>
+    readScreen(cli, io.screen(), { cwd: io.foregroundCwd ? io.foregroundCwd() : undefined, home: io.home }).kind;
+  let pressed = 0;
+  for (const key of keys) {
+    if (!live()) return pressed > 0 ? true : 'no-agent';
+    if (!resting()) return pressed > 0 ? true : false;
+    if (kindOf() !== 'idle') return pressed > 0 ? true : false;
+    if (!io.sendKey(key)) return pressed > 0 ? true : false;
+    pressed++;
+  }
+  return true;
 }
 
 /** This seat's pane when the state records that pane and that workspace for exactly one seat.
@@ -943,7 +973,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // never confirmed it — is named as such either way: the profile's one clearing key decides
     // whether this run empties it and asks again (the plan's run step) or the owner does (its
     // skip line). Anything else unsent keeps the ordinary unsent line.
-    const exitInBox = reading === 'unsent' && profile !== null
+    const exitInBox = reading === 'unsent' && profile !== null && profile.exit !== null
       && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
     seats.push({
       name,
@@ -1095,6 +1125,22 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           sleep: sources.sleep ?? launch.sleep,
           now: () => sources.now().getTime(),
         }, cli, text);
+      },
+      async pressKeys(sessionName, pane, cli, keys) {
+        // As `typeLine`: the whole key sequence — the caller check, the fresh idle reading, the
+        // key itself — is `keyExit`'s, shared with `remove`.
+        return keyExit({
+          typeText: (line) => launch.typeText(sessionName, pane, line),
+          sendKey: (key) => launch.sendKey(sessionName, pane, key),
+          pressEnter: () => launch.pressEnter(sessionName, pane),
+          screen: () => sources.screenText(sessionName, pane, cli),
+          status: () => sources.status(sessionName, pane),
+          foreground: () => sources.foreground(sessionName, pane),
+          foregroundCwd: () => (sources.foregroundCwd ? sources.foregroundCwd(sessionName, pane) : null),
+          home: sources.home,
+          sleep: sources.sleep ?? launch.sleep,
+          now: () => sources.now().getTime(),
+        }, cli, keys);
       },
       renameAgent: () => false,
       closeWorkspace: launch.closeWorkspace,

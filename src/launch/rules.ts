@@ -56,19 +56,22 @@ export function seatRules(input: RulesInput): string[] {
   return [...own, ...input.rules, ...signing, ...working];
 }
 
-/** How the rules reach a seat: typed as its first message, or carried as a launch option. */
-export type RulesDelivery = 'message' | 'option';
+/** How the rules reach a seat: typed as its first message, carried as a launch option, or
+ *  prepended to every brief a send types into its pane. */
+export type RulesDelivery = 'message' | 'option' | 'prepend';
 
 /**
  * The line each form ends with. The message says what the rules are and never that they are not a
  * task, so some models start complying by investigating instead of waiting for a brief. A first
  * message is answered once, so it can ask for the ready reply; a system prompt (a launch option)
  * stays in force on every later turn, so it must not: a Claude seat could answer "ready" to its
- * real brief.
+ * real brief. Prepended rules ride every brief — there is no standing session to keep them —
+ * so they carry no ready reply either, and say the brief follows.
  */
 const CLOSING: Record<RulesDelivery, string> = {
   message: 'These are standing rules, not a task: reply ready and wait for your brief.',
   option: 'These are standing rules, not a task.',
+  prepend: 'These are standing rules for this session. The brief follows.',
 };
 
 /** The rules as the one text a launch option or a first message carries, the closing line last. */
@@ -86,7 +89,7 @@ export function rulesText(input: RulesInput, delivery: RulesDelivery): string {
 export function rulesOf(team: TeamFile, seat: Seat, root: string): string {
   const { commits, pullRequests } = team.identity.signature;
   const profile = profileFor(seat.cli);
-  const delivery = profile && profile.rulesOption !== null ? 'option' : 'message';
+  const delivery: RulesDelivery = profile?.rulesMode ?? 'message';
   return rulesText(
     {
       orchestrator: team.orchestrator,

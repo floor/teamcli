@@ -12,6 +12,8 @@ export const PROFILES: Profile[] = [
   // `muse` execs `muse-bin-<version>-<build>`, and macOS cuts a process name to 15 bytes
   // (`muse-bin-1.4.9-`): the name is a prefix, spelled with a trailing `*`.
   { cli: 'muse', processes: ['muse', 'muse-bin-*'] },
+  // @google/jules 0.1.42 is a Go binary that runs under its own name (`jules`).
+  { cli: 'jules', processes: ['jules'] },
 ];
 
 export const CLIS: string[] = PROFILES.map((profile) => profile.cli);

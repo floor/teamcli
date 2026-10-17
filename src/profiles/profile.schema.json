@@ -23,6 +23,7 @@
     "rules": {
       "oneOf": [
         { "const": "first-message" },
+        { "const": "prepend" },
         {
           "type": "object",
           "additionalProperties": false,
@@ -40,7 +41,14 @@
         "hint": { "type": "string", "minLength": 1 }
       }
     },
-    "exit": { "type": "string", "minLength": 1 },
+    "exit": { "type": "string", "minLength": 1, "description": "what is typed into an idle prompt to make the CLI exit; a profile carries this or exit_keys, never both" },
+    "exit_keys": {
+      "type": "array",
+      "items": { "enum": ["ctrl+c"] },
+      "minItems": 1,
+      "description": "the keys that exit the CLI from its idle screen, in order, for a CLI that takes no exit text; a profile carries this or exit, never both"
+    },
+    "compose_module": { "$ref": "#/$defs/screenModule" },
     "exit_clear": {
       "type": "string",
       "enum": ["ctrl+c", "ctrl+u", "escape", "backspace"],
@@ -91,6 +99,9 @@
         }
       }
     }
+  ],
+  "allOf": [
+    { "oneOf": [{ "required": ["exit"] }, { "required": ["exit_keys"] }] }
   ],
   "$defs": {
     "trustAnswer": {

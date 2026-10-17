@@ -408,7 +408,7 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
       // A box holding exactly this CLI's exit text is an earlier stop's leftover, not the
       // owner's half-written line: the report names the text and the one key, and nothing is sent.
       const exitText = profileFor(cli)?.exit;
-      if (exitText !== undefined && boxHoldsText(cli, exitText, io.screen())) {
+      if (exitText != null && boxHoldsText(cli, exitText, io.screen())) {
         return report({ ...stopAs(cli, 'leftover', io.screen()), exitText });
       }
       return report(stopAs(cli, 'leftover', io.screen()));

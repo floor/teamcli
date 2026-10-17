@@ -67,7 +67,7 @@ export type Op =
       seat: string;
       label: string;
       seconds: number;
-      rules: 'option' | 'message';
+      rules: 'option' | 'message' | 'prepend';
       pane?: string;
       /** Sidebar line 2, reported once this rename has named the seat. A failure is one line. */
       displayAgent?: string;
@@ -76,7 +76,7 @@ export type Op =
    *  Line 1 is the workspace title; line 2 is display_agent. A failed call is one line. */
   | { do: 'relabel'; seat: string; pane: string; workspace: string; title: string; displayAgent: string }
   | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string }
-  | { do: 'ready'; seat: string; rules: 'option' | 'message'; notice?: string }
+  | { do: 'ready'; seat: string; rules: 'option' | 'message' | 'prepend'; notice?: string }
   | {
       do: 'repair';
       seat: string;
@@ -105,6 +105,17 @@ export type Op =
       closeUnasked?: boolean;
       workspace?: string;
       /** What the failure line names when the seat is left: `team down --abandon closes it`. */
+      unasked?: string;
+    }
+  | {
+      /** A CLI that exits by key: the keys are pressed in order at its idle screen. */
+      do: 'keys';
+      seat: string;
+      pane: string;
+      cli: string;
+      keys: readonly string[];
+      closeUnasked?: boolean;
+      workspace?: string;
       unasked?: string;
     }
   | {
@@ -562,7 +573,7 @@ export function upPlan(input: UpInput): Step[] {
         do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, ...(said ? { notice: said } : {}) },
       });
     }
-    const rules = profile.rulesOption === null ? 'message' : 'option';
+    const rules = profile.rulesMode;
     // A waiting seat is asked even when its stage says named: the prompt is the only way its
     // owner can finish or skip it, and nothing here launches it again.
     if (seat.stage !== 'named' || waiting) {
@@ -613,7 +624,7 @@ export function upPlan(input: UpInput): Step[] {
         },
       });
     }
-    if (profile.rulesOption === null) {
+    if (profile.rulesMode === 'message') {
       if (seat.rulesRefusal || !seat.rulesFile) {
         const why = seat.rulesRefusal ?? "its rules file's path can't be typed safely";
         steps.push({
@@ -812,6 +823,8 @@ export function downPlan(input: DownInput): Step[] {
         continue;
       }
       if (!(seat.state === 'unsent' && seat.exitInBox && profile.exitClear !== null)) {
+        // A key-exit profile has no exit text, so no box can hold it: `exitInBox` is false
+        // for it at every read.
         // An unsent box holding exactly the exit text, on a CLI with no key for it, is named:
         // the owner sends it or clears it. A framed exit question already on screen is named
         // for what it is: this run never asked it. Every other not-free seat keeps its own line.
@@ -819,7 +832,7 @@ export function downPlan(input: DownInput): Step[] {
           kind: 'skip',
           text: seat.atExitQuestion
             ? `${seat.name}: sits at its own exit question; left running (team down --abandon closes it)`
-            : seat.state === 'unsent' && seat.exitInBox
+            : seat.state === 'unsent' && seat.exitInBox && profile.exit !== null
               ? `${seat.name}: holds this CLI's exit text (${profile.exit}) unsent in its input box; left running (the owner sends it or clears it in its pane)`
               : `${seat.name}: ${LEFT[seat.state]}; left running`,
         });
@@ -837,14 +850,23 @@ export function downPlan(input: DownInput): Step[] {
       ...(input.closeUnasked ? { closeUnasked: true, workspace: seat.workspace } : {}),
       ...(input.unasked ? { unasked: input.unasked } : {}),
     };
-    steps.push({
-      kind: 'run',
-      argv: herdr(session, 'pane', 'run', seat.pane, profile.exit),
-      ...(seat.exitInBox && profile.exitClear !== null
-        ? { note: `its box already holds this exit text; it is cleared first (${profile.exitClear})` }
-        : {}),
-      do: { do: 'type', seat: seat.name, pane: seat.pane, text: profile.exit, ...asked },
-    });
+    if (profile.exit !== null) {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'pane', 'run', seat.pane, profile.exit),
+        ...(seat.exitInBox && profile.exitClear !== null
+          ? { note: `its box already holds this exit text; it is cleared first (${profile.exitClear})` }
+          : {}),
+        do: { do: 'type', seat: seat.name, pane: seat.pane, text: profile.exit, ...asked },
+      });
+    } else {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'pane', 'send-keys', seat.pane, ...profile.exitKeys),
+        note: `its CLI takes no exit text: ${profile.exitKeys.join(' then ')} at its idle screen`,
+        do: { do: 'keys', seat: seat.name, pane: seat.pane, cli: profile.cli, keys: profile.exitKeys, ...asked },
+      });
+    }
     steps.push({
       kind: 'wait',
       text: `until ${seat.name}'s pane is back at its shell (${profile.exitTimeout} s at most); on a time-out it is left as it is`,

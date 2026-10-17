@@ -1,7 +1,7 @@
 // The profiles' JSON Schema is the shape's documentation — the package carries no schema
 // validator, screen-file.ts is what refuses a file, in words — so nothing checked the
 // schema against the profiles it describes. This applies it, with a reader for the subset
-// the schema uses, to the five shipped profiles, and pins the two shapes that had drifted
+// the schema uses, to the shipped profiles, and pins the two shapes that had drifted
 // from the loader: the rule flags it omitted, and the composer's flag on its one mode.
 // The reader throws on any keyword it does not know, so a schema that outgrows it fails
 // here rather than passing unnoticed.
@@ -115,6 +115,7 @@ describe("the profiles' schema", () => {
     const doc = {
       format: 1,
       cli: 'sample',
+      exit: 'bye',
       screen: {
         provider_error: [{ any: ['API Error: Connection lost mid-response\\. The response above may be incomplete\\.'] }],
         rate_limit: [{ any: ['API Error: Request rejected \\(429\\)', 'Usage limit reached', 'Your limit will reset at '] }],
@@ -124,15 +125,15 @@ describe("the profiles' schema", () => {
     expect(errors(doc)).toEqual([]);
   });
 
-  test('the seven shipped profiles pass it', () => {
-    for (const name of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse']) {
+  test('the eight shipped profiles pass it', () => {
+    for (const name of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse', 'jules']) {
       expect([name, errors(profile(name))]).toEqual([name, []]);
     }
   });
 
   test('unread_model takes launch alone, the loader’s one value', () => {
     const doc = (unreadModel: unknown): unknown => ({
-      format: 1, cli: 'sample', unread_model: unreadModel,
+      format: 1, cli: 'sample', exit: 'bye', unread_model: unreadModel,
       screen: { composer: COMPOSER },
     });
     expect(errors(doc('launch'))).toEqual([]);
@@ -141,7 +142,7 @@ describe("the profiles' schema", () => {
   });
 
   test('a rule may carry on_footer and without_rule, the loader’s flags', () => {
-    const trust = (rule: unknown): unknown => ({ format: 1, cli: 'sample', screen: { trust: [rule], composer: COMPOSER } });
+    const trust = (rule: unknown): unknown => ({ format: 1, cli: 'sample', exit: 'bye', screen: { trust: [rule], composer: COMPOSER } });
     expect(errors(trust({ any: ['^x$'], on_footer: true }))).toEqual([]);
     expect(errors(trust({ any: ['^x$'], without_rule: true }))).toEqual([]);
   });
@@ -154,7 +155,7 @@ describe("the profiles' schema", () => {
       if (mode === 'status-last' || mode === 'status-then-one') composer.status_line = '^status$';
       if (mode === 'status-then-one') composer.fallback = [{ all: ['^done$'], kind: 'idle' }];
       if (ignoreCase) composer.ignore_case = true;
-      return { format: 1, cli: 'sample', screen: { composer } };
+      return { format: 1, cli: 'sample', exit: 'bye', screen: { composer } };
     };
     expect(errors(doc('two-rules-footer-below', true))).toEqual([]);
     for (const mode of ['box-to-rule', 'status-last', 'status-then-one']) {
@@ -167,7 +168,7 @@ describe("the profiles' schema", () => {
     const doc = (extra: Record<string, unknown>): unknown => {
       const composer: Record<string, unknown> = { mode: 'status-last', prompt: '^>', status_line: '^status$', placeholders: [{ equals: '' }] };
       Object.assign(composer, extra);
-      return { format: 1, cli: 'sample', screen: { composer } };
+      return { format: 1, cli: 'sample', exit: 'bye', screen: { composer } };
     };
     expect(errors(doc({ status_line: ['^a$', '^b$'] }))).toEqual([]);
     expect(errors(doc({ status_line: [] })).length).toBeGreaterThan(0);

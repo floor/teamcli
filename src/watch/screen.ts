@@ -42,6 +42,7 @@ const DATA: Record<string, ScreenData> = {
   grok: load('grok'),
   gemini: load('gemini'),
   muse: load('muse'),
+  jules: load('jules'),
 };
 
 /** The shipped screen for a CLI, or null when this version has none. */
