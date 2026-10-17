@@ -195,6 +195,7 @@ const REPAIR_TEAM_COMMAND = /\bteam\s+([a-z][a-z0-9-]*)\b/;
  * - `seat-record` / `owner-or-own-team` / `admission` → `'any seat'`
  */
 export function whoFromCommand(command: string): DifferenceWho {
+  if (command === 'tempo' || command === 'broker') return 'the owner';
   const gate = COMMAND_GATES[command];
   if (gate) {
     if (gate.kind === 'owner-only') return 'the owner';

@@ -144,6 +144,8 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
     expect(DIFFERENCE_WHO_VALUES).toEqual(['the owner', "the team's lead", 'a grant holder', 'any seat']);
     expect(whoFromCommand('up')).toBe("the team's lead");
     expect(whoFromCommand('add')).toBe('the owner');
+    expect(whoFromCommand('tempo')).toBe('the owner');
+    expect(whoFromCommand('broker')).toBe('the owner');
     expect(whoFromCommand('restart')).toBe("the team's lead");
     expect(whoFromCommand('reload')).toBe('a grant holder');
     expect(whoFromCommand('status')).toBe('any seat');
