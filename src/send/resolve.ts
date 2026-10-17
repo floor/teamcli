@@ -1,6 +1,9 @@
-// Send addressing: one spec — an agent id (`agt_…`), a `seat@team`, or a plain seat of the
-// team whose shell the caller stands in — resolved through the registry. The registry's records
-// are the address; the live herdr read is the fallback for a record that carries no pane yet.
+// Send addressing: one spec — an agent id (`agt_…`), a `<target>@<scope>`, or a plain seat of the
+// team whose shell the caller stands in — resolved through the registry. The parse step reads the
+// text alone; the lookup step asks the registry what it reaches. Keeping them apart is what lets
+// the registry learn another lookup form (an agent's name, tried before the seat) without a second
+// grammar. The registry's records are the address; the live herdr read is the fallback for a
+// record that carries no pane yet.
 
 import { loadTeamFile } from '../file/load.ts';
 import { agentList } from '../herdr.ts';
@@ -25,8 +28,36 @@ export function isRegistrySpec(spec: string): boolean {
   return AGENT_ID_PATTERN.test(spec) || spec.startsWith('agt_') || spec.includes('@');
 }
 
+/** What a spec's text names, before the registry is asked: an agent id, a `<target>@<scope>`
+ *  pair, or a plain seat of the caller's own team. The parse reads no file. */
+export type ParsedSpec =
+  | { kind: 'id'; id: string }
+  | { kind: 'at'; target: string; scope: string }
+  | { kind: 'seat'; seat: string };
+
 /**
- * The team a spec names, as a person wrote it: the agent id's own `reach.team`, or the key after
+ * The parse step: one grammar, whatever the `<target>` later turns out to name. An agent id is
+ * whole; `<target>@<scope>` is exactly one `@` with text on both sides; a plain target is a seat
+ * of the caller's own team. The agent-id spelling is caught before the plain form so a mistyped
+ * id is refused as one rather than looked up as a seat.
+ */
+export function parseSpec(spec: string): ParsedSpec | { error: string } {
+  if (AGENT_ID_PATTERN.test(spec)) return { kind: 'id', id: spec };
+  const at = spec.indexOf('@');
+  if (at >= 0) {
+    const target = spec.slice(0, at);
+    const scope = spec.slice(at + 1);
+    if (at !== spec.lastIndexOf('@') || target === '' || scope === '') {
+      return { error: `${spec}: a spec is <seat>@<team>, or an agent id` };
+    }
+    return { kind: 'at', target, scope };
+  }
+  if (spec.startsWith('agt_')) return { error: `${spec}: that is not an agent id (agt_ plus 12 hex)` };
+  return { kind: 'seat', seat: spec };
+}
+
+/**
+ * The team a spec names, as a person wrote it: the agent id's own `reach.team`, or the scope after
  * the `@`, or — for a plain seat — the team file at the caller's cwd, matched by the id the
  * registry keys teams on, then by the project or session name it may also be written as.
  */
@@ -36,25 +67,20 @@ export function resolveTarget(
   io: Pick<Io, 'cwd'>,
   live: LiveRead = liveFromHerdr,
 ): Target | { error: string } {
-  if (AGENT_ID_PATTERN.test(spec)) return fromId(home, spec, live);
-  const at = spec.indexOf('@');
-  if (at >= 0) {
-    const seat = spec.slice(0, at);
-    const key = spec.slice(at + 1);
-    if (at !== spec.lastIndexOf('@') || seat === '' || key === '') {
-      return { error: `${spec}: a spec is <seat>@<team>, or an agent id` };
-    }
-    const team = findTeam(home, key);
-    if (!team) return { error: `${spec}: no team registry record matches "${key}" (by id, project or session)` };
-    return fromSeat(home, spec, team, seat, live);
+  const parsed = parseSpec(spec);
+  if ('error' in parsed) return parsed;
+  if (parsed.kind === 'id') return fromId(home, parsed.id, live);
+  if (parsed.kind === 'at') {
+    const team = findTeam(home, parsed.scope);
+    if (!team) return { error: `${spec}: no team registry record matches "${parsed.scope}" (by id, project or session)` };
+    return lookupInTeam(home, spec, team, parsed.target, live);
   }
-  if (spec.startsWith('agt_')) return { error: `${spec}: that is not an agent id (agt_ plus 12 hex)` };
   const loaded = loadTeamFile(io.cwd, { home });
   if (!loaded.ok) return { error: `${spec}: the team of the caller's folder cannot be read (${io.cwd})` };
   const id = teamIdOf(loaded.root);
   const team = findTeam(home, id) ?? findTeam(home, loaded.team.project) ?? findTeam(home, loaded.team.session);
   if (!team) return { error: `${spec}: this team has no registry record yet` };
-  return fromSeat(home, spec, team, spec, live);
+  return lookupInTeam(home, spec, team, parsed.seat, live);
 }
 
 /** The agent that holds a seat, across the spellings a record's `reach.team` may use: the
@@ -78,7 +104,14 @@ function fromId(home: string, id: string, live: LiveRead): Target | { error: str
   return { team, agent, pane: pane.pane };
 }
 
-function fromSeat(
+/**
+ * The lookup step: the record a target reaches inside the team its scope named. A target is
+ * looked up by the team's own spellings — the id the registry keys on, then its project and
+ * session — because a record's `reach.team` may be written as any of them. The seat lookup is
+ * the only form today; an agent-name lookup slots in ahead of it, in this one place, when the
+ * registry addresses names.
+ */
+function lookupInTeam(
   home: string,
   spec: string,
   team: TeamRecord,

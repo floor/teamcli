@@ -15,7 +15,7 @@ import { registerAgent, updateAgent, type Agent } from '../src/registry/agents.t
 import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, senderHeader } from '../src/send/admit.ts';
 import type { NativePane } from '../src/send/native.ts';
-import { isRegistrySpec, resolveTarget, type LiveAgent } from '../src/send/resolve.ts';
+import { isRegistrySpec, parseSpec, resolveTarget, type LiveAgent } from '../src/send/resolve.ts';
 import { updateState } from '../src/state.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
@@ -127,6 +127,18 @@ describe('isRegistrySpec', () => {
     expect(isRegistrySpec('lead@beta')).toBe(true);
     expect(isRegistrySpec('builder-1')).toBe(false);
     expect(isRegistrySpec('main')).toBe(false);
+  });
+});
+
+describe('parseSpec', () => {
+  test('one grammar: an agent id, one @ with text on both sides, or a plain seat', () => {
+    expect(parseSpec('agt_0123456789ab')).toEqual({ kind: 'id', id: 'agt_0123456789ab' });
+    // The parse keeps the target and the scope apart, so the lookup step can try another form
+    // of target (an agent's name) before the seat without the grammar changing.
+    expect(parseSpec('lead@api')).toEqual({ kind: 'at', target: 'lead', scope: 'api' });
+    expect(parseSpec('builder-1')).toEqual({ kind: 'seat', seat: 'builder-1' });
+    expect(parseSpec('a@b@c')).toEqual({ error: 'a@b@c: a spec is <seat>@<team>, or an agent id' });
+    expect(parseSpec('agt_zz')).toEqual({ error: 'agt_zz: that is not an agent id (agt_ plus 12 hex)' });
   });
 });
 
