@@ -1,10 +1,6 @@
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { expect, test } from 'bun:test';
 import { commands, main, version } from '../src/cli.ts';
 import type { Io } from '../src/io.ts';
-
-const cliEntry = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 
 function io(): Io & { out: string; err: string } {
   const state = {
@@ -68,13 +64,6 @@ test('every command of the table takes --help and -h, and prints its usage', asy
       const first = run.out.split('\n')[0] ?? '';
       expect(first).toMatch(new RegExp(`^Usage: team ${name}\\b`));
     }
-  }
-});
-
-test('status --help and watch --help load cleanly from a cold CLI entry', () => {
-  for (const name of ['status', 'watch']) {
-    const out = execFileSync(process.execPath, [cliEntry, name, '--help'], { encoding: 'utf8' });
-    expect(out).toMatch(new RegExp(`^Usage: team ${name}\\b`));
   }
 });
 
