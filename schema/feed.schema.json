@@ -90,6 +90,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "note": {
+            "type": "string"
           }
         }
       }

@@ -610,7 +610,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(readdirSync(drops).filter((name) => !name.endsWith('.pending'))).toHaveLength(1);
   });
 
-  test('single-Enter discipline: does not press a second Enter when screen is unknown and trigger is not in box', async () => {
+  test('single-Enter discipline: a screen that cannot be read as a box takes the line once, and the send is taken', async () => {
     const w = setupWorld();
     const host = makeHost(w, {
       native: {
@@ -628,9 +628,12 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
       },
     });
 
-    // Direct
+    // Direct: the screen is not an unsent box and never holds the trigger, so the box the
+    // delivery sees is empty after Enter — the line left it, taken but not yet confirmed.
     const directIo = ownerIo(w.root);
-    expect(await runSend(['lead', 'single enter direct'], directIo, host)).toBe(1);
+    expect(await runSend(['lead', 'single enter direct'], directIo, host)).toBe(0);
+    expect(directIo.out).toContain('lead: delivered (taken, not yet confirmed)');
+    expect(directIo.err).toBe('');
     expect(host.enters.length).toBe(1);
 
     // Daemon
@@ -639,7 +642,8 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    expect(await runSend(['lead', 'single enter test'], io, host)).toBe(1);
+    expect(await runSend(['lead', 'single enter test'], io, host)).toBe(0);
+    expect(io.out).toContain('lead: delivered (taken, not yet confirmed)');
     expect(host.enters.length).toBe(2);
   });
 

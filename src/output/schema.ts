@@ -772,6 +772,9 @@ export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
           ms: { type: 'number' },
           via: { type: 'string' },
           failed: { type: 'array', items: { type: 'string' } },
+          // The qualifier on an outcome the plain word cannot carry alone, as the history log
+          // writes it (`taken, not yet confirmed` on a delivered send; `taken but never acted on`).
+          note: { type: 'string' },
         },
       },
     },

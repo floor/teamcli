@@ -177,11 +177,11 @@ describe('the composer read-back at its boundaries', () => {
     expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
   });
 
-  test('a box that stops holding the trigger after the first Enter gets no second Enter', async () => {
+  test('a box that stops holding the trigger after the first Enter is delivered as taken, and gets no second Enter', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     // The first Enter is taken but herdr never reports the seat working, and the composer now
-    // holds a draft that is not the trigger.
+    // holds a draft that is not the trigger: the line left the box, so the seat took it.
     host.native.pressEnter = (_session, pane) => {
       host.enters.push(pane);
       return true;
@@ -197,13 +197,19 @@ describe('the composer read-back at its boundaries', () => {
     };
 
     const io = ownerIo(world.root);
-    expect(await runSend(['lead', 'never submitted'], io, host)).toBe(1);
-    expect(io.err).toContain('not-submitted: the seat did not take the trigger after 1 Enter; the box holds "a draft that is not the trigger"');
+    expect(await runSend(['lead', 'never submitted'], io, host)).toBe(0);
+    expect(io.out).toContain('lead: delivered (taken, not yet confirmed)');
     expect(host.enters.length).toBe(1);
-    expect(outcomes(world)).toEqual(['not-submitted']);
+    const history = readHistory('acme', world.root, world.home);
+    if (!history.ok) throw new Error('history could not be read');
+    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([['delivered', 'taken, not yet confirmed']]);
+
+    // A taken line is never retyped: no retry record is left beside the drop.
+    const drops = join(world.dir, 'send-drops', 'acme', 'lead');
+    expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(0);
   });
 
-  test('the same box through the daemon: one Enter, and the same not-submitted word', async () => {
+  test('the same box through the daemon: one Enter, and the same taken word', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     host.native.pressEnter = (_session, pane) => {
@@ -225,14 +231,16 @@ describe('the composer read-back at its boundaries', () => {
     handles.push(started.handle);
 
     const io = ownerIo(world.root);
-    expect(await runSend(['lead', 'never submitted through the daemon'], io, host)).toBe(1);
-    expect(io.err).toContain('not-submitted: the seat did not take the trigger after 1 Enter; the box holds "a draft that is not the trigger"');
-    expect(io.err).not.toContain('a running watch retries it');
+    expect(await runSend(['lead', 'never submitted through the daemon'], io, host)).toBe(0);
+    expect(io.out).toContain('lead: delivered (taken, not yet confirmed)');
+    expect(io.err).not.toContain('not-submitted');
     expect(host.enters.length).toBe(1);
-    expect(outcomes(world)).toEqual(['not-submitted']);
+    const history = readHistory('acme', world.root, world.home);
+    if (!history.ok) throw new Error('history could not be read');
+    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([['delivered', 'taken, not yet confirmed']]);
 
-    // The daemon typed the trigger and the seat did not take it: its own drop folder holds the
-    // message, and no pending record — a watch does not scan this folder, so none is promised.
+    // The daemon keeps no retry record in the folder a watch scans — and a taken line is never
+    // typed again either way.
     const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'lead');
     expect(readPending(drops)).toHaveLength(0);
     expect(readdirSync(drops).filter((name) => !name.endsWith('.pending'))).toHaveLength(1);

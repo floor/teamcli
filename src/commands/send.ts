@@ -25,7 +25,7 @@ import { appendHistory } from '../send/history.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
-import { bindPane, deliverTrigger, showsHeldFrameDialog, type DeliverResult } from '../send/deliver.ts';
+import { bindPane, deliverTrigger, showsHeldFrameDialog, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { markPending } from '../send/pending.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
@@ -821,7 +821,10 @@ function finishDaemonSend(
   note?: string,
 ): number {
   report.sent = res.id;
-  if (res.outcome === 'delivered') return delivered(io, seatName, report, note);
+  if (res.outcome === 'delivered') {
+    const taken = res.evidence === 'taken' ? TAKEN_REASON : undefined;
+    return delivered(io, seatName, report, taken === undefined ? note : note === undefined ? taken : `${taken}; ${note}`);
+  }
   if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
   if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
   if (res.outcome === 'held') return held(io, dir, who, seatName, res.detail, host, report);
@@ -984,8 +987,10 @@ function findAgent(host: SendHost, session: string, seatName: string): Found {
  * Writes the drop file under the seat lock, types the one trigger, and reports delivered only
  * when the seat is verified to have taken it: the trigger left the box and herdr reports the seat
  * working (`deliverTrigger`). A line that was typed but not taken is `not-submitted`, never a
- * success. The lock is held across the typing so a second send cannot append into the same
- * composer.
+ * success. A line that left the box with no status or transcript evidence inside the window is
+ * delivered as `taken, not yet confirmed`: the seat took it, and the watch confirms it later — it
+ * is never typed again, and no pending record is left beside the drop. The lock is held across the
+ * typing so a second send cannot append into the same composer.
  */
 async function deliverNative(
   io: Io,
@@ -1051,9 +1056,19 @@ async function deliverNative(
       markPending(dropDir, entry);
       return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}`, host, report);
     }
+    const taken = result.evidence === 'taken';
     logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
-    appendHistory(project, root, host.home, { ...entry, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
-    return delivered(io, seatName, report, note);
+    // A taken send is a delivery with its confirmation still to come: the history says so, and no
+    // record is written beside the drop — a taken line is never typed again.
+    appendHistory(project, root, host.home, {
+      ...entry,
+      outcome: 'delivered',
+      ...(taken ? { note: TAKEN_REASON } : {}),
+      ms: host.now().getTime() - startedAt,
+      via: 'typed',
+      ...failed,
+    });
+    return delivered(io, seatName, report, taken ? (note === undefined ? TAKEN_REASON : `${TAKEN_REASON}; ${note}`) : note);
   } finally {
     lock.release();
   }
@@ -1701,8 +1716,11 @@ function held(io: Io, dir: string, who: string, seat: string, reason: string, ho
   return 1; // exit: send.held
 }
 
-/** What showed a delivered seat took the line, as the log words it. */
+/** What showed a delivered seat took the line, as the log words it. A box that cleared with no
+ *  status or transcript evidence is `taken, not yet confirmed`: a delivery, with its confirmation
+ *  still to come. */
 function evidenceOf(result: DeliverResult): string {
+  if (result.evidence === 'taken') return TAKEN_REASON;
   return result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${result.status ?? 'working'}`;
 }
 

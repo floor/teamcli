@@ -8,9 +8,9 @@ nothing, and following the log never grows it.
 Each completed `team send` run (`delivered`, `answered`, `held`, `not-submitted`, `timeout`, or
 `unreachable`) appends one JSON object per line to `messages.jsonl`:
 
-    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed>","failed":["<leg>: <reason>",...]}
+    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed>","failed":["<leg>: <reason>",...],"note":"<qualifier>"}
 
-The last five fields are optional. `spec` is the address the sender wrote when it was a form
+The last six fields are optional. `spec` is the address the sender wrote when it was a form
 rather than the seat's own name — a `@<nickname>`, a `<seat|nickname>@<team>`, `lead@<team>`, or
 an agent id — and `resolved` is the registry id (`agt_…`) that address resolved to; the two are written
 together, and `to` is that seat either way. `ms` is the whole milliseconds from send to outcome,
@@ -19,10 +19,13 @@ written when the send measured it, and `via` is the path the message actually tr
 the delivery legs a send walked past, each as `<leg>: <reason>`: the legs of the seat's delivery
 order that definitely could not take the send — the ones a walk passed before the leg that took
 it, or every leg that failed on a walk that ran out of legs — `native` or `mcp-inbox` in this
-build. It is absent when no leg failed, and a line that has none of the five, from a build older
-than these fields, carries the six required fields alone. The table shows `ms` and `via` with the
-outcome in the KIND column, `delivered (via socket in 812 ms)`, and carries `spec`, `resolved`
-and `failed` in the `--json` event, since the plain row keeps the channel that took the send.
+build. It is absent when no leg failed, and a line that has none of the six, from a build older
+than these fields, carries the six required fields alone. `note` is the short qualifier the
+outcome word cannot carry alone: a delivered send whose box cleared before herdr's status or the
+transcript showed the seat act reads `taken, not yet confirmed`, and the sign that the seat acted
+is read later. The table shows `ms` and `via` with the outcome in the KIND column, `delivered (via
+socket in 812 ms)`, and carries `spec`, `resolved`, `failed` and `note` in the `--json` event,
+since the plain row keeps the channel that took the send.
 
 The log rotates at 1 MB and keeps three files (`messages.jsonl`, `messages.jsonl.1`,
 `messages.jsonl.2`), each at mode `0600`. Pre-flight refusals, `--list`, and `--dry-run` write
@@ -88,10 +91,10 @@ from the next.
 
 With `--json` the run prints one pretty-printed `team.feed` document:
 
-    {"schema":{"name":"team.feed","version":1},"format":1,"project":"<project>","session":"<session>","events":[{"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","ms":<milliseconds>,"via":"<socket|typed>","failed":["<leg>: <reason>"]}]}
+    {"schema":{"name":"team.feed","version":1},"format":1,"project":"<project>","session":"<session>","events":[{"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","ms":<milliseconds>,"via":"<socket|typed>","failed":["<leg>: <reason>"],"note":"<qualifier>"}]}
 
-`project` and `session` are `null` when the run names no single team, and `ms`, `via` and `failed`
-appear on an event only when the history line carries them. The schema is published at
+`project` and `session` are `null` when the run names no single team, and `ms`, `via`, `failed`
+and `note` appear on an event only when the history line carries them. The schema is published at
 `schema/feed.schema.json`.
 
 ## Examples

@@ -166,11 +166,13 @@ describe('a box that never submits', () => {
     expect(result.box).toBe(LINE);
   });
 
-  test('a box that the seat cleared but herdr never called working is not-submitted, and gets no more Enters', async () => {
+  test('a box that the seat cleared but herdr never called working is delivered as taken, and gets no more Enters', async () => {
     const cli = fakeCli({ after: 'idle' });
     const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
-    expect(result).toMatchObject({ outcome: 'not-submitted', box: '', tries: 1 });
+    expect(result).toMatchObject({ outcome: 'delivered', evidence: 'taken', prior: 'idle', tries: 1 });
+    expect(result.box).toBeUndefined();
     expect(cli.enters).toBe(1);
+    expect(settled(cli)).toBe(VERIFY_TOTAL_MS);
   });
 });
 
@@ -182,11 +184,11 @@ describe('a faint suggestion in the box', () => {
     expect(cli.log).toEqual([`type:${LINE}`, 'enter']);
   });
 
-  test('is never taken for the trigger: an unsubmitted send is not-submitted with an empty box, and no Enter follows', async () => {
+  test('is never taken for the trigger: a cleared box with no proof is delivered as taken, and no Enter follows', async () => {
     const cli = fakeCli({ empty: 'suggestion', after: 'idle' });
     const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
-    expect(result.outcome).toBe('not-submitted');
-    expect(result.box).toBe('');
+    expect(result).toMatchObject({ outcome: 'delivered', evidence: 'taken', tries: 1 });
+    expect(result.box).toBeUndefined();
     expect(cli.enters).toBe(1);
   });
 
@@ -288,18 +290,18 @@ describe('a seat whose status lags', () => {
     expect(await deliverTrigger(cli, 'w1:p1', LINE, PROFILE)).toMatchObject({ outcome: 'delivered', evidence: 'transcript' });
   });
 
-  test('the echo of the trigger in the transcript is not the drop being read', async () => {
+  test('the echo of the trigger in the transcript is not the drop being read: taken, not yet confirmed', async () => {
     const echo = [`\u276f Read /tmp/drops/native/${DROP_ID} and do that.`];
     const cli = fakeCli({ after: 'idle', transcript: echo });
     const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
-    expect(result).toMatchObject({ outcome: 'not-submitted', box: '' });
+    expect(result).toMatchObject({ outcome: 'delivered', evidence: 'taken', tries: 1 });
     expect(cli.enters).toBe(1);
   });
 
-  test('an echo wrapped over rows is not the drop being read either', async () => {
+  test('an echo wrapped over rows is not the drop being read either, and ends taken', async () => {
     const echo = ['\u276f Read /tmp/drops/native/', `  ${DROP_ID} and do`, '  that.'];
     const cli = fakeCli({ after: 'idle', transcript: echo });
-    expect(await deliverTrigger(cli, 'w1:p1', LINE, PROFILE)).toMatchObject({ outcome: 'not-submitted' });
+    expect(await deliverTrigger(cli, 'w1:p1', LINE, PROFILE)).toMatchObject({ outcome: 'delivered', evidence: 'taken' });
   });
 
   test('a status that moves late, inside the longer window, is delivered', async () => {
@@ -309,10 +311,10 @@ describe('a seat whose status lags', () => {
     expect(cli.enters).toBe(1);
   });
 
-  test('a status that never moves, and a transcript that shows nothing, ends not-submitted after the whole window', async () => {
+  test('a status that never moves, and a transcript that shows nothing, is taken after the whole window', async () => {
     const cli = fakeCli({ lagMs: Infinity });
     const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
-    expect(result).toMatchObject({ outcome: 'not-submitted', box: '', tries: 1 });
+    expect(result).toMatchObject({ outcome: 'delivered', evidence: 'taken', tries: 1 });
     expect(settled(cli)).toBe(VERIFY_TOTAL_MS);
   });
 
@@ -334,17 +336,16 @@ describe('a seat whose status lags', () => {
 describe('evidence has to come from this line', () => {
   const explored = `\u25cf Explored 1 file (${DROP_ID})`;
 
-  test('a seat already working before Enter, still working after, with an empty box and no transcript, is not delivered', async () => {
+  test('a seat already working before Enter, still working after, with an empty box and no transcript, is taken', async () => {
     const cli = fakeCli({ statusBefore: 'working', after: 'working' });
     const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
-    expect(result).toMatchObject({ outcome: 'not-submitted', box: '', tries: 1 });
-    expect(result.evidence).toBeUndefined();
+    expect(result).toMatchObject({ outcome: 'delivered', evidence: 'taken', prior: 'working', tries: 1 });
     expect(cli.enters).toBe(1);
   });
 
-  test('a seat already working that finishes its turn is not delivered either', async () => {
+  test('a seat already working that finishes its turn is taken too: the box cleared', async () => {
     const cli = fakeCli({ statusBefore: 'working', after: 'done' });
-    expect((await deliverTrigger(cli, 'w1:p1', LINE, PROFILE)).outcome).toBe('not-submitted');
+    expect(await deliverTrigger(cli, 'w1:p1', LINE, PROFILE)).toMatchObject({ outcome: 'delivered', evidence: 'taken' });
   });
 
   test('a seat already working is delivered when the transcript shows the drop read', async () => {
