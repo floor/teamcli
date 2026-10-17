@@ -73,12 +73,18 @@ one does.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| a skeleton was written, or the stored copy was restored | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.` | 0 |
+| a skeleton was written | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.` | 0 |
+| the stored copy was restored | `Restored .agents/team.yaml from the copy this machine stored.` | 0 |
 | refused: not the owner, the file is tracked or already there, or there is nothing to restore | `team init: <reason>` | 1 |
 | it can't run: not inside a git repository, or a bad option | `team init: <problem>`, with the usage for a bad option | 2 |
 
+Every plain run prints the privacy paragraph after that line, a blank line between: `The team
+file is private to this clone: it is listed in .git/info/exclude, never in .gitignore, so git
+doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or receives
+one and uses it as their own.`
+
 `--json` prints one `team.init` document instead: `file` (`.agents/team.yaml`), `restored`
-(`false` for a skeleton, `true` for the approved copy), the outcome as `status` (`wrote` or
+(`false` for a skeleton, `true` for the stored copy), the outcome as `status` (`wrote` or
 `restored`), any collapsed notes, and the closing line as `action_summary`. A refusal under
 `--json` prints the `team.error` document on stdout — its `id` is the contract row for that
 refusal (`init.not-owner`, `init.exists`, …) — and nothing on stderr.

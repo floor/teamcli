@@ -1,6 +1,6 @@
 # team usage
 
-Shows what this machine holds: every team with an approval store here, read as one report — each
+Shows what this machine holds: every team it keeps a store for, read as one report — each
 team's accounts and windows, with what is left and used, when each figure was last read and from
 which source. The caller's own project is one of those teams, whether or not it holds a store.
 Anyone may run it, from anywhere, and it only reads: no check runs, no CLI is launched, no pane is
@@ -37,7 +37,7 @@ no screen parser and no recorded figure say `not readable from a CLI screen`.
 
 | Caller | May |
 | --- | --- |
-| anyone — a seat, an unplaced agent, or the owner, from any folder | run it; it needs no approval of its own, and changes nothing about the one in force |
+| anyone — a seat, an unplaced agent, or the owner, from any folder | run it; it changes nothing |
 | the owner at a terminal | read machine subscriptions and the caller’s team; `--all` includes every team’s rows and seats |
 | every other caller | read the restricted view, whose shape is a closed list, built once before anything prints |
 

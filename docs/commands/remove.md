@@ -30,7 +30,7 @@ unless its owner abandons it.
 | a run with no terminal | nothing: `team remove: only the owner runs this, from a terminal outside herdr` — a caller outside herdr has no registry record, so no record admits it |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | remove another seat; never the orchestrator's or the operator's own seat, and never `--abandon` |
 | the approved delegate, when the file's `delegates` section names it | remove a named seat; never `--keep`, `--abandon`, `--session` or `--file` |
-| the orchestrator's seat, when the approved `grant` lists `swap` | `--keep` on the operator's seat (a swap) |
+| the orchestrator's seat, when the file's `grant` lists `swap` | `--keep` on the operator's seat (a swap) |
 | the approved delegate whose entry lists `swap` | `--keep` on the orchestrator's or the operator's seat (a swap) |
 
 ### Swapping a lead seat
@@ -41,7 +41,7 @@ The seat stays in the file, unedited, and stays the lead through the gap: a lead
 `stopped: true`. The stop is an ordinary one — a working seat, a seat holding unsent text, a
 prompt or an unrecognised screen is left as it is — and it is never the seat's own: closing its
 pane would end the call before the new agent starts (`<name> can't swap its own seat`). The
-owner may swap either lead; the orchestrator's seat may swap the operator's when the approved
+owner may swap either lead; the orchestrator's seat may swap the operator's when the file's
 `grant` lists `swap`; an approved delegate whose entry lists `swap` may swap either. The state
 records who started the swap (`swapping`), `team doctor` names it until the seat runs again, the
 log has one line for the stop and one for the start, and a granted or delegated swap adds its

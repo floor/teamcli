@@ -49,7 +49,7 @@ pane, with or without a grant in the file. A seat the file's grant names — the
 may also name any other seat when the grant lists `reload`, and may not name its own seat:
 closing that pane would end the caller. A grant the file carries is a second gate, as it is
 for `down`: where the file carries one, its words are read even for a lead. The grant this
-run reads is the live file's, like `up` and `down`: a file edited since the last approval is
+run reads is the live file's, like `up` and `down`: a file edited since the last record is
 not a refusal. `--file` is the owner's. A delegate is not offered this command.
 
 ## Flags

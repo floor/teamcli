@@ -24,7 +24,7 @@ request's body alone and needs no git.
 
 | Caller | May |
 | --- | --- |
-| anyone — a seat, an agent-run CLI, or the owner, from any folder | run it: it needs no herdr session, no terminal and no approval of its own |
+| anyone — a seat, an agent-run CLI, or the owner, from any folder | run it: it needs no herdr session and no terminal |
 | a seat, on its own branch, before it reports | run it |
 | CI, on a push | run it |
 

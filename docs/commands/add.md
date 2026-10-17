@@ -2,8 +2,8 @@
 
 Starts one seat of a running team: a seat the file declares but nothing runs for — `team up` started
 the others — or a temporary seat beside the team, which the file does not declare at all. A declared
-seat the file marks `stopped: true`, or that `team remove` took out, is put back from the approved
-copy first. It never touches the seats that are already running.
+seat the file marks `stopped: true` starts again, its mark cleared first. It never touches the seats
+that are already running.
 
 The one seat starts where `up` would start it: the orchestrator's and the operator's seat starts in
 the project folder, every other seat in the team's lobby outside repositories, verified by the
@@ -18,8 +18,8 @@ needs it, and refuses the same folders `up` refuses, before it writes anything.
 
 ## What it reads and writes
 
-Reads the team file (or the one `--file` names), this machine's approval store (the record, and the
-approved copy the seat is put back from), the session's state (`.agents/team.state.json`, including
+Reads the team file (or the one `--file` names), this machine's record store (the record it holds,
+if any), the session's state (`.agents/team.state.json`, including
 the project's stored budget readings), herdr (the session's state, its agents and their workspaces),
 the seat's CLI's own config under the seat's home when the seat is about to start in the lobby,
 and, like `up`: the doctor's findings and the machine's load, free memory, free disk and free swap.
@@ -53,14 +53,14 @@ live file is the record.
 A file with a `delegates` section also admits one more caller: the approved delegate, a pane the
 owner named in that section as `<session>/<pane id>`, outside the team. When the map refuses — for
 every seat it does — and the file names a delegate, the delegate gate decides — it re-reads the
-live file and the approval in force, never a remembered copy, and proves the caller stands on the
+live file and the record in force, never a remembered copy, and proves the caller stands on the
 delegate pane, and only that pane — and a caller it passes runs this command as that delegate. The
-delegated `add` is a same-copy seat and nothing else: the one seat it may start is a seat the last
-approval already holds, its stanza hash for hash as the approved copy wrote it, so the add writes
-neither the file nor the approval. `--temporary`, `--like`, `--until`, `--worktree`, `--session`
-and `--file` stay the owner's, and so does any add that would edit the file or the approval —
-restoring a seat the file no longer holds, clearing `stopped: true`, or naming a stanza the
-approval does not hold, which would extend or change the file. A `--file` or `--session`
+delegated `add` is a same-copy seat and nothing else: the one seat it may start is a seat the record
+already holds, its stanza hash for hash as the live file writes it, so the add writes neither the
+file nor the record. `--temporary`, `--like`, `--until`, `--worktree`, `--session`
+and `--file` stay the owner's, and so does any add that would edit the file or the record —
+clearing `stopped: true`, or naming a stanza the record does not hold, which would extend or
+change the file. A `--file` or `--session`
 a non-owner aims is the gate's too, once the file names a delegate: the gate refuses it before the
 flagged file or the flag's session is read, on the eligibility of the default live file alone —
 the flagged file is never opened. With no `delegates` section the run is refused by the rule
@@ -75,7 +75,7 @@ that proceeds is attributed in the log before its effects, as
 | `--model <model>` | override the seat's model for this launch (CLI model id or `<model> <version>`); on a declared seat the owner's alone |
 | `--effort <effort>` | override the seat's reasoning effort for this launch; on a declared seat the owner's alone |
 | `--temporary` | start a seat the file does not declare, beside the team |
-| `--like <seat>` | the approved seat a temporary seat is a copy of: its CLI, model and launch |
+| `--like <seat>` | the declared seat a temporary seat is a copy of: its CLI, model and launch |
 | `--until <end>` | what the temporary seat works for: `result:<path>` or `merged:<branch>`, as below |
 | `--worktree <task>` | the worktree the temporary seat is started in, instead of the seat's own `cwd` |
 | `--session <name>` | the herdr session, instead of `team.session`; the owner's alone |
@@ -174,7 +174,7 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 | `team add: the approved delegate must be an external non-seat pane` | 1 |
 | ``team add: the approved delegate <session>/<pane id> may not run `add`; its approved commands are <list>`` | 1 |
 | `team add: --<flag> is the owner's; the approved delegate cannot use it` — `--temporary`, `--like`, `--until`, `--worktree`, `--session` or `--file` | 1 |
-| `team add: the approved delegate adds only a same-copy seat: the live file's own stanza, hash for hash; a missing, stopped or changed seat is the owner's` — any add that would edit the file or the approval, also on `--dry-run` | 1 |
+| `team add: the approved delegate adds only a same-copy seat: the live file's own stanza, hash for hash; a missing, stopped or changed seat is the owner's` — any add that would edit the file or the record, also on `--dry-run` | 1 |
 | `team add: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat` — any caller but the owner; a temporary seat takes them from any caller | 1 |
@@ -183,7 +183,7 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 | `team add: the file has no seat "<name>"` | 1 |
 | `team add: <name> is already running`. When that seat's screen is one the profile does not recognise, the owner is also told `team remove <name> --abandon closes its workspace without typing`; anyone else is told `the owner runs team remove <name> --abandon, which closes its workspace without typing` | 1 |
 | `team add: no launch profile for \`<cli>\` in this version` | 1 |
-| `team add: the approval allows <n> seats; <m> would be running` / `… <n> temporary seats; …` / `… <n> <vendor> seats; …` | 1 |
+| `team add: the file allows <n> seats; <m> would be running` / `… <n> temporary seats; …` / `… <n> <vendor> seats; …` | 1 |
 | `team add: refused: <account> <window> left <n>%, inside its <reserve>% reserve, changed <age> ago; accounts with room: <accounts>` | 1 |
 | `team add: refused: <account> spend <amount> <CUR>, at or below its <floor> <CUR> floor, read <age> ago; accounts with room: <accounts>` | 1 |
 | `team add: session can't be "default", herdr's own session` | 1 |
@@ -210,7 +210,7 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 lobby the registry recorded for the session, else `<home>/.config/team/lobbies/<entity>` when the
 file names `entity:`, else the default `~/.config/team/lobby`.
 
-The ceilings are read from the approval's record, never from the file: a seat that would put the
+The ceilings are read from the live file, never from the record: a seat that would put the
 session past `limits.seats`, past `limits.temporary` for a temporary seat, or past a
 `limits.vendors` entry for its vendor, is refused.
 
@@ -312,7 +312,7 @@ claude-beacon: ready
 exit 0
 ```
 
-A temporary seat is not in the file at all. It is a copy of an approved seat — here the implementer's
+A temporary seat is not in the file at all. It is a copy of a declared seat — here the implementer's
 — and it works until a result exists or a branch is merged:
 
 ```console

@@ -22,7 +22,7 @@ The commits are a separate run, [`team commits check`](commits.md).
 
 | Caller | May |
 | --- | --- |
-| anyone — a seat, an agent-run CLI, or the owner, from any folder | run it: it needs no herdr session, no terminal and no approval of its own |
+| anyone — a seat, an agent-run CLI, or the owner, from any folder | run it: it needs no herdr session and no terminal |
 | CI, on a push | run it, with the body written to a file or piped in with `-` |
 
 ## Output and exit codes

@@ -11,9 +11,8 @@ documents the sections one by one.
 
 ## `tasks`
 
-Names the team's one task source. It is an owner section: adding, changing or removing it is a
-change to the file the owner approves. Omitted, it reads as `null` and `team issues` refuses
-rather than inventing a path.
+Names the team's one task source. It is an owner section: only the owner writes it. Omitted, it
+reads as `null` and `team issues` refuses rather than inventing a path.
 
 ```yaml
 tasks:
@@ -83,8 +82,8 @@ either folder is left there. The fields are in the README's
   suffix the seat's name gets, so the lines differ (`desk`, `desk-2`).
 - A seat with no written label is titled `<name> · <role>`. Count instances already have
   distinct names (`maker`, `maker-2`), so their lines differ too. The model is never line 1.
-- Left out, the stored `label` stays the model and version in lowercase, which is what an
-  approval of a file written that way already sealed. That stored field stays in the seat's digest.
+- Left out, the stored `label` stays the model and version in lowercase, as a file written that
+  way has always read. That stored field stays in the seat's digest.
 - `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
   as a token of its own when the file writes it. After launch, `up` and `add` set the pane's
   display_agent to `<display> <effort>` when the seat sets `effort`, and to `<display> default`
@@ -107,8 +106,8 @@ accepts any effort.
 A word outside its lab's list is a warning, and the warning names the words that lab allows.
 It does not fail `team check` or `team up`. That is not a regression for a file
 that already loaded: an unknown field is refused, so no such file contains `effort`. Left out,
-the field is not stored on the seat, and the seat's approval key is unchanged. Adding it, in
-or out of the list, changes that key, because the word is part of the seat.
+the field is not stored on the seat, and the seat's digest is unchanged. Adding it, in
+or out of the list, changes that digest, because the word is part of the seat.
 
 Nothing in the launch line reads `effort`.
 
@@ -138,7 +137,7 @@ because they load the file first.
 seconds — and it applies to that seat alone. A seat tightens the windows in force and never
 loosens one: a longer word is set aside where the thresholds resolve, the value in force standing.
 (The blind window is the one a project may open again; a seat inside may close it, not open it
-further.) Writing the map changes the seat's approval key, because the word is part of the seat.
+further.) Writing the map changes the seat's digest, because the word is part of the seat.
 The levels above a seat declare their own words — the machine's `~/.config/team/settings.yaml`,
 an entity's `entities.yaml` entry, a project's record — all under `liveness`, and the watch
 section's `idle_first`, `idle_owner` and `blind_after` are the team's own, described in
@@ -147,7 +146,7 @@ section's `idle_first`, `idle_owner` and `blind_after` are the team's own, descr
 ## `delivery_order`
 
 The order a send to this team's seats walks. It is not an owner section: writing or changing it
-changes nothing the owner approves, and a file that writes none keeps every approval it had.
+is an ordinary change, and a file that writes none reads as the default order.
 Omitted, the order is `native`, then `mcp-inbox`, then `typed`.
 
 ```yaml
@@ -167,7 +166,7 @@ delivery_order: [typed]
   leg the order in force does not have is set aside, and the order in force stands. A word
   equal to the order in force is no word at all.
 - A seat's word is written on the seat, and is part of the seat's digest — writing or changing
-  it needs a new approval, like every other field of the seat:
+  it changes the digest, like every other field of the seat:
 
   ```yaml
   seats:
@@ -187,8 +186,8 @@ delivery_order: [typed]
 
 ## `grant`
 
-Records the grant the owner gives the orchestrator's seat. It is an owner section: adding,
-changing or removing it is a change to the file the owner approves. Omitted, it reads as `null`.
+Records the grant the owner gives the orchestrator's seat. It is an owner section: only the owner
+writes it. Omitted, it reads as `null`.
 
 ```yaml
 grant:
@@ -208,21 +207,19 @@ grant:
   operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":
   "<written>"`.
 - `scope` names acts from the closed set `up`, `down`, `approve`, `init`, `reload` and `swap`. The
-  list is non-empty, each act appears once, and the order is part of the value the owner
-  approves. An empty list is `grant.scope must name at least one of: up, down, approve, init,
+  list is non-empty, each act appears once, and the order is part of the value the owner writes.
+  An empty list is `grant.scope must name at least one of: up, down, approve, init,
   reload, swap`. A repeated act is `grant.scope names "<act>" twice`. Any other word is
   `grant.scope must name up, down, approve, init, reload, swap: "<word>" is not one`.
 - `swap` in `scope` admits the orchestrator's seat to `team remove <operator> --keep`: the swap
   of the operator's agent (`docs/commands/remove.md`). Never its own seat — a seat cannot close
   the pane its own call runs in — so the orchestrator's own swap stays the owner's or a
   delegate's whose entry lists `swap`. The grant itself stays an owner section.
-- `approve` in `scope` is an ordinary approval: the roster and `rules`. A change to `grant`
-  itself, and a change to any other owner section, stays the owner's. The grant admits the
-  orchestrator's seat for that class when it lists `approve`. The run is this folder's own
-  file, `--file` is refused, and the first approval of a team stays the owner's. A roster
-  edit that moves the derived ceiling — a file that declares no `limits` — stays the owner's too.
+- `approve` is accepted in `scope` and acts on nothing: `team approve` was removed, and the word
+  stays so a file that already names it loads unchanged. A change to `grant` itself, and a
+  change to any other owner section, stays the owner's.
 - Any other key, including `path`, is an unknown field.
-- `team up` admits the orchestrator's seat when the approved grant lists `up`. The run is this
+- `team up` admits the orchestrator's seat when the live file's `grant` lists `up`. The run is this
   folder's own file: `--session` and `--file` are refused, and the run does not relaunch or close
   the orchestrator's seat. `team down` admits that seat when the list includes `down`, and leaves
   the orchestrator's seat and the operator's seat running. `team reload <seat>` admits that
@@ -233,8 +230,8 @@ grant:
 ## `delegates`
 
 Names panes outside the team's session that may run some operational commands as a delegate of
-this team file. It is an owner section: adding, changing or removing it is a change to the file
-the owner approves. Omitted, it reads as `null` and nothing is delegated.
+this team file. It is an owner section: only the owner writes it. Omitted, it reads as `null`
+and nothing is delegated.
 
 ```yaml
 delegates:
@@ -248,21 +245,20 @@ delegates:
   pane are refused.
 - A pane is herdr's pane ID — `<session>/<pane id>`, such as `main/w1:p1` — one slash, no
   whitespace, matched on the whole string and case-sensitively. A pane closed and made again has
-  a new ID, so delegation is off until the owner approves a file naming that new ID.
+  a new ID, so delegation is off until the owner writes that new ID into the file.
 - `commands` names at most one each of the six `up`, `down`, `add`, `remove`, `approve` and
   `swap`. `swap` admits `team remove <lead> --keep` and `team add <lead>` on the orchestrator's
   or the operator's seat — the swap of that seat's agent — and nothing else; `remove` never
   reaches a lead.
-  Entry order and command order are part of the value the owner approves: a reorder is a change
+  Entry order and command order are part of the value the owner writes: a reorder is a change
   like any other.
-- `approve` is granted like the rest, under the gate's guard, and the guard is an allowlist:
-  a delegated approval admits the roster and `rules`, and refuses, fail-closed, every other
-  owner section — `delegates`, `budgets`, `limits`, identity, `trust`, the workspace, the
-  operator and orchestrator — and any section added later, so a delegate can never approve a
-  change to its own authority. A delegated approval of an ordinary change — the roster, a
-  launch line, a rule — passes, and the write records one audit line naming the pane and what
-  it sealed.
-- A pane named in several approved team files is a delegate of each — the files do not see or
+- `approve` is accepted in `commands` and acts on nothing: `team approve` was removed, the word
+  stays so a file that already names it loads unchanged, and `team check` prints a note above its
+  findings asking for it to be dropped. Every other act reads the live file. A delegate's commands
+  write the file's roster alone: the owner's sections — `delegates`, `budgets`, `limits`, identity,
+  `trust`, the workspace, the operator and orchestrator — stay the owner's, and so does any
+  section added later. A delegated act records one audit line naming the pane and what it did.
+- A pane several teams' live files name is a delegate of each — the files do not see or
   limit one another — and in every one of them the owner-only sections stay the owner's, never
   a delegate's.
 - A pane's own shell reaches that pane's grant when the pane's root process is among the
@@ -293,5 +289,6 @@ tempo: urgent
 - An omitted `idle_repeat` stays off. `interval` is the pass rate and is not scaled, and
   neither are the quota marks, the check switches or the liveness windows `idle_owner` and
   `blind_after`.
-- `relaxed` and `urgent` take effect when the file is approved. A file that omits the key,
-  and one that sets `normal`, stay the file that was approved.
+- `relaxed` and `urgent` take effect on the next pass once a verified record of the file is in
+  force; a file with no such record runs the default timings. A file that omits the key, and one
+  that sets `normal`, leave every wait as written.

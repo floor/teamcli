@@ -28,15 +28,15 @@ owner included.
 The file decides who may do what, a grant cannot widen its own entry, and `--file` and `--session`
 stay the owner's, from a terminal outside herdr.
 
-- **`team add`** — the owner, the file's approved delegate, or a caller a create-grant's `runner`
-  names. A delegate adds only a seat the file already declares, exactly as written; a different
-  stanza is the owner's: an add that would write the file — restoring a seat the file no longer
-  holds, or clearing `stopped: true` — is refused for everyone else.
+- **`team add`** — the owner, the file's delegate, or a caller an active create-grant names by
+  its own registry agent id (`agt_` …) or its team's registry id. A delegate adds only a seat
+  the file already declares, exactly as written; a different stanza is the owner's: an add that
+  would write the file — clearing `stopped: true` — is refused for everyone else.
 - **`team up`** — the owner or the team's lead seat, or a delegate entry naming `up`; a verified
   grant admits the orchestrator's seat where the map's row does not.
 - **`team down`, `team restart` and `team remove`** — the owner, or the orchestrator's seat — and
   any seat the record marks a lead (the map's `leads`) — acting on another seat, never its own.
-  `down` and `remove` also admit the file's approved delegate whose entry carries them; `restart`
+  `down` and `remove` also admit the file's delegate whose entry carries them; `restart`
   is not delegable. An operator the record does not mark a lead loses these unless a delegate
   entry carries `down` or `remove`.
 - **`team grant` and `team revoke`** — the owner alone, from a terminal outside herdr, at both

@@ -12,7 +12,7 @@ pane is read, no team file or state is written.
 
 Reads `herdr session list --json`, and for each session it keeps, that session's registry
 (`<session_dir>/session.json`, for each workspace's `identity_cwd`) and, when the registry does not
-name a team file, this machine's approval stores. A team file is `.agents/team.yaml` whose `session`
+name a team file, this machine's record stores. A team file is `.agents/team.yaml` whose `session`
 is the herdr session (an omitted `session` is the project name). A link standing in for the file is
 not opened. For a running session it also reads `herdr agent list` — the roster, not a pane. A
 stopped session is not asked for a roster.
@@ -26,7 +26,7 @@ exits 0; `--json` prints `[]`.
 
 ## Who may run it
 
-Anyone, from any folder. It needs no approval and no project of its own.
+Anyone, from any folder. It needs no project of its own.
 
 ## Flags
 

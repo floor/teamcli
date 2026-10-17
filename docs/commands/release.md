@@ -34,7 +34,7 @@ wherever they appear, so `--file --help` prints the usage and exits 0.
 
 | Caller | May |
 | --- | --- |
-| anyone, from any folder | run it: it needs no herdr session, no terminal, no approval and no login |
+| anyone, from any folder | run it: it needs no herdr session, no terminal and no login |
 | the Linear check alone | read its key from the macOS Keychain, so that one check needs macOS, an interactive run and the one-time setup; anywhere else it is `unknown` and the others are unaffected |
 
 ## Output and exit codes

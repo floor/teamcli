@@ -1,8 +1,8 @@
 # team hold
 
 A hold is a note on the team's work: why it was placed, who placed it and when, and when it lapses.
-It lives in the team state (`.agents/team.state.json`), never in the team file — the file waits for
-the owner's approval, and a hold that waits is no hold. A hold is the project's, not one session's.
+It lives in the team state (`.agents/team.state.json`), never in the team file: placing one edits
+no team file, and a hold that waits is no hold. A hold is the project's, not one session's.
 `status` prints it as its first `note:` and `doctor` as the last `--  ` line before the summary. A
 record whose `until` has passed reads as no hold at all, so a lapsed hold needs no writer to clear
 it: every reader stops showing it, and the next `team hold` replaces it. In this build nothing else
