@@ -89,7 +89,9 @@ lock holds exactly the paths it names.
 
 `team broker: stopped` when the loop ended and the socket file was removed.
 
-Every line goes to stderr. Nothing is printed on stdout.
+Every line goes to stderr. Nothing is printed on stdout. No `--json` runs on the daemon loop: the
+invocation takes no flags, so `--json` is refused as an unknown argument, with the usage, on
+stderr, and exit 2.
 
 ## Refusals
 
