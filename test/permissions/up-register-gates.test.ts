@@ -10,7 +10,7 @@
 // roster is the record, and the file does not widen it.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
@@ -22,7 +22,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import { setHerdrRun, type HerdrAgent } from '../../src/herdr.ts';
 import { readAgents } from '../../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
-import { emptySession, readState, updateState } from '../../src/state.ts';
+import { emptySession, LOG_FILE, readState, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 
@@ -99,14 +99,14 @@ function setup(): void {
   approve(teamText());
 }
 
-/** The same file with a verified grant that names the lead and lists only `down`: the grant
- *  refuses `up` for every caller, the lead included. */
-function grantedText(): string {
+/** The same file with a verified grant that names the lead and lists `scope` alone. The
+ *  default refuses `up` for every caller, the lead included. */
+function grantedText(scope: string[] = ['down']): string {
   return `${teamText()}grant:
   session: alpha
   seat: lead
   scope:
-    - down
+${scope.map((act) => `    - ${act}`).join('\n')}
 `;
 }
 
@@ -370,6 +370,32 @@ describe('the up row (owner-or-leads)', () => {
     expect(flagged.out).toContain('! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\n');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
+
+  test('an admitted lead is not constrained by a grant that leaves `up` out, and starts the team', async () => {
+    // The row admits the orchestrator and the file's grant lists `down` alone: a grant is the
+    // fallback for a caller the map refused, never a second gate on an admitted run.
+    approve(grantedText(['down']));
+    record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
+    const { sources, trace } = upTrace();
+    const io = testIo(root, seatCaller('lead', 'lead-pane'));
+    const code = await runUp([], io, sources);
+    expect(code, io.err + io.out).toBe(0);
+    expect(trace.workspaces).toEqual(withCwd(PLAN));
+    expect(trace.audits).toEqual([]);
+  });
+
+  test('an admitted lead writes no grant audit line even where the grant would have passed', async () => {
+    // The grant names this lead and lists `up`: asked before the map rule, it would set the
+    // granted seat and the run would log `grant ... up` beside the map's own admission.
+    approve(grantedText(['up', 'down']));
+    record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
+    const { sources, trace } = upTrace();
+    const io = testIo(root, seatCaller('lead', 'lead-pane'));
+    const code = await runUp([], io, sources);
+    expect(code, io.err + io.out).toBe(0);
+    expect(trace.workspaces).toEqual(withCwd(PLAN));
+    expect(trace.audits).toEqual([]);
+  });
 });
 
 describe('the register row (owner-or-own-team)', () => {
@@ -427,5 +453,30 @@ describe('the register row (owner-or-own-team)', () => {
     const code = await runRegister(['pilot'], io, registerSources([['pilot', 'pilot-pane']]));
     expect(code, io.err).toBe(0);
     expect(io.out).toContain('pilot: registered — pane pilot-pane; nothing was launched\n');
+  });
+
+  test('an admitted orchestrator registers where a grant leaves `up` out, and logs no grant line', async () => {
+    // The row lists the orchestrator; the grant lists `down` alone. Asked before the map rule,
+    // its refusal would block this run while a plain worker's passes.
+    approve(grantedText(['down']));
+    record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
+    const io = testIo(root, seatCaller('lead', 'lead-pane'));
+    const code = await runRegister(['pilot'], io, registerSources([['lead', 'lead-pane'], ['pilot', 'pilot-pane']]));
+    expect(code, io.err).toBe(0);
+    expect(io.out).toContain('pilot: registered — pane pilot-pane; nothing was launched\n');
+    expect(readState(dir).sessions.alpha?.seats.pilot?.pane).toBe('pilot-pane');
+    const log = existsSync(join(dir, LOG_FILE)) ? readFileSync(join(dir, LOG_FILE), 'utf8') : '';
+    expect(log).not.toContain('grant [grant]');
+  });
+
+  test('an admitted orchestrator writes no grant audit line even where the grant would have passed', async () => {
+    approve(grantedText(['up']));
+    record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
+    const io = testIo(root, seatCaller('lead', 'lead-pane'));
+    const code = await runRegister(['pilot'], io, registerSources([['lead', 'lead-pane'], ['pilot', 'pilot-pane']]));
+    expect(code, io.err).toBe(0);
+    const log = existsSync(join(dir, LOG_FILE)) ? readFileSync(join(dir, LOG_FILE), 'utf8') : '';
+    expect(log).toContain('register [lead]');
+    expect(log).not.toContain('grant [grant]');
   });
 });

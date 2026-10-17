@@ -649,48 +649,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // or the token. The refusal is one sentence, on the dry run and the real run.
   const detached = detachedRefusal(walked);
   const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : loadTeamFile(io.cwd, { home: sources.home });
-  const delegateTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
-  const verdict = delegateTeam
-    ? (sources.delegateGate ?? delegateGate)({
-        command: 'up',
-        team: delegateTeam.team,
-        root: delegateTeam.root,
-        dir: dirname(delegateTeam.path),
-        flags: [...args.flags, ...Object.keys(args.values)],
-        io,
-        home: sources.home,
-      })
-    : null;
-  // The approved `<session>/<pane id>` when this run is a delegated one: the ordinary caller rule
-  // refused, the default file's `delegates` section named a pane, and the gate passed it.
-  let delegated: string | null = null;
-  if (verdict?.kind === 'passed') delegated = verdict.pane;
-  // The grant is asked where the ordinary rule refused and a delegate did not take the run.
-  // A delegate refusal that already named a listed pane — a flag, a drift, an approval — keeps
-  // that sentence. `up.delegate` is the caller who is not a listed pane, and that caller may be
-  // the granted seat. A file that omits `grant` does not ask.
-  const grantTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.grant !== null ? defaultLoad : null;
-  const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
-  let grantedSeat: string | null = null;
-  let grantRefusal: string | null = null;
-  let grantRefusalId: string | null = null;
-  if (!mayLaunchSeats(walked) && delegated === null && delegateMissed && grantTeam) {
-    const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home });
-    if (said.kind === 'passed') grantedSeat = said.grant.seat;
-    else {
-      grantRefusal = said.text;
-      grantRefusalId = said.id;
-    }
-  }
   // A non-owner passing `--session`, or a `--file` other than this folder's own team file, is
-  // refused here, before that file is read, before a session is asked, and before an out-of-band
-  // owner token is matched. The walk reads no session. The token is a yes for the launch this
-  // folder's own file would make, so it is matched only on the path below, which never opens a
-  // flagged file and never asks a named session. A delegate verdict that already refused this aim
-  // returns in the gate's words, before the caller is placed. A granted seat that aims either
-  // flag is refused in its own words, and the flagged path is not opened. The owner-only rule is
-  // the first thing the aim meets: a grant that refused the run — for any reason — never turns
-  // the aim into an ordinary one on the file's own session. This folder's own file, with no
+  // refused before the map is walked for this run: the aim is the owner's, the walk reads a
+  // session and asks the host, and the flagged path and the named session are never read. The
+  // gate's own sentence replaces the walk's where a delegate refused the aim, and a granted
+  // seat that aims either flag is refused in its own words. The owner-only rule is the first
+  // thing the aim meets: a grant that refused the run — for any reason — never turns the aim
+  // into an ordinary one on the file's own session. This folder's own file, with no
   // `--session`, continues below.
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const aimed = otherFile || args.values.session !== undefined;
@@ -699,37 +664,78 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.detached
     return 1;
   }
-  if (!mayLaunchSeats(walked) && aimed && grantedSeat !== null) {
-    const flag = args.values.session !== undefined ? 'session' : 'file';
-    out.stderr(`team up: --${flag} is the owner's; the granted seat cannot use it\n`);
-    // exit: up.grant-flag
-    return 1;
-  }
-  // Dev mode does not return here: the file is mounted, and the same sentence is a warning below.
-  // One return answers both runs: a real one with the bare word, a dry one never denied but told
-  // the reason and the owner's own command. Either way the flagged file stays unread, so the dry
-  // run prints no plan for it.
-  if (!mayLaunchSeats(walked) && aimed && verdict === null && !dev) {
-    if (dry) {
-      out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}\n`);
-      out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
-    } else {
-      out.stderr('deny\n');
+  // The two fallbacks, read from the DEFAULT live file of this cwd, with no flag: a delegate's
+  // eligibility never comes from a file the caller names, and neither gate opens the aim.
+  const delegatesFile = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
+  const grantFile = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.grant !== null ? defaultLoad : null;
+  const judgeGates = (): {
+    verdict: ReturnType<typeof delegateGate> | null;
+    delegated: string | null;
+    grantedSeat: string | null;
+    grantRefusal: string | null;
+  } => {
+    const verdict = delegatesFile
+      ? (sources.delegateGate ?? delegateGate)({
+          command: 'up',
+          team: delegatesFile.team,
+          root: delegatesFile.root,
+          dir: dirname(delegatesFile.path),
+          flags: [...args.flags, ...Object.keys(args.values)],
+          io,
+          home: sources.home,
+        })
+      : null;
+    // The approved `<session>/<pane id>` when this run is a delegated one: the default file's
+    // `delegates` section named a pane, and the gate passed it.
+    const delegated = verdict?.kind === 'passed' ? verdict.pane : null;
+    // The grant is asked where no delegate took the run. A delegate refusal that already named a
+    // listed pane — a flag, a drift, an approval — keeps that sentence. `up.delegate` is the
+    // caller who is not a listed pane, and that caller may be the granted seat. A file that
+    // omits `grant` does not ask.
+    const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
+    let grantedSeat: string | null = null;
+    let grantRefusal: string | null = null;
+    if (delegated === null && delegateMissed && grantFile) {
+      const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home });
+      if (said.kind === 'passed') grantedSeat = said.grant.seat;
+      else grantRefusal = said.text;
     }
-    // exit: up.not-owner
-    return 1;
-  }
-  if (!mayLaunchSeats(walked) && aimed && verdict?.kind === 'refused') {
-    out.stderr(`team up: ${verdict.text}\n`);
-    // exit: up.delegate-flag
-    return 1;
+    return { verdict, delegated, grantedSeat, grantRefusal };
+  };
+  if (!mayLaunchSeats(walked) && aimed) {
+    const gates = judgeGates();
+    if (gates.grantedSeat !== null) {
+      const flag = args.values.session !== undefined ? 'session' : 'file';
+      out.stderr(`team up: --${flag} is the owner's; the granted seat cannot use it\n`);
+      // exit: up.grant-flag
+      return 1;
+    }
+    // Dev mode does not return here: the file is mounted, and the same sentence is a warning below.
+    // One return answers both runs: a real one with the bare word, a dry one never denied but told
+    // the reason and the owner's own command. Either way the flagged file stays unread, so the dry
+    // run prints no plan for it.
+    if (gates.verdict === null && !dev) {
+      if (dry) {
+        out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}\n`);
+        out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
+      } else {
+        out.stderr('deny\n');
+      }
+      // exit: up.not-owner
+      return 1;
+    }
+    if (gates.verdict?.kind === 'refused') {
+      out.stderr(`team up: ${gates.verdict.text}\n`);
+      // exit: up.delegate-flag
+      return 1;
+    }
   }
   // The caller rule is the map's row (`owner-or-leads`): the owner, or a seat the team's record
   // marks `leads` — its orchestrator, or a roster mark. The decision is made where the caller
   // stands, by the same search `down` makes (`judgeCallerIn`), and the pane proof stays the
   // standing's: a lead the state does not record on its pane is still refused below. The row
-  // reads the file the run is on, so an aimed run — refused above unless a gate took it — is
-  // judged on this folder's own file, the one every non-owner run still loads.
+  // reads the file the run is on. It is decided before either fallback is used: an admitted run
+  // owes neither gate, and neither gate's audit line.
   const gate = defaultLoad !== null && defaultLoad.ok ? defaultLoad : null;
   let judged: ReturnType<typeof judgeCallerIn> | null = null;
   let rule: ReturnType<typeof gateVerdict> | null = null;
@@ -742,6 +748,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   }
   const ordinaryAdmitted = mayLaunchSeats(walked) || rule?.kind === 'ok';
   const caller = judged?.caller ?? callerOf(io);
+  // The two fallbacks are used only where the map refused. A gate refusal replaces the ordinary
+  // caller refusal; a passed one makes the run the gate's, and its audit line is written where
+  // the run has effects — never beside the map's own admission.
+  const delegateTeam = !ordinaryAdmitted && delegatesFile !== null ? delegatesFile : null;
+  const gates = ordinaryAdmitted ? null : judgeGates();
+  const verdict = gates?.verdict ?? null;
+  const delegated = gates?.delegated ?? null;
+  const grantedSeat = gates?.grantedSeat ?? null;
+  const grantRefusal = gates?.grantRefusal ?? null;
   // The file this run is whole on: the default one whenever the gate decided on it — a refused
   // run stops on the gate's words without reading a flagged target, a delegated one runs the
   // file its delegation was read from — and otherwise today's load, `--file` honoured exactly
@@ -801,22 +816,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     ownerAuthorized(io.env, upFp);
 
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
-  // The file's `grant` is the orchestrator's own authority for `up`, and a constraint where the
-  // map has admitted it: a verified grant that names another seat or pane, or that leaves `up`
-  // out of its scope, refuses the orchestrator's run (the bare word, as every other seat
-  // refusal on this page). A file no approval covers grants nothing — not even a constraint —
-  // so its refusal does not stop the map's own admission: the run goes on as the lead's, with
-  // no audit line.
-  const grantBlocked =
-    ordinaryAdmitted &&
-    grantRefusal !== null &&
-    grantRefusalId !== 'grant.approval' &&
-    caller.kind === 'seat' &&
-    caller.name === team.orchestrator;
   // The map's admission, the trusted owner token, the granted seat, a passed delegation, a pane
-  // the live file names for `up`, or an agent with an active entity create-grant.
+  // the live file names for `up`, or an agent with an active entity create-grant. A grant is not
+  // a constraint on an admitted run: it was never asked, and its audit line is never written.
   const named =
-    (ordinaryAdmitted && !grantBlocked) ||
+    ordinaryAdmitted ||
     ownerToken ||
     grantedSeat !== null ||
     delegated !== null ||

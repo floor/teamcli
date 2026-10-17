@@ -32,8 +32,8 @@ stay the owner's, from a terminal outside herdr.
   names. A delegate adds only a seat the file already declares, exactly as written; a different
   stanza is the owner's: an add that would write the file — restoring a seat the file no longer
   holds, or clearing `stopped: true` — is refused for everyone else.
-- **`team up`** — the owner or the team's lead seat, or a delegate entry naming `up` (constrained
-  by a verified grant when one is present).
+- **`team up`** — the owner or the team's lead seat, or a delegate entry naming `up`; a verified
+  grant admits the orchestrator's seat where the map's row does not.
 - **`team down`, `team restart` and `team remove`** — the owner, or the orchestrator's seat — and
   any seat the record marks a lead (the map's `leads`) — acting on another seat, never its own.
   `down` and `remove` also admit the file's approved delegate whose entry carries them; `restart`

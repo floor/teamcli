@@ -327,16 +327,39 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
   if (detached !== undefined && !createGranted) return detachedExit(out, detached);
 
-  // The gate, `up`'s own: the map's `register` row (`owner-or-own-team` — the owner, or a seat
-  // this team's record lists), a delegate this file names for `up` — the act that would have
-  // written this record in the first place — the seat the file's `grant` names for `up`, or the
-  // create-granted runner. The run launches nothing, so no launch is granted; but the record is
-  // what lets `team send` type into the pane, so it is the owner's authority, judged by the
-  // same gate and in the same order: the ordinary rule first, the delegate gate only where it
-  // refused and the file has a delegates section to read, and the grant only where no delegate
-  // took the run and the file has a `grant` at all.
+  // `--session` picks the herdr session the pane is verified in: where the record it writes will
+  // point `send`, `watch` and `down`. It is the owner's, and the aim is refused before the map is
+  // walked for this run — the walk reads a session — whatever the grant state: a seat the grant
+  // names is refused in the grant's own words, and everyone else — a delegate that aimed it
+  // included — before the named session is read. The grant is asked for its sentence alone; its
+  // verdict decides nothing here, and a grant that refused the run never turns the aim into an
+  // ordinary one.
+  if (args.values.session !== undefined && !mayLaunchSeats(walked) && !createGranted) {
+    const said = team.grant !== null ? (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home }) : null;
+    if (said?.kind === 'passed') return grantFlagRefused(out);
+    const line = sessionOwnerRefusal(walked);
+    if (dev) warning.push(line);
+    else return callerRefused(out, line, dry, unblock(args.values));
+  }
+
+  // The caller rule is the map's row (`owner-or-own-team`): the owner, or a seat this team's
+  // record lists — the registry's roster line, or the file's own declaration where the registry
+  // holds no record of the team. The decision is made where the caller stands, by the same
+  // search `up` and `down` make, and the pane proof stays the standing's. It is decided first:
+  // an admitted run owes neither the delegate nor the grant, and neither gate's audit line.
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, sources.home, 'register', at, sources.now);
+  const judged = mayLaunchSeats(walked) || detached !== undefined ? null : judgeCallerIn(io, dir, team, verdictOf);
+  const rule = judged !== null ? verdictOf(judged.caller, standingOf(dir, judged.session, judged.caller)) : null;
+  const caller = judged?.caller ?? walked;
+  const ordinaryAdmitted = mayLaunchSeats(walked) || rule?.kind === 'ok';
+  // The fallbacks, `up`'s own, asked only where the map refused: a delegate this file names for
+  // `up` — the act that would have written this record in the first place — then the seat the
+  // file's `grant` names for `up`, then the create-granted runner. The run launches nothing, so
+  // no launch is granted; but the record is what lets `team send` type into the pane, so it is
+  // the owner's authority, judged by the same gates and in the same order.
   const verdict =
-    mayLaunchSeats(walked) || detached !== undefined || !team.delegates
+    ordinaryAdmitted || detached !== undefined || !team.delegates
       ? null
       : (sources.delegateGate ?? delegateGate)({
           command: 'up',
@@ -352,40 +375,12 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // and a file that omits `grant` does not ask.
   const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
   const grantSaid =
-    delegateMissed && !mayLaunchSeats(walked) && !createGranted && team.grant !== null
+    !ordinaryAdmitted && delegateMissed && !createGranted && team.grant !== null
       ? (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home })
       : null;
   const grantedSeat = grantSaid?.kind === 'passed' ? grantSaid.grant.seat : null;
-  // The caller rule is the map's row (`owner-or-own-team`): the owner, or a seat this team's
-  // record lists — the registry's roster line, or the file's own declaration where the registry
-  // holds no record of the team. The decision is made where the caller stands, by the same
-  // search `up` and `down` make, and the pane proof stays the standing's. A file's `grant` is
-  // the orchestrator's own authority and, where the map has admitted it, its constraint: a
-  // verified grant outside its scope refuses the orchestrator's run. A file no approval covers
-  // grants nothing, not even a constraint, so its refusal does not stop the map's admission.
-  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
-    gateVerdict(who, team, root, sources.home, 'register', at, sources.now);
-  const judged = mayLaunchSeats(walked) || detached !== undefined ? null : judgeCallerIn(io, dir, team, verdictOf);
-  const rule = judged !== null ? verdictOf(judged.caller, standingOf(dir, judged.session, judged.caller)) : null;
-  const caller = judged?.caller ?? walked;
-  const ordinaryAdmitted = mayLaunchSeats(walked) || rule?.kind === 'ok';
-  const grantBlocked =
-    ordinaryAdmitted &&
-    grantSaid?.kind === 'refused' &&
-    grantSaid.id !== 'grant.approval' &&
-    caller.kind === 'seat' &&
-    caller.name === team.orchestrator;
-  const named = (ordinaryAdmitted && !grantBlocked) || delegated !== null || createGranted || grantedSeat !== null;
-  // `--session` picks the herdr session the pane is verified in: where the record it writes will
-  // point `send`, `watch` and `down`. It is the owner's: a granted seat is refused in the grant's
-  // own words, and everyone else — a delegate that aimed it included — before the named session
-  // is read.
-  if (args.values.session !== undefined && !mayLaunchSeats(walked) && !createGranted) {
-    if (grantedSeat !== null) return grantFlagRefused(out);
-    const line = sessionOwnerRefusal(walked);
-    if (dev) warning.push(line);
-    else return callerRefused(out, line, dry, unblock(args.values));
-  }
+  // The map's admission, the create-granted runner, a passed delegation, or the granted seat.
+  const named = ordinaryAdmitted || delegated !== null || createGranted || grantedSeat !== null;
   if (!named && grantSaid?.kind === 'refused') return grantRefused(out, grantSaid.text);
   if (!named && verdict?.kind === 'refused') return delegateRefused(out, verdict.text);
   if (!named) {
