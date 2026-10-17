@@ -741,4 +741,42 @@ test('an expired dev-mode declaration still governs: the gate reads off and the 
   expect(run.on).toBe(false);
   expect(run.governed).toBe(true);
   expect(run.ignored).toBe(true);
+  // And the run knows what quieted the gate, so the refusal can say it.
+  expect(run.expired).toEqual({ at: '2026-10-16T12:00:00Z', level: 'team' });
+});
+
+test('after an expiry the gated refusal names it, and the command logs it once', async () => {
+  const { root, home } = repo();
+  // Signed the day before, expired at noon, read the next day: the declaration still retires
+  // the variable (the reading above), and the gate it used to lift refuses again — naming when
+  // and where it went quiet, so the caller learns why the mode stopped covering them.
+  setDevMode(home, root, 'on', { now: new Date('2026-10-15T12:00:00Z'), expiry: '2026-10-16T12:00:00Z' });
+  approve(home, root);
+  const after = new Date('2026-10-17T12:00:00Z');
+  const placement = 'only the owner or `leads` stops the team; this call is unplaced (it runs under herdr)';
+  const didStop = { n: 0 };
+  const io = testIo(root, UNPLACED);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  const sources: DownSources = { ...downSources(home, didStop), now: () => after };
+  expect(await runDown([], io, sources)).toBe(1);
+  expect(io.err).toBe(
+    `team down: ${placement}; dev-mode expired at 2026-10-16T12:00:00Z for team; it is off since\n`,
+  );
+  expect(didStop.n).toBe(0);
+  const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+  expect(log).toBe(
+    `${after.toISOString()} down [unplaced (it runs under herdr)] dev-mode: TEAMCLI_DEV_MODE=1 ignored because dev-mode policy is off\n`
+    + `${after.toISOString()} down [unplaced (it runs under herdr)] dev-mode: expired at 2026-10-16T12:00:00Z for team; it is off since\n`,
+  );
+});
+
+test('after an expiry the bare `deny` carries the clause too', async () => {
+  const { root, home } = repo();
+  setDevMode(home, root, 'on', { now: new Date('2026-10-15T12:00:00Z'), expiry: '2026-10-16T12:00:00Z' });
+  const world = upWorld();
+  const io = testIo(root, UNPLACED);
+  const sources: UpSources = { ...upSources(home, world.launch), now: () => new Date('2026-10-17T12:00:00Z') };
+  expect(await runUp([], io, sources)).toBe(1);
+  expect(io.err).toBe('deny; dev-mode expired at 2026-10-16T12:00:00Z for team; it is off since\n');
+  expect(world.runs).toEqual([]);
 });

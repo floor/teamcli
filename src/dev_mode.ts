@@ -12,7 +12,9 @@
 // migration trigger. Once a value governs, the variable is ignored entirely — once a command
 // says so in the log — and the effective policy alone decides. An expired declaration still
 // counts as a declaration here (`resolvePolicyChain`'s `devModeGoverned`, read as exported), so
-// an expiry reverts the gate to `off` and the variable stays ignored.
+// an expiry reverts the gate to `off` and the variable stays ignored; the first command refused
+// after it names the expiry in its refusal (and every command logs it once), so a gate that
+// went quiet says when and at which level.
 //
 // Every use under `on` warns on stderr and writes the audit log line beside it — the one sink
 // every command logs through (`logLine`) — with the caller, the command and the level that set
@@ -44,6 +46,9 @@ export type DevModeContext = {
   now?: Date;
 };
 
+/** An expired `dev-mode` declaration: what the gate fell back to `off` from, and where. */
+export type DevModeExpiry = { at: string; level: PolicyLevel };
+
 /** What the chain says about dev mode for one command, before any gate is asked. */
 export type DevModeRun = {
   /** The caller gate is lifted: the effective policy is `on`, or the variable is in effect before any policy. */
@@ -54,6 +59,10 @@ export type DevModeRun = {
   governed: boolean;
   /** The variable is set to `1` and the governing policy is `off`: the ignoring to log once. */
   ignored: boolean;
+  /** The nearest declaration the expiry left with no effective value: an expired `dev-mode`
+   *  is what makes the gate quiet, so the first refusal after it says so, and each command
+   *  logs it once. */
+  expired: DevModeExpiry | null;
   /** Policy sources that cannot be read, verified or ordered: dev mode is not applied on them. */
   refusals: PolicyLoadRefusal[];
 };
@@ -74,7 +83,18 @@ function projectIdOfTeam(home: string, team: TeamFile | null, root: string | nul
 }
 
 function variableOnly(envSet: boolean): DevModeRun {
-  return { on: envSet, by: envSet ? 'env' : null, governed: false, ignored: false, refusals: [] };
+  return { on: envSet, by: envSet ? 'env' : null, governed: false, ignored: false, expired: null, refusals: [] };
+}
+
+/** The nearest expired `dev-mode` declaration — the level `resolvePolicy` would have taken had
+ *  it not expired (team over project over entity; dev mode is never a seat's). */
+function nearestExpiry(expired: readonly { name: string; level: PolicyLevel; expiry?: string | null }[]): DevModeExpiry | null {
+  const gone = expired.filter((decl) => decl.name === 'dev-mode' && typeof decl.expiry === 'string');
+  for (const level of ['team', 'project', 'entity'] as const) {
+    const decl = gone.find((candidate) => candidate.level === level);
+    if (decl !== undefined && typeof decl.expiry === 'string') return { at: decl.expiry, level };
+  }
+  return null;
 }
 
 /**
@@ -98,13 +118,16 @@ export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, con
   if (!chain.ok) {
     // Nothing is lifted on a policy the tool could not read or order (amendment §2.5): the
     // default does not silently stand in its place, and the run says why in its log.
-    return { on: false, by: null, governed: chain.devModeGoverned, ignored: false, refusals: chain.refusals };
+    return { on: false, by: null, governed: chain.devModeGoverned, ignored: false, expired: null, refusals: chain.refusals };
   }
   if (chain.devModeGoverned) {
     const effective = chain.policies['dev-mode'];
     const on = DEV_MODE_OPERATIONS.includes(command) && effective !== undefined && effective.value === 'on';
     const level = on && effective !== undefined && effective.level !== 'default' ? effective.level : null;
-    return { on, by: level, governed: true, ignored: envSet && !on, refusals: [] };
+    // The default standing while a declaration exists: the expiry is what left the gate off.
+    // An explicit value at any level — even `off` — did the refusing, and is not this clause.
+    const expired = effective === undefined || effective.level === 'default' ? nearestExpiry(chain.expired) : null;
+    return { on, by: level, governed: true, ignored: envSet && !on, expired, refusals: [] };
   }
   return variableOnly(envSet && DEV_MODE_OPERATIONS.includes(command));
 }
@@ -115,6 +138,15 @@ export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, con
  */
 export function devModeLevelNote(run: DevModeRun): string {
   return run.by === 'env' || run.by === null ? '' : ` (dev-mode on at ${run.by} level)`;
+}
+
+/**
+ * The clause a refusal carries after an expiry: the gate it used to lift is quiet, and the
+ * refusal says when it went quiet and at which level — `; dev-mode expired at <t> for
+ * <level>; it is off since`. Empty while no `dev-mode` declaration has expired.
+ */
+export function devModeExpiryNote(run: DevModeRun): string {
+  return run.expired === null ? '' : `; dev-mode expired at ${run.expired.at} for ${run.expired.level}; it is off since`;
 }
 
 /**
@@ -148,6 +180,9 @@ export function logDevMode(dir: string, command: DevModeCommand, caller: string,
 export function logDevModeState(dir: string, command: DevModeCommand, caller: string, run: DevModeRun, now?: Date): void {
   if (run.ignored) {
     logLine(dir, command, caller, 'dev-mode: TEAMCLI_DEV_MODE=1 ignored because dev-mode policy is off', now);
+  }
+  if (run.expired !== null) {
+    logLine(dir, command, caller, `dev-mode: expired at ${run.expired.at} for ${run.expired.level}; it is off since`, now);
   }
   for (const refusal of run.refusals) {
     logLine(dir, command, caller, `dev-mode: ${refusal.message}; dev mode is not applied`, now);

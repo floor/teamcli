@@ -20,7 +20,7 @@ import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerLabel, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { devModeLevelNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeExpiryNote, devModeLevelNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -152,8 +152,8 @@ function notOwnerLine(caller: Caller): string {
   return `only the owner or a seat of this team registers a running seat; this call is ${plainLine(describeCaller(caller))}`;
 }
 
-function notOwnerRefused(out: Io, caller: Caller, dry = false, unblock?: string): number {
-  const line = notOwnerLine(caller);
+function notOwnerRefused(out: Io, caller: Caller, dry = false, unblock?: string, note = ''): number {
+  const line = `${notOwnerLine(caller)}${note}`;
   if (dry) {
     out.stdout(`! register would refuse: ${plainText(line)}\n`);
     if (unblock !== undefined) out.stdout(`! to unblock: ${plainText(unblock)}\n`);
@@ -343,7 +343,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   if (args.values.session !== undefined && !mayLaunchSeats(walked) && !createGranted) {
     const said = team.grant !== null ? (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home }) : null;
     if (said?.kind === 'passed') return grantFlagRefused(out);
-    const line = sessionOwnerRefusal(walked);
+    const line = `${sessionOwnerRefusal(walked)}${devModeExpiryNote(dev)}`;
     if (dev.on) {
       warning.push(line);
       // The audit line the fold owes, written where the gate is used: the refusal's words, on
@@ -401,7 +401,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     if (dev.on) {
       warning.push(line);
       if (!dry) logDevMode(dir, 'register', callerLabel(walked), `warning: ${line}${devModeLevelNote(dev)}`, sources.now());
-    } else return notOwnerRefused(out, caller, dry, unblock(args.values));
+    } else return notOwnerRefused(out, caller, dry, unblock(args.values), devModeExpiryNote(dev));
   }
   if (warning.length > 0) {
     const line = [...new Set(warning)].join('; ');

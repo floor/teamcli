@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { devModeCallerGate, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { TEAM_FILE, findRoot, loadTeamFile } from '../file/load.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
@@ -184,7 +184,7 @@ export async function runInit(
   // logged where the run knows the folder it writes in.
   let devOwnerLine: string | null = null;
   if (!isOwner(caller) && !createGranted) {
-    const ownerLine = `only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+    const ownerLine = `only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}${devModeExpiryNote(dev)}`;
     const folded = devModeCallerGate(dev, ownerLine);
     if (folded === null) {
       io.stderr(`team init: ${ownerLine}\n`);

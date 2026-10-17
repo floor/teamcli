@@ -6,7 +6,7 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { findRoot, loadTeamFile } from '../file/load.ts';
@@ -278,7 +278,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // refusal's own words print as a warning, the run goes on, and the audit log records the
     // caller it admitted. Every later gate — the owner-only abandon, the lead's seat, the
     // placement in the session — still refuses.
-    const said = `only the owner or \`leads\` removes a seat; this call is ${describeCaller(shown)}`;
+    const said = `only the owner or \`leads\` removes a seat; this call is ${describeCaller(shown)}${devModeExpiryNote(dev)}`;
     const folded = devModeCallerGate(dev, said);
     if (folded === null) {
       io.stderr(`team remove: ${said}\n`);

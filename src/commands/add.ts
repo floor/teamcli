@@ -10,7 +10,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
@@ -314,7 +314,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // trust. The warning is logged where this call runs; a dry run says it beside the dry answer
   // and decides nothing.
   const mayRun = mayChange.kind === 'refused' && delegatePane === null && !createGranted
-    ? `only the owner or a standing grant (delegate) runs it; this call is ${plainLine(describeCaller(shown))}`
+    ? `only the owner or a standing grant (delegate) runs it; this call is ${plainLine(describeCaller(shown))}${devModeExpiryNote(dev)}`
     : null;
   if (mayRun !== null) {
     const folded = devModeCallerGate(dev, mayRun);

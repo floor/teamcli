@@ -3,7 +3,7 @@ import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { processNameMatches } from '../clis.ts';
-import { devModeLevelNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeExpiryNote, devModeLevelNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
@@ -712,7 +712,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         refusals.push(anotherPaneRefusal(rule.name, rule.recordedPane));
       } else {
         refusals.push(
-          `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}`,
+          `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}${devModeExpiryNote(dev)}`,
         );
       }
     } else if (said.kind === 'refused') {

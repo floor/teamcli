@@ -21,7 +21,7 @@ import {
 } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
-import { devModeCallerGate, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
@@ -125,7 +125,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       const foldable = said.id === 'grant.approval' || said.id === 'grant.caller' || said.id === 'grant.omitted';
       const folded = foldable ? devModeCallerGate(dev, said.text) : null;
       if (folded === null) {
-        out.stderr(`team reload: ${said.text}\n`);
+        out.stderr(`team reload: ${said.text}${foldable ? devModeExpiryNote(dev) : ''}\n`);
         // exit: reload.grant-another-pane
         // exit: reload.grant-approval
         // exit: reload.grant-caller
