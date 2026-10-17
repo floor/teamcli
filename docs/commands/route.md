@@ -3,8 +3,8 @@
 Answers one seat's address for the native channel: a sender that delivers with its own cross-session
 tool asks here first, then delivers itself, then writes the delivery down with
 [team send](send.md) `--record`. The CLI neither delivers nor dials anything: it judges the pair,
-reads the recipient's address from the registry and the pane, and records that it handed the address
-out.
+resolves the recipient live, reads the address from the registry and the recipient's own pane, and
+records that it handed the address out.
 
 ## Synopsis
 
@@ -22,6 +22,12 @@ is read. A seat is judged by the same admission as `team send`; the owner and ad
 answered.
 
 ## The address
+
+The recipient is resolved live before any address is read: herdr must name the seat on a pane of
+its session, running the CLI its registry record names, and that pane is the one read. A recorded
+pane is never trusted — panes close and are reused, and an address read from a pane another seat
+now stands on would be that seat's. A seat herdr does not name there, names twice, or names on
+another CLI is refused, and no address is answered.
 
 The answer names the recipient's agent id, session, CLI and pane, and its socket with the state the
 reading found it in:

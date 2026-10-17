@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
+import { PROFILES } from '../src/clis.ts';
 import type { Io } from '../src/io.ts';
 import { rulesText } from '../src/launch/rules.ts';
+import { readAgents } from '../src/registry/agents.ts';
 import { updateState } from '../src/state.ts';
 
 /** The seven-rule message the Codex 0.160.0 and Cursor 2026.10.01 captures were typed with,
@@ -186,6 +188,20 @@ export function testIo(cwd: string, caller?: Caller): TestIo {
     ...(caller ? { caller } : {}),
   };
   return io;
+}
+
+/** The live read a fake herdr host answers with: every running registry record placed in the
+ *  session, its seat as herdr names it, its recorded pane, and the CLI herdr would report there —
+ *  the profile's first process name (`claude` for `claude-code`), with a version prefix's `*`
+ *  cut off. A scene about a seat herdr does not name, or names elsewhere, passes its own read. */
+export function liveAgentsOf(home: string, session: string): { name: string; pane: string; cli: string }[] {
+  return readAgents(home).flatMap((agent) => {
+    const pane = agent.reach.pane;
+    if (agent.lifecycle !== 'running' || agent.reach.session !== session || pane === null || pane === '') return [];
+    const profile = PROFILES.find((one) => one.cli === agent.cli);
+    const cli = profile?.processes[0] ?? agent.cli;
+    return [{ name: agent.reach.seat, pane, cli: cli.replace(/\*$/, '') }];
+  });
 }
 
 /** The environment for a git command run in a fixture repository: the identity a session

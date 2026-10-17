@@ -3109,7 +3109,7 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
   let working = false;
   const host: SendHost & { frames: string[] } = {
     frames: [],
-    agents: () => (over.agents === false ? null : [{ name: 'lead', pane: 'w1:p1' }]),
+    agents: () => (over.agents === false ? null : [{ name: 'lead', pane: 'w1:p1', cli: 'claude' }]),
     processInfo: () => ({ shell: 400, foreground: [] }),
     socketsDir: sockets,
     deliver: async (_socketPath, frame) => {

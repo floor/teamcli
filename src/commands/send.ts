@@ -119,8 +119,10 @@ waited send — the native leg carries it.
 `;
 
 export type SendHost = {
-  /** The live agents of a session; null when herdr can't be reached. */
-  agents(session: string): { name: string; pane: string }[] | null;
+  /** The live agents of a session; null when herdr can't be reached. `cli` is the agent herdr
+   *  reads on the pane (`claude`, `codex`, …), the process name a CLI profile names — null or
+   *  absent when herdr reported none. */
+  agents(session: string): { name: string; pane: string; cli?: string | null }[] | null;
   /** A pane's process pids, or null when the pane can't be read. */
   processInfo(session: string, pane: string): PaneProcesses | null;
   /** The folder the session sockets live in; the real one is the runtime temp folder's. */
@@ -147,7 +149,7 @@ export type SendHost = {
 };
 
 export const realHost: SendHost = {
-  agents: (session) => agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane })) ?? null,
+  agents: (session) => agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane, cli: agent.agent })) ?? null,
   processInfo: (session, pane) => paneProcesses(pane, session),
   // The probe's path shape: `<tmp>/cc-socks/<pid>.sock`, the runtime temp folder's own
   // (observed on this Mac as /tmp/cc-socks; a version-specific observation, not a public
