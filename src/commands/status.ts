@@ -19,6 +19,7 @@ import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
+import { INTEGRITY_NOT_AUTHORITY } from '../permissions/must-not-pretend.ts';
 import { profileFor } from '../profiles/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { readTeams } from '../registry/teams.ts';
@@ -480,6 +481,10 @@ function render(
   } else {
     lines.push(`${comparison.differences.length} difference(s)`);
   }
+  // The footer the decision record puts on a view of records
+  // (decided-grants-minimum-2026-10-17, "every record and view says so"): this reading is a view,
+  // not an authority. The plain reading alone carries it; the document is a script's to read.
+  lines.push(INTEGRITY_NOT_AUTHORITY);
   return `${lines.join('\n')}\n`;
 }
 

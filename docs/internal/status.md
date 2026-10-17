@@ -190,9 +190,19 @@ what blocks a launch is `team doctor`'s
 to report. When at least one repair is the owner's, the summary line reports
 `N difference(s), M for the owner`.
 
+The plain reading closes with the decision record's own footer, in its words
+(`decided-grants-minimum-2026-10-17`, "every record and view says so"):
+
+    Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+
+The line stands under the count, whatever the count says; it is the plain reading's, not the
+document's, and `team check` prints the same sentence first under its block of the limits 0.5.0
+does not close.
+
 ## The JSON
 
-`--json` prints the same reading as one document, format 1:
+`--json` prints the same reading as one document, format 1 (without the plain reading's footer
+line):
 
     {
       "format": 1,
@@ -339,6 +349,7 @@ budgets:
 difference: claude-keeper is in the file and is not running
   repair: team add claude-keeper
 1 difference(s)
+Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 1
 ```
 
@@ -441,6 +452,7 @@ budgets:
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 0 difference(s)
+Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 0
 ```
 
@@ -462,6 +474,7 @@ budgets:
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
 0 difference(s)
+Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 0
 ```
 

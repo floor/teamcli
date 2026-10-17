@@ -22,6 +22,7 @@ import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
+import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
@@ -188,6 +189,10 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // What the check cannot see is not silently implied to be fine (§3.4, decision 2): the one line
   // that names it stands under both answers.
   io.stdout('not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n');
+  // Under both answers too, the decision record's own limits, in its words: the gaps this release
+  // does not close are named here, never left to be discovered
+  // (decided-grants-minimum-2026-10-17, "What 0.5.0 must not pretend").
+  for (const line of NOT_PRETENDED) io.stdout(`${line}\n`);
   // exit: check.findings
   // exit: check.ok
   return differences.length > 0 ? 1 : 0;
