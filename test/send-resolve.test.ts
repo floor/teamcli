@@ -89,7 +89,7 @@ function agent(home: string, init: { name: string; role: string; cli: string; te
   });
 }
 
-function team(home: string, id: string, project: string, session: string, root: string, roster: { agent: string; seat: string; role: string; leads: boolean }[]): void {
+function team(home: string, id: string, project: string, session: string, root: string, roster: { agent: string; seat: string; role: string; leads: boolean; nickname?: string }[]): void {
   // The file sets neither `entity` nor `lobby`, so the lobby its seats start in — and the entry
   // its trust lists — is the machine lobby; the record says the same, as `up` would have noted it.
   upsertTeam(home, id, { project, entity: project, session, root, lobby: lobbyDir(home), roster, lifecycle: 'running' });
@@ -111,10 +111,10 @@ function admitRuleFor(home: string, target: Agent): string {
 }
 
 /** One seat of a world, registered and rostered: the common case in these scenes. */
-function seatOf(w: World, project: string, session: string, seat: string, role: string, pane: string | null, cli = 'claude-code'): Agent {
+function seatOf(w: World, project: string, session: string, seat: string, role: string, pane: string | null, cli = 'claude-code', extra: { nickname?: string; leads?: boolean } = {}): Agent {
   const id = teamIdOf(w.root);
   const made = agent(w.home, { name: seat, role, cli, team: id, seat, session, pane });
-  team(w.home, id, project, session, w.root, [{ agent: made.id, seat, role, leads: false }]);
+  team(w.home, id, project, session, w.root, [{ agent: made.id, seat, role, leads: extra.leads === true, ...(extra.nickname === undefined ? {} : { nickname: extra.nickname }) }]);
   return made;
 }
 
@@ -131,13 +131,17 @@ describe('isRegistrySpec', () => {
 });
 
 describe('parseSpec', () => {
-  test('one grammar: an agent id, one @ with text on both sides, or a plain seat', () => {
+  test('one grammar: an agent id, one @ with a scope after it, or a plain target', () => {
     expect(parseSpec('agt_0123456789ab')).toEqual({ kind: 'id', id: 'agt_0123456789ab' });
     // The parse keeps the target and the scope apart, so the lookup step can try another form
-    // of target (an agent's name) before the seat without the grammar changing.
+    // of target (a nickname, or the team's lead) before the seat without the grammar changing.
     expect(parseSpec('lead@api')).toEqual({ kind: 'at', target: 'lead', scope: 'api' });
+    expect(parseSpec('zeus@api')).toEqual({ kind: 'at', target: 'zeus', scope: 'api' });
+    // Nothing before the @ is the team's own address: its lead, or the owner.
+    expect(parseSpec('@api')).toEqual({ kind: 'at', target: '', scope: 'api' });
     expect(parseSpec('builder-1')).toEqual({ kind: 'seat', seat: 'builder-1' });
-    expect(parseSpec('a@b@c')).toEqual({ error: 'a@b@c: a spec is <seat>@<team>, or an agent id' });
+    expect(parseSpec('a@b@c')).toEqual({ error: 'a@b@c: a spec is <seat>@<team>, <nickname>@<team>, @<team>, or an agent id' });
+    expect(parseSpec('lead@')).toEqual({ error: 'lead@: a spec is <seat>@<team>, <nickname>@<team>, @<team>, or an agent id' });
     expect(parseSpec('agt_zz')).toEqual({ error: 'agt_zz: that is not an agent id (agt_ plus 12 hex)' });
   });
 });
@@ -190,10 +194,88 @@ describe('resolveTarget by seat@team', () => {
     seatOf(w, 'alpha', 'alpha', 'lead', 'coordinator', 'pane-alpha-lead');
 
     expect(resolveTarget(w.home, 'lead@ghost', { cwd: w.root })).toEqual({ error: 'lead@ghost: no team registry record matches "ghost" (by id, project or session)' });
-    expect(resolveTarget(w.home, 'ghost@alpha', { cwd: w.root })).toEqual({ error: 'ghost@alpha: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running' });
-    expect(resolveTarget(w.home, 'a@b@c', { cwd: w.root })).toEqual({ error: 'a@b@c: a spec is <seat>@<team>, or an agent id' });
-    expect(resolveTarget(w.home, 'lead@', { cwd: w.root })).toEqual({ error: 'lead@: a spec is <seat>@<team>, or an agent id' });
-    expect(resolveTarget(w.home, '@alpha', { cwd: w.root })).toEqual({ error: '@alpha: a spec is <seat>@<team>, or an agent id' });
+    expect(resolveTarget(w.home, 'ghost@alpha', { cwd: w.root })).toEqual({ error: 'ghost@alpha: no registered agent holds the seat or nickname "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running' });
+    expect(resolveTarget(w.home, 'a@b@c', { cwd: w.root })).toEqual({ error: 'a@b@c: a spec is <seat>@<team>, <nickname>@<team>, @<team>, or an agent id' });
+    expect(resolveTarget(w.home, 'lead@', { cwd: w.root })).toEqual({ error: 'lead@: a spec is <seat>@<team>, <nickname>@<team>, @<team>, or an agent id' });
+  });
+});
+
+describe('resolveTarget by the team\'s own address and by nickname', () => {
+  test('@team resolves to the seat its roster marks as lead, across the team spellings', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true, nickname: 'zeus' },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false },
+    ]);
+    const never = (): LiveAgent[] => {
+      throw new Error('the live read must not be asked when the record carries a pane');
+    };
+
+    for (const spelling of [teamIdOf(w.root), 'alpha']) {
+      const target = resolveTarget(w.home, `@${spelling}`, { cwd: w.root }, never);
+      if ('error' in target) throw new Error(`${spelling} did not resolve: ${target.error}`);
+      expect(target.agent.id).toBe(lead.id);
+      expect(target.pane).toBe('pane-alpha-lead');
+    }
+  });
+
+  test('a nickname answers at a team, and bare in the caller\'s own team; a plain seat still answers', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true, nickname: 'zeus' },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'hephaestus' },
+    ]);
+
+    const atTeam = resolveTarget(w.home, 'hephaestus@alpha', { cwd: w.root });
+    if ('error' in atTeam) throw new Error(`the nickname did not resolve at the team: ${atTeam.error}`);
+    expect(atTeam.agent.id).toBe(builder.id);
+    const bare = resolveTarget(w.home, 'hephaestus', { cwd: w.root });
+    if ('error' in bare) throw new Error(`the bare nickname did not resolve: ${bare.error}`);
+    expect(bare.agent.id).toBe(builder.id);
+    const bySeat = resolveTarget(w.home, 'builder-1', { cwd: w.root });
+    if ('error' in bySeat) throw new Error(`the seat did not resolve: ${bySeat.error}`);
+    expect(bySeat.agent.id).toBe(builder.id);
+  });
+
+  test('no role addresses: a spec equal to a seat\'s role names nobody', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }]);
+
+    expect(resolveTarget(w.home, 'coordinator@alpha', { cwd: w.root })).toEqual({ error: 'coordinator@alpha: no registered agent holds the seat or nickname "coordinator" in that team; `team up` records a seat it launches, or `team register coordinator` records one already running' });
+  });
+
+  test('a team with no lead answers with the owner, and an owner has no channel', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [{ agent: builder.id, seat: 'builder-1', role: 'builder', leads: false }]);
+
+    expect(resolveTarget(w.home, '@alpha', { cwd: w.root })).toEqual({
+      error: '@alpha: the team "alpha" has no lead; the owner is its team-level address, and a send cannot reach an owner',
+    });
+  });
+
+  test('a spec two entries answer is refused naming both, and neither is typed into', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    // The load refuses this collision; a registry written elsewhere can still hold it, and the
+    // resolver must not pick a seat by accident.
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'lead' },
+    ]);
+
+    expect(resolveTarget(w.home, 'lead@alpha', { cwd: w.root })).toEqual({
+      error: 'lead@alpha: the spec matches two seats — the seat "lead" and the nickname "lead" of the seat "builder-1"; nothing was sent',
+    });
+    expect(resolveTarget(w.home, 'lead', { cwd: w.root })).toEqual({
+      error: 'lead: the spec matches two seats — the seat "lead" and the nickname "lead" of the seat "builder-1"; nothing was sent',
+    });
   });
 });
 
@@ -214,7 +296,7 @@ describe('resolveTarget by plain seat', () => {
     expect(resolveTarget(w.home, 'lead', { cwd: w.root })).toEqual({ error: 'lead: this team has no registry record yet' });
 
     seatOf(w, 'alpha', 'alpha', 'lead', 'coordinator', 'pane-alpha-lead');
-    expect(resolveTarget(w.home, 'ghost', { cwd: w.root })).toEqual({ error: 'ghost: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running' });
+    expect(resolveTarget(w.home, 'ghost', { cwd: w.root })).toEqual({ error: 'ghost: no registered agent holds the seat or nickname "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running' });
   });
 
   test('a folder that is no team at all refuses with the folder it could not read', () => {

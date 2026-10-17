@@ -255,6 +255,47 @@ describe('team send history log & team feed', () => {
     ]);
   });
 
+  test('--json carries the address a send kept beside the seat, and the line keeps it', async () => {
+    const { root, home } = world();
+    const wrote = appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      spec: 'zeus@acme',
+      resolved: 'agt_0123456789ab',
+      body: `${OWNER_HEADER}addressed`,
+      id: 'seed-addressed',
+      outcome: 'delivered',
+      via: 'typed',
+    });
+    expect(wrote.ok).toBe(true);
+
+    const raw = readFileSync(historyPath('acme', root, home), 'utf8');
+    expect(raw).toContain('"spec":"zeus@acme"');
+    expect(raw).toContain('"resolved":"agt_0123456789ab"');
+
+    const jsonIo = testIo(root);
+    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
+    const jsonLine = JSON.parse(jsonIo.out) as Record<string, unknown>;
+    expect(jsonLine.to).toBe('lead');
+    expect(jsonLine.spec).toBe('zeus@acme');
+    expect(jsonLine.resolved).toBe('agt_0123456789ab');
+
+    // A line that wrote neither keeps the shape it always had.
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${OWNER_HEADER}plain`,
+      id: 'seed-plain',
+      outcome: 'delivered',
+      via: 'typed',
+    });
+    const plainIo = testIo(root);
+    expect(await runFeed(['--limit', '1', '--json'], plainIo, { home })).toBe(0);
+    expect(Object.keys(JSON.parse(plainIo.out) as Record<string, unknown>).sort()).toEqual(['body', 'from', 'id', 'outcome', 'to', 'ts', 'via']);
+  });
+
   test('records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
     const { root, home, sockets } = world();
     // A file at the measured socket name stands while every send below runs: no path consults it.

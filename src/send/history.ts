@@ -36,6 +36,13 @@ export type HistoryEntry = {
   body: string;
   id: string;
   outcome: string;
+  /** The address the caller wrote, when it was not the resolved seat's own name: a nickname, a
+   *  `<seat|nickname>@<team>`, `@<team>`, or an agent id. It lets a reader see what was addressed
+   *  beside `to`, the seat it resolved to. */
+  spec?: string;
+  /** The registry id (`agt_…`) the spec resolved to, written with `spec`; the canonical form
+   *  records and scripts use. */
+  resolved?: string;
   /** Send to outcome in whole milliseconds, written when the sender measured it. */
   ms?: number;
   /** The path the message travelled: `typed` (a composer trigger) or `socket` (a frame); absent when it never left the sender. */
@@ -174,7 +181,9 @@ export function appendHistory(project: string, root: string, home: string, entry
     id: entry.id,
     outcome: entry.outcome,
   };
-  // Written only when the sender measured them, so older lines keep their exact shape.
+  // Written only when the run recorded them, so a plain line keeps its exact older shape.
+  if (entry.spec !== undefined) record.spec = entry.spec;
+  if (entry.resolved !== undefined) record.resolved = entry.resolved;
   if (entry.ms !== undefined) record.ms = entry.ms;
   if (entry.via !== undefined) record.via = entry.via;
   if (entry.failed !== undefined && entry.failed.length > 0) record.failed = entry.failed;
@@ -293,7 +302,13 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     id: obj.id,
     outcome: obj.outcome,
   };
-  // `ms`, `via` and `failed` are optional: a line with a wrong-typed one keeps its other fields.
+  // `spec`, `resolved`, `ms`, `via` and `failed` are optional: a line with a wrong-typed one keeps its other fields.
+  if (typeof obj.spec === 'string' && obj.spec !== '') {
+    entry.spec = obj.spec;
+  }
+  if (typeof obj.resolved === 'string' && obj.resolved !== '') {
+    entry.resolved = obj.resolved;
+  }
   if (typeof obj.ms === 'number' && Number.isFinite(obj.ms) && obj.ms >= 0) {
     entry.ms = obj.ms;
   }

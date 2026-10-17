@@ -67,7 +67,7 @@ const TEAMS: Record<string, TeamSpec> = {
     project: 'beta',
     entity: 'beta',
     session: 'beta',
-    seats: [{ name: 'beta-lead', role: 'guide', leads: true }],
+    seats: [{ name: 'beta-lead', role: 'guide', leads: true, nickname: 'hermes' }],
   },
   data: {
     project: 'data',
@@ -243,6 +243,24 @@ describe('cross-team sends inside an entity', () => {
     refused(await send({ team: 'web', seat: 'web-helper' }, 'data-lead@data'));
     refused(await send({ team: 'web', seat: 'web-helper' }, 'data-helper@data'));
   });
+
+  test('a nickname is an address like the seat it names, and admission judges that seat', async () => {
+    // The lead by its human name, from a lead of the same entity: the seat `zeus@api` would
+    // reach is the one the rule judges.
+    admitted(await send({ team: 'web', seat: 'web-lead' }, 'zeus@api'));
+    // A seat that leads nothing is refused by nickname exactly as by seat: the name confers
+    // nothing, and admission never reads it.
+    refused(await send({ team: 'web', seat: 'web-helper' }, 'zeus@api'));
+    // Another entity's lead, by its own nickname: the same cross-entity refusal the seat form
+    // gets.
+    refused(await send({ team: 'api', seat: 'api-lead' }, 'hermes@beta'));
+  });
+
+  test('the bare-team form resolves to the team\'s lead, and another entity\'s lead is out of reach', async () => {
+    admitted(await send({ team: 'web', seat: 'web-lead' }, '@api'));
+    admitted(await send({ team: 'acme', seat: 'coord' }, '@api'));
+    refused(await send({ team: 'api', seat: 'api-lead' }, '@data'));
+  });
 });
 
 describe('cross-team --list', () => {
@@ -308,6 +326,28 @@ describe('cross-team --record', () => {
     expect(written).toContain('"from":"web-lead"');
     expect(written).toContain('"to":"api-lead"');
     expect(written).toContain('"via":"native"');
+  });
+
+  test('the history line keeps the address as written and the id it resolved to', async () => {
+    const reading = await record({ team: 'web', seat: 'web-lead' }, 'zeus@api');
+
+    expect(reading.code).toBe(0);
+    expect(reading.out).toBe('api-lead: recorded (native, 812 ms)\n');
+    const teams = readTeams(world.home);
+    const zeus = teams[teamIdOf(world.roots.api as string)]?.roster.find((line) => line.seat === 'api-lead');
+    if (!zeus) throw new Error('the test world has no api-lead roster line');
+    const written = readFileSync(historyPath('api', world.roots.api as string, world.home), 'utf8');
+    expect(written).toContain('"to":"api-lead"');
+    // The nickname as the caller wrote it, and the registry id it resolved to: the line keeps
+    // both, so a reader sees the address beside the seat.
+    expect(written).toContain('"spec":"zeus@api"');
+    expect(written).toContain(`"resolved":"${zeus.agent}"`);
+    // A plain seat of the caller's own team names itself: no `spec` is written, and the line is
+    // the one it always was.
+    await record({ team: 'web', seat: 'web-lead' }, 'web-helper');
+    const plain = readFileSync(historyPath('web', world.roots.web as string, world.home), 'utf8');
+    expect(plain).toContain('"to":"web-helper"');
+    expect(plain).not.toContain('"spec"');
   });
 
   test('a dry run resolves the same address and writes nothing; another entity is refused', async () => {

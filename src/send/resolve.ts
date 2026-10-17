@@ -1,9 +1,9 @@
-// Send addressing: one spec — an agent id (`agt_…`), a `<target>@<scope>`, or a plain seat of the
-// team whose shell the caller stands in — resolved through the registry. The parse step reads the
-// text alone; the lookup step asks the registry what it reaches. Keeping them apart is what lets
-// the registry learn another lookup form (an agent's name, tried before the seat) without a second
-// grammar. The registry's records are the address; the live herdr read is the fallback for a
-// record that carries no pane yet.
+// Send addressing: one spec — an agent id (`agt_…`), a `<target>@<scope>` (a seat or a nickname
+// before the `@`, or nothing for the team's own lead), or a plain seat or nickname of the team
+// whose shell the caller stands in — resolved through the registry. The parse step reads the
+// text alone; the lookup step asks the team's roster and the agent records what it reaches. The
+// registry's records are the address; the live herdr read is the fallback for a record that
+// carries no pane yet.
 
 import { loadTeamFile } from '../file/load.ts';
 import { agentList } from '../herdr.ts';
@@ -29,7 +29,8 @@ export function isRegistrySpec(spec: string): boolean {
 }
 
 /** What a spec's text names, before the registry is asked: an agent id, a `<target>@<scope>`
- *  pair, or a plain seat of the caller's own team. The parse reads no file. */
+ *  pair (an empty target is the team's own address: its lead, or the owner), or a plain seat or
+ *  nickname of the caller's own team. The parse reads no file. */
 export type ParsedSpec =
   | { kind: 'id'; id: string }
   | { kind: 'at'; target: string; scope: string }
@@ -37,9 +38,10 @@ export type ParsedSpec =
 
 /**
  * The parse step: one grammar, whatever the `<target>` later turns out to name. An agent id is
- * whole; `<target>@<scope>` is exactly one `@` with text on both sides; a plain target is a seat
- * of the caller's own team. The agent-id spelling is caught before the plain form so a mistyped
- * id is refused as one rather than looked up as a seat.
+ * whole; `<target>@<scope>` is exactly one `@` with a scope after it and text before it when a
+ * target is written — `@<scope>` alone is the team's own address. A plain target is a seat or
+ * nickname of the caller's own team. The agent-id spelling is caught before the plain form so a
+ * mistyped id is refused as one rather than looked up as a seat.
  */
 export function parseSpec(spec: string): ParsedSpec | { error: string } {
   if (AGENT_ID_PATTERN.test(spec)) return { kind: 'id', id: spec };
@@ -47,8 +49,8 @@ export function parseSpec(spec: string): ParsedSpec | { error: string } {
   if (at >= 0) {
     const target = spec.slice(0, at);
     const scope = spec.slice(at + 1);
-    if (at !== spec.lastIndexOf('@') || target === '' || scope === '') {
-      return { error: `${spec}: a spec is <seat>@<team>, or an agent id` };
+    if (at !== spec.lastIndexOf('@') || scope === '') {
+      return { error: `${spec}: a spec is <seat>@<team>, <nickname>@<team>, @<team>, or an agent id` };
     }
     return { kind: 'at', target, scope };
   }
@@ -105,27 +107,77 @@ function fromId(home: string, id: string, live: LiveRead): Target | { error: str
 }
 
 /**
- * The lookup step: the record a target reaches inside the team its scope named. A target is
- * looked up by the team's own spellings — the id the registry keys on, then its project and
- * session — because a record's `reach.team` may be written as any of them. The seat lookup is
- * the only form today; an agent-name lookup slots in ahead of it, in this one place, when the
- * registry addresses names.
+ * The lookup step: the record a target reaches inside the team its scope named. The team's roster
+ * is asked first, so a seat is reached by its name, a nickname by the human name the file gives
+ * it, and `@<team>` by the seat whose entry holds `leads` — never by a role's name. A target two
+ * entries answer, as one seat's name and another seat's nickname, is refused naming both before
+ * anything is sent. A seat no roster line names keeps the agent-record lookup, so a registry whose
+ * roster has not caught up still addresses the seat. The records' own spellings — the id the
+ * registry keys on, then its project and session — are asked, because a record's `reach.team` may
+ * be written as any of them.
  */
 function lookupInTeam(
   home: string,
   spec: string,
   team: TeamRecord,
-  seat: string,
+  target: string,
   live: LiveRead,
 ): Target | { error: string } {
+  const chosen = seatOfTarget(team, spec, target);
+  if (chosen !== null && 'error' in chosen) return chosen;
+  const seat = chosen === null ? target : chosen.seat;
   const agent = seatAgent(home, [teamIdOf(team.root), team.project, team.session], seat);
   // The commands that write the record this spec needs: `register` records a seat its file
   // declares where it already runs, and `up` records every seat it launches, so a seat that ran
   // before this machine's store held it is judged by its own row afterwards.
-  if (!agent) return { error: `${spec}: no registered agent holds the seat "${seat}" in that team; \`team up\` records a seat it launches, or \`team register ${seat}\` records one already running` };
+  if (!agent) {
+    const wanted =
+      chosen === null
+        ? `the seat or nickname "${target}"`
+        : seat === target
+          ? `the seat "${seat}"`
+          : `the seat "${seat}" (the nickname "${target}")`;
+    return { error: `${spec}: no registered agent holds ${wanted} in that team; \`team up\` records a seat it launches, or \`team register ${seat}\` records one already running` };
+  }
   const pane = paneOf(agent, live);
   if ('error' in pane) return pane;
   return { team, agent, pane: pane.pane };
+}
+
+/**
+ * The seat a target names in one team, from the team's roster: `''` is the team's lead — the
+ * entry its file marks `leads: true` — and a written target is a seat's name or a nickname. A
+ * team with no lead answers with the owner as its team-level address; an owner has no seat or
+ * pane this build can reach, so the send is refused rather than silently dropped. A target that
+ * two entries answer is refused naming both: the load refuses that collision, so only a registry
+ * written elsewhere can hold it, and no address in it may pick a seat by accident. `null` leaves
+ * the target to the agent-record lookup below.
+ */
+function seatOfTarget(
+  team: TeamRecord,
+  spec: string,
+  target: string,
+): { seat: string } | { error: string } | null {
+  if (target === '') {
+    const lead = team.roster.find((entry) => entry.leads === true);
+    if (lead !== undefined) return { seat: lead.seat };
+    return { error: `${spec}: the team "${team.project}" has no lead; the owner is its team-level address, and a send cannot reach an owner` };
+  }
+  const seatNames = team.roster.filter((entry) => entry.seat === target).map((entry) => entry.seat);
+  const nicknameSeats = team.roster
+    .filter((entry) => entry.nickname === target && entry.seat !== target)
+    .map((entry) => entry.seat);
+  const answers = [...new Set([...seatNames, ...nicknameSeats])];
+  if (answers.length > 1) {
+    const named = [
+      ...seatNames.map((seat) => `the seat "${seat}"`),
+      ...nicknameSeats.filter((seat) => !seatNames.includes(seat)).map((seat) => `the nickname "${target}" of the seat "${seat}"`),
+    ];
+    return { error: `${spec}: the spec matches two seats — ${named.join(' and ')}; nothing was sent` };
+  }
+  if (seatNames.length > 0) return { seat: seatNames[0] as string };
+  if (nicknameSeats.length > 0) return { seat: nicknameSeats[0] as string };
+  return null;
 }
 
 /** The pane to type into: the one the record carries, re-pointed on relaunch; when it carries

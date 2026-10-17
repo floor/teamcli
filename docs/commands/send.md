@@ -109,7 +109,17 @@ writes no drop file and types nothing; it appends one line to
 | --- | --- |
 | `agt_<12 hex>` | one agent by its id, from the agent registry |
 | `<seat>@<team>` | a seat in a named team — whoever its registry record holds now; `<team>` is a team id, a project or a session |
-| `<seat>` | a seat of the caller's own team: its registry record when one holds it, the team file's declaration otherwise |
+| `<nickname>@<team>` | the seat that human name belongs to, in a named team — a nickname confers nothing: its seat talks and is judged by its own record |
+| `@<team>` | the team's lead: the seat its file marks `leads: true`. A team with no lead answers with the owner, and the owner has no channel a send can reach, so the send is refused and names the owner |
+| `<seat>` or `<nickname>` | a seat of the caller's own team, by its name or its human name |
+
+A role is never an address: `coordinator@api` names nobody even when a seat of that team holds
+the role `coordinator`. Every form resolves to one seat's registry record before any rule runs,
+and the admission rule judges that record's seat — a nickname added or removed never changes who
+may reach whom. A spec that two entries answer — one seat's name and another seat's nickname of
+the same team — is refused naming both and sending nothing. A `<seat>@<team>` and a nickname
+resolve only through the team's roster; when the roster has no line for it, the agent records are
+asked by the same seat name, so a registry whose roster has not caught up still addresses the seat.
 
 The registries — `~/.config/team/agents/<id>.yaml` and `~/.config/team/teams.yaml` — are the
 address. The live herdr read is the fallback for a record that carries no pane yet, by the seat's
@@ -121,6 +131,12 @@ spelling, `<seat>@<team>`, for every seat the registry holds there. A listed row
 stands; whether this caller may send to it is the admission rule's answer, judged when the send
 runs. An agent's id is assigned once and never reused; its name is display only
 ([the registries](../concepts/registry.md)).
+
+A history line keeps the address beside the seat it resolved to: when the caller wrote a form
+rather than the seat's own name — a nickname, a `<nickname>@<team>`, `@<team>`, an agent id — the
+line adds `spec`, the address exactly as written, and `resolved`, the seat's registry id
+(`agt_…`). `to` is the seat either way. A plain seat of the caller's own team names itself, and
+its line carries no `spec`.
 
 ## What it reads and writes
 
