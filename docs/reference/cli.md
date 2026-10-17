@@ -341,6 +341,30 @@ None.
 
 None.
 
+## `hold`
+
+Hidden: no
+
+Usage:
+
+    team hold <reason> [--until <time>]
+    team hold --release
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--release` | no | no | no |
+| `--until` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `reason` | yes | no |
+
 ## `init`
 
 Hidden: no
@@ -671,6 +695,29 @@ Usage:
 #### Positionals
 
 None.
+
+## `register`
+
+Hidden: no
+
+Usage:
+
+    team register <seat> [--session <name>] [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
 
 ## `release`
 
@@ -1042,7 +1089,7 @@ Usage:
 
     team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]
     team worktree list [--session <name>] [--file <path>]
-    team worktree remove <task> [--session <name>] [--file <path>]
+    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]
 
 ### Flags
 
@@ -1107,12 +1154,13 @@ Hidden: no
 
 Usage:
 
-    team worktree remove <task> [--session <name>] [--file <path>]
+    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--branch` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--session` | yes | no | no |

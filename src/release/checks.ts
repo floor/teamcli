@@ -7,7 +7,11 @@
 // results can still form — it does not short-circuit after a missing condition — and combines
 // them unknown, then missing, then pass. A read an upstream missing makes unformable is not
 // required and is not requested; one an upstream unknown makes unformable is unknown.
-import { hasPrerelease } from './grammar.ts';
+//
+// Beside the checks, one warning: npm's `next` dist-tag pointing at a version older than
+// `latest`. It is a hint, not a check — it carries no status and changes no exit — so the run
+// prints it only when it can be evaluated and found wanting (`staleNextWarning`).
+import { compareVersions, hasPrerelease } from './grammar.ts';
 import type { Attempt, Fetch, RequestOptions } from './http.ts';
 import type { KeyReader } from './keychain.ts';
 import type { ReleaseDecl } from '../file/sections/releases.ts';
@@ -19,14 +23,16 @@ export type ReleaseResult = {
   tag: Outcome;
   github: Outcome;
   changelog: Outcome;
+  /** Present exactly when npm's `next` dist-tag trails `latest` (`staleNextWarning`). */
+  warning?: string;
   /** Present exactly when the file configures the pair. */
   linear?: Outcome;
   activity?: Outcome;
 };
 
-/** One command's budget: at most thirteen endpoint reads and twenty-six HTTP attempts, retries included. */
-export const READ_CAP = 13;
-export const ATTEMPT_CAP = 26;
+/** One command's budget: at most fourteen endpoint reads and twenty-eight HTTP attempts, retries included. */
+export const READ_CAP = 14;
+export const ATTEMPT_CAP = 28;
 
 export type Caps = { reads: number; attempts: number };
 
@@ -199,6 +205,26 @@ async function npmCheck(reader: Reader, decl: ReleaseDecl, version: string): Pro
     parts.push(attestationPart(attested));
   }
   return combine(parts, decl.trustedPublishing ? 'exact version, checksums, and provenance found' : 'exact version and checksums found');
+}
+
+/**
+ * The one warning beside the checks: npm's `next` dist-tag pointing at a version older than
+ * `latest`, which the owner's own `npm dist-tag add` catches up — this run names that command and
+ * never runs it. The tags come from npm's small dist-tags endpoint, never the full packument. A
+ * warning is not a check: it carries no status, changes no exit, and every state it cannot
+ * evaluate prints nothing — a read that failed, answered something unexpected or was refused by
+ * the cap; a document missing either tag; a tag that is not a version (`compareVersions`), so
+ * nothing here guesses at a tag that is not one — the same silence a package that never had a
+ * `next` tag (the common case) gets.
+ */
+async function staleNextWarning(reader: Reader, name: string): Promise<string | undefined> {
+  const record = recordOf(await reader.read(`https://registry.npmjs.org/-/package/${encodeSegment(name)}/dist-tags`));
+  if (record.kind !== 'json') return undefined;
+  const { next, latest } = record.value;
+  if (typeof next !== 'string' || typeof latest !== 'string') return undefined;
+  const order = compareVersions(next, latest);
+  if (order === null || order >= 0) return undefined;
+  return `npm's next dist-tag points at ${next}, older than latest ${latest}: run npm dist-tag add ${name}@${latest} next`;
 }
 
 /** A full Git commit SHA: forty lowercase hex characters — what a compare segment is built from. */
@@ -445,20 +471,22 @@ async function changelogCheck(reader: Reader, base: string, version: string, rep
 
 /**
  * The checks of one release, in the output's order. The reads are sequential and deterministic:
- * npm (with its attestation when trusted publishing is declared), the repository the tag,
- * changelog and activity checks share, the tag chain and compare, the release, the changelog,
- * then the Linear and activity reads when their pairs are configured.
+ * npm (with its attestation when trusted publishing is declared) and its dist-tags for the one
+ * warning, the repository the tag, changelog and activity checks share, the tag chain and
+ * compare, the release, the changelog, then the Linear and activity reads when their pairs are
+ * configured.
  */
 export async function runChecks(decl: ReleaseDecl, version: string, fetcher: Fetch, deps: CheckDeps = {}): Promise<ReleaseResult> {
   const reader = new Reader(fetcher, deps.caps);
   const [owner, repoName] = decl.github.split('/') as [string, string];
   const base = `https://api.github.com/repos/${encodeSegment(owner)}/${encodeSegment(repoName)}`;
   const npm = await npmCheck(reader, decl, version);
+  const warning = await staleNextWarning(reader, decl.package);
   const repo = await readRepo(reader, base, decl.github);
   const tag = await tagCheck(reader, base, version, repo);
   const github = await githubCheck(reader, base, version);
   const changelog = await changelogCheck(reader, base, version, repo);
-  const result: ReleaseResult = { npm, tag, github, changelog: changelog.outcome };
+  const result: ReleaseResult = { npm, tag, github, changelog: changelog.outcome, ...(warning === undefined ? {} : { warning }) };
   if (decl.linear) result.linear = await linearCheck(reader, decl.linear, version, changelog, deps.keyReader);
   if (decl.activity) result.activity = await activityCheck(reader, base, decl.activity, repo, decl.package, version);
   return result;

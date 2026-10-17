@@ -13,7 +13,10 @@ prunes, and does not delete the branch.
 Creates and removes a task worktree: a second checkout of the project on a branch of its own, where
 one seat does one task. `new` cuts the branch from `workspace.base`, records the worktree in the
 session's state and prints its folder; `remove` deletes a worktree that holds nothing that would be
-lost, and keeps its branch.
+lost, and keeps its branch. The branch `remove` checks and names is the worktree's own, read from
+`git worktree list --porcelain` — a branch renamed in place is still the one that must hold nothing
+unpublished, and the record's branch is only a hint. A detached HEAD, or a folder the list does not
+name, has no branch there; the record's branch stands for it then, as it always did.
 
 ## What it reads and writes
 
@@ -67,6 +70,11 @@ the worktree itself and the branch it cuts.
 The folder is `workspace.path` with `{repo}` and `{task}` filled; the branch is `workspace.branch`
 with `{kind}` and `{task}` filled. `new` fetches the base's upstream when it has one, and starts from
 the local base, with a note in the log, when it doesn't. Nothing is created when the fetch fails.
+`remove` reads the branch from `git worktree list --porcelain` instead: the entry whose folder is
+this worktree's, and its ref. `--branch` gives the name it must find there; any other name, the
+detached state included, is refused with `--branch "<name>" does not name the branch this worktree
+is on ("<branch>"); nothing was removed`. When the list names no branch — a detached HEAD — or does
+not name the folder at all, the record's branch stands, as it did before this read existed.
 
 ## Who may run it
 
@@ -89,6 +97,7 @@ the same way.
 | --- | --- |
 | `team worktree: a subcommand is required` / `unknown subcommand "x"` / `a task name is required` / `unexpected "x"` (each with the usage) | 2 |
 | `team worktree: remove takes no --kind or --seat` (with the usage) | 2 |
+| `team worktree: new takes no --branch` / `list takes no --branch` (with the usage) | 2 |
 | `team worktree: line <n>: <message>` | 2 |
 | `team worktree: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team worktree: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
@@ -122,7 +131,7 @@ the same way.
 | `team worktree: seat <name> is recorded in this worktree; team remove <name> first` | 1 |
 | `team worktree: uncommitted or untracked files:` … the first twenty, one per line | 1 |
 | `team worktree: the recorded path "<path>" is not "<folder>"; nothing was removed` — the state record's path is not `workspace.path` filled for the task | 1 |
-| `team worktree: the recorded branch "<branch>" does not match "<pattern>" for "<task>"; nothing was removed` — the record's branch is empty, is `workspace.base`, or does not fill `workspace.branch` for the task | 1 |
+| `team worktree: --branch "<name>" does not name the branch this worktree is on ("<branch>"); nothing was removed` — the branch read from `git worktree list --porcelain` (or, for a detached HEAD or an unnamed folder, the record's branch) is not the one given | 1 |
 | `team worktree: commits on no remote branch:` … the first twenty, one per line | 1 |
 | `team worktree: the worktree was not removed: <first line of git's error>` | 1 |
 

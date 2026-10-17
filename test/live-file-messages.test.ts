@@ -48,6 +48,7 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^# the command and its model options; no approval flags$/, why: 'a line of the skeleton `init` writes: it carries no approval flags' },
   // A filter over the doctor's own lines: a finding that names the approval command, or the
   // never-approved case, is skipped by `add`, `restart` and `up` — never printed by them.
+  { literal: /^APPROVED$/, why: "the `team list` §5 column: whether the live file loads and validates, not an approval record" },
   { literal: /^team approve$/, why: "part of a filter over the doctor's lines, never printed by these commands" },
   { literal: /^never approved$/, why: "part of a filter over the doctor's lines, never printed by these commands" },
 ];

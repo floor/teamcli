@@ -1193,6 +1193,76 @@
     },
     {
       "code": 0,
+      "command": "hold",
+      "id": "hold.placed",
+      "meaning": "the hold was placed",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 0,
+      "command": "hold",
+      "id": "hold.released",
+      "meaning": "the hold was released",
+      "trigger": "team hold --release"
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.caller",
+      "meaning": "not the owner, the orchestrator or the operator",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.held",
+      "meaning": "a hold already stands",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.io",
+      "meaning": "the state can't be read or written",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.not-held",
+      "meaning": "no hold stands",
+      "trigger": "team hold --release"
+    },
+    {
+      "code": 1,
+      "command": "hold",
+      "id": "hold.until",
+      "meaning": "--until is not a clock or an instant",
+      "trigger": "team hold \"freeze deploys\" --until tomorrow"
+    },
+    {
+      "code": 2,
+      "command": "hold",
+      "id": "hold.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team hold \"freeze deploys\""
+    },
+    {
+      "code": 2,
+      "command": "hold",
+      "id": "hold.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team hold"
+    },
+    {
+      "code": 0,
       "command": "init",
       "id": "init.restored",
       "meaning": "the approved copy was restored",
@@ -1827,6 +1897,167 @@
       "id": "proc.not-yours",
       "meaning": "the caller may not read this team",
       "trigger": "team proc list"
+    },
+    {
+      "code": 0,
+      "command": "register",
+      "id": "register.already",
+      "meaning": "the seat is already recorded on that pane",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 0,
+      "command": "register",
+      "id": "register.dry-run",
+      "meaning": "the seat would be registered; nothing was written",
+      "trigger": "team register worker --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "register",
+      "id": "register.ready",
+      "meaning": "the running seat's record was written",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.caller",
+      "meaning": "--session is the owner's",
+      "trigger": "team register worker --session other"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.cli",
+      "meaning": "the pane holds no process the seat's CLI profile names",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.delegate",
+      "meaning": "the caller is not the approved delegate for up",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.grant",
+      "meaning": "the caller is not the seat the file's grant names for up",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.grant-flag",
+      "meaning": "--session is the owner's for a granted seat",
+      "trigger": "team register worker --session other"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.herdr",
+      "meaning": "herdr doesn't answer",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.many-agents",
+      "meaning": "the session has more than one agent with that name",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.no-agent",
+      "meaning": "no agent of that name is running in the session",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.no-cli",
+      "meaning": "the pane holds no CLI in front of its shell",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.no-profile",
+      "meaning": "the seat has no launch profile",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.no-seat",
+      "meaning": "the file has no such seat",
+      "trigger": "team register missing"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.no-session",
+      "meaning": "the herdr session is not running",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.not-owner",
+      "meaning": "the caller is not the owner, a delegate this file names for up, or the seat its grant names",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.recorded",
+      "meaning": "the state records another pane for that seat",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.screen",
+      "meaning": "the pane is not the seat at its prompt",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.session-file",
+      "meaning": "the session was launched from another team file",
+      "trigger": "team register worker --session other"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.stopped",
+      "meaning": "the seat is stopped in the file",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 2,
+      "command": "register",
+      "id": "register.file",
+      "meaning": "the team file can't be read or parsed, or not inside a git repository",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 2,
+      "command": "register",
+      "id": "register.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team register"
     },
     {
       "code": 0,
@@ -2547,6 +2778,13 @@
       "command": "send",
       "id": "send.held",
       "meaning": "the message is on disk and the pane was left untouched",
+      "trigger": "team send worker hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
+      "id": "send.not-submitted",
+      "meaning": "the trigger was typed and the seat never took it",
       "trigger": "team send worker hello"
     },
     {
@@ -3378,6 +3616,13 @@
     {
       "code": 1,
       "command": "worktree",
+      "id": "worktree.remove-branch",
+      "meaning": "the --branch given does not name the branch the worktree is on",
+      "trigger": "team worktree remove task --branch fix/other"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
       "id": "worktree.remove-failed",
       "meaning": "the worktree was not removed",
       "trigger": "team worktree remove task"
@@ -3458,6 +3703,13 @@
       "id": "worktree.unreadable",
       "meaning": "the worktree couldn't be read",
       "trigger": "team worktree remove task"
+    },
+    {
+      "code": 2,
+      "command": "worktree",
+      "id": "worktree.branch-flags",
+      "meaning": "new and list take no --branch",
+      "trigger": "team worktree new task --branch fix/task"
     },
     {
       "code": 2,

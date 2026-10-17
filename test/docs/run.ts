@@ -18,8 +18,10 @@ import { pr } from '../../src/commands/pr.ts';
 import { runDoctor } from '../../src/commands/doctor.ts';
 import { runDown } from '../../src/commands/down.ts';
 import { runFeed } from '../../src/commands/feed.ts';
+import { runHold } from '../../src/commands/hold.ts';
 import { runInit } from '../../src/commands/init.ts';
 import { runMcp } from '../../src/commands/mcp.ts';
+import { runRegister } from '../../src/commands/register.ts';
 import { runRemove } from '../../src/commands/remove.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
@@ -222,6 +224,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runDown(rest, io, world.downSources());
     case 'feed':
       return runFeed(rest, io, { home: fixture.home, poll: async () => false });
+    case 'hold':
+      return runHold(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'messages':
       return runMessages(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'issues':
@@ -235,6 +239,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runInit(rest, io, fixture.home, undefined, { loggedIn: () => false });
     case 'mcp':
       return runMcp(rest, io, world.mcpSources());
+    case 'register':
+      return runRegister(rest, io, world.registerSources());
     case 'remove':
       return runRemove(rest, io, world.removeSources());
     case 'restart':
@@ -323,14 +329,19 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
   const sockets = join(fixture.home, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
   writeFileSync(join(sockets, `${String(SEND_PID)}.sock`), '');
+  // The seat's own evidence for this line: idle until the Enter, working after it.
+  let working = false;
   return {
     agents: () => seats.map((name, index) => ({ name, pane: `w1:p${String(index + 1)}` })),
     processInfo: () => ({ shell: SEND_PID, foreground: [] }),
     socketsDir: sockets,
     native: {
       typeText: () => true,
-      pressEnter: () => true,
-      status: () => 'working',
+      pressEnter: () => {
+        working = true;
+        return true;
+      },
+      status: () => (working ? 'working' : 'idle'),
       wait: async () => {},
     },
     deliver: async () => {

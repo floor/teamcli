@@ -132,11 +132,14 @@ $ team proc list --json
 ```console
 $ team status
 team beacon, session "beacon"
-  claude-keeper  idle  Claude Opus 5.5  w1:p1
-  claude-desk    idle  Claude Opus 5.5  w2:p1
+  claude-keeper  idle  Claude Opus 5.5  w1:p1  typed
+  claude-desk    idle  Claude Opus 5.5  w2:p1  typed
 note: proc release-watch: owner since 2026-10-04T09:00:00.000Z
 0 difference(s)
 ```
+
+The seats table's last column is the word a send would use to reach each seat — `socket` or `typed`;
+[team status](../commands/status.md) explains it.
 
 A second seat may not take a live name. The record stays where it is:
 

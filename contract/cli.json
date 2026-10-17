@@ -592,6 +592,48 @@
         },
         {
           "hidden": false,
+          "name": "--release",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--until",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "hold",
+      "positionals": [
+        {
+          "name": "reason",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team hold <reason> [--until <time>]",
+        "team hold --release"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--restore",
           "repeatable": false,
           "takesValue": false
@@ -1074,6 +1116,47 @@
         "team proc add <name> [--pid <pid>] [--note <text>]",
         "team proc list [--json]",
         "team proc done <name>"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "register",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team register <seat> [--session <name>] [--dry-run]"
       ]
     },
     {
@@ -1841,6 +1924,12 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--branch",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--file",
               "repeatable": false,
               "takesValue": true
@@ -1875,14 +1964,14 @@
           ],
           "subcommands": [],
           "usage": [
-            "team worktree remove <task> [--session <name>] [--file <path>]"
+            "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]"
           ]
         }
       ],
       "usage": [
         "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]",
         "team worktree list [--session <name>] [--file <path>]",
-        "team worktree remove <task> [--session <name>] [--file <path>]"
+        "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]"
       ]
     }
   ],

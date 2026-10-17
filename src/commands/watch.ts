@@ -767,7 +767,7 @@ async function closeEnded(input: {
     if (!decision.close) continue;
     const code = sources.removeWorktree
       ? sources.removeWorktree(task)
-      : removeWorktree(io, { home: homedir(), now: sources.now }, team, root, dir, session, task, 'watch');
+      : removeWorktree(io, { home: homedir(), now: sources.now }, team, root, dir, session, task, undefined, 'watch');
     if (code !== 0) say(`worktree ${task} was not removed`, true);
   }
 }
