@@ -540,6 +540,49 @@ export const LIST_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team messages` (`schema/messages.schema.json`). */
+export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.messages',
+  fileName: 'messages.schema.json',
+  title: 'team messages --json output',
+  required: ['format', 'project', 'session', 'rows', 'notes', 'differences', 'summary', 'counts'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    rows: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'from', 'to', 'sent', 'sent_display', 'status'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          from: { type: ['string', 'null'] },
+          to: { type: ['string', 'null'] },
+          sent: { type: ['string', 'null'] },
+          sent_display: { type: 'string', minLength: 1 },
+          status: { type: 'string', enum: ['shown', 'refused'] },
+          body: { type: 'string' },
+        },
+      },
+    },
+    notes: { type: 'array', items: { type: 'string' } },
+    differences: { type: 'array', items: DIFFERENCE_SCHEMA_FRAGMENT },
+    summary: SUMMARY_SCHEMA_FRAGMENT,
+    counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['messages', 'shown', 'refused'],
+      properties: {
+        messages: { type: 'integer', minimum: 0 },
+        shown: { type: 'integer', minimum: 0 },
+        refused: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -549,5 +592,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   DOCTOR_OUTPUT_SCHEMA,
   CHECK_OUTPUT_SCHEMA,
   LIST_OUTPUT_SCHEMA,
+  USAGE_OUTPUT_SCHEMA,
+  MESSAGES_OUTPUT_SCHEMA,
 ];
 

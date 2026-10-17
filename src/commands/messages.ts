@@ -8,6 +8,19 @@ import { join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { findRoot, loadTeamFile, NOT_A_REPO } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
+import {
+  contextLine,
+  formatRelativeTime,
+  renderDifferences,
+  renderNotes,
+  renderTable,
+  summaryCounts,
+  ttyStyle,
+  toJsonDifference,
+  writeJson,
+  writeJsonError,
+  type OutputDifference,
+} from '../output/index.ts';
 import { writeAtomic } from '../state.ts';
 import {
   messageKeyOf,
@@ -19,7 +32,10 @@ import {
   type Json,
 } from '../store/keys.ts';
 
-export const USAGE = 'Usage: team messages\n';
+export const USAGE = `Usage: team messages [--json]
+
+Exits 0 when the inbox is read, 1 when the caller, team file, or message record is refused, 2 when the invocation can't be read or this folder is not a git repository.
+`;
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
@@ -224,29 +240,96 @@ function writeReceipt(home: string, root: string, payload: MessagePayload, at: s
   writeAtomic(receiptFile(root, payload.to, payload.id), `${JSON.stringify({ payload: receipt, signature }, null, 2)}\n`);
 }
 
+/** The mailbox row the table prints and `--json` carries. A record that does not verify is a row
+ *  with `status: "refused"` — it is still in the inbox, and its difference says why it was not
+ *  shown. `from`, `to` and `sent` come from the payload when one can be read, and are null when
+ *  the file is not a message at all. */
+type MailboxRow = {
+  id: string;
+  seat: string;
+  from: string | null;
+  to: string | null;
+  sent: string | null;
+  sent_display: string;
+  status: 'shown' | 'refused';
+};
+
+/** `.agents/messages/<seat>/<id>.json` as the caller reads it in the refusal's repair. */
+function mailboxPath(candidate: Candidate): string {
+  return `.agents/messages/${candidate.seat}/${candidate.id}.json`;
+}
+
+/** What an unverifying record's repair is, per failed check. It names the file the caller already
+ *  sees in the table; moving it where its own payload says it belongs is the repair for a misfiled
+ *  record, and removing it is the repair for one nothing can make verify. */
+function repairOf(candidate: Candidate, problem: Problem, payload: MessagePayload | null): string {
+  const path = mailboxPath(candidate);
+  switch (problem.kind) {
+    case 'id':
+      return payload
+        ? `move ${path} to .agents/messages/${candidate.seat}/${payload.id}.json, or remove it`
+        : `remove ${path}, or restore it from the sender`;
+    case 'seat':
+      return payload
+        ? `move ${path} to .agents/messages/${payload.to}/${candidate.id}.json, or remove it`
+        : `remove ${path}, or restore it from the sender`;
+    case 'root':
+      return `remove ${path}: it is bound to another checkout`;
+    case 'session':
+      return `remove ${path}: it is bound to another session`;
+    case 'signature':
+      return `remove ${path}, or have the sender re-send it`;
+    default:
+      return `remove ${path}, or restore it from the sender`;
+  }
+}
+
+/** The body as lines, without a trailing empty line: the document joins them, so the body's own
+ *  lines are exactly what the caller reads. */
+function bodyLines(body: string): string[] {
+  const trimmed = body.endsWith('\n') ? body.slice(0, -1) : body;
+  return trimmed.split('\n');
+}
+
 /**
  * Verifies every unacked record, prints each body that verifies, and writes its receipt in the
- * same step. A record that does not verify prints no body and writes nothing. An empty mailbox
- * prints one line and creates no key. Anyone in the checkout may run it: the ring asks the
- * recipient's pane, and the receipt records that a process was shown the body.
+ * same step. A record that does not verify prints no body and writes nothing; it is a `refused`
+ * row and a difference, and the run exits 1. An empty mailbox is a `0 message(s)` reading with
+ * the note that nothing is waiting, and creates no key. Anyone in the checkout may run it: the
+ * ring asks the recipient's pane, and the receipt records that a process was shown the body.
  */
 export async function runMessages(argv: string[], io: Io, sources: MessagesSources = realSources): Promise<number> {
-  const args = readArgs(argv, [], []);
+  const args = readArgs(argv, [], ['json']);
+  const json = args.flags.has('json');
   if (args.error || args.rest.length) {
-    io.stderr(`team messages: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
+    const problem = args.error ?? `unexpected "${args.rest[0]}"`;
+    if (json) {
+      // The structured face: the refusal row's own id, stderr empty, the exit unchanged.
+      writeJsonError(io, 'messages.invocation', problem, null);
+    } else {
+      io.stderr(`team messages: ${problem}\n${USAGE}`);
+    }
     // exit: messages.invocation
     return 2;
   }
   const root = findRoot(io.cwd);
   if (!root) {
-    io.stderr(`team messages: ${NOT_A_REPO}\n`);
+    if (json) {
+      writeJsonError(io, 'messages.not-a-repo', NOT_A_REPO, null);
+    } else {
+      io.stderr(`team messages: ${NOT_A_REPO}\n`);
+    }
     // exit: messages.not-a-repo
     return 2;
   }
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     const message = loaded.errors[0]?.message ?? 'the team file can\'t be read';
-    io.stderr(`team messages: ${message}\n`);
+    if (json) {
+      writeJsonError(io, 'messages.file', message, null);
+    } else {
+      io.stderr(`team messages: ${message}\n`);
+    }
     // exit: messages.file
     return 1;
   }
@@ -257,30 +340,108 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     return !receiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key);
   });
   if (waiting.length === 0) {
-    io.stdout('team messages: nothing is waiting\n');
+    // An empty inbox is a reading, not a refusal: the table has its headers and no rows, the note
+    // says nothing is waiting, and the summary counts zero. No key is created.
+    const emptyRows: MailboxRow[] = [];
+    if (json) {
+      writeJson(io, 'team.messages', {
+        format: 1 as const,
+        project: loaded.team.project,
+        session,
+        rows: emptyRows,
+        notes: ['nothing is waiting'],
+        differences: [],
+        summary: summaryCounts([]),
+        counts: { messages: 0, shown: 0, refused: 0 },
+      });
+    } else {
+      io.stdout(renderMailbox(loaded.team.project, session, emptyRows, [], [], ['nothing is waiting'], ttyStyle(io)));
+    }
     // exit: messages.none
     return 0;
   }
   if (state.kind !== 'key') {
     const why = state.kind === 'missing' ? 'no message key; nothing was shown' : `${state.why}; nothing was shown`;
-    io.stderr(`team messages: ${why}\n`);
+    if (json) {
+      writeJsonError(io, 'messages.key', why, null);
+    } else {
+      io.stderr(`team messages: ${why}\n`);
+    }
     // exit: messages.key
     return 1;
   }
-  let failed = false;
+  const now = sources.now();
+  const rows: MailboxRow[] = [];
+  /** The body of each record that verified, by `<seat>/<id>`: the table's key, so the body the
+   *  run prints and the body its `--json` row carries are one value. */
+  const bodies = new Map<string, string>();
+  const verified: { candidate: Candidate; payload: MessagePayload }[] = [];
+  const differences: OutputDifference[] = [];
   for (const candidate of waiting) {
     const result = problemOf(candidate, root, session, state.key);
+    const parsed = messagePayload(readJson(candidate.path));
     if ('text' in result) {
-      io.stderr(`team messages: ${result.text}\n`);
-      failed = true;
+      rows.push({
+        id: candidate.id,
+        seat: candidate.seat,
+        from: parsed?.from ?? null,
+        to: parsed?.to ?? null,
+        sent: parsed?.at ?? null,
+        sent_display: formatRelativeTime(parsed?.at, now),
+        status: 'refused',
+      });
+      differences.push({ what: result.text, repair: repairOf(candidate, result, parsed), who: 'any seat' });
       continue;
     }
-    // The receipt means the body was shown. `io.stdout` returning is that boundary: a throw
-    // leaves no receipt, and the record stays unacked.
-    io.stdout(result.body.endsWith('\n') ? result.body : `${result.body}\n`);
-    writeReceipt(sources.home, root, result, sources.now().toISOString());
+    rows.push({
+      id: candidate.id,
+      seat: candidate.seat,
+      from: result.from,
+      to: result.to,
+      sent: result.at,
+      sent_display: formatRelativeTime(result.at, now),
+      status: 'shown',
+    });
+    bodies.set(`${candidate.seat}/${candidate.id}`, result.body);
+    verified.push({ candidate, payload: result });
   }
-  if (failed) {
+  if (json) {
+    writeJson(io, 'team.messages', {
+      format: 1 as const,
+      project: loaded.team.project,
+      session,
+      rows: rows.map((row) => {
+        const body = bodies.get(`${row.seat}/${row.id}`);
+        return {
+          id: row.id,
+          from: row.from,
+          to: row.to,
+          sent: row.sent,
+          sent_display: row.sent_display,
+          status: row.status,
+          ...(body !== undefined ? { body } : {}),
+        };
+      }),
+      notes: [],
+      differences: differences.map(toJsonDifference),
+      // The envelope's `summary` is the reading's difference counts, the stable key every reading
+      // envelope carries; the table's own counts live beside it under `counts`.
+      summary: summaryCounts(differences),
+      counts: {
+        messages: rows.length,
+        shown: verified.length,
+        refused: differences.length,
+      },
+    });
+  } else {
+    io.stdout(renderMailbox(loaded.team.project, session, rows, verified.map((one) => ({ candidate: one.candidate, body: one.payload.body })), differences, [], ttyStyle(io)));
+  }
+  // The receipt means the body was shown. `io.stdout` returning is that boundary: a throw leaves
+  // no receipt, and the record stays unacked.
+  for (const one of verified) {
+    writeReceipt(sources.home, root, one.payload, sources.now().toISOString());
+  }
+  if (differences.length > 0) {
     // exit: messages.shape
     // exit: messages.id
     // exit: messages.seat
@@ -291,4 +452,34 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   }
   // exit: messages.shown
   return 0;
+}
+
+/** The reading's plain text: the context line, the `ID  FROM  TO  SENT  STATUS` table, each shown
+ *  body under its own `<seat>/<id>:` heading, the notes and differences, and the closing
+ *  `<n> message(s)` line. */
+function renderMailbox(
+  project: string,
+  session: string,
+  rows: readonly MailboxRow[],
+  bodies: readonly { candidate: Candidate; body: string }[],
+  differences: readonly OutputDifference[],
+  notes: readonly string[],
+  style: ReturnType<typeof ttyStyle>,
+): string {
+  const lines = [contextLine(project, session)];
+  lines.push(
+    ...renderTable({
+      headers: ['ID', 'FROM', 'TO', 'SENT', 'STATUS'],
+      rows: rows.map((row) => [row.id, row.from, row.to, row.sent_display, row.status]),
+      indent: '  ',
+      style,
+    }),
+  );
+  for (const one of bodies) {
+    lines.push('', `${one.candidate.seat}/${one.candidate.id}:`, ...bodyLines(one.body));
+  }
+  if (notes.length > 0) lines.push('', ...renderNotes(notes));
+  if (differences.length > 0) lines.push('', ...renderDifferences(differences, style));
+  lines.push('', `${rows.length} message(s)`);
+  return `${lines.join('\n')}\n`;
 }

@@ -8,6 +8,7 @@ import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import {
   contextLine,
+  formatRelativeTime,
   hasJsonFlag,
   renderTable,
   ttyStyle,
@@ -122,18 +123,7 @@ export const USAGE = `Usage: team seats [--session <name>] [--file <path>] [--al
 Exits 0 when the seats are shown, 1 when an owner-only flag is refused, 2 when the invocation, team file, or herdr can't be read.
 `;
 
-export function formatRelativeTime(iso: string | null | undefined, now: Date): string {
-  if (!iso) return '-';
-  const parsed = Date.parse(iso);
-  if (!Number.isFinite(parsed)) return '-';
-  const seconds = Math.max(0, Math.floor((now.getTime() - parsed) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
+export { formatRelativeTime };
 
 export function seatRegistryRows(
   team: TeamFile,

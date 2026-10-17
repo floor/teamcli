@@ -302,6 +302,24 @@ export function renderSummary(diffs: readonly OutputDifference[]): string {
 }
 
 /**
+ * A timestamp said as its age: `12s ago`, `4m ago`, `3h ago`, `2d ago`. The value is clamped at
+ * the reading's own moment, so a stamp from the future reads `0s ago`, never a negative age.
+ * `-` stands for no timestamp and for one that is not a date.
+ */
+export function formatRelativeTime(iso: string | null | undefined, now: Date): string {
+  if (!iso) return '-';
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return '-';
+  const seconds = Math.max(0, Math.floor((now.getTime() - parsed) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+/**
  * Single severity vocabulary for diagnostic/prerequisite rows (`team doctor`, `team mcp doctor`):
  * `ok` (`ok  `), `warn` (`warn`), `miss` (`MISS`), and `note` (`--  `).
  */
