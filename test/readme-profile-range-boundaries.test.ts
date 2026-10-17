@@ -74,4 +74,31 @@ describe('the tested-range sentence against the profile that declares it', () =>
       }
     }
   });
+
+  test('README.md carries tested-range sentences for codex, antigravity, gemini, and muse', () => {
+    const readmeSentences = sentences('README.md');
+    const names = readmeSentences.map((s) => s.name);
+    for (const name of ['codex', 'antigravity', 'gemini', 'muse']) {
+      expect(names).toContain(name);
+    }
+  });
+
+  test('README.md rules: comment, seats[*].cli bullet, and seats.md CLI column row name every shipped profile', () => {
+    const shippedNames = Object.keys(profiles);
+    const readmeContent = readFileSync(join(ROOT, 'README.md'), 'utf8');
+    const seatsDocContent = readFileSync(join(ROOT, 'docs', 'commands', 'seats.md'), 'utf8');
+
+    const rulesBlock = readmeContent.slice(
+      readmeContent.indexOf('rules:'),
+      readmeContent.indexOf('workspace:'),
+    );
+    const seatsCliBullet = readmeContent.match(/- `seats\[\*\]\.cli` picks the launch profile;[^\n]+/)?.[0] ?? '';
+    const seatsDocCliRow = seatsDocContent.match(/\| CLI \|[^\n]+/)?.[0] ?? '';
+
+    for (const name of shippedNames) {
+      expect(rulesBlock, `rules: comment missing ${name}`).toContain(name);
+      expect(seatsCliBullet, `seats[*].cli bullet missing ${name}`).toContain(name);
+      expect(seatsDocCliRow, `seats.md CLI row missing ${name}`).toContain(name);
+    }
+  });
 });
