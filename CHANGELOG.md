@@ -38,7 +38,11 @@ commands read them.
   on the address its session answers at, the reply listener standing before it, 120 seconds
   unless `--timeout` says otherwise — a frame the receiving session holds at its held-message
   dialog is `held (socket)`, and nothing was sent — and `--wait` is refused for any other seat.
-  `--json`, `--file`, `--dry-run` and `--list` round it out. A message's body is written down in
+  `--json`, `--file`, `--dry-run` and `--list` round it out. The native channel is the sender's
+  own half: `team route <seat>` answers the address a delivery from the sender's cross-session
+  tool uses — the recipient's agent id, session, CLI and pane, and its socket — and
+  `team send --record <seat> --channel native --ms <n>` writes that delivery down, one
+  `via native` history line, the body not passing through the CLI. A message's body is written down in
   the project's history, which
   `team feed` reads, with the send-to-outcome milliseconds and the path it took; the refusal for
   a seat no record covers names the command that writes one (`team up`, `team register <seat>`).

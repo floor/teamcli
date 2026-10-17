@@ -50,6 +50,12 @@ split. Every run ends in one word: `delivered`, `answered`, `held`, `not-submitt
 `unreachable` or `refused`. `--wait` to a Claude Code seat writes one frame on its cross-session
 socket and brings the reply back; `--wait` to any other seat is refused and nothing is written.
 
+A delivery can also be the sender's own, through the native channel:
+[`team route <seat>`](https://github.com/floor/teamcli/blob/main/docs/commands/route.md) answers
+the address, the sender (a Claude Code seat, with its own cross-session tool) delivers itself, and
+`team send --record <seat> --channel native --ms <n>` writes that delivery down — one history
+line, `via native`, the body not passing through this CLI.
+
 Who may send to whom is a rule table: a seat to its own team's orchestrator, a team's leads to its
 own seats, another team's seats through that team's orchestrator, an owner-signed grant last — and
 a seat the file marks `assistant: true` is admitted to its entity's main coordinator.

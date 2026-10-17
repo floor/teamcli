@@ -19,7 +19,9 @@ The first release since 0.3.5, and the first on npm since it. The full list is i
   commands can address it by name.
 - **`team send`, and the channel it takes.** A plain send gives the seat the body in a drop file
   and one trigger line; `--wait` to a Claude Code seat takes its cross-session socket and brings
-  the reply back. Every run ends in one word — `delivered`, `answered`, `held`, `not-submitted`,
+  the reply back; a sender with its own cross-session tool takes the native channel — `team route
+  <seat>` answers the address, and `team send --record <seat> --channel native --ms <n>` writes
+  the delivery down. Every run ends in one word — `delivered`, `answered`, `held`, `not-submitted`,
   `timeout`, `unreachable` or `refused`. A seat its file marks `assistant: true` is its entity's
   assistant, admitted to the entity's main coordinator by its place in the chain, never by a
   role's name.
