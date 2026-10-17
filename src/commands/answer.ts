@@ -15,7 +15,7 @@ import { deliverRules, type Delivery } from '../launch/deliver.ts';
 import { seatProcessVerdict, type LaunchedIdentity } from '../launch/identity.ts';
 import { rulesDeliveryOf, rulesFileHash, rulesFileHolds, writeRulesFile } from '../launch/rules-file.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
-import { resolveLobby } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { type Profile } from '../profiles/profile.ts';
@@ -200,7 +200,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     const profile = profileFor(cli);
     // The lobby the file resolves to: its own when the file sets `entity` or `lobby`, else
     // the machine-global one. The folder shown in the dialog must be this lobby, as team writes it.
-    const answerLobby = resolveLobby(host.home, team);
+    const answerLobby = lobbyOf(host.home, root, team);
     const checked = inspect(seatName, host, session, pane, profile, team.trust, answerLobby, root, recorded?.launched);
     if ('class' in checked) return refused(checked);
     const again = inspect(seatName, host, session, pane, profile, team.trust, answerLobby, root, recorded?.launched);

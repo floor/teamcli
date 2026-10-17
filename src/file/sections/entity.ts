@@ -7,9 +7,11 @@ const ENTITY = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
  * The entity the team belongs to, or null when the file names none. When set — and no explicit
- * `lobby` overrides it — the team operates on its own lobby under `~/.config/team/lobbies/<slug>`,
- * so a second team on the machine no longer waits behind the first's lobby. A file that sets
- * neither `entity` nor `lobby` keeps the machine-global lobby, unchanged.
+ * `lobby` overrides it — the team's lobby at its first registration is
+ * `~/.config/team/lobbies/<slug>`, so a second team on the machine no longer waits behind the
+ * first's lobby. Once the registry holds the team's lobby it stands, and changing the entity does
+ * not move it (`src/lobby/recorded.ts`). A file that sets neither `entity` nor `lobby` keeps the
+ * machine-global lobby, unchanged.
  */
 export const entity: Section = {
   name: 'entity',

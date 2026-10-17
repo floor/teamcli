@@ -1,7 +1,7 @@
 // Per-entity lobby resolution: a team that sets `entity` or `lobby` operates on its own lobby,
 // while a team that sets neither keeps the machine-global `~/.config/team/lobby` exactly as before
 // — so a second team on the machine no longer waits behind the first team's lobby.
-import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -10,7 +10,9 @@ import { placedProblems } from '../../src/file/load.ts';
 import { migrationTrust } from '../../src/file/migrate.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { lobbyDir, lobbyTrustEntry, resolveLobby, verifyLobby } from '../../src/lobby/gate.ts';
+import { lobbyOf } from '../../src/lobby/recorded.ts';
 import { shippedStartupReads } from '../../src/profiles/index.ts';
+import { getTeam, noteTeam, teamIdOf } from '../../src/registry/teams.ts';
 import { seatStart } from '../../src/worktree/place.ts';
 
 let base: string;
@@ -257,5 +259,47 @@ describe('seatStart waits in the resolved lobby', () => {
     expect(seatStart(team.team, lead, root, home)).toEqual({ cwd: root });
     const start = seatStart(team.team, worker, root, home);
     expect('cwd' in start && start.cwd).toBe(resolveLobby(home, { entity: 'floor' }));
+  });
+});
+
+describe('the registry records the lobby once, and the record stands', () => {
+  const seed = (entity: string) => ({ project: 'acme', entity, session: 'acme', lobby: null });
+  const asFile = (entity: string) => ({ project: 'acme', session: 'acme', entity });
+
+  test('a new team derives its lobby from its entity', () => {
+    noteTeam(home, root, seed('Acme'), 'defined', 'owner');
+    expect(getTeam(home, teamIdOf(root))?.lobby).toBe(join(home, '.config', 'team', 'lobbies', 'acme'));
+    expect(lobbyOf(home, root, asFile('Acme'))).toBe(join(home, '.config', 'team', 'lobbies', 'acme'));
+  });
+
+  test('changing the entity leaves the recorded lobby in place', () => {
+    noteTeam(home, root, seed('Acme'), 'defined', 'owner');
+    noteTeam(home, root, seed('fleet'), 'running', 'owner');
+    // The record keeps the folder the seats were trusted for, and the new entity's lobby is not
+    // what the team operates on — nor created for it.
+    expect(getTeam(home, teamIdOf(root))?.lobby).toBe(join(home, '.config', 'team', 'lobbies', 'acme'));
+    expect(lobbyOf(home, root, asFile('fleet'))).toBe(join(home, '.config', 'team', 'lobbies', 'acme'));
+    expect(existsSync(join(home, '.config', 'team', 'lobbies', 'fleet'))).toBe(false);
+  });
+
+  test('a team the registry holds no lobby for still derives from its entity', () => {
+    expect(lobbyOf(home, root, asFile('Acme'))).toBe(join(home, '.config', 'team', 'lobbies', 'acme'));
+  });
+
+  test('another team in the same checkout derives from its own entity, not the record', () => {
+    noteTeam(home, root, seed('Acme'), 'defined', 'owner');
+    // The registry is keyed by the root; this file's session is its own, so the lobby noted for
+    // the first team is not its lobby.
+    expect(lobbyOf(home, root, { project: 'acme', session: 'beta', entity: 'zeta' })).toBe(join(home, '.config', 'team', 'lobbies', 'zeta'));
+    noteTeam(home, root, { project: 'acme', session: 'beta', entity: 'zeta', lobby: null }, 'defined', 'owner');
+    expect(getTeam(home, teamIdOf(root))?.lobby).toBe(join(home, '.config', 'team', 'lobbies', 'zeta'));
+  });
+
+  test('an explicit lobby is the owner\'s declaration: it wins, and the note records it', () => {
+    const declared = join(base, 'own-lobby');
+    noteTeam(home, root, seed('Acme'), 'defined', 'owner');
+    noteTeam(home, root, { ...seed('Acme'), lobby: declared }, 'running', 'owner');
+    expect(getTeam(home, teamIdOf(root))?.lobby).toBe(declared);
+    expect(lobbyOf(home, root, { ...asFile('Acme'), lobby: declared })).toBe(declared);
   });
 });

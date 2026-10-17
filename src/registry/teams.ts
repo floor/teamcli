@@ -192,13 +192,21 @@ export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: 
     return `the project registry was not updated: ${(error as Error).message}`;
   }
   try {
+    // The lobby is recorded once: a team the registry holds a lobby for keeps it, so editing the
+    // file's `entity` never moves a running team's seats. An explicit `lobby:` is the owner's own
+    // declaration, not a derivation, and is re-recorded; a new team derives from its entity
+    // (`src/lobby/recorded.ts` reads the record back at every use). The prior lobby is this
+    // team's only while the project and session are its identity too: another file in the same
+    // checkout (the registry is keyed by the root) derives from its own entity.
+    const earlier = getTeam(home, teamId);
+    const prior = earlier !== null && earlier.project === seed.project && earlier.session === seed.session ? earlier.lobby : '';
     upsertTeam(home, teamId, {
       project: seed.project,
       projectId,
       entity: seed.entity,
       session: seed.session,
       root: real,
-      lobby: resolveLobby(home, { entity: seed.entity, lobby: seed.lobby }),
+      lobby: seed.lobby ? resolveLobby(home, { lobby: seed.lobby }) : prior || resolveLobby(home, { entity: seed.entity }),
       lifecycle,
       by,
     });

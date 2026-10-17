@@ -22,6 +22,7 @@ import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
+import { resolveLobby } from '../lobby/gate.ts';
 import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
 import { rosterOf } from '../permissions/who.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
@@ -183,6 +184,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
   for (const note of delegateNotes(team)) io.stdout(`note: ${note}\n`);
+  for (const note of lobbyNotes(team, root, sources.home)) io.stdout(`note: ${note}\n`);
   for (const difference of differences) {
     io.stdout(`difference: ${difference.what}\n  repair: ${difference.repair}\n`);
   }
@@ -235,6 +237,33 @@ function devModeDifferences(team: TeamFile, root: string, home: string | undefin
     });
   }
   return out;
+}
+
+/**
+ * The lobby the registry holds against the one the file would derive. Once the registry holds a
+ * team's lobby, the entity never derives it again (`src/lobby/recorded.ts`): changing `entity` on
+ * a running team no longer moves its seats, so the check names the file that now derives another
+ * lobby and says which path stands. A file with an explicit `lobby:` is not a derivation — the
+ * owner's own declaration re-records it — and a team the registry holds no lobby for has nothing
+ * recorded to stand. The record speaks for this team only when its project and session are the
+ * file's: another file in the same checkout derives from its own entity, as a new team does. A
+ * home that names no store answers for no registry, as the other notes do.
+ */
+function lobbyNotes(team: TeamFile, root: string, home: string | undefined): string[] {
+  if (home === undefined || team.lobby) return [];
+  let recorded = '';
+  try {
+    const record = getTeam(home, teamIdOf(root));
+    if (record !== null && record.project === team.project && record.session === team.session) recorded = record.lobby;
+  } catch (error) {
+    // An unreadable registry already has its own difference; it cannot say where the lobby is.
+    if (!(error instanceof TeamsError)) throw error;
+    return [];
+  }
+  if (!recorded) return [];
+  const derived = resolveLobby(home, { entity: team.entity });
+  if (derived === recorded) return [];
+  return [`the file's entity derives the lobby ${derived}, and the registry records ${recorded}: the recorded lobby stands`];
 }
 
 /**

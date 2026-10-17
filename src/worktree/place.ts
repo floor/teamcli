@@ -5,7 +5,7 @@ import { migrationText } from '../file/migrate.ts';
 import { insideTrust, isLegacyTrust, isMigratedTrust, protectedBy } from '../file/paths.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { resolveLobby } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 
 // A task name is one path segment. It is also the last segment of the folder and part of the branch.
 const TASK_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -80,10 +80,10 @@ export type SeatStart = { cwd: string; lobby?: true } | { problem: string; once?
 // lobby. In a legacy file, a shared seat starts in its cwd, and a worktree seat starts in the
 // old derived lobby.
 export function seatStart(
-  team: Pick<TeamFile, 'project' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string,
+  team: Pick<TeamFile, 'project' | 'session' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string,
 ): SeatStart {
   if (!team.trust || team.trust.length === 0) {
-    const lobby = resolveLobby(home, team);
+    const lobby = lobbyOf(home, root, team);
     return {
       problem:
         `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(team, root, home)}`,
@@ -168,7 +168,7 @@ export function seatStart(
       }
       return { cwd: root };
     }
-    return { cwd: verifiedLobby ?? resolveLobby(home, team), lobby: true };
+    return { cwd: verifiedLobby ?? lobbyOf(home, root, team), lobby: true };
   }
 
   return { problem: 'trust configuration is invalid', once: true };

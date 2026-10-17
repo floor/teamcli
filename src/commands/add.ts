@@ -27,7 +27,8 @@ import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel, validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
-import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
+import { recheckLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import {
   agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, reportDisplayAgent, sendKey, sessionRunning,
   sessionState, startServer, typeText, workspaceClose, workspaceCreate, workspaceList, workspacePanes,
@@ -504,7 +505,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.placed
     return 1;
   }
-  const lobby = resolveLobby(sources.home, prepared.team);
+  const lobby = lobbyOf(sources.home, root, prepared.team);
   let startProblem: string | null = null;
   let verifiedLobby: string | null = null;
   let lobbySeen: LobbySeen | null = null;
