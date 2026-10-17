@@ -1,7 +1,7 @@
 // `team send` to a Claude Code seat: the typed trigger (a 0600 drop file and one line) is the
-// default channel again, and the cross-session socket is `--wait`'s. The socket-first default
-// sits behind SOCKET_FIRST in src/commands/send.ts, off while the owner decides on attestation;
-// these scenes pin the flipped state, so flipping the constant back reddens them loudly.
+// channel, and no path opens the seat's cross-session socket. The gate is SOCKET_SEND in
+// src/send/uds.ts, off while the channel is unattested; these scenes pin the gated state, so
+// flipping the constant back reddens them loudly.
 //
 // Fixtures only: a fake seat, a fake sockets folder, and a real unix socket listener this test
 // owns — the shape `test/send.test.ts` measured. No pane is read and no live session is touched.
@@ -212,19 +212,20 @@ describe('team send: a typed send with no socket at all', () => {
   });
 });
 
-describe('team send: --wait keeps the socket-only contract', () => {
-  test('a missing socket is unreachable, never typed', async () => {
+describe('team send: --wait to a Claude Code seat is refused', () => {
+  test('the refusal comes first, and nothing is typed or dialed', async () => {
     const { root, sockets } = world();
     const host = claudeHost(sockets, ['idle', 'working']);
     const io = owner(root);
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
-    // The reply channel is the socket: a typed fallback could deliver a message no reply can
-    // come back from, so a --wait send with no socket is refused, not rerouted.
+    // The frame a --wait waits on is the socket's, and this build writes none: the run is
+    // refused before any socket or pane is touched, and it is never rerouted to the typed
+    // trigger — a typed fallback could deliver a message no reply can come back from.
     expect(code).toBe(1);
-    expect(io.err).toContain('lead: unreachable');
-    expect(io.err).toContain('no cross-session socket was found');
+    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
+    expect(host.socketsTried).toEqual([]);
     expect(host.pane.typed).toEqual([]);
     expect(host.pane.enters).toBe(0);
   });

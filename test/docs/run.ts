@@ -248,8 +248,9 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRestart(rest, io, world.restartSources());
     case 'send': {
       // Every seat of the page's file is a live agent, so a native-CLI example resolves.
-      // `reply="…"` on the fence is the fake seat's answer: with it, a `--wait` example has a
-      // reply to print; without it, the seat stays silent and the wait times out.
+      // `reply="…"` on the fence is the fake seat's answer: a `--wait` example with it would
+      // print a reply. No page uses it while SOCKET_SEND (src/send/uds.ts) is off — a waited
+      // send is refused before a frame exists — so it stands for the socket leg's return.
       const seats = page.team?.seats.map((seat) => seat.name) ?? ['claude-keeper'];
       return runSend(rest, io, sendHost(fixture, seats, spec.now, reply));
     }
@@ -326,8 +327,9 @@ function answerHost(home: string): AnswerHost {
 /** The docs page's send: a fake seat whose pane reports one process with a file at the socket's
  *  measured name, and a deliver that accepts. With `reply`, the delivery answers too: a
  *  connection back to the sender's own measured `cc-socks/<pid>.sock` — the frame a replying
- *  session writes — so a `--wait` example has a reply to print. No session is read and no pane
- *  is touched. */
+ *  session writes — so a `--wait` example prints what the seat said; without it, the seat stays silent and the wait times out. No path calls this
+ *  deliver while SOCKET_SEND (src/send/uds.ts) is off, so `reply` stands unused until the
+ *  native leg returns. No session is read and no pane is touched. */
 const SEND_PID = 4200;
 
 function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string): SendHost {

@@ -14,6 +14,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { upsertProject } from '../src/registry/projects.ts';
 import { dropMessage, sawSubmission, triggerLine, TRIGGER_MAX, type NativePane } from '../src/send/native.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../src/send/uds.ts';
+import { readReply } from '../src/send/reply.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 
@@ -111,11 +112,6 @@ async function listen(sockets: string, pid: number): Promise<{ path: string; rec
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(path, resolve));
   return { path, received };
-}
-
-async function until(check: () => boolean, ms = 2000): Promise<void> {
-  const start = Date.now();
-  while (!check() && Date.now() - start < ms) await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
 /** A native pane that never moves. Socket tests must not depend on it. */
@@ -383,16 +379,18 @@ describe('team send: refused', () => {
     expect(existsSync(join(dir, 'send-drops'))).toBe(false);
   });
 
-  test('a message over the measured limit is refused, never truncated', async () => {
+  test('a --wait message over the old channel limit is refused on the leg, not the size', async () => {
     const { root, sockets } = world();
     const host = fake(sockets);
     const io = owner(root);
 
     const code = await runSend(['lead', 'x'.repeat(FRAME_LIMIT), '--wait'], io, host);
 
+    // The gate sits above the frame-size check: the refusal is the channel's, and the size is
+    // never measured. The checker stays in the code, one constant away, for the socket's return.
     expect(code).toBe(1);
-    expect(io.err).toContain('too large for this channel');
-    expect(io.err).toContain(String(FRAME_LIMIT));
+    expect(io.err).toContain('needs the native leg');
+    expect(io.err).not.toContain('too large');
     expect(host.frames).toEqual([]);
   });
 
@@ -436,7 +434,7 @@ describe('team send: unreachable', () => {
     expect(io.err).toContain('no live agent carries that name in the session');
   });
 
-  test('no socket for the pane s processes is unreachable', async () => {
+  test('--wait never looks for a socket: the leg refusal comes first', async () => {
     const { root, sockets } = world();
     const host = fake(sockets);
     const io = owner(root);
@@ -444,29 +442,28 @@ describe('team send: unreachable', () => {
     const code = await runSend(['lead', 'hello', '--wait'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('unreachable');
-    expect(io.err).toContain('no cross-session socket was found');
-    expect(io.err).toContain(sockets);
+    expect(io.err).toContain('refused');
+    expect(io.err).toContain('needs the native leg');
+    // No lookup and no dial: the socket folder is never consulted on a refused wait.
+    expect(io.err).not.toContain('no cross-session socket was found');
+    expect(host.socketsTried).toEqual([]);
   });
 
-  test('a socket path with no listener is unreachable through the real client', async () => {
-    const { root, sockets } = world();
-    // A closed listener here removes its file (measured: `server.close()` unlinks it, so the
-    // sender then reads "no socket found"), so the stale path is a plain file at the measured
-    // name — the state a socket left by a session that is gone can hold.
+  test('the real client maps a non-socket file at the path to one sentence (measured)', async () => {
+    const { sockets } = world();
+    // A closed listener removes its file (measured: `server.close()` unlinks it), so the stale
+    // path is a plain file at the measured name — the state a socket left by a session that is
+    // gone can hold. sendFrame is called directly: no runSend path dials, and this measurement is
+    // the client's own, kept for the day the socket is the channel again.
     writeFileSync(join(sockets, '222.sock'), '');
-    const host = fake(sockets, { deliver: (socketPath, frame) => sendFrame(socketPath, frame) });
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello', '--wait'], io, host);
-
-    expect(code).toBe(1);
-    expect(io.err).toContain('lead: unreachable');
+    const taken = await sendFrame(join(sockets, '222.sock'), '{"type":"user"}\n');
+    expect(taken.ok).toBe(false);
+    if (taken.ok) return;
     // What a non-socket file at the socket's path answers, measured on two platforms: ENOTSOCK on
     // macOS (this build's own run) and ECONNREFUSED on the ubuntu runner (the pull request run's
     // log, 2026-10-10T20:27:34.8654866Z). The client maps both to one sentence; the test accepts
     // either, so neither platform's kernel is baked in.
-    expect(io.err).toMatch(/nothing is listening there \((the path is not a socket|the connection was refused)\)/);
+    expect(taken.reason).toMatch(/nothing is listening there \((the path is not a socket|the connection was refused)\)/);
   });
 });
 
@@ -561,8 +558,10 @@ const WRAPPED_REPLY = JSON.stringify({
 });
 
 describe('team send: --wait', () => {
-  test('writes one measured frame through the real socket client and says it was sent', async () => {
+  test('--wait to a Claude Code seat is refused: the native leg carries it, and nothing dials', async () => {
     const { root, dir, sockets } = world();
+    // A live listener at the pane's pid, and a sender deliver that would reach it: the refusal
+    // must leave both untouched.
     const { received } = await listen(sockets, 222);
     const io = owner(root);
     const host = fake(sockets, { deliver: (socketPath, frame) => sendFrame(socketPath, frame) });
@@ -571,156 +570,47 @@ describe('team send: --wait', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toContain('sent, no reply within 1s');
-    expect(io.err).not.toContain('delivered');
-    await until(() => received.length > 0);
-    const frame = received.join('');
-    expect(frame.endsWith('\n')).toBe(true);
-    expect((frame.match(/\n/g) ?? []).length).toBe(1);
-    const parsed = JSON.parse(frame) as { type: string; message: { role: string; content: string }; msg_id: string };
-    expect(parsed.type).toBe('user');
-    expect(parsed.message).toEqual({ role: 'user', content: 'from the owner — admitted by: the owner\n\nhello world' });
-    expect(parsed.msg_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    const log = readFileSync(join(dir, LOG_FILE), 'utf8');
-    expect(log).toContain('lead: sent on the socket (');
-    expect(log).not.toContain('hello world');
-    expect(log).not.toContain('delivered');
-  });
-
-  test('the pane probe takes the first process with a socket, shell included', async () => {
-    const { root, sockets } = world();
-    // Only the shell's pid has a socket: the foreground pids are tried first, then the shell.
-    writeFileSync(join(sockets, '111.sock'), '');
-    const host = fake(sockets);
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
-
-    expect(code).toBe(1);
-    expect(host.socketsTried).toEqual([join(sockets, '111.sock')]);
-    expect(host.frames.length).toBe(1);
-  });
-
-  test("the seat's reply is printed, the listener is gone and the log keeps no text", async () => {
-    const { root, dir, sockets } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'ping', '--wait'], io, replying(sockets, REPLY_FRAME));
-
-    expect(code).toBe(0);
-    expect(io.out).toBe('lead: answered\npong\n');
-    expect(io.err).toBe('');
+    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
+    expect(received).toEqual([]);
+    expect(host.frames).toEqual([]);
+    expect(host.socketsTried).toEqual([]);
+    expect(existsSync(join(dir, 'send-drops'))).toBe(false);
+    // No reply listener was stood at this process's own pid path either.
     expect(existsSync(senderSocket(sockets))).toBe(false);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
-    expect(log).toContain('lead: answered (reply 4 characters)');
-    expect(log).not.toContain('pong');
+    expect(log).toContain('refused: lead: --wait needs the native leg');
+    expect(log).not.toContain('hello world');
   });
 
-  test('--json answered: the document carries the reply and both ids', async () => {
+  test('--json --wait: one refusal document, and no id ever sent', async () => {
     const { root, sockets } = world();
     writeFileSync(join(sockets, '222.sock'), '');
+    // A host that would answer: the refusal must come before any frame exists to answer.
     const host = replying(sockets, REPLY_FRAME);
     const io = owner(root);
 
     const code = await runSend(['lead', 'ping', '--wait', '--json'], io, host);
 
-    expect(code).toBe(0);
-    expect(io.err).toBe('');
-    const doc = JSON.parse(io.out) as { seat: string; status: string; exit: number; reply: string; ids: { sent: string; reply: string } };
-    const sent = JSON.parse((host.frames[0] as string).trim()) as { msg_id: string };
-    expect(doc).toEqual({ seat: 'lead', status: 'answered', exit: 0, reply: 'pong', ids: { sent: sent.msg_id, reply: 'reply-1' } });
-  });
-
-  test("a reply line that is not this channel's frame is kept whole", async () => {
-    const { root, sockets } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'ping', '--wait'], io, replying(sockets, 'plain words, not JSON'));
-
-    expect(code).toBe(0);
-    expect(io.out).toBe('lead: answered\nplain words, not JSON\n');
-  });
-
-  test("the replying harness's wrapper is peeled off, and the frame's own id is kept", async () => {
-    const { root, sockets } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'ping', '--wait'], io, replying(sockets, WRAPPED_REPLY));
-
-    expect(code).toBe(0);
-    expect(io.out).toBe('lead: answered\npong\n');
-
-    const doc = owner(root);
-    expect(await runSend(['lead', 'ping', '--wait', '--json'], doc, replying(sockets, WRAPPED_REPLY))).toBe(0);
-    const parsed = JSON.parse(doc.out) as { reply: string; ids: { reply: string } };
-    expect(parsed.reply).toBe('pong');
-    expect(parsed.ids.reply).toBe('reply-2');
-  });
-
-  test('no reply within the window: timeout, exit 1, nothing on stdout', async () => {
-    const { root, dir, sockets } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'ping', '--wait', '--timeout', '1'], io, replying(sockets, null));
-
-    expect(code).toBe(1);
-    expect(io.out).toBe('');
-    expect(io.err).toContain('lead: timeout: sent, no reply within 1s; a seat which does not accept messages from other sessions holds the frame until a person lets it through');
-    expect(io.err).not.toContain('delivered');
-    expect(existsSync(senderSocket(sockets))).toBe(false);
-    const log = readFileSync(join(dir, LOG_FILE), 'utf8');
-    // The write is recorded first; the window closing is its own line. Neither says delivered.
-    expect(log).toContain('lead: sent on the socket (');
-    expect(log).toContain('lead: timeout (sent, no reply within 1s)');
-    expect(log).not.toContain('delivered');
-  });
-
-  test('--json timeout: a document that says the frame was sent and no reply came', async () => {
-    const { root, sockets } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'ping', '--wait', '--timeout', '1', '--json'], io, replying(sockets, null));
-
     expect(code).toBe(1);
     expect(io.err).toBe('');
-    const doc = JSON.parse(io.out) as { seat: string; status: string; exit: number; error: string; ids: { sent: string | null } };
-    expect(doc.status).toBe('timeout');
-    expect(doc.exit).toBe(1);
-    expect(doc.error).toBe('sent, no reply within 1s; a seat which does not accept messages from other sessions holds the frame until a person lets it through');
-    expect(typeof doc.ids.sent).toBe('string');
-    expect('reply' in doc).toBe(false);
-  });
-
-  test("a dead file at the sender's own pid path is cleared, and the reply still lands", async () => {
-    const { root, sockets } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    writeFileSync(senderSocket(sockets), '');
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'ping', '--wait'], io, replying(sockets, 'pong'));
-
-    expect(code).toBe(0);
-    expect(io.out).toBe('lead: answered\npong\n');
-  });
-
-  test("a live listener at the sender's own pid path refuses before anything is sent", async () => {
-    const { root, sockets } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    await listen(sockets, process.pid);
-    const host = replying(sockets, 'pong');
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'ping', '--wait'], io, host);
-
-    expect(code).toBe(1);
-    expect(io.err).toContain('refused');
-    expect(io.err).toContain('a listener already answers at');
+    expect(JSON.parse(io.out)).toEqual({
+      seat: 'lead',
+      status: 'refused',
+      exit: 1,
+      error: 'lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent',
+      ids: { sent: null, reply: null },
+    });
     expect(host.frames).toEqual([]);
+  });
+});
+
+// The reply reader, exercised on its own: no run reaches it while SOCKET_SEND is off, and the
+// measured peel (reply.ts) is what a waited send reads again when the native leg ships.
+describe('the reply line reader', () => {
+  test('peels the measured wrapper and keeps the frame id', () => {
+    expect(readReply(REPLY_FRAME)).toEqual({ reply: 'pong', msg_id: 'reply-1' });
+    expect(readReply(WRAPPED_REPLY)).toEqual({ reply: 'pong', msg_id: 'reply-2' });
+    expect(readReply('plain words, not JSON')).toEqual({ reply: 'plain words, not JSON', msg_id: null });
   });
 });
 
@@ -1080,7 +970,7 @@ describe('team send: native drop', () => {
     expect(claude.out).toBe('lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written\n');
     const waited = owner(root);
     expect(await runSend(['lead', 'hello', '--wait', '--dry-run'], waited, fake(sockets))).toBe(0);
-    expect(waited.out).toBe('lead: dry-run: claude-code via the cross-session socket; nothing was sent\n');
+    expect(waited.out).toBe('lead: dry-run: claude-code --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
   });
 
   test('a pane that rejects the trigger is unreachable and the file remains', async () => {

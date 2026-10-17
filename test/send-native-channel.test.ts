@@ -1,5 +1,6 @@
-// A plain send is the drop file for every seat, Claude Code included. `--wait` to a Claude
-// Code seat is the socket frame. No live pane.
+// A plain send is the drop file for every seat, Claude Code included, and `--wait` to a Claude
+// Code seat is refused while the socket is not the channel: the frame it waits on is a write
+// this build does not make. No live pane.
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,7 +33,7 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
   expect(readFileSync(join(drops, files[0] as string), 'utf8')).toBe(filed('hello'));
 });
 
-test('--wait to a claude-code seat writes the socket frame and no drop', async () => {
+test('--wait to a claude-code seat is refused: no frame, no drop, nothing typed', async () => {
   const made = world();
   cleanup = made.cleanup;
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -42,9 +43,7 @@ test('--wait to a claude-code seat writes the socket frame and no drop', async (
   const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], owner(made.root), host);
 
   expect(code).toBe(1);
-  expect(host.frames.length).toBe(1);
-  const frame = JSON.parse((host.frames[0] as string).trim()) as { message: { content: string } };
-  expect(frame.message.content).toBe(filed('hello'));
+  expect(host.frames).toEqual([]);
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);

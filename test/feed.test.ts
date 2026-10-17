@@ -15,7 +15,6 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runFeed } from '../src/commands/feed.ts';
@@ -216,6 +215,7 @@ describe('team send history log & team feed', () => {
 
   test('records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
     const { root, home, sockets } = world();
+    // A file at the measured socket name stands while every send below runs: no path consults it.
     writeFileSync(join(sockets, '222.sock'), '');
 
     // 1. refused (unknown seat), --list, --dry-run write nothing to messages.jsonl
@@ -236,27 +236,31 @@ describe('team send history log & team feed', () => {
       ),
     ).toBe(1);
 
-    // 4. answered (--wait)
-    const answeringHost = hostFor(home, sockets, {
-      deliver: async () => {
-        const back = createConnection(join(sockets, `${String(process.pid)}.sock`));
-        back.on('error', () => {});
-        back.on('connect', () =>
-          back.end('{"type":"user","message":{"role":"user","content":"ack"},"msg_id":"r-1"}\n'),
-        );
-        return { ok: true };
-      },
+    // 4. a --wait refusal writes nothing either. The waited outcomes are out of this build's
+    // reach while the socket is off, so the answered and timeout lines are seeded straight into
+    // the history — as the native leg's will be — and the feed renders the history, not the
+    // runs that made it.
+    expect(await runSend(['lead', 'msg-refused-wait', '--wait'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(1);
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${OWNER_HEADER}msg-answered`,
+      id: 'seed-answered',
+      outcome: 'answered',
+      ms: 0,
+      via: 'socket',
     });
-    expect(await runSend(['lead', 'msg-answered', '--wait'], testIo(root, { kind: 'owner' }), answeringHost)).toBe(0);
-
-    // 5. timeout (--wait)
-    expect(
-      await runSend(
-        ['lead', 'msg-timeout', '--wait', '--timeout', '1'],
-        testIo(root, { kind: 'owner' }),
-        hostFor(home, sockets),
-      ),
-    ).toBe(1);
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${OWNER_HEADER}msg-timeout`,
+      id: 'seed-timeout',
+      outcome: 'timeout',
+      ms: 0,
+      via: 'socket',
+    });
 
     const read = readHistory('acme', root, home);
     expect(read.ok).toBe(true);

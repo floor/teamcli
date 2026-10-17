@@ -1,8 +1,9 @@
 // `team send` and the held frame: a socket write the receiving session's "Held message from
 // another session" dialog holds is `held (socket)`, never `delivered (socket)`, and no trigger
-// is typed into the blocked box. The plain send's default is the typed trigger, with the socket
-// `--wait`'s channel (`SOCKET_FIRST` in src/commands/send.ts): these scenes pin both, so flipping
-// the constant back reddens them loudly.
+// is typed into the blocked box — a shape the code keeps for the socket's return, unreachable
+// while SOCKET_SEND (src/send/uds.ts) is off. These scenes pin the gated state: the plain send
+// is the typed trigger, and a `--wait` is refused before any frame exists, so nothing can land
+// at a dialog. Flipping the constant back reddens them loudly.
 //
 // Fixtures only: a fake seat, a fake sockets folder, and a pane this test scripts. No live
 // session is touched and no real pane is read.
@@ -145,13 +146,12 @@ function claudeHost(sockets: string, samples: string[], screens?: string[]): Fak
 
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
-describe('team send: a socket frame the session holds at its dialog', () => {
-  test('--wait: the held-message dialog makes it held (socket), and nothing is typed', async () => {
-    const { root, sockets } = world();
-    // A plain file at the measured name stands in for the live socket: the socket's path is
-    // resolved by that name, and the frame itself goes through the fake `deliver` above.
+describe('team send: a --wait frame cannot land at a dialog', () => {
+  test('--wait is refused before the frame: the pane is never read for the dialog', async () => {
+    const { root, sockets, home } = world();
+    // A plain file at the measured name stands in for the live socket, and the pane would hold
+    // the held-message dialog on its second read: with the socket off, neither is consulted.
     writeFileSync(join(sockets, '222.sock'), '');
-    // The dialog is not on the first read: the run reads on, and finds it.
     const host = claudeHost(sockets, ['idle'], [QUIET, HELD_WRAPPED]);
     const io = owner(root);
 
@@ -159,38 +159,16 @@ describe('team send: a socket frame the session holds at its dialog', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toContain('lead: held (socket): ');
-    expect(io.err).toContain('held-message dialog');
-    expect(io.err).not.toContain('delivered');
-    // The frame was written; the box was not touched while the dialog stood.
-    expect(host.frames.length).toBe(1);
+    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
+    expect(io.err).not.toContain('held');
+    expect(host.frames.length).toBe(0);
     expect(host.pane.typed).toEqual([]);
     expect(host.pane.enters).toBe(0);
-    const read = readHistory('acme', root, host.home);
+    const read = readHistory('acme', root, home);
+    // A refusal writes nothing down: no held frame exists, so the history has no line for one.
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.entries).toHaveLength(1);
-    expect(read.entries[0]).toMatchObject({ to: 'lead', outcome: 'held', ms: 0, via: 'socket' });
-  });
-
-  test('--wait: a quiet pane keeps the window, and the timeout stands', async () => {
-    const { root, sockets } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    const host = claudeHost(sockets, ['idle'], [QUIET]);
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
-
-    expect(code).toBe(1);
-    expect(io.err).toContain('lead: timeout: ');
-    expect(io.err).not.toContain('held');
-    expect(host.frames.length).toBe(1);
-    expect(host.pane.typed).toEqual([]);
-    const read = readHistory('acme', root, host.home);
-    expect(read.ok).toBe(true);
-    if (!read.ok) return;
-    // The clock is fixed, so the measured ms is 0: what the scene pins is the path and outcome.
-    expect(read.entries[0]).toMatchObject({ to: 'lead', outcome: 'timeout', ms: 0, via: 'socket' });
+    expect(read.entries).toEqual([]);
   });
 });
 
