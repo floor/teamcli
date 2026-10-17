@@ -134,7 +134,7 @@ describe('registering a seat the pane already holds ready', () => {
     // No `in_project:` in the file yet: the team points at no project.
     expect(getTeam(w.home, teamId(w))?.projectId).toBeNull();
     expect(readProjects(w.home)).toEqual({});
-    // The file gains the project level after the launch — the case operator-3's review named.
+    // The file gains the project level after the launch — the case a review named.
     writeFileSync(join(w.root, '.agents', 'team.yaml'), teamYaml(w, 'in_project: platform\nproject_lead: true\n'));
 
     const second = await register(w, ['lead']);
@@ -156,7 +156,7 @@ describe('registering a seat the pane already holds ready', () => {
     const held = recordOf(w);
     expect(held).toBeDefined();
     // The record lost the seat's line after the launch — a registry that never got it, the case
-    // operator-3's P1 named — while the state still holds the seat ready on the pane.
+    // a review's P1 named — while the state still holds the seat ready on the pane.
     setRoster(w.home, teamId(w), []);
     expect(getTeam(w.home, teamId(w))?.roster).toEqual([]);
     const state = readFileSync(join(w.dir, STATE_FILE), 'utf8');

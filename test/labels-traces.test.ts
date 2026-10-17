@@ -43,7 +43,7 @@ beforeEach(() => {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-traces-')));
   root = join(base, 'acme-web');
   home = join(base, 'home');
-  worktree = join(base, 'worktrees', 'p0b-builder-2');
+  worktree = join(base, 'worktrees', 'task-1');
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home);
 });
