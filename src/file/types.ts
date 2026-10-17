@@ -159,12 +159,6 @@ export type TeamFile = {
   };
   rules: string[];
   trust: string[];
-  /**
-   * Who may answer a folder-trust dialog. Omitted in the file means owner. The file may spell the
-   * second value `orchestrator`; it normalises to `coordinator` here, the value every record's
-   * digest was written with, so a file rewritten to the new word keeps its approval.
-   */
-  dialogs: { trust: 'owner' | 'coordinator' };
   workspace: {
     mode: Mode;
     path: string | null;

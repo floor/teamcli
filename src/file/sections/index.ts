@@ -5,7 +5,6 @@ import { projectLead } from './project_lead.ts';
 import { entity } from './entity.ts';
 import { lobby } from './lobby.ts';
 import { trust } from './trust.ts';
-import { dialogs } from './dialogs.ts';
 import { limits } from './limits.ts';
 import { machine } from './machine.ts';
 import { rules } from './rules.ts';
@@ -50,7 +49,6 @@ export const SECTIONS: readonly Section[] = [
   entity,
   lobby,
   trust,
-  dialogs,
   limits,
   machine,
   rules,

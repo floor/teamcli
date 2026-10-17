@@ -98,9 +98,6 @@ ${head ? `#   since: ${head}   # check reads no commit reachable from this one\n
 trust:
   - ~/.config/team/lobby
   - ${rootPath}
-# dialogs:
-#   trust: owner              # owner | orchestrator
-
 workspace:
   mode: shared                # worktree | shared
   # path: ../worktrees/{repo}/{task}

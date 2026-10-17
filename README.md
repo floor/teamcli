@@ -304,7 +304,7 @@ length, a figure over 100%, or no such rollout prints nothing, so the account
 reads unknown. The file names the command the check runs. Bun has to be on
 `PATH` when the check runs.
 
-More fields exist — `dialogs`, `tools`, `trust`, `machine`, `limits`, `watch`, `visibility` and
+More fields exist — `tools`, `trust`, `machine`, `limits`, `watch`, `visibility` and
 `releases` — and the comments `team init` writes name them; validation refuses what it cannot
 check, and this build acts on what the commands below read.
 

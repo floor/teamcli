@@ -51,23 +51,6 @@
       },
       "$comment": "absolute paths the seats may work in, including the team's lobby (the default ~/.config/team/lobby) and the project root"
     },
-    "dialogs": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "trust"
-      ],
-      "properties": {
-        "trust": {
-          "enum": [
-            "owner",
-            "orchestrator",
-            "coordinator"
-          ]
-        }
-      },
-      "$comment": "who may answer a folder-trust dialog. Omitted means owner, and then no command sends a trust key"
-    },
     "limits": {
       "type": "object",
       "additionalProperties": false,

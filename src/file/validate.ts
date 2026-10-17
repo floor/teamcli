@@ -88,7 +88,6 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
     identity: valueOf<TeamFile['identity']>(ctx, 'identity'),
     rules: valueOf<string[]>(ctx, 'rules'),
     trust: valueOf<string[]>(ctx, 'trust'),
-    dialogs: valueOf<TeamFile['dialogs']>(ctx, 'dialogs'),
     workspace: valueOf<TeamFile['workspace']>(ctx, 'workspace'),
     watch: valueOf<Watched>(ctx, 'watch').watch,
     budgets: valueOf<Budgeted>(ctx, 'budgets').budgets,

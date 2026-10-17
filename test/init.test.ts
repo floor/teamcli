@@ -66,7 +66,8 @@ describe('team init', () => {
     // The written bytes, pinned: no key, the operator naming the lead seat, the seat block whole.
     expect(text).not.toContain('coordinator');
     expect(text).toContain('operator: orchestrator        # the seat the watch reports to');
-    expect(text).toContain('#   trust: owner              # owner | orchestrator');
+    // Trust answering is a grant, not a file key: the skeleton names none.
+    expect(text).not.toContain('dialogs');
     expect(text).toContain(
       [
         'seats:',
