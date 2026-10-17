@@ -78,7 +78,7 @@ seats:
 
 One entry per published package: `package`, its `github` owner/repo, and `trusted_publishing: true`
 when npm provenance is required (omit it otherwise). A package the section does not declare cannot
-be checked; an invalid section fails `team doctor`, and the command reports it with exit 64.
+be checked; an invalid section fails `team doctor`, and the command reports it with exit 2.
 
 Two optional pairs each add one check. In a pair, either both keys are present or neither is:
 
@@ -127,12 +127,12 @@ a pass):
 One read stands beside the checks: npm's `dist-tags` document for the package, the small one that
 names each channel's version. When its `next` tag points at a version older than `latest` — by
 Semantic Versioning 2.0.0's precedence, so a prerelease is behind the release it precedes — the run
-prints one line after the table, naming the exact command that catches the tag up and running
-nothing itself:
+prints one line after the table and before the closing summary, naming the exact command that
+catches the tag up and running nothing itself:
 
     npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next
 
-With `--json` it is a `"warning"` member after `checks`, absent when there is nothing to say. It is
+With `--json` it is a `"warning"` member after `summary`, absent when there is nothing to say. It is
 a hint, never a check: it adds no row, changes no check's status and never changes the exit code. A
 `next` tag level with or ahead of `latest`, an absent tag, a value that is not a version, and a read
 that fails or is refused all print nothing.
@@ -141,18 +141,18 @@ that fails or is refused all print nothing.
 
 | Message | Exit |
 | --- | --- |
-| `team release: a subcommand is required: check` | 64 |
-| `team release: unknown subcommand "<name>"` | 64 |
-| `team release: a <package@version> is required` | 64 |
-| `team release: unexpected "<argument>"` | 64 |
-| `team release: unknown option --<name>` | 64 |
-| `team release: --file needs a value` | 64 |
-| `team release: "<argument>" is not <package>@<version>` | 64 |
-| `team release: the package "<name>" is not a package name` | 64 |
-| `team release: the version "<version>" is not a Semantic Versioning 2.0.0 version` | 64 |
-| `team release: <package> is not declared in the team file's releases` | 64 |
-| `team release: <path>: no team file at <path>` | 64 |
-| `team release: <path>, line <n>: <message>` | 64 |
+| `team release: a subcommand is required: check` | 2 |
+| `team release: unknown subcommand "<name>"` | 2 |
+| `team release: a <package@version> is required` | 2 |
+| `team release: unexpected "<argument>"` | 2 |
+| `team release: unknown option --<name>` | 2 |
+| `team release: --file needs a value` | 2 |
+| `team release: "<argument>" is not <package>@<version>` | 2 |
+| `team release: the package "<name>" is not a package name` | 2 |
+| `team release: the version "<version>" is not a Semantic Versioning 2.0.0 version` | 2 |
+| `team release: <package> is not declared in the team file's releases` | 2 |
+| `team release: <path>: no team file at <path>` | 2 |
+| `team release: <path>, line <n>: <message>` | 2 |
 
 ## Examples, moved here whole
 
@@ -167,12 +167,14 @@ right, but the tag's commit has not reached the default branch and npm's `next` 
 
 ```console
 $ team release check material@3.0.2 ; echo "exit $?"
-check      status   detail
-npm        pass     exact version, checksums, and provenance found
-tag        missing  tag commit is not an ancestor of the default branch
-github     pass     published release matches SemVer channel
-changelog  pass     changelog entry has a valid release date
+package material, version 3.0.2
+  CHECK      STATE    DETAIL
+  npm        pass     exact version, checksums, and provenance found
+  tag        missing  tag commit is not an ancestor of the default branch
+  github     pass     published release matches SemVer channel
+  changelog  pass     changelog entry has a valid release date
 warn  npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next
+4 check(s), 1 missing
 exit 1
 ```
 
@@ -181,28 +183,55 @@ status update is after the release day and the marker line is in place — every
 
 ```console
 $ team release check widgets@3.0.2 ; echo "exit $?"
-check      status  detail
-npm        pass    exact version and checksums found
-tag        pass    tag resolves to a commit on the default branch
-github     pass    published release matches SemVer channel
-changelog  pass    changelog entry has a valid release date
-linear     pass    Linear milestone is complete and a qualifying status update exists
-activity   pass    public activity marker found
+package widgets, version 3.0.2
+  CHECK      STATE  DETAIL
+  npm        pass   exact version and checksums found
+  tag        pass   tag resolves to a commit on the default branch
+  github     pass   published release matches SemVer channel
+  changelog  pass   changelog entry has a valid release date
+  linear     pass   Linear milestone is complete and a qualifying status update exists
+  activity   pass   public activity marker found
+6 check(s), 0 missing
 exit 0
 ```
 
-The same runs as one JSON object, for the checklist that records them:
+The same runs as one `team.release` document, for the checklist that records them:
 
 ```console
 $ team release check material@3.0.2 --json ; echo "exit $?"
 {
+  "schema": {
+    "name": "team.release",
+    "version": 1
+  },
+  "format": 1,
   "package": "material",
   "version": "3.0.2",
-  "checks": {
-    "npm": { "status": "pass", "detail": "exact version, checksums, and provenance found" },
-    "tag": { "status": "missing", "detail": "tag commit is not an ancestor of the default branch" },
-    "github": { "status": "pass", "detail": "published release matches SemVer channel" },
-    "changelog": { "status": "pass", "detail": "changelog entry has a valid release date" }
+  "rows": [
+    {
+      "check": "npm",
+      "state": "pass",
+      "detail": "exact version, checksums, and provenance found"
+    },
+    {
+      "check": "tag",
+      "state": "missing",
+      "detail": "tag commit is not an ancestor of the default branch"
+    },
+    {
+      "check": "github",
+      "state": "pass",
+      "detail": "published release matches SemVer channel"
+    },
+    {
+      "check": "changelog",
+      "state": "pass",
+      "detail": "changelog entry has a valid release date"
+    }
+  ],
+  "summary": {
+    "checks": 4,
+    "missing": 1
   },
   "warning": "npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next"
 }
@@ -212,26 +241,69 @@ exit 1
 ```console
 $ team release check widgets@3.0.2 --json ; echo "exit $?"
 {
+  "schema": {
+    "name": "team.release",
+    "version": 1
+  },
+  "format": 1,
   "package": "widgets",
   "version": "3.0.2",
-  "checks": {
-    "npm": { "status": "pass", "detail": "exact version and checksums found" },
-    "tag": { "status": "pass", "detail": "tag resolves to a commit on the default branch" },
-    "github": { "status": "pass", "detail": "published release matches SemVer channel" },
-    "changelog": { "status": "pass", "detail": "changelog entry has a valid release date" },
-    "linear": { "status": "pass", "detail": "Linear milestone is complete and a qualifying status update exists" },
-    "activity": { "status": "pass", "detail": "public activity marker found" }
+  "rows": [
+    {
+      "check": "npm",
+      "state": "pass",
+      "detail": "exact version and checksums found"
+    },
+    {
+      "check": "tag",
+      "state": "pass",
+      "detail": "tag resolves to a commit on the default branch"
+    },
+    {
+      "check": "github",
+      "state": "pass",
+      "detail": "published release matches SemVer channel"
+    },
+    {
+      "check": "changelog",
+      "state": "pass",
+      "detail": "changelog entry has a valid release date"
+    },
+    {
+      "check": "linear",
+      "state": "pass",
+      "detail": "Linear milestone is complete and a qualifying status update exists"
+    },
+    {
+      "check": "activity",
+      "state": "pass",
+      "detail": "public activity marker found"
+    }
+  ],
+  "summary": {
+    "checks": 6,
+    "missing": 0
   }
 }
 exit 0
 ```
 
-An undeclared package is a usage error, in the same JSON shape when `--json` is given:
+An undeclared package is a usage error, in the same `team.error` envelope when `--json` is given:
 
 ```console
 $ team release check other@3.0.2 --json ; echo "exit $?"
-{"error":{"code":"usage","message":"other is not declared in the team file's releases"}}
-exit 64
+{
+  "schema": {
+    "name": "team.error",
+    "version": 1
+  },
+  "error": {
+    "id": "release.usage",
+    "message": "other is not declared in the team file's releases",
+    "repair": null
+  }
+}
+exit 2
 ```
 
 `--file` names the team file to read — here a relative path against the working directory — and a
@@ -240,5 +312,5 @@ file that isn't there is the configuration refusal, before any record is read:
 ```console
 $ team release check material@3.0.2 --file policy/team.yaml ; echo "exit $?"
 team release: ./policy/team.yaml: no team file at policy/team.yaml
-exit 64
+exit 2
 ```

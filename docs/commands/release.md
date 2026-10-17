@@ -39,19 +39,57 @@ wherever they appear, so `--file --help` prints the usage and exits 0.
 
 ## Output and exit codes
 
+The plain reading is the context line, the table, any warning, and one closing summary line:
+
+```text
+package material, version 3.0.2
+  CHECK      STATE    DETAIL
+  npm        pass     exact version, checksums, and provenance found
+  tag        missing  tag commit is not an ancestor of the default branch
+  github     pass     published release matches SemVer channel
+  changelog  pass     changelog entry has a valid release date
+4 check(s), 1 missing
+```
+
+`<n> check(s), <m> missing` counts the present checks and those of them whose state is
+`missing`, in that fixed order.
+
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| every check passed | the table, one row per check in its fixed order, each `pass`, `missing` or `unknown` — or the one JSON object with `--json` | 0 |
-| no check is unknown, but one or more are missing | the same table, the failing rows' detail under `missing` | 1 |
-| at least one check is unknown | the same table, the failed reads' detail under `unknown` | 2 |
-| a bad invocation, an invalid team file, or a package the file does not declare | `team release: <reason>`; with `--json`, one error object instead (`usage` for the arguments and an undeclared package, `configuration` for the file) | 64 |
+| every check passed | the context line and table, one row per check in its fixed order, each `pass`, `missing` or `unknown` — or the one JSON object with `--json` | 0 |
+| no check is unknown, but one or more are missing | the same reading, the failing rows' detail under `missing` | 1 |
+| at least one check is unknown | the same reading, the failed reads' detail under `unknown` | 2 |
+| a bad invocation, an invalid team file, or a package the file does not declare | `team release: <reason>`; with `--json`, one `team.error` document instead on `stdout`, with `stderr` empty | 2 |
+
+The `--json` document is one `team.release` envelope:
+
+```json
+{
+  "schema": { "name": "team.release", "version": 1 },
+  "format": 1,
+  "package": "material",
+  "version": "3.0.2",
+  "rows": [
+    { "check": "npm", "state": "pass", "detail": "exact version, checksums, and provenance found" },
+    { "check": "tag", "state": "missing", "detail": "tag commit is not an ancestor of the default branch" },
+    { "check": "github", "state": "pass", "detail": "published release matches SemVer channel" },
+    { "check": "changelog", "state": "pass", "detail": "changelog entry has a valid release date" }
+  ],
+  "summary": { "checks": 4, "missing": 1 },
+  "warning": "npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next"
+}
+```
+
+The JSON `state` is the table's `STATE` cell and `detail` its `DETAIL` cell; `summary` carries the
+same two counts the plain closing line reports. A refusal names the `contract/exit-codes.json` row:
+`release.usage` for the arguments and an undeclared package, `release.configuration` for the file.
 
 A timeout, a transport failure, or a 408, 429 or 5xx response is retried exactly once; other failures are not retried.
 
 A run whose npm `dist-tags` document shows `next` behind `latest` appends one `warn  <reason>` line
-after the table, or a `"warning"` member after `checks` with `--json`. The warning is a hint, not a
-check: it changes no row, no status and no exit code, and a document that is absent or unreadable,
-or whose tags are not versions, prints nothing.
+after the table and before the summary, or a `"warning"` member after `summary` with `--json`. The
+warning is a hint, not a check: it changes no row, no status and no exit code, and a document that
+is absent or unreadable, or whose tags are not versions, prints nothing.
 
 ## Example
 
@@ -98,12 +136,14 @@ right, but the tag's commit has not reached the default branch and npm's `next` 
 
 ```console
 $ team release check material@3.0.2 ; echo "exit $?"
-check      status   detail
-npm        pass     exact version, checksums, and provenance found
-tag        missing  tag commit is not an ancestor of the default branch
-github     pass     published release matches SemVer channel
-changelog  pass     changelog entry has a valid release date
+package material, version 3.0.2
+  CHECK      STATE    DETAIL
+  npm        pass     exact version, checksums, and provenance found
+  tag        missing  tag commit is not an ancestor of the default branch
+  github     pass     published release matches SemVer channel
+  changelog  pass     changelog entry has a valid release date
 warn  npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next
+4 check(s), 1 missing
 exit 1
 ```
 

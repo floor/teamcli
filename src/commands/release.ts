@@ -1,5 +1,6 @@
 import { readArgs } from '../args.ts';
 import { loadTeamFile } from '../file/load.ts';
+import { formatTable, writeJson, writeJsonError } from '../output/index.ts';
 import { SEMVER_PATTERN, packageProblem } from '../release/grammar.ts';
 import { runChecks, type Outcome, type ReleaseResult } from '../release/checks.ts';
 import { realFetch, type Fetch } from '../release/http.ts';
@@ -21,8 +22,7 @@ Linear milestone and a qualifying status update (one read-only request, its key
 read from the Keychain and sent in one header, nowhere else); with the activity
 pair, the release marker in the public activity file.
 
-Exits 0 when every check passes, 1 when one is missing, 2 when one is unknown,
-64 on a bad invocation or an invalid team file.
+Exits 0 when every check passes, 1 when one is missing, 2 when one is unknown, the invocation is bad, or the team file is invalid.
 `;
 
 // The rows, in the output's fixed order; a check is present exactly when the file configures it.
@@ -52,11 +52,11 @@ export async function runRelease(argv: string[], io: Io, fetcher: Fetch, keyRead
   const args = readArgs(argv, ['file'], ['json']);
   const sub = args.rest[0];
   const fail = (code: 'usage' | 'configuration', message: string): number => {
-    if (json) io.stdout(`${JSON.stringify({ error: { code, message } })}\n`);
+    if (json) writeJsonError(io, `release.${code}`, message);
     else io.stderr(`team release: ${message}\n`);
     // exit: release.configuration
     // exit: release.usage
-    return 64;
+    return 2;
   };
 
   // The arguments are validated first, without reading the team file: an invalid argument is a
@@ -95,9 +95,16 @@ export async function runRelease(argv: string[], io: Io, fetcher: Fetch, keyRead
     keyReader: keyReader ?? keychainReader(process.platform, io.stdinIsTTY, realSecurityRun),
   });
   if (json) {
-    io.stdout(jsonResult(name, version, result));
+    writeJson(io, 'team.release', {
+      format: 1 as const,
+      package: name,
+      version,
+      rows: resultRows(result),
+      summary: { checks: present(result).length, missing: missingCount(result) },
+      ...(result.warning !== undefined ? { warning: result.warning } : {}),
+    });
   } else {
-    io.stdout(table(result));
+    io.stdout(plainResult(name, version, result));
   }
   const statuses = present(result).map((check) => (result[check] as Outcome).status);
   // exit: release.passed
@@ -112,27 +119,28 @@ function present(result: ReleaseResult): (keyof ReleaseResult)[] {
   return ORDER.filter((check) => result[check] !== undefined);
 }
 
-// One JSON object and nothing else: the three keys in order, each check on one line, and the
-// one warning as a fourth key when the run has one.
-function jsonResult(name: string, version: string, result: ReleaseResult): string {
-  const lines = present(result).map((check) => {
+/** The rows the run reports, one per present check, in the fixed order. */
+function resultRows(result: ReleaseResult): { check: string; state: string; detail: string }[] {
+  return present(result).map((check) => {
     const { status, detail } = result[check] as Outcome;
-    return `    ${JSON.stringify(check)}: { "status": ${JSON.stringify(status)}, "detail": ${JSON.stringify(detail)} }`;
+    return { check, state: status, detail };
   });
-  const warning = result.warning === undefined ? '' : `,\n  "warning": ${JSON.stringify(result.warning)}`;
-  return `{\n  "package": ${JSON.stringify(name)},\n  "version": ${JSON.stringify(version)},\n  "checks": {\n${lines.join(',\n')}\n  }${warning}\n}\n`;
 }
 
-function table(result: ReleaseResult): string {
-  const rows: string[][] = [
-    ['check', 'status', 'detail'],
-    ...present(result).map((check) => {
-      const outcome = result[check] as Outcome;
-      return [check, outcome.status, outcome.detail];
-    }),
+/** How many present checks are `missing` — the summary's second count, and only that status. */
+function missingCount(result: ReleaseResult): number {
+  return present(result).filter((check) => (result[check] as Outcome).status === 'missing').length;
+}
+
+// The plain reading: the context line, the uppercase table, the warning when the run has one, and
+// the closing summary line.
+function plainResult(name: string, version: string, result: ReleaseResult): string {
+  const rows = resultRows(result);
+  const lines = [
+    `package ${name}, version ${version}`,
+    formatTable({ headers: ['CHECK', 'STATE', 'DETAIL'], rows: rows.map((row) => [row.check, row.state, row.detail]) }).trimEnd(),
   ];
-  const first = Math.max(...rows.map((row) => (row[0] as string).length));
-  const second = Math.max(...rows.map((row) => (row[1] as string).length));
-  const warning = result.warning === undefined ? '' : `warn  ${result.warning}\n`;
-  return `${rows.map((row) => `${(row[0] as string).padEnd(first)}  ${(row[1] as string).padEnd(second)}  ${row[2]}`).join('\n')}\n${warning}`;
+  if (result.warning !== undefined) lines.push(`warn  ${result.warning}`);
+  lines.push(`${String(rows.length)} check(s), ${String(missingCount(result))} missing`);
+  return `${lines.join('\n')}\n`;
 }

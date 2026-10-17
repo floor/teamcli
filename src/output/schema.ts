@@ -649,6 +649,41 @@ export const UNLOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+export const RELEASE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.release',
+  fileName: 'release.schema.json',
+  title: 'team release --json output',
+  required: ['format', 'package', 'version', 'rows', 'summary'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    package: { type: 'string', minLength: 1 },
+    version: { type: 'string', minLength: 1 },
+    rows: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['check', 'state', 'detail'],
+        properties: {
+          check: { type: 'string', minLength: 1 },
+          state: { type: 'string', enum: ['pass', 'missing', 'unknown'] },
+          detail: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    summary: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['checks', 'missing'],
+      properties: {
+        checks: { type: 'integer', minimum: 0 },
+        missing: { type: 'integer', minimum: 0 },
+      },
+    },
+    warning: { type: 'string', minLength: 1 },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -664,6 +699,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   HOLD_OUTPUT_SCHEMA,
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
+  RELEASE_OUTPUT_SCHEMA,
 ];
 
 

@@ -67,6 +67,7 @@ export {
   PLAN_STEP_SCHEMA_FRAGMENT,
   PROJECTS_OUTPUT_SCHEMA,
   publishCommandOutputSchema,
+  RELEASE_OUTPUT_SCHEMA,
   renderCommandOutputSchema,
   REVOKE_OUTPUT_SCHEMA,
   schemaTagFragment,

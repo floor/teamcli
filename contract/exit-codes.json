@@ -2118,19 +2118,19 @@
     {
       "code": 2,
       "command": "release",
-      "id": "release.unknown",
-      "meaning": "a check is unknown",
-      "trigger": "team release check material@3.0.2"
-    },
-    {
-      "code": 64,
-      "command": "release",
       "id": "release.configuration",
       "meaning": "the team file can't be read",
       "trigger": "team release check material@3.0.2"
     },
     {
-      "code": 64,
+      "code": 2,
+      "command": "release",
+      "id": "release.unknown",
+      "meaning": "a check is unknown",
+      "trigger": "team release check material@3.0.2"
+    },
+    {
+      "code": 2,
       "command": "release",
       "id": "release.usage",
       "meaning": "the invocation can't be read",

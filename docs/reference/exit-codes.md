@@ -308,9 +308,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `register.usage` | `register` | 2 | the invocation can't be read | `team register` |
 | `release.passed` | `release` | 0 | every check passed | `team release check material@3.0.2` |
 | `release.missing` | `release` | 1 | a check is missing | `team release check material@3.0.2` |
+| `release.configuration` | `release` | 2 | the team file can't be read | `team release check material@3.0.2` |
 | `release.unknown` | `release` | 2 | a check is unknown | `team release check material@3.0.2` |
-| `release.configuration` | `release` | 64 | the team file can't be read | `team release check material@3.0.2` |
-| `release.usage` | `release` | 64 | the invocation can't be read | `team release` |
+| `release.usage` | `release` | 2 | the invocation can't be read | `team release` |
 | `reload.reloaded` | `reload` | 0 | the seat was closed at an idle prompt and the new launch reached ready | `team reload worker` |
 | `reload.same` | `reload` | 0 | the seat is already running what the file declares | `team reload worker` |
 | `reload.absent` | `reload` | 1 | the file has no seat of that name | `team reload missing` |

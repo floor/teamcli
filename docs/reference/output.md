@@ -51,7 +51,7 @@ In `src/cli.ts` command order (`contract/exit-codes.json` is authoritative for t
 | 27 | `send` | action (`--dry-run`) + `--list` | `team <project>, session "<session>"` | `SEAT  ROLE  PROJECT  REACH` (on `--list`) | delivery outcome summary (`delivered`, `held`, etc.) | `team.send` / `team.send.list` | `schema/send.schema.json` | `0, 1, 2` (15 rows) | `Exits 0 when delivered, answered, listed, recorded, or resolved by --dry-run, 1 when held, not-submitted, timed out, unreachable, stopped, or refused, 2 when the invocation or team file can't be read.` |
 | 28 | `route` | reading / `--dry-run` | `team <project>, session "<session>"` | — | resolved address / leg walk summary | `team.route` | `schema/route.schema.json` | `0, 1, 2` (7 rows) | `Exits 0 when the address is answered, 1 when the route is refused or cannot be recorded, 2 when the invocation or team file cannot be read.` |
 | 29 | `feed` | reading | `team <project>, session "<session>"` | `TIME  KIND  SEAT  DETAIL` | `<n> event(s)` summary | `team.feed` | `schema/feed.schema.json` | `0, 1, 2` (4 rows) | `Exits 0 when the feed is printed, 1 when the history log can't be read, 2 when the invocation or team file can't be read.` |
-| 30 | `release` | reading | `package <name>, version <ver>` | `CHECK  STATE  DETAIL` | `<n> check(s), <m> missing` summary | `team.release` | `schema/release.schema.json` | `0, 1, 2, 64` (5 rows) | `Exits 0 when every check passes, 1 when one is missing, 2 when one is unknown, 64 on a bad invocation or an invalid team file.` |
+| 30 | `release` | reading | `package <name>, version <ver>` | `CHECK  STATE  DETAIL` | `<n> check(s), <m> missing` summary | `team.release` | `schema/release.schema.json` | `0, 1, 2` (5 rows) | `Exits 0 when every check passes, 1 when one is missing, 2 when one is unknown, the invocation is bad, or the team file is invalid.` |
 | 31 | `usage` | reading | — (cross-project store) | `ACCOUNT  WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE` | collapsed `note: … (x<n>)`, summary line | `team.usage` | `schema/usage.schema.json` | `0, 2` (3 rows) | `Exits 0 when the report is printed, 2 when the invocation or store folder can't be read.` |
 | 32 | `lock` | action | `team <project>, session "<session>"` | — | `action_summary` | `team.lock` | `schema/lock.schema.json` | `0, 1, 2` (5 rows) | `Exits 0 when the lock is taken, 1 when it is already held or cannot be written, 2 when the invocation or project can't be read.` |
 | 33 | `tempo` | action | `team <project>, session "<session>"` | — | `action_summary` | `team.tempo` | `schema/tempo.schema.json` | `0, 1, 2` (8 rows) | `Exits 0 when the tempo is set or already matches, 1 when the caller is not the owner, 2 when the invocation, tempo word, or team file can't be read.` |
@@ -226,13 +226,12 @@ Every command ends its plain-text reading or action with **one summary line**:
 ## 4. Exit Codes, Refusal Rules, and `--help`
 
 1. **Authoritative contract (`contract/exit-codes.json`)**:
-   - Exit codes are **unchanged** in 0.5.0. `contract/exit-codes.json` (558 rows across the 41 command names, verified by `bun scripts/exit-codes.ts --check` and `test/exit-codes.test.ts`) is the single source of truth.
+   - Exit codes are **unchanged** in 0.5.0, except `release`, whose exit `64` came into the standard convention as `2`. `contract/exit-codes.json` (558 rows across the 41 command names, verified by `bun scripts/exit-codes.ts --check` and `test/exit-codes.test.ts`) is the single source of truth.
    - Standard convention across commands:
      - `0`: work finished, reading agrees with the file, or `--dry-run` plan printed.
      - `1`: differences/findings found, caller/policy/lock gate refused, or runtime step failed.
      - `2`: bad CLI invocation (unknown flag, missing argument), unreadable/invalid `.agents/team.yaml`, not inside a git repository, or `herdr` unreachable (where the contract row specifies `2`).
    - **Documented contract exceptions (pinned in `contract/exit-codes.json`)**:
-     - `release`: returns `0` (all checks pass), `1` (a check is missing), `2` (`release.unknown` — unknown check name), and `64` (`release.configuration`, `release.usage` — unreadable team file or bad invocation).
      - `list` and `usage`: return only `0` and `2` (no exit `1` rows).
      - `messages`, `issues`, `next`, `plan`, `broker`: put unreadable/invalid team file (`*.file`) on exit `1` and bad invocation / not-a-repo (`*.invocation`, `*.not-a-repo`) on exit `2`.
      - `check`, `status`, `seats`, `proc`: put `*.not-yours` (and `*.herdr` on `check`, `status`, `seats`, `down`) on exit `2`, whereas `add.caller`, `down.caller`, `answer.caller` and `add.effort` / `add.model` / `add.seat-name` / `add.locked` follow their respective `1` or `2` rows in `contract/exit-codes.json`.
@@ -267,7 +266,7 @@ Every `--json` document carries a top-level `schema` tag as its first key (`json
 
 - Sub-modes use dotted names: e.g., `team.status.project` for `team status --project <name> --json`, `team.send.list` for `team send --list --json`.
 - **Field-name stability and scoping**:
-  - Top-level envelope keys are stable: `schema`, `format`, `project`, `session`, `rows` / `seats` / `findings`, `notes`, `differences`, `summary` (object `{ differences, owner_differences }` on reading envelopes), `action_summary` (string on action envelopes), `notice`.
+  - Top-level envelope keys are stable: `schema`, `format`, `project`, `session`, `rows` / `seats` / `findings`, `notes`, `differences`, `summary` (object `{ differences, owner_differences }` on difference-reading envelopes, `{ checks, missing }` on `team.release`), `action_summary` (string on action envelopes), `notice`.
   - Per-command row shapes are scoped by `schema.name`:
     - In `team.status`, each item in `rows` carries `state` (the comparison phrase, e.g. `"working"`, `"missing"`, `"stopped"` under `--all`) plus `seat_state` and `seat_state_source` (from `src/labels/state.ts`, where a stopped seat under `--all` carries `seat_state: "done", seat_state_source: "process"`).
     - In `team.seats`, each item in `seats` carries `status` (the comparison phrase) plus `state` and `state_source`.
@@ -313,7 +312,7 @@ Every `--json` document carries a top-level `schema` tag as its first key (`json
 
 ### 5.3 Structured Errors Under `--json` (`jsonError`, `writeJsonError`)
 
-When a command fails (exit code `1`, `2`, or `64`) while `--json` is passed, it writes a structured error envelope (`schema/error.schema.json`) to `stdout` via `writeJsonError(io, id, message, repair, version, rule)` (with `stderr` empty) and exits with the contract exit code:
+When a command fails (exit code `1` or `2`) while `--json` is passed, it writes a structured error envelope (`schema/error.schema.json`) to `stdout` via `writeJsonError(io, id, message, repair, version, rule)` (with `stderr` empty) and exits with the contract exit code:
 
 ```json
 {
