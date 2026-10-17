@@ -180,6 +180,7 @@ describe('up --dry-run', () => {
         seat('grok-acme', { stopped: true }),
         seat('claude-docs', { cwd: 'docs', label: 'docs' }),
       ],
+      watchLabel: 'Watch · acme-web',
     });
     expect(formatPlan(plan)).toBe(
       [
@@ -203,8 +204,9 @@ describe('up --dry-run', () => {
         '  wait until claude-docs shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of claude-docs> claude-docs',
         "+ herdr --session acme-web pane report-metadata <pane of claude-docs> --source team --display-agent 'Claude Opus 5.5 default'",
-        "+ 'team watch --session acme-web'",
-        '    (detached; the state records its pid)',
+        "+ herdr --session acme-web workspace create --cwd /work/acme-web --label 'Watch · acme-web' --no-focus",
+        "+ herdr --session acme-web pane run <pane of Watch · acme-web> 'team watch --session acme-web'",
+        '    (a desktop notification follows when the watch exits)',
         'dry run: nothing was run',
         '',
       ].join('\n'),
@@ -212,9 +214,11 @@ describe('up --dry-run', () => {
   });
 
   test('a running session is not started again', () => {
-    const plan = upPlan({ root: '/work/a', session: 'a', sessionRunning: true, seats: [] });
-    expect(plan.map((step) => step.kind)).toEqual(['run']);
-    expect(plan[0]).toMatchObject({ argv: ['team watch --session a'] });
+    const plan = upPlan({ root: '/work/a', session: 'a', sessionRunning: true, seats: [], watchLabel: 'Watch · a' });
+    expect(plan.map((step) => step.kind)).toEqual(['run', 'run']);
+    expect(plan[0]).toMatchObject({
+      argv: ['herdr', '--session', 'a', 'workspace', 'create', '--cwd', '/work/a', '--label', 'Watch · a', '--no-focus'],
+    });
   });
 
   test('a state hook the run installed rides at the end of the line it would print', () => {
@@ -223,6 +227,7 @@ describe('up --dry-run', () => {
       session: 'acme-web',
       sessionRunning: true,
       seats: [seat('worker'), seat('grok-acme', { cli: 'grok', launch: 'grok' })],
+      watchLabel: 'Watch · acme-web',
       cliHooks: {
         worker: '/work/acme-web/.agents/hooks/worker.json',
         'grok-acme': '/work/acme-web/.agents/hooks/grok-acme.json',
@@ -237,7 +242,7 @@ describe('up --dry-run', () => {
   });
 
   test('never holds a command that answers, closes or deletes', () => {
-    const plan = upPlan({ root: '/work/a', session: 'a', sessionRunning: false, seats: [seat('one'), seat('two')] });
+    const plan = upPlan({ root: '/work/a', session: 'a', sessionRunning: false, seats: [seat('one'), seat('two')], watchLabel: 'Watch · a' });
     const verbs = plan.flatMap((step) => {
       if (step.kind !== 'run') return [];
       return [step.argv, ...(step.also ? [step.also] : [])]

@@ -33,6 +33,7 @@ import { emptySession, readState, updateState, type SeatState } from '../state.t
 import { modelDiffers } from '../status/statusline.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
+import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import type { Launch } from './up.ts';
 
@@ -234,6 +235,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       sessionRunning: true,
       startWatch: false,
       cliHooks: installed,
+      watchLabel: watchLabel(team.project),
     });
     // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
     // run starts.

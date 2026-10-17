@@ -67,6 +67,7 @@ import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
+import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -316,6 +317,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       seats: [planSeat],
       watchAlive: true,
       cliHooks: plannedCliHooks(dir, [planSeat]),
+      watchLabel: watchLabel(team.project),
     });
     return dryRunExit(out, `${stopStep}${plainText(formatPlan(preview))}`);
   }
@@ -405,6 +407,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       seats: [planSeat],
       watchAlive: true,
       cliHooks: installed,
+      watchLabel: watchLabel(team.project),
     });
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
     // plan starts.

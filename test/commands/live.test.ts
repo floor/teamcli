@@ -17,6 +17,7 @@ import type { Key } from '../../src/launch/terminal.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { defaultFs } from '../../src/lobby/gate.ts';
 import { readScreen, type Screen } from '../../src/watch/screen.ts';
+import { watchLabel } from '../../src/watch/pane.ts';
 import { agyMismatchedFrame, CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
@@ -460,6 +461,8 @@ describe('team up, live', () => {
       'claude-coordinator-acme · project coordinator',
       'deepseek-acme · implementer',
       'deepseek-acme-2 · implementer',
+      // Last, the watch's own workspace: the pane that runs the watch.
+      watchLabel('acme-web'),
     ]);
     expect(made.renames).toEqual(['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2']);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
@@ -1190,7 +1193,7 @@ describe('team up, live', () => {
       '  already ready; left as it is; a relaunch records its process: ' +
         'team down, then team up (to restart the whole team)\n',
     );
-    expect(made.creates).toEqual(['deepseek-acme-2 · implementer']);
+    expect(made.creates).toEqual(['deepseek-acme-2 · implementer', watchLabel('acme-web')]);
     expect(made.renames).toContain('deepseek-acme');
     expect(made.renames).not.toContain('claude-coordinator-acme');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
@@ -1883,7 +1886,7 @@ describe('team up, live', () => {
     expect(code, io.err + io.out).toBe(refusal ? 1 : 0);
     const names = ['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2'];
     const labels = ['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer'];
-    expect(made.creates.filter((label) => label !== 'watchdog')).toEqual(labels.slice(0, count));
+    expect(made.creates.filter((label) => label !== watchLabel('acme-web'))).toEqual(labels.slice(0, count));
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     for (const name of names.slice(0, count)) expect(seats[name]?.stage, name).toBe('ready');
     for (const name of names.slice(count)) expect(seats[name]?.stage, name).not.toBe('ready');
@@ -2028,7 +2031,7 @@ describe('team up, live', () => {
     const made = world();
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({ machine: () => fine }, made))).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
   });
 
   test("a doctor miss refuses, and the watch's missing heartbeat does not", async () => {
@@ -3487,6 +3490,8 @@ describe('team up, the pause', () => {
       // Then the later seats, the same way.
       'create:deepseek-acme · implementer', 'run:w2:p1', 'read:w2:p1', 'read:w2:p1', 'process:w2:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w2:p1:deepseek-acme',
       'create:deepseek-acme-2 · implementer', 'run:w3:p1', 'read:w3:p1', 'read:w3:p1', 'process:w3:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w3:p1:deepseek-acme-2',
+      // Then the watch's workspace and its command line, the plan's last step.
+      'create:Watch · acme-web', 'run:w4:p1',
     ]);
     expect(typed).toEqual([]);
     expect(lockedWhileWaiting.length).toBeGreaterThanOrEqual(2);
@@ -3578,10 +3583,10 @@ describe('team up, the pause', () => {
     expect(code).toBe(1);
     expect(io.err).toContain(prompt('claude-coordinator-acme', 'permission'));
     // The run's own seat's workspace is closed; the session it did not start is not stopped,
-    // and no second watchdog is started into it.
+    // and no second watch is started into it.
     expect(made.closes).toEqual(['w1']);
     expect(stopped).toBe(0);
-    expect(made.creates).not.toContain('watchdog');
+    expect(made.creates).not.toContain(watchLabel('acme-web'));
     expect(io.err).not.toContain('session acme-web');
   });
 
@@ -4698,7 +4703,7 @@ describe('team up, delegated', () => {
     expect(io.err).not.toContain("--file is the owner's");
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(made.starts).toBe(1);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
     expect(audits).toEqual([]);
   });
 
@@ -4732,7 +4737,7 @@ describe('team up, delegated', () => {
     const code = await runUp(FILE, io, sources({ ...passed, logDelegated }, made));
     expect(code).toBe(0);
     expect(made.starts).toBe(1);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(made.terminal.reads).toBe(0);
     expect(audits).toHaveLength(1);

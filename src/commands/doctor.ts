@@ -402,7 +402,7 @@ function watchFindings(
   if (recorded.pane && sources.watchPane && sources.watchAlive) {
     const there = sources.watchPane(session, recorded.pane, recorded.workspace);
     if (there === false) {
-      if (sources.watchAlive(recorded.pid)) {
+      if (recorded.pid !== undefined && sources.watchAlive(recorded.pid)) {
         const name = sources.processComm?.(recorded.pid) ?? 'process';
         return [{
           level: 'miss',

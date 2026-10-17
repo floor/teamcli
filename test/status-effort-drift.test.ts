@@ -19,6 +19,7 @@ import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import type { Standing } from '../src/store/store.ts';
+import { watchLabel } from '../src/watch/pane.ts';
 import { testIo } from './helpers.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
@@ -48,7 +49,7 @@ function built(): Live {
     ],
     workspaces: [
       { id: 'w1', label: 'claude opus 5.5' }, { id: 'w2', label: 'gpt sol 6' },
-      { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: 'watchdog' },
+      { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: watchLabel('acme-web') },
     ],
     screens: { 'w1:p1': claudeScreen('Opus 5.5') },
   };

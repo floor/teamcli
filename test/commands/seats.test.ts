@@ -11,6 +11,7 @@ import { runStatus, type StatusJson, type StatusSources } from '../../src/comman
 import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, updateState } from '../../src/state.ts';
+import { watchLabel } from '../../src/watch/pane.ts';
 import type { Live } from '../../src/status/compare.ts';
 import type { Standing } from '../../src/store/store.ts';
 import { gitEnv, testIo } from '../helpers.ts';
@@ -40,7 +41,7 @@ function built(): Live {
       { id: 'ws-2', label: 'gpt sol 6' },
       { id: 'ws-3', label: 'deepseek flash v4.1' },
       { id: 'ws-4', label: 'deepseek flash v4.1-2' },
-      { id: 'ws-9', label: 'watchdog' },
+      { id: 'ws-9', label: watchLabel('acme-web') },
     ],
     screens: { 'pane-1': claudeScreen('Opus 5.5') },
   };

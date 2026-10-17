@@ -114,7 +114,7 @@ describe('the watch and its pane', () => {
   test('own pane is the one whose shell is this process\'s parent', () => {
     setHerdrRun((args) => {
       if (args[0] === 'workspace' && args[1] === 'list') {
-        return { workspaces: [capturedWorkspaceEntry('w9', 'watchdog'), capturedWorkspaceEntry('w1', 'seat')] };
+        return { workspaces: [capturedWorkspaceEntry('w9', 'Watch · acme-web'), capturedWorkspaceEntry('w1', 'seat')] };
       }
       if (args[0] === 'pane' && args[1] === 'list' && args[3] === 'w9') {
         return { panes: [capturedPaneEntry('w9:p1', 'w9')] };
@@ -216,7 +216,7 @@ describe('the watch and its pane', () => {
 });
 
 describe('remove --keep', () => {
-  test('closes the seat workspace and leaves the watchdog workspace alone', async () => {
+  test('closes the seat workspace and leaves the watch workspace alone', async () => {
     const dir = root;
     writeFileSync(join(dir, '.agents/team.yaml'), REMOVE_FILE);
     execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore' });
