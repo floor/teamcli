@@ -75,12 +75,20 @@ and open nothing: the target is the file the caller's own place finds.
   (`src/labels/state.ts`): the word and where it came from, best source first — the pane's screen,
   herdr's word, the seat's newest trace, its process — save one exception: a trace inside the window
   (`state_trace_window_seconds`, 2m shipped) beats an idle word, from the screen or from herdr, and
-  only a trace with its own clock counts as fresh — a commit, an ack, a message. A tool row read
+  only a trace with its own clock counts as fresh — a commit, an ack, a message that reached the
+  seat (a send the seat did not take — `unreachable`, `not-submitted`, `held`, `timeout` — is no
+  trace: it would read a seat as working because someone failed to reach it, and clear a blind
+  seat's flag without a sign the seat moved). A tool row read
   off a screen carries no clock of its own and is never weighed as recency (it is kept for
   display), so a seat whose last commit, ack or message is that fresh reads `working` while its
-  prompt shows; a working screen, a blocked screen and the certainties (`held`, `unreachable`,
-  `done`) never yield to it. A seat blind — `unknown` past the blind threshold, 30m shipped —
-  counts as not working:
+  prompt shows; a working screen, a blocked screen — a composer holding unsent text included —
+  and the certainties (`held`, `unreachable`, `done`) never yield to it. `done` from the file's
+  `stopped` or from a retained record stands only while herdr names no agent for the seat: a live
+  agent is the observation, and a file's `stopped` beside a running seat is a difference of its
+  own, never the state. A process the comparison calls `restored, not launched by team` is
+  untrusted: neither its screen nor herdr's word for it is read, and the reading is TeamCLI's own
+  records or nothing — `unknown`, blind by its trace's age. A seat blind — `unknown` past the
+  blind threshold, 30m shipped — counts as not working:
   one difference, the owner's, `<seat>: unknown for over 30m — blind, and it counts as not working`,
   repaired with the owner's look at the pane;
 - the agent registry (`<home>/.config/team/agents/`), one read of each seat's record for the
