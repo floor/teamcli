@@ -403,13 +403,14 @@ Hidden: no
 
 Usage:
 
-    team issues
+    team issues [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -548,13 +549,14 @@ Hidden: no
 
 Usage:
 
-    team next [--mine | --release] [--wait]
+    team next [--mine | --release] [--wait] [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--mine` | no | no | no |
 | `--release` | no | no | no |
 | `--wait` | no | no | no |
@@ -570,13 +572,14 @@ Hidden: no
 
 Usage:
 
-    team plan
+    team plan [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

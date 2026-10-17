@@ -2702,12 +2702,12 @@ async function issued(place: Place, argv: string[] = []): Promise<Ran> {
 scene('issues.none', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '[]\n');
-  return show(await issued(place), 'nothing is waiting');
+  return show(await issued(place), '0 issue(s)');
 });
 scene('issues.shown', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '- id: m1\n  title: the task title\n');
-  return show(await issued(place), 'm1  the task title');
+  return show(await issued(place), 'm1  open   -         the task title');
 });
 scene('issues.file', async (place) => show(await issued(place), 'no team file here'));
 scene('issues.missing', async (place) => {
@@ -3114,13 +3114,13 @@ scene('plan.none', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '[]\n');
   recordLead(place);
-  return show(await planned(place), 'nothing is takeable');
+  return show(await planned(place), '0 task(s)');
 });
 scene('plan.shown', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '- id: m1\n  title: the task title\n');
   recordLead(place);
-  return show(await planned(place), 'm1  the task title');
+  return show(await planned(place), '1     open   -      the task title');
 });
 scene('plan.caller', async (place) => {
   write(place, TASKS);
@@ -3380,7 +3380,7 @@ async function fed(place: Place, argv: string[]): Promise<Ran> {
 
 scene('feed.ok', async (place) => {
   write(place, TEAM);
-  return show(await fed(place, []), '(no messages)');
+  return show(await fed(place, []), '0 event(s)');
 });
 scene('feed.unreadable', async (place) => {
   write(place, TEAM);

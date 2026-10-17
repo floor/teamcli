@@ -309,7 +309,7 @@ try {
   const take = await runNext([], io, { home });
   console.log('--- take (the state-recorded seat, the real client) ---');
   console.log(JSON.stringify({ code: take, out: io.out, err: io.err }));
-  if (take !== 0 || io.out !== 'ACME-1  a task\n  priority: 1\n' || io.err !== '') throw new Error(`the take was not the filtered record: ${take} ${io.out} ${io.err}`);
+  if (take !== 0 || io.out !== 'team acme, session "acme"\nACME-1  a task\n  priority: 1\nteam next: claimed ACME-1\n' || io.err !== '') throw new Error(`the take was not the filtered record: ${take} ${io.out} ${io.err}`);
   if (JSON.stringify(keyReads) !== JSON.stringify(['team.linear.acme'])) throw new Error(`the keychain reads were ${JSON.stringify(keyReads)}`);
   const leasePath = join(root, '.agents', 'leases', 'ACME-1.json');
   const lease = JSON.parse(readFileSync(leasePath, 'utf8')) as { seat: string; pane: string };
@@ -346,7 +346,7 @@ try {
   const release = await runNext(['--release'], io2, { home });
   console.log('--- release (local, the broker untouched) ---');
   console.log(JSON.stringify({ code: release, out: io2.out, err: io2.err }));
-  if (release !== 0 || io2.out !== 'team next: released ACME-1\n' || io2.err !== '') throw new Error(`the release was ${release} ${io2.out}`);
+  if (release !== 0 || io2.out !== 'team acme, session "acme"\nteam next: released ACME-1\n' || io2.err !== '') throw new Error(`the release was ${release} ${io2.out}`);
   if (existsSync(leasePath)) throw new Error('the release did not unlink the lease');
   if (tracked() !== 2) throw new Error('the release reached the tracker');
 

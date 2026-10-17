@@ -650,6 +650,134 @@ export const UNLOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
     value: { type: ['string', 'null'] },
   },
 });
+/** Published `--json` output schema for `team issues` (`schema/issues.schema.json`). */
+export const ISSUES_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.issues',
+  fileName: 'issues.schema.json',
+  title: 'team issues --json output',
+  required: ['format', 'project', 'session', 'issues'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    issues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'title', 'state', 'assignee'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          title: { type: 'string', minLength: 1 },
+          state: { type: 'string', enum: ['open', 'blocked'] },
+          assignee: { type: ['string', 'null'] },
+          priority: { type: ['string', 'number'] },
+          milestone: { type: 'string' },
+          deadline: { type: 'string' },
+          blocked_by: { type: 'array', items: { type: 'string' } },
+          repos: { type: 'array', items: { type: 'string' } },
+          needs: { type: 'array', items: { type: 'string' } },
+          description: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team plan` (`schema/plan.schema.json`). */
+export const PLAN_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.plan',
+  fileName: 'plan.schema.json',
+  title: 'team plan --json output',
+  required: ['format', 'project', 'session', 'tasks'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    tasks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['step', 'state', 'owner', 'id', 'title'],
+        properties: {
+          step: { type: 'integer', minimum: 1 },
+          state: { type: 'string', enum: ['open', 'overdue'] },
+          owner: { type: ['string', 'null'] },
+          id: { type: 'string', minLength: 1 },
+          title: { type: 'string', minLength: 1 },
+          priority: { type: ['string', 'number'] },
+          milestone: { type: 'string' },
+          deadline: { type: 'string' },
+          description: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team feed` (`schema/feed.schema.json`). */
+export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.feed',
+  fileName: 'feed.schema.json',
+  title: 'team feed --json output',
+  required: ['format', 'project', 'session', 'events'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    // A run outside a checkout, or one scanning every team with `--all`, names no single team.
+    project: { type: ['string', 'null'] },
+    session: { type: ['string', 'null'] },
+    events: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['ts', 'from', 'to', 'body', 'id', 'outcome'],
+        properties: {
+          ts: { type: 'string' },
+          from: { type: 'string' },
+          to: { type: 'string' },
+          body: { type: 'string' },
+          id: { type: 'string' },
+          outcome: { type: 'string' },
+          // Present only on a line the sender measured, as the history log writes it.
+          ms: { type: 'number' },
+          via: { type: 'string' },
+          failed: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team next` (`schema/next.schema.json`). */
+export const NEXT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.next',
+  fileName: 'next.schema.json',
+  title: 'team next --json output',
+  statuses: ['claimed', 'released', 'none'],
+  required: ['project', 'session', 'action', 'task'],
+  properties: {
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    action: { type: 'string', enum: ['claim', 'release', 'none'] },
+    // The claimed record's id and title, null for a release or an empty answer.
+    task: {
+      oneOf: [
+        { type: 'null' },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['id', 'title'],
+          properties: {
+            id: { type: 'string', minLength: 1 },
+            title: { type: 'string', minLength: 1 },
+          },
+        },
+      ],
+    },
+  },
+});
 
 const RELEASE_CHECK_OUTCOME_FRAGMENT: JsonSchema = {
   type: 'object',
@@ -714,6 +842,10 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
   RELEASE_OUTPUT_SCHEMA,
+  ISSUES_OUTPUT_SCHEMA,
+  FEED_OUTPUT_SCHEMA,
+  PLAN_OUTPUT_SCHEMA,
+  NEXT_OUTPUT_SCHEMA,
 ];
 
 

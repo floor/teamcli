@@ -722,6 +722,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -733,7 +739,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team issues"
+        "team issues [--json]"
       ]
     },
     {
@@ -946,6 +952,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--mine",
           "repeatable": false,
           "takesValue": false
@@ -974,7 +986,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team next [--mine | --release] [--wait]"
+        "team next [--mine | --release] [--wait] [--json]"
       ]
     },
     {
@@ -982,6 +994,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -997,7 +1015,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team plan"
+        "team plan [--json]"
       ]
     },
     {

@@ -17,15 +17,25 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { runFeed } from '../src/commands/feed.ts';
+import { runFeed, USAGE } from '../src/commands/feed.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { FEED_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { appendHistory, historyPath, MAX_HISTORY_BYTES, readHistory } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
+
+type FeedDoc = {
+  schema: { name: string; version: number };
+  format: number;
+  project: string | null;
+  session: string | null;
+  events: Array<Record<string, unknown>>;
+};
 
 const NOW = new Date('2026-10-14T15:30:00.000Z');
 
@@ -212,17 +222,34 @@ describe('team send history log & team feed', () => {
     expect(existsSync(join(dir, 'messages.jsonl'))).toBe(false);
     expect(readdirSync(lobbyDir(home))).toEqual([]);
 
+    // The table's KIND keeps the channel and the timing, and DETAIL folds the filed body's
+    // header and blank line onto the one line its cell can hold.
     const feedIo = testIo(root);
     expect(await runFeed([], feedIo, { home })).toBe(0);
     expect(feedIo.out).toBe(
-      `15:30:00  helper -> lead  [delivered] via typed in 0 ms  ${seatHeader.split('\n')[0]}\n          \n          ${secret}\n`,
+      'team acme, session "acme"\n' +
+        '  TIME      KIND                           SEAT            DETAIL\n' +
+        `  15:30:00  delivered (via typed in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
+        '1 event(s)\n',
     );
 
-    // The formatted line keeps the channel; `--json` carries the legs that failed before it.
+    // One envelope, not one line per event; it carries the legs that failed before the typed one.
     const jsonIo = testIo(root);
     expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
-    const jsonLine = JSON.parse(jsonIo.out) as Record<string, unknown>;
-    expect(jsonLine.failed).toEqual([
+    const doc = assertMatchesOutputSchema<FeedDoc>(jsonIo.out, FEED_OUTPUT_SCHEMA);
+    expect(doc.schema).toEqual({ name: 'team.feed', version: 1 });
+    expect(doc).toMatchObject({ format: 1, project: 'acme', session: 'acme' });
+    expect(doc.events).toHaveLength(1);
+    expect(doc.events[0]).toMatchObject({
+      ts: NOW.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      id: sentDoc.ids.sent,
+      outcome: 'delivered',
+      ms: 0,
+      via: 'typed',
+    });
+    expect(doc.events[0]?.failed).toEqual([
       'native: unavailable; the frame path is a socket write this build does not make',
       'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
     ]);
@@ -328,6 +355,74 @@ describe('team send history log & team feed', () => {
     const io = testIo(root);
     expect(await runFeed([], io, { home })).toBe(1);
     expect(io.err).toContain('the history log cannot be read: a symbolic link was found and not followed');
+
+    // Under `--json` the same refusal is one team.error document on stdout, stderr empty.
+    const json = testIo(root);
+    expect(await runFeed(['--json'], json, { home })).toBe(1);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'feed.unreadable',
+      messageContains: 'the history log cannot be read: a symbolic link was found and not followed',
+    });
+  });
+
+  test('--follow and --json are refused: the error document --json asks for', async () => {
+    const { root, home } = world();
+    const io = testIo(root);
+    expect(await runFeed(['--follow', '--json'], io, { home })).toBe(2);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, {
+      id: 'feed.usage',
+      messageContains: "--follow and --json can't be used together",
+    });
+  });
+
+  test('--json writes one team.feed document, names no team outside a checkout, and every refusal is a team.error', async () => {
+    const { root, home } = world();
+    const empty = testIo(root);
+    expect(await runFeed(['--json'], empty, { home })).toBe(0);
+    expect(assertMatchesOutputSchema<FeedDoc>(empty.out, FEED_OUTPUT_SCHEMA)).toMatchObject({
+      format: 1,
+      project: 'acme',
+      session: 'acme',
+      events: [],
+    });
+
+    // A run outside any checkout with --all is not team-scoped: the document names no team.
+    const all = testIo(base);
+    expect(await runFeed(['--all', '--json'], all, { home })).toBe(0);
+    expect(assertMatchesOutputSchema<FeedDoc>(all.out, FEED_OUTPUT_SCHEMA)).toMatchObject({
+      project: null,
+      session: null,
+      events: [],
+    });
+
+    const noFile = testIo(base);
+    expect(await runFeed(['--json'], noFile, { home })).toBe(2);
+    expect(noFile.err).toBe('');
+    assertJsonErrorShape(noFile.out, { id: 'feed.configuration', messageContains: 'not inside a git repository' });
+
+    const usage = testIo(root);
+    expect(await runFeed(['--json', 'extra'], usage, { home })).toBe(2);
+    expect(usage.err).toBe('');
+    assertJsonErrorShape(usage.out, { id: 'feed.usage', messageContains: 'unexpected "extra"' });
+
+    // The raw argv is scanned before the parser runs: an unknown option ahead of `--json`, or a
+    // `--json=<value>` the parser refuses, still writes the error document and leaves stderr empty.
+    const nope = testIo(root);
+    expect(await runFeed(['--nope', '--json'], nope, { home })).toBe(2);
+    expect(nope.err).toBe('');
+    assertJsonErrorShape(nope.out, { id: 'feed.usage', messageContains: 'unknown option --nope' });
+
+    const inline = testIo(root);
+    expect(await runFeed(['--json=1'], inline, { home })).toBe(2);
+    expect(inline.err).toBe('');
+    assertJsonErrorShape(inline.out, { id: 'feed.usage', messageContains: 'unknown option --json' });
+
+    const badLimit = testIo(root);
+    expect(await runFeed(['--json', '--limit', '0'], badLimit, { home })).toBe(2);
+    expect(badLimit.err).toBe('');
+    assertJsonErrorShape(badLimit.out, { id: 'feed.usage', messageContains: '--limit takes a whole number' });
   });
 
   test('rotates at 1 MB keeping 3 files at mode 0600, and team feed --follow streams across rotation', async () => {
@@ -357,9 +452,10 @@ describe('team send history log & team feed', () => {
     expect(statSync(`${logPath}.1`).mode & 0o777).toBe(0o600);
     expect(statSync(`${logPath}.2`).mode & 0o777).toBe(0o600);
 
-    // Follow mode across another rotation
+    // Follow mode across another rotation: the opening batch is the last line before it, and
+    // the pass that crosses the rotation prints the four events it brought as its own table.
     const followIo = testIo(root);
-    const code = await runFeed(['--limit', '1', '--follow', '--json'], followIo, {
+    const code = await runFeed(['--limit', '1', '--follow'], followIo, {
       home,
       poll: async (tick) => {
         if (tick === 0) {
@@ -380,11 +476,14 @@ describe('team send history log & team feed', () => {
       },
     });
     expect(code).toBe(0);
-    const lines = followIo.out
-      .trim()
-      .split('\n')
-      .map((line) => (JSON.parse(line) as { id: string }).id);
-    expect(lines).toEqual(['id-9', 'id-10', 'id-11', 'id-12', 'id-13']);
+    expect((followIo.out.match(/^ *TIME +KIND +SEAT +DETAIL$/gm) ?? []).length).toBe(2);
+    expect((followIo.out.match(/team acme, session "acme"/g) ?? []).length).toBe(1);
+    expect(followIo.out).toContain('1 event(s)\n');
+    expect(followIo.out).toContain('4 event(s)\n');
+    expect(followIo.out).toContain(`9:${chunk}`);
+    for (let j = 10; j <= 13; j++) {
+      expect(followIo.out).toContain(`followed-${String(j)}:${'z'.repeat(240_000)}`);
+    }
   });
 
   test('filters by --seat, respects --limit, and merges briefs/*-to-*.md and audit.jsonl', async () => {
@@ -422,27 +521,30 @@ describe('team send history log & team feed', () => {
     const allIo = testIo(root);
     expect(await runFeed([], allIo, { home, auditPath })).toBe(0);
     expect(allIo.out).toBe(
-      [
-        '15:00:01  lead -> helper  [delivered]  first task',
-        '15:00:02  iris -> atlas  [brief]  handoff note',
-        '15:00:03  lead -> native  [delivered]  second task',
-        '          line two',
-        '15:00:04  desk -> lead  [verified]  status check',
-        '',
-      ].join('\n'),
+      'team acme, session "acme"\n' +
+        '  TIME      KIND       SEAT            DETAIL\n' +
+        '  15:00:01  delivered  lead -> helper  first task\n' +
+        '  15:00:02  brief      iris -> atlas   handoff note\n' +
+        '  15:00:03  delivered  lead -> native  second task line two\n' +
+        '  15:00:04  verified   desk -> lead    status check\n' +
+        '4 event(s)\n',
     );
 
     const seatIo = testIo(root);
     expect(await runFeed(['--seat', 'helper'], seatIo, { home, auditPath })).toBe(0);
-    expect(seatIo.out).toBe('15:00:01  lead -> helper  [delivered]  first task\n');
+    expect(seatIo.out).toBe(
+      'team acme, session "acme"\n' +
+        '  TIME      KIND       SEAT            DETAIL\n' +
+        '  15:00:01  delivered  lead -> helper  first task\n' +
+        '1 event(s)\n',
+    );
 
     const limitIo = testIo(root);
     expect(await runFeed(['--limit', '2', '--json'], limitIo, { home, auditPath })).toBe(0);
-    const jsonIds = limitIo.out
-      .trim()
-      .split('\n')
-      .map((line) => (JSON.parse(line) as { id: string }).id);
-    expect(jsonIds).toEqual(['m2', 'req-1']);
+    expect(assertMatchesOutputSchema<FeedDoc>(limitIo.out, FEED_OUTPUT_SCHEMA).events.map((event) => event.id)).toEqual([
+      'm2',
+      'req-1',
+    ]);
   });
 
   test('parses multi-section briefs/*-to-*.md with ## <ISO-8601> — From <Sender> headers in chronological order', async () => {
@@ -470,11 +572,11 @@ describe('team send history log & team feed', () => {
     const io = testIo(root);
     expect(await runFeed([], io, { home })).toBe(0);
     expect(io.out).toBe(
-      [
-        '15:00:01  iris -> atlas  [brief]  Round 1: First brief section from Iris.',
-        '15:00:05  atlas -> iris  [brief]  Round 1 Reply: Reply section from Atlas in the same file.',
-        '',
-      ].join('\n'),
+      'team acme, session "acme"\n' +
+        '  TIME      KIND   SEAT           DETAIL\n' +
+        '  15:00:01  brief  iris -> atlas  Round 1: First brief section from Iris.\n' +
+        '  15:00:05  brief  atlas -> iris  Round 1 Reply: Reply section from Atlas in the same file.\n' +
+        '2 event(s)\n',
     );
   });
 
@@ -526,16 +628,17 @@ describe('team send history log & team feed', () => {
     writeFileSync(answerFile, answerContent);
 
     // Running outside any git checkout (e.g. from the Desk lobby directory) merges all projects + Desk lobby records
+    // Outside any checkout there is no team to name: no context line, and the table starts at
+    // column 0.
     const deskPaneIo = testIo(lobbyDir(home));
     expect(await runFeed([], deskPaneIo, { home })).toBe(0);
     expect(deskPaneIo.out).toBe(
-      [
-        '16:00:01  lead -> helper  [delivered]  acme message',
-        '16:00:02  keeper -> reviewer  [delivered]  beacon message',
-        '16:00:03  desk -> orchestrator  [accepted]  accepted (req-9)',
-        '16:00:04  orchestrator -> desk  [answered]  gate approved',
-        '',
-      ].join('\n'),
+      'TIME      KIND       SEAT                  DETAIL\n' +
+        '16:00:01  delivered  lead -> helper        acme message\n' +
+        '16:00:02  delivered  keeper -> reviewer    beacon message\n' +
+        '16:00:03  accepted   desk -> orchestrator  accepted (req-9)\n' +
+        '16:00:04  answered   orchestrator -> desk  gate approved\n' +
+        '4 event(s)\n',
     );
 
     // Running inside `acme` with `--all`, `--audit`, and `--briefs` flags
@@ -557,15 +660,15 @@ describe('team send history log & team feed', () => {
       await runFeed(['--all', '--briefs', customBriefs, '--audit', customAudit], flagIo, { home }),
     ).toBe(0);
     expect(flagIo.out).toBe(
-      [
-        '16:00:01  lead -> helper  [delivered]  acme message',
-        '16:00:02  keeper -> reviewer  [delivered]  beacon message',
-        '16:00:03  desk -> orchestrator  [accepted]  accepted (req-9)',
-        '16:00:04  orchestrator -> desk  [answered]  gate approved',
-        '16:00:05  desk -> lead  [brief]  custom brief line',
-        '16:00:06  desk -> lead  [forwarded]  explicit audit line',
-        '',
-      ].join('\n'),
+      'team acme, session "acme"\n' +
+        '  TIME      KIND       SEAT                  DETAIL\n' +
+        '  16:00:01  delivered  lead -> helper        acme message\n' +
+        '  16:00:02  delivered  keeper -> reviewer    beacon message\n' +
+        '  16:00:03  accepted   desk -> orchestrator  accepted (req-9)\n' +
+        '  16:00:04  answered   orchestrator -> desk  gate approved\n' +
+        '  16:00:05  brief      desk -> lead          custom brief line\n' +
+        '  16:00:06  forwarded  desk -> lead          explicit audit line\n' +
+        '6 event(s)\n',
     );
 
     // Desk ask/answer and audit files remain untouched (read-only)

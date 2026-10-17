@@ -78,12 +78,8 @@ function world() {
   return { root, dir, home };
 }
 
-function jsonIds(out: string): string[] {
-  return out
-    .trim()
-    .split('\n')
-    .filter((line) => line !== '' && line !== '(no messages)')
-    .map((line) => (JSON.parse(line) as { id: string }).id);
+function feedIds(out: string): string[] {
+  return (JSON.parse(out) as { events: Array<{ id: string }> }).events.map((event) => event.id);
 }
 
 describe('the feed\'s boundaries', () => {
@@ -104,14 +100,14 @@ describe('the feed\'s boundaries', () => {
 
     const io = testIo(root);
     expect(await runFeed(['--json'], io, { home })).toBe(0);
-    expect(jsonIds(io.out)).toEqual(['acme-1']);
+    expect(feedIds(io.out)).toEqual(['acme-1']);
     expect(io.out).not.toContain('the beta secret');
     expect(io.out).not.toContain('the other checkout line');
 
     // --all is the only door through which the other teams' messages appear
     const all = testIo(root);
     expect(await runFeed(['--all', '--json'], all, { home })).toBe(0);
-    expect(jsonIds(all.out)).toEqual(['acme-1', 'beta-1', 'acme-2']);
+    expect(feedIds(all.out)).toEqual(['acme-1', 'beta-1', 'acme-2']);
   });
 
   test('the 0600 history log is read and never rewritten, plain or following', async () => {
@@ -134,8 +130,14 @@ describe('the feed\'s boundaries', () => {
     const plain = testIo(root);
     expect(await runFeed([], plain, { home })).toBe(0);
     const follow = testIo(root);
-    expect(await runFeed(['--follow', '--json'], follow, { home, poll: async (tick) => tick < 2 })).toBe(0);
-    expect(jsonIds(follow.out)).toEqual(['m1', 'm2']);
+    expect(await runFeed(['--follow'], follow, { home, poll: async (tick) => tick < 2 })).toBe(0);
+    expect(follow.out).toBe(
+      'team acme, session "acme"\n' +
+        '  TIME      KIND       SEAT           DETAIL\n' +
+        '  16:00:00  delivered  owner -> lead  one\n' +
+        '  16:00:01  delivered  owner -> lead  two\n' +
+        '2 event(s)\n',
+    );
 
     expect(statSync(logPath).mode & 0o777).toBe(0o600);
     expect(readFileSync(logPath, 'utf8')).toBe(before);
@@ -164,7 +166,7 @@ describe('the feed\'s boundaries', () => {
 
     const io = testIo(root);
     expect(await runFeed(['--json'], io, { home })).toBe(0);
-    expect(jsonIds(io.out)).toEqual(['m1']);
+    expect(feedIds(io.out)).toEqual(['m1']);
     expect(io.out).not.toContain('this line is not json');
     expect(io.out).not.toContain('a body with no id');
 
@@ -179,7 +181,7 @@ describe('the feed\'s boundaries', () => {
     ].join('\n') + '\n', { mode: 0o600 });
     const auditIo = testIo(root);
     expect(await runFeed(['--audit', auditPath, '--json'], auditIo, { home })).toBe(0);
-    expect(jsonIds(auditIo.out)).toEqual(['m1', 'audit:r9:guard.ask:2026-10-14T16:00:11.000Z']);
+    expect(feedIds(auditIo.out)).toEqual(['m1', 'audit:r9:guard.ask:2026-10-14T16:00:11.000Z']);
     expect(auditIo.out).not.toContain('not json either');
   });
 
@@ -197,7 +199,7 @@ describe('the feed\'s boundaries', () => {
     };
 
     const io = testIo(root);
-    expect(await runFeed(['--follow', '--json'], io, {
+    expect(await runFeed(['--follow'], io, {
       home,
       poll: async (tick) => {
         if (tick !== 0) return false;
@@ -205,7 +207,15 @@ describe('the feed\'s boundaries', () => {
         return true;
       },
     })).toBe(0);
-    expect(jsonIds(io.out)).toEqual(['m1', 'm2']);
+    expect(io.out).toBe(
+      'team acme, session "acme"\n' +
+        '  TIME      KIND       SEAT           DETAIL\n' +
+        '  16:00:00  delivered  owner -> lead  the first line\n' +
+        '1 event(s)\n' +
+        '  TIME      KIND       SEAT           DETAIL\n' +
+        '  16:00:05  delivered  owner -> lead  the line the team wrote while it was followed\n' +
+        '1 event(s)\n',
+    );
 
     const after = readFileSync(logPath, 'utf8');
     expect(after.startsWith(before)).toBe(true);

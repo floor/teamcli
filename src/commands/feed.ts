@@ -6,6 +6,7 @@ import { loadTeamFile } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { lobbyDir } from '../lobby/gate.ts';
+import { contextLine, hasJsonFlag, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import {
   parseHistoryLine,
   readAllHistories,
@@ -19,7 +20,9 @@ export const USAGE = `Usage: team feed [--seat <name>] [--limit <n>] [--all] [--
 
 Reads the project's message history from the 0600 log in its state folder
 (~/.config/team/<project>-<hash>/messages.jsonl), together with any brief files
-(briefs/<from>-to-<to>.md) and Desk audit lines when present.
+(briefs/<from>-to-<to>.md) and Desk audit lines when present. Each event is one
+row: when it was written, its kind (the send outcome), who sent it to whom, and
+its body folded to one line.
 
 Options:
   --seat <name>    only messages sent by or to this seat
@@ -28,7 +31,9 @@ Options:
   --audit <path>   include Desk or bridge audit JSONL lines from <path>
   --briefs <dir>   include <from>-to-<to>.md brief files from <dir>
   --follow         keep reading as new lines arrive, across log rotations
-  --json           one JSON object per line ({ts, from, to, body, id, outcome, ms?, via?, failed?})
+  --json           one team.feed document ({..., events: [{ts, from, to, body, id, outcome, ms?, via?, failed?}]})
+
+Exits 0 when the feed is printed, 1 when the history log can't be read, 2 when the invocation or team file can't be read.
 `;
 
 export const DEFAULT_FEED_LIMIT = 50;
@@ -525,72 +530,107 @@ function timeOf(ts: string): string {
   return ts;
 }
 
-function formatEntry(entry: HistoryEntry, json: boolean): string {
-  if (json) {
-    const obj: Record<string, unknown> = {
-      ts: entry.ts,
-      from: entry.from,
-      to: entry.to,
-      body: entry.body,
-      id: entry.id,
-      outcome: entry.outcome,
-    };
-    // Present only when the send recorded them, so older readers see the same object.
-    if (entry.ms !== undefined) obj.ms = entry.ms;
-    if (entry.via !== undefined) obj.via = entry.via;
-    if (entry.failed !== undefined) obj.failed = entry.failed;
-    return `${JSON.stringify(obj)}\n`;
-  }
-  const lines = entry.body.split('\n');
-  const first = lines[0] ?? '';
+/** The KIND cell: the entry's outcome, with the path and the milliseconds when the send
+ *  recorded them — absent on a line written without them, as the old line was. */
+function kindOf(entry: HistoryEntry): string {
   const meta = [
     entry.via !== undefined ? `via ${entry.via}` : null,
     entry.ms !== undefined ? `in ${String(Math.round(entry.ms))} ms` : null,
   ]
     .filter((part): part is string => part !== null)
     .join(' ');
-  const timing = meta === '' ? '' : ` ${meta}`;
-  const header = `${timeOf(entry.ts)}  ${entry.from} -> ${entry.to}  [${entry.outcome}]${timing}  ${first}\n`;
-  if (lines.length === 1) return header;
-  const rest = lines
-    .slice(1)
-    .map((line) => `          ${line}\n`)
-    .join('');
-  return `${header}${rest}`;
+  return meta === '' ? entry.outcome : `${entry.outcome} (${meta})`;
 }
 
-function usage(io: Io, message: string): number {
-  io.stderr(`team feed: ${message}\n${USAGE}`);
+function eventJson(entry: HistoryEntry): Record<string, unknown> {
+  const obj: Record<string, unknown> = {
+    ts: entry.ts,
+    from: entry.from,
+    to: entry.to,
+    body: entry.body,
+    id: entry.id,
+    outcome: entry.outcome,
+  };
+  // Present only when the send recorded them, so older readers see the same object.
+  if (entry.ms !== undefined) obj.ms = entry.ms;
+  if (entry.via !== undefined) obj.via = entry.via;
+  if (entry.failed !== undefined) obj.failed = entry.failed;
+  return obj;
+}
+
+/** The context line opens a run once; null when the run is not team-scoped (`--all` or
+ *  outside a checkout), and a follow that starts empty prints nothing until its first event. */
+type Scope = { context: string | null; printed: boolean };
+
+function printContext(io: Io, scope: Scope): void {
+  if (scope.printed || scope.context === null) return;
+  io.stdout(`${scope.context}\n`);
+  scope.printed = true;
+}
+
+/** One batch of events: the context line when it has not opened the run yet, the four-column
+ *  table, and the batch's count. `--follow` prints one batch per pass that brought new events. */
+function printBatch(io: Io, scope: Scope, entries: readonly HistoryEntry[]): void {
+  printContext(io, scope);
+  const lines = renderTable({
+    headers: ['TIME', 'KIND', 'SEAT', 'DETAIL'],
+    rows: entries.map((entry) => [timeOf(entry.ts), kindOf(entry), `${entry.from} -> ${entry.to}`, entry.body]),
+    indent: scope.context === null ? '' : '  ',
+    style: ttyStyle(io, { json: false }),
+  });
+  io.stdout(`${lines.join('\n')}\n${entries.length} event(s)\n`);
+}
+
+function keyOf(entry: HistoryEntry): string {
+  return `${entry.id}\0${entry.outcome}\0${entry.ts}`;
+}
+
+function usage(io: Io, message: string, json: boolean): number {
+  if (json) writeJsonError(io, 'feed.usage', message, null);
+  else io.stderr(`team feed: ${message}\n${USAGE}`);
   return 2; // exit: feed.usage
 }
 
-function configuration(io: Io, message: string): number {
-  io.stderr(`team feed: ${message}\n`);
+function configuration(io: Io, message: string, json: boolean): number {
+  if (json) writeJsonError(io, 'feed.configuration', message, null);
+  else io.stderr(`team feed: ${message}\n`);
   return 2; // exit: feed.configuration
 }
 
-function unreadable(io: Io, reason: string): number {
-  io.stderr(`team feed: the history log cannot be read: ${reason}\n`);
+function unreadable(io: Io, reason: string, json: boolean): number {
+  const message = `the history log cannot be read: ${reason}`;
+  if (json) writeJsonError(io, 'feed.unreadable', message, null);
+  else io.stderr(`team feed: ${message}\n`);
   return 1; // exit: feed.unreadable
 }
 
 export async function runFeed(argv: string[], io: Io, sources: FeedSources = realSources): Promise<number> {
   const args = readArgs(argv, ['seat', 'limit', 'audit', 'briefs'], ['all', 'follow', 'json']);
-  if (args.error) return usage(io, args.error);
-  if (args.rest.length > 0) return usage(io, `unexpected "${args.rest[0] ?? ''}"`);
+  // The raw argv, not the parser's flags: an unknown option before `--json`, or `--json=<value>`,
+  // must still route the refusal through the `team.feed` error document on stdout.
+  const json = hasJsonFlag(argv);
+  const follow = args.flags.has('follow');
+  // A follow is a stream of tables, not one document: `--json` prints one object per run. The
+  // refusal for asking for both is still the `--json` error document — the flag decides the
+  // output, never whether an envelope exists.
+  if (args.error || args.rest.length || (follow && json)) {
+    const why = args.error
+      ?? (args.rest.length ? `unexpected "${args.rest[0] ?? ''}"` : "--follow and --json can't be used together");
+    return usage(io, why, json);
+  }
 
   const seatFilter = args.values.seat;
   if (seatFilter !== undefined && seatFilter.trim() === '') {
-    return usage(io, '--seat requires a seat name');
+    return usage(io, '--seat requires a seat name', json);
   }
 
   const auditFlag = args.values.audit;
   if (auditFlag !== undefined && auditFlag.trim() === '') {
-    return usage(io, '--audit requires a file path');
+    return usage(io, '--audit requires a file path', json);
   }
   const briefsFlag = args.values.briefs;
   if (briefsFlag !== undefined && briefsFlag.trim() === '') {
-    return usage(io, '--briefs requires a directory path');
+    return usage(io, '--briefs requires a directory path', json);
   }
 
   let limit = DEFAULT_FEED_LIMIT;
@@ -598,19 +638,18 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
     const raw = args.values.limit;
     const parsed = /^\d+$/.test(raw) ? Number(raw) : 0;
     if (parsed < 1 || parsed > MAX_FEED_LIMIT) {
-      return usage(io, `--limit takes a whole number, 1 to ${String(MAX_FEED_LIMIT)} (got "${raw}")`);
+      return usage(io, `--limit takes a whole number, 1 to ${String(MAX_FEED_LIMIT)} (got "${raw}")`, json);
     }
     limit = parsed;
   }
 
-  const json = args.flags.has('json');
-  const follow = args.flags.has('follow');
   const allTeams = args.flags.has('all');
 
   const explicitAudit = auditFlag !== undefined ? resolve(io.cwd, auditFlag) : undefined;
   const explicitBriefs = briefsFlag !== undefined ? resolve(io.cwd, briefsFlag) : undefined;
 
   let project: string | null = null;
+  let session: string | null = null;
   let root: string | null = null;
   const lobbyRoot = lobbyDir(sources.home);
   const lobbiesRoot = join(sources.home, '.config', 'team', 'lobbies');
@@ -622,42 +661,54 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
   if (loaded.ok) {
     project = loaded.team.project;
+    session = loaded.team.session;
     root = loaded.root;
   } else if (!allTeams && !inDeskLobby) {
     const message = loaded.errors
       .map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message))
       .join('; ');
-    return configuration(io, message || 'the team file cannot be read');
+    return configuration(io, message || 'the team file cannot be read', json);
   }
 
   const initial = collectEntries(project, root, allTeams, sources, seatFilter, explicitAudit, explicitBriefs);
-  if (!initial.ok) return unreadable(io, initial.reason);
+  if (!initial.ok) return unreadable(io, initial.reason, json);
 
   const seen = new Set<string>();
   const slice = initial.entries.slice(-limit);
-  if (slice.length === 0 && !json && !follow) {
-    io.stdout('(no messages)\n');
-  } else {
-    for (const entry of slice) {
-      io.stdout(formatEntry(entry, json));
-    }
+  const scope: Scope = {
+    context: project !== null && session !== null ? contextLine(project, session) : null,
+    printed: false,
+  };
+  if (json) {
+    writeJson(io, 'team.feed', {
+      format: 1 as const,
+      project,
+      session,
+      events: slice.map(eventJson),
+    });
+  } else if (slice.length > 0) {
+    printBatch(io, scope, slice);
+  } else if (!follow) {
+    // An empty feed is still one answer: the context line and a zero count, never a bare table.
+    printContext(io, scope);
+    io.stdout('0 event(s)\n');
   }
-  for (const entry of initial.entries) {
-    seen.add(`${entry.id}\0${entry.outcome}\0${entry.ts}`);
-  }
+  for (const entry of initial.entries) seen.add(keyOf(entry));
 
   if (follow) {
     const poll = sources.poll ?? (() => defaultPoll());
     let tick = 0;
     while (await poll(tick++)) {
       const next = collectEntries(project, root, allTeams, sources, seatFilter, explicitAudit, explicitBriefs);
-      if (!next.ok) return unreadable(io, next.reason);
+      if (!next.ok) return unreadable(io, next.reason, json);
+      const fresh: HistoryEntry[] = [];
       for (const entry of next.entries) {
-        const key = `${entry.id}\0${entry.outcome}\0${entry.ts}`;
+        const key = keyOf(entry);
         if (seen.has(key)) continue;
         seen.add(key);
-        io.stdout(formatEntry(entry, json));
+        fresh.push(entry);
       }
+      if (fresh.length > 0) printBatch(io, scope, fresh);
     }
   }
 
