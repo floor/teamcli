@@ -163,7 +163,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
-    ...signingDifferences(team, live, root, sources.home),
+    ...signingDifferences(team, state, live, root, sources.home),
     ...devModeDifferences(team, root, sources.home),
     ...attentionDifferences(team, state, live),
     ...labelDifferences(team, state, live),
@@ -256,19 +256,25 @@ function delegateNotes(team: TeamFile): string[] {
  * The registry's signing triple against the pane: a seat whose agent record says it signs as
  * `<model> <version>` while its screen runs another model would sign commits with a model it does
  * not run, so the two things are named side by side with the re-record and the relaunch beside
- * them. The record is the launch's own declaration (`src/registry/sync.ts`), and nothing here
- * updates it: an accepted drift is re-recorded by `team register`, or the seat is relaunched on
- * the record's model. A team the registry holds no record for reads as before, and a screen the
- * reader cannot name a model from — unread, or another maker's through Claude Code — is never
+ * them. The live agent must be the pane the state recorded for the seat, as the attention and
+ * label differences read it: a name herdr lists on another pane is a stray, and its screen is not
+ * this seat's. The record is the launch's own declaration (`src/registry/sync.ts`), and nothing
+ * here updates it: `team register` writes the file's declared model into the record, so an
+ * accepted drift is the file's model updated first and registered after, or the seat relaunched
+ * on the record's model. A team the registry holds no record for reads as before, and a screen
+ * the reader cannot name a model from — unread, or another maker's through Claude Code — is never
  * wrong.
  */
-function signingDifferences(team: TeamFile, live: Live, root: string, home: string | undefined): Difference[] {
+function signingDifferences(team: TeamFile, state: SessionState, live: Live, root: string, home: string | undefined): Difference[] {
   if (home === undefined) return [];
   const out: Difference[] = [];
   const teamId = teamIdOf(root);
   for (const seat of team.seats) {
+    // The pane the state recorded for the seat: a name on another pane is not the seat, and its
+    // model is not the one the record is compared with.
+    const recorded = state.seats[seat.name]?.pane;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
-    if (!agent) continue;
+    if (!agent || agent.pane !== recorded) continue;
     const running = seatModel(seat, live.screens[agent.pane]);
     if (!running) continue;
     const record = findAgent(home, { team: teamId, seat: seat.name });
@@ -283,7 +289,7 @@ function signingDifferences(team: TeamFile, live: Live, root: string, home: stri
       : `team remove ${seat.name} --keep, then team add ${seat.name}`;
     out.push({
       what: `${seat.name}: signs as ${signs}, runs ${running.model} ${running.version}`,
-      repair: `re-record the seat once the drift is accepted (team register ${seat.name}), or relaunch it on the record's model (${command})`,
+      repair: `update the team file's model, then team register ${seat.name}, or relaunch on the recorded model (${command})`,
       needs: 'approve',
     });
   }
