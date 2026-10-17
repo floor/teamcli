@@ -482,10 +482,10 @@ describe('team up, live', () => {
       // The rules stay whole, and the seat's own state hook rides after them on a settings file
       // this run wrote, aimed at that seat's state file.
       expect(command).toContain(`--append-system-prompt '`);
-      expect(command).toContain(`\n${CLOSING_OPTION}' --settings ${join(root, '.agents', 'hooks')}/`);
+      expect(command).toContain(`\n${CLOSING_OPTION}' --settings ${join(root, '.agents', 'hooks', 'acme-web')}/`);
       expect(command).not.toContain('reply ready and wait for your brief');
       const settingsPath = command.slice(command.lastIndexOf(' --settings ') + ' --settings '.length);
-      expect(settingsPath).toMatch(/\/\.agents\/hooks\/[A-Za-z0-9._-]+\.json$/);
+      expect(settingsPath).toMatch(/\/\.agents\/hooks\/acme-web\/[A-Za-z0-9._-]+\.json$/);
       expect(existsSync(settingsPath)).toBe(true);
       expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
       expect(readFileSync(settingsPath, 'utf8')).toContain('UserPromptSubmit');
