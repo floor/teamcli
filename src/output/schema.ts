@@ -710,10 +710,11 @@ export const POLICY_OUTPUT_SCHEMA: CommandSchemaSpec = {
     {
       type: 'object',
       additionalProperties: false,
-      required: ['schema', 'format', 'project', 'session', 'dev_mode_governed', 'policies'],
+      required: ['schema', 'format', 'status', 'project', 'session', 'dev_mode_governed', 'policies'],
       properties: {
         schema: schemaTagFragment('team.policy', 1),
         format: { type: 'integer', const: 1 },
+        status: { type: 'string', const: 'ok' },
         project: { type: 'string', minLength: 1 },
         session: { type: 'string', minLength: 1 },
         entity: { type: ['string', 'null'] },
@@ -737,6 +738,7 @@ export const POLICY_OUTPUT_SCHEMA: CommandSchemaSpec = {
             },
           },
         },
+        notice: { type: ['string', 'null'] },
       },
     },
     {

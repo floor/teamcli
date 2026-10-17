@@ -20,6 +20,7 @@ import {
   ADVISED_POLICY_NAMES,
   ENFORCED_POLICY_NAMES,
   loadAndResolvePolicyChain,
+  logExpiredPoliciesOnce,
   normalizePolicyName,
   planPolicySet,
   planPolicyUnset,
@@ -265,15 +266,7 @@ function executePolicyView(
     },
   );
 
-  for (const exp of resolved.expired) {
-    logLine(
-      join(root, '.agents'),
-      'policy',
-      exp.setter,
-      `level ${exp.level} ${exp.name}: ${formatValueCell(exp.value)} -> unset (expired at ${exp.expiry ?? 'now'})`,
-      now,
-    );
-  }
+  logExpiredPoliciesOnce(join(root, '.agents'), resolved.expired, now);
 
   if (!resolved.ok) {
     const msg = resolved.refusals.map((r) => r.message).join('; ');
@@ -620,8 +613,12 @@ function executePolicySet(
             ? resolveProjectIdForTeam(home, ctx.teamRoot, ctx.team)
             : null,
       teamRoot: ctx.teamRoot ?? null,
-      team: null,
+      team: ctx.team ?? null,
       agentId: parsedLevel.level === 'seat' ? ctx.target : null,
+      seat:
+        parsedLevel.level === 'seat' && parsedLevel.seatName
+          ? (ctx.team?.seats.find((s) => s.name === parsedLevel.seatName) ?? null)
+          : null,
     });
     const currentLevelSource = chainSources[parsedLevel.level];
     const currentPolicies = currentLevelSource?.ok ? currentLevelSource.policies.filter((p) => p.name !== plan.policy.name) : [];

@@ -13,10 +13,11 @@ import { entitiesPath } from '../entities.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { writeTeamFile } from '../file/write.ts';
 import { grantsDir } from '../grant.ts';
+import { logLine } from '../log.ts';
 import { agentsDir, getAgent, updateAgent } from '../registry/agents.ts';
 import { get as getProject, projectsFile, upsertProject } from '../registry/projects.ts';
-import { teamIdOf } from '../registry/teams.ts';
-import { writeAtomic } from '../state.ts';
+import { getTeam, teamIdOf } from '../registry/teams.ts';
+import { readState, updateState, writeAtomic } from '../state.ts';
 import { bumpGeneration, keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { parseYaml, toValue, YamlError, type YamlNode, type YamlValue } from '../yaml.ts';
 import {
@@ -432,7 +433,8 @@ export function readProjectPolicySource(home: string = homedir(), projectId: str
 
 /**
  * Reads the team-level owner `policies:` section from `<teamRoot>/.agents/team.yaml` (or the
- * pre-loaded `team` object). An unreadable or invalidly signed section returns
+ * pre-loaded `team` object), as well as any legacy unsigned `delivery_order:` declaration at the
+ * team level (Kernel Amendment 02 Gap 3). An unreadable or invalidly signed section returns
  * `{ ok: false, level: 'team', why }`.
  */
 export function readTeamPolicySource(
@@ -448,36 +450,90 @@ export function readTeamPolicySource(
   if (team?.project) {
     expectedTargets.push(team.project);
   }
-  if (team && team.policies !== undefined) {
-    return verifyPoliciesMap(home, 'team', expectedTargets, path, team.policies);
+  const primaryTarget = expectedTargets[0] ?? null;
+
+  let rawPolicies: YamlValue | undefined = team?.policies;
+  let rawLegacyDelivery: unknown = team?.deliveryOrder ?? undefined;
+
+  if (rawPolicies === undefined && teamRoot && existsSync(path)) {
+    let text: string;
+    try {
+      text = readFileSync(path, 'utf8');
+    } catch (error) {
+      return { ok: false, level: 'team', target: primaryTarget, source: path, why: `${path}: ${(error as Error).message}` };
+    }
+    let root: YamlValue;
+    try {
+      root = toValue(parseYaml(text));
+    } catch (error) {
+      const why = error instanceof YamlError ? `${path}: line ${error.line}: ${error.message}` : `${path}: ${(error as Error).message}`;
+      return { ok: false, level: 'team', target: primaryTarget, source: path, why };
+    }
+    if (!isMap(root)) {
+      return { ok: false, level: 'team', target: primaryTarget, source: path, why: `${path}: expected a map` };
+    }
+    rawPolicies = root.policies;
+    if (rawLegacyDelivery === undefined && root.delivery_order !== undefined) {
+      rawLegacyDelivery = root.delivery_order;
+    }
   }
-  if (!teamRoot) {
-    return { ok: true, level: 'team', target: null, policies: [] };
+
+  const verified = verifyPoliciesMap(home, 'team', expectedTargets, path, rawPolicies);
+  if (!verified.ok) return verified;
+
+  const policies = [...verified.policies];
+  if (!policies.some((p) => p.name === 'delivery-order') && rawLegacyDelivery !== undefined && rawLegacyDelivery !== null) {
+    if (!isPolicyValueShape(rawLegacyDelivery)) {
+      return {
+        ok: false,
+        level: 'team',
+        target: primaryTarget,
+        source: path,
+        why: `${path}: delivery_order has an unreadable value`,
+      };
+    }
+    policies.push({
+      name: 'delivery-order',
+      value: Array.isArray(rawLegacyDelivery) ? [...rawLegacyDelivery] : rawLegacyDelivery,
+      level: 'team',
+      setter: null,
+      date: null,
+      expiry: null,
+      kind: 'enforced',
+      ...(primaryTarget ? { target: primaryTarget } : {}),
+    });
   }
-  if (!existsSync(path)) {
-    return { ok: true, level: 'team', target: expectedTargets[0] ?? null, policies: [] };
-  }
-  let text: string;
+
+  return { ok: true, level: 'team', target: primaryTarget, policies };
+}
+
+function readSeatLegacyDeliveryFromTeamRoot(teamRoot: string, seatName: string): unknown {
+  const path = join(teamRoot, '.agents', 'team.yaml');
+  if (!existsSync(path)) return undefined;
   try {
-    text = readFileSync(path, 'utf8');
-  } catch (error) {
-    return { ok: false, level: 'team', target: expectedTargets[0] ?? null, source: path, why: `${path}: ${(error as Error).message}` };
+    const root = toValue(parseYaml(readFileSync(path, 'utf8')));
+    if (!isMap(root) || !Array.isArray(root.seats)) return undefined;
+    for (const item of root.seats) {
+      if (!isMap(item) || typeof item.name !== 'string') continue;
+      const baseName = item.name;
+      const count = typeof item.count === 'number' && Number.isInteger(item.count) && item.count > 1 ? item.count : 1;
+      const matches =
+        seatName === baseName ||
+        (count > 1 &&
+          Array.from({ length: count - 1 }, (_, idx) => `${baseName}-${idx + 2}`).includes(seatName));
+      if (matches && item.delivery_order !== undefined) {
+        return item.delivery_order;
+      }
+    }
+  } catch {
+    return undefined;
   }
-  let root: YamlValue;
-  try {
-    root = toValue(parseYaml(text));
-  } catch (error) {
-    const why = error instanceof YamlError ? `${path}: line ${error.line}: ${error.message}` : `${path}: ${(error as Error).message}`;
-    return { ok: false, level: 'team', target: expectedTargets[0] ?? null, source: path, why };
-  }
-  if (!isMap(root)) {
-    return { ok: false, level: 'team', target: expectedTargets[0] ?? null, source: path, why: `${path}: expected a map` };
-  }
-  return verifyPoliciesMap(home, 'team', expectedTargets, path, root.policies);
+  return undefined;
 }
 
 /**
- * Reads the seat-level policies for `agentId` / `seat` from `<home>/.config/team/agents/<id>.yaml`.
+ * Reads the seat-level policies for `agentId` / `seat` from `<home>/.config/team/agents/<id>.yaml`,
+ * as well as any legacy unsigned `delivery_order` declaration on `seat` (Kernel Amendment 02 Gap 3).
  */
 export function readSeatPolicySource(
   home: string = homedir(),
@@ -485,31 +541,77 @@ export function readSeatPolicySource(
   seat: Seat | null = null,
 ): PolicySourceRead {
   const target = agentId ?? seat?.name ?? null;
-  if (!agentId) {
-    return { ok: true, level: 'seat', target, policies: [] };
+  let policies: Policy[] = [];
+  let agentRoot: Record<string, YamlValue> | null = null;
+
+  if (agentId) {
+    const path = join(agentsDir(home), `${agentId}.yaml`);
+    if (existsSync(path)) {
+      let text: string;
+      try {
+        text = readFileSync(path, 'utf8');
+      } catch (error) {
+        return { ok: false, level: 'seat', target, source: path, why: `${path}: ${(error as Error).message}` };
+      }
+      let root: YamlValue;
+      try {
+        root = toValue(parseYaml(text));
+      } catch (error) {
+        const why = error instanceof YamlError ? `${path}: line ${error.line}: ${error.message}` : `${path}: ${(error as Error).message}`;
+        return { ok: false, level: 'seat', target, source: path, why };
+      }
+      if (!isMap(root)) {
+        return { ok: false, level: 'seat', target, source: path, why: `${path}: expected a map` };
+      }
+      agentRoot = root;
+      const expectedTargets = seat?.name ? [agentId, seat.name] : [agentId];
+      const verified = verifyPoliciesMap(home, 'seat', expectedTargets, path, root.policies);
+      if (!verified.ok) return verified;
+      policies = [...verified.policies];
+    }
   }
-  const path = join(agentsDir(home), `${agentId}.yaml`);
-  if (!existsSync(path)) {
-    return { ok: true, level: 'seat', target, policies: [] };
+
+  if (!policies.some((p) => p.name === 'delivery-order')) {
+    let rawLegacy: unknown =
+      seat?.deliveryOrder ?? (seat as { delivery_order?: unknown } | null)?.delivery_order;
+    if (rawLegacy === undefined && seat === null && agentRoot && isMap(agentRoot.reach)) {
+      const teamId = typeof agentRoot.reach.team === 'string' ? agentRoot.reach.team : null;
+      const seatName = typeof agentRoot.reach.seat === 'string' ? agentRoot.reach.seat : null;
+      if (teamId && seatName) {
+        try {
+          const teamRoot = getTeam(home, teamId)?.root;
+          if (teamRoot) {
+            rawLegacy = readSeatLegacyDeliveryFromTeamRoot(teamRoot, seatName);
+          }
+        } catch {
+          rawLegacy = undefined;
+        }
+      }
+    }
+    if (rawLegacy !== undefined && rawLegacy !== null) {
+      if (!isPolicyValueShape(rawLegacy)) {
+        return {
+          ok: false,
+          level: 'seat',
+          target,
+          source: '.agents/team.yaml',
+          why: `seat "${seat?.name ?? target ?? 'seat'}": delivery_order has an unreadable value`,
+        };
+      }
+      policies.push({
+        name: 'delivery-order',
+        value: Array.isArray(rawLegacy) ? [...rawLegacy] : rawLegacy,
+        level: 'seat',
+        setter: null,
+        date: null,
+        expiry: null,
+        kind: 'enforced',
+        ...(target ? { target } : {}),
+      });
+    }
   }
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch (error) {
-    return { ok: false, level: 'seat', target, source: path, why: `${path}: ${(error as Error).message}` };
-  }
-  let root: YamlValue;
-  try {
-    root = toValue(parseYaml(text));
-  } catch (error) {
-    const why = error instanceof YamlError ? `${path}: line ${error.line}: ${error.message}` : `${path}: ${(error as Error).message}`;
-    return { ok: false, level: 'seat', target, source: path, why };
-  }
-  if (!isMap(root)) {
-    return { ok: false, level: 'seat', target, source: path, why: `${path}: expected a map` };
-  }
-  const expectedTargets = seat?.name ? [agentId, seat.name] : [agentId];
-  return verifyPoliciesMap(home, 'seat', expectedTargets, path, root.policies);
+
+  return { ok: true, level: 'seat', target, policies };
 }
 
 /**
@@ -536,6 +638,60 @@ export function loadAndResolvePolicyChain(
   return resolvePolicyChain(readPolicyChain(input), options);
 }
 
+function expiredPolicyMarker(exp: Policy): string {
+  return `${exp.level}:${exp.target ?? ''}:${exp.name}:${exp.date ?? ''}:${exp.expiry ?? ''}:${exp.signature ?? ''}`;
+}
+
+/**
+ * Logs each expired policy reading at most once per expired entry to `<agentsDir>/team.log`,
+ * recording an unsigned marker in `<agentsDir>/team.state.json` while leaving the signed policy
+ * files untouched.
+ */
+export function logExpiredPoliciesOnce(
+  agentsDir: string,
+  expired: readonly Policy[],
+  now: Date,
+): void {
+  if (expired.length === 0) return;
+  let existing: Set<string>;
+  try {
+    existing = new Set(readState(agentsDir).expired_policies ?? []);
+  } catch {
+    existing = new Set();
+  }
+  const unseen = expired.filter((exp) => !existing.has(expiredPolicyMarker(exp)));
+  if (unseen.length === 0) return;
+
+  let toLog = unseen;
+  try {
+    toLog = updateState(agentsDir, (state) => {
+      const seen = new Set(state.expired_policies ?? []);
+      const newlyAdded: Policy[] = [];
+      for (const exp of unseen) {
+        const key = expiredPolicyMarker(exp);
+        if (!seen.has(key)) {
+          seen.add(key);
+          newlyAdded.push(exp);
+        }
+      }
+      state.expired_policies = [...seen];
+      return newlyAdded;
+    });
+  } catch {
+    // If state cannot be updated, still log the unseen readings for this call.
+  }
+
+  for (const exp of toLog) {
+    logLine(
+      agentsDir,
+      'policy',
+      exp.setter ?? 'owner',
+      `${exp.name} at ${exp.level} expired at ${exp.expiry ?? 'now'}; read as unset`,
+      now,
+    );
+  }
+}
+
 // ---- Policy writers (`planPolicySet`, `writePolicySet`, `planPolicyUnset`, `writePolicyUnset`) ----
 
 function formatRawValue(raw: unknown): string {
@@ -553,7 +709,7 @@ function readExistingPolicyAtLevel(home: string, level: PolicyLevel, target: str
           ? readTeamPolicySource(home, teamRoot ?? null, null)
           : readSeatPolicySource(home, target, null);
   if (!source.ok) return null;
-  return source.policies.find((p) => p.name === name) ?? null;
+  return source.policies.find((p) => p.name === name && p.signature !== undefined) ?? null;
 }
 
 /**
@@ -598,7 +754,9 @@ export function planPolicySet(
       const customWhy = spec.valueProblem?.(request.value) ?? null;
       return {
         ok: false,
-        why: customWhy ?? `invalid value "${formatRawValue(request.value)}" for policy "${name}"`,
+        why: customWhy
+          ? `${request.level}: ${customWhy}`
+          : `invalid value "${formatRawValue(request.value)}" for policy "${name}"`,
       };
     }
     normalizedValue = parsed;
@@ -669,13 +827,15 @@ export function writePolicySet(
   mkdirSync(folder, { recursive: true, mode: 0o700 });
   const generation = bumpGeneration(folder, home, now);
   const key = options.key ?? keyOf(home);
+  const setter = plan.policy.setter ?? 'owner';
+  const date = plan.policy.date ?? now.toISOString();
   const payload = policySignaturePayload({
     name: plan.policy.name,
     value: plan.policy.value,
     level: plan.policy.level,
     target: plan.policy.target!,
-    setter: plan.policy.setter,
-    date: plan.policy.date,
+    setter,
+    date,
     expiry: plan.policy.expiry ?? null,
     kind: plan.policy.kind,
     generation,
@@ -683,13 +843,15 @@ export function writePolicySet(
   const signature = signDomain(POLICY_DOMAIN, payload, key);
   const signedPolicy: Policy = {
     ...plan.policy,
+    setter,
+    date,
     generation,
     signature,
   };
   const diskEntry: Record<string, YamlValue> = {
     value: Array.isArray(signedPolicy.value) ? [...signedPolicy.value] : (signedPolicy.value as YamlValue),
-    setter: signedPolicy.setter,
-    date: signedPolicy.date,
+    setter,
+    date,
     expiry: signedPolicy.expiry ?? null,
     kind: signedPolicy.kind,
     target: signedPolicy.target!,

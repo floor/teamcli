@@ -195,6 +195,12 @@ export type State = {
    * absent once `until` has passed. A hold is the project's, not one session's.
    */
   hold?: HoldRecord;
+  /**
+   * Unsigned markers of expired policy declarations whose expiry reading has already been logged
+   * to `team.log`, so the expiry reading is logged at most once per expired entry while leaving
+   * the signed policy file untouched.
+   */
+  expired_policies?: string[];
   sessions: Record<string, SessionState>;
 };
 
@@ -255,6 +261,11 @@ export function readState(dir: string): State {
   // dropped here, so the reason, the name and the instants later readers print are the ones
   // the command wrote, never a hand-edited file's.
   if (state.hold !== undefined && !isHoldRecord(state.hold)) delete state.hold;
+  if (Array.isArray(state.expired_policies)) {
+    state.expired_policies = state.expired_policies.filter((item): item is string => typeof item === 'string');
+  } else if (state.expired_policies !== undefined) {
+    delete state.expired_policies;
+  }
   for (const session of Object.values(state.sessions)) {
     session.seats ??= {};
     session.worktrees ??= {};
