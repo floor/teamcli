@@ -37,7 +37,6 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^ask the owner to approve this exact folder and answer through team up$/, why: "the record is written by the owner's own `team up`, which this asks for" },
   // A grant gate's refusal id (`a grant needs a verified approval: …`), compared by `up` and
   // `register` and never printed: a grant's own approval-state key, not an approved copy.
-  { literal: /^grant\.approval$/, why: "a grant gate's refusal id: an approval-state key compared, never shown as an approved copy" },
   // A grant's own word: a delegate the owner granted `swap` to is an approved one.
   { literal: /an approved delegate swaps/, why: "the delegate grant's word: a delegate granted `swap` is an approved one" },
   // Seat membership in the file: the note names a pane the file does not carry.
