@@ -9,7 +9,7 @@ Anything else sends nothing.
 
     team answer <seat> trust [--session <name>] [--file <path>] [--json]
 
-`<seat>` names one seat of the approved copy. `trust` is the only dialog word. No option takes a key, a text, or another dialog. The pane is herdr's one agent of that name; a pane recorded in the state selects nothing. A name the copy does not carry is left as it is. Two agents of the name send nothing.
+`<seat>` names one seat of the team file. `trust` is the only dialog word. No option takes a key, a text, or another dialog. The pane is herdr's one agent of that name; a pane recorded in the state selects nothing. A name the file does not carry is left as it is. Two agents of the name send nothing.
 
 ## Flags
 
@@ -27,7 +27,14 @@ Anything else sends nothing.
 | the owner, from outside herdr | answer the dialog; `--file` and `--session` are the owner's alone, refused before the flagged file or session is read at all |
 | a run with no terminal | nothing: `team answer: only the owner runs this, from a terminal outside herdr` |
 | the orchestrator, from its own seat | the same, in a session this project's state records, on the pane the state records for that name |
-| anyone else | nothing; with `dialogs.trust: owner` (the value when `dialogs` is omitted) nobody sends a key, the owner included |
+| anyone else | nothing |
+
+Trust answering is the owner's to turn on, and the switch is a live grant: `team grant @team
+--capabilities dialogs.trust` writes it for the project's team id, and `team revoke` ends it.
+With no grant in force nobody sends a key, the owner included, and the refusal names the
+setting: `<seat>: use team up and [o] (dialogs.trust is off; only the owner can turn it on:
+team grant @team --capabilities dialogs.trust)`. The record is read on every run, so a
+revocation takes effect at the next dialog.
 
 ## Output and exit codes
 

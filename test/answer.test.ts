@@ -3,19 +3,19 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fingerprints } from '../src/approve/fingerprint.ts';
 import { runApprove } from '../src/approve/command.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { validateTeamFile } from '../src/file/validate.ts';
 import { extractFolder, isEligible, labelMatches, versionMatches, wholeVersion, type TrustRecord } from '../src/profiles/trust-answer.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding, storePath } from '../src/store/store.ts';
 import { readState, updateState } from '../src/state.ts';
+import { readGrants, writeGrant, writeRevocation } from '../src/permissions/grants.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { boxHoldsText } from '../src/launch/deliver.ts';
 import { rulesFilePath } from '../src/launch/rules-file.ts';
 import { testIo } from './helpers.ts';
@@ -36,6 +36,31 @@ afterEach(() => {
   if (base) rmSync(base, { recursive: true, force: true });
 });
 
+/**
+ * The owner's live grant: `dialogs.trust` for this project's team id, the way `team grant @team
+ * --capabilities dialogs.trust` writes it. The `world()` below grants it once, so a scene that
+ * wants the setting off revokes it.
+ */
+function grantTrust(root: string, home: string): void {
+  const written = writeGrant(home, {
+    name: `team-${teamIdOf(root)}`,
+    kind: 'team',
+    grantee: teamIdOf(root),
+    capabilities: ['dialogs.trust'],
+    roots: [root],
+    scope: [root],
+  }, { now: NOW });
+  if (!written.ok) throw new Error(`the scene's grant was refused: ${written.why}`);
+}
+
+/** Ends the setting at the next read, the way `team revoke <name>` does. */
+function revokeTrust(home: string): void {
+  const record = readGrants(home).grants.find((grant) => grant.capabilities.includes('dialogs.trust'));
+  if (record === undefined) throw new Error('the scene holds no trust grant to revoke');
+  const written = writeRevocation(home, { name: `revoke-${record.name}`, grant: record.name, generation: record.generation }, { now: NOW });
+  if (!written.ok) throw new Error(`the scene's revocation was refused: ${written.why}`);
+}
+
 function world() {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-answer-')));
   const root = join(base, 'acme');
@@ -48,11 +73,12 @@ function world() {
   // flag since round 4) resolves the same file rather than failing as "not inside a git
   // repository" before it reaches the check under test.
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+  // The setting is on for every scene unless the scene ends it: trust answering is a grant.
+  grantTrust(root, home);
   return { root, home, lobby, dir: join(root, '.agents') };
 }
 
-function file(lobby: string, dialogs: 'owner' | 'coordinator' | 'omit', cli = 'cursor'): string {
-  const dialog = dialogs === 'omit' ? '' : `dialogs:\n  trust: ${dialogs}\n`;
+function file(lobby: string, cli = 'cursor'): string {
   return `format: 1
 project: acme
 coordinator: lead
@@ -60,7 +86,7 @@ operator: helper
 session: acme
 workspace:
   mode: shared
-${dialog}trust:
+trust:
   - ${lobby}
   - ${projectRoot}
 seats:
@@ -286,7 +312,7 @@ describe('team answer', () => {
   test('cursor and antigravity each send their one key, then become ready', async () => {
     for (const cli of ['cursor', 'antigravity'] as const) {
       const { root, home, lobby, dir } = world();
-      writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator', cli));
+      writeFileSync(join(dir, 'team.yaml'), file(lobby, cli));
       await approve(root, home);
       wait(dir, 'lead');
       const source = cli === 'cursor' ? cursorTrust : agyTrust;
@@ -313,7 +339,7 @@ describe('team answer', () => {
 
   test('a retry on recovery sends no key, and a retry that stays idle does not either', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     updateState(dir, (state) => {
       state.sessions.acme = {
@@ -349,7 +375,7 @@ describe('team answer', () => {
 
   test('the recovery state is on disk before the key, and a failed write sends nothing', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
 
@@ -392,7 +418,7 @@ describe('team answer', () => {
 
   test('a send that throws keeps recovery, and the retry sends no key', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
@@ -420,7 +446,7 @@ describe('team answer', () => {
 
   test("after the key, a rules file that cannot be written keeps the seat in recovery", async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     // The seat's final name holds a directory: the write refuses — it never replaces what it
@@ -447,8 +473,9 @@ describe('team answer', () => {
     const spaced = join(base, 'ho me');
     const lobby = lobbyDir(spaced);
     mkdirSync(lobby, { recursive: true });
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, spaced);
+    grantTrust(root, spaced);
     wait(dir, 'lead');
     const host = fake(spaced, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
     const io = testIo(root, { kind: 'owner' });
@@ -464,7 +491,7 @@ describe('team answer', () => {
 
   test("after the key, a line that does not read back keeps the seat in recovery", async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -490,7 +517,7 @@ describe('team answer', () => {
 
   test("after the key, a rules file that changes before the Enter keeps the seat in recovery", async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -518,7 +545,7 @@ describe('team answer', () => {
 
   test("after the key, a seat mid-turn when its delivery starts types nothing more and stays in recovery", async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -546,7 +573,7 @@ describe('team answer', () => {
 
   test("an eligible seat's answer, call by call: the key, then only the delivery", async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -583,7 +610,7 @@ describe('team answer', () => {
 
   test('each failed check sends no key', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     const cases: { name: string; screen: string; version?: string; waiting?: Record<string, unknown>; message: string; versions?: number }[] = [];
     const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
@@ -650,7 +677,7 @@ describe('team answer', () => {
 
   test('a dialog that names the old per-project lobby sends no key', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const old = join(root, 'worktrees', 'acme', '.lobby');
@@ -667,7 +694,7 @@ describe('team answer', () => {
   describe('process identity checks before sending key', () => {
     function setupIdentitySeat() {
       const { root, home, lobby, dir } = world();
-      writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+      writeFileSync(join(dir, 'team.yaml'), file(lobby));
       updateState(dir, (state) => {
         state.sessions.acme = {
           seats: {
@@ -998,7 +1025,7 @@ describe('team answer', () => {
   describe('process identity checks on recovery path', () => {
     function setupRecoverySeat() {
       const { root, home, lobby, dir } = world();
-      writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+      writeFileSync(join(dir, 'team.yaml'), file(lobby));
       updateState(dir, (state) => {
         state.sessions.acme = {
           seats: {
@@ -1139,7 +1166,7 @@ describe('team answer', () => {
   describe('the approved copy names the seat, and herdr names the pane', () => {
     test('a recorded pane is not where the key goes', async () => {
       const { root, home, lobby, dir } = world();
-      writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+      writeFileSync(join(dir, 'team.yaml'), file(lobby));
       await approve(root, home);
       updateState(dir, (state) => {
         state.sessions.acme = {
@@ -1170,7 +1197,7 @@ describe('team answer', () => {
 
     test('two agents of the approved name send no key', async () => {
       const { root, home, lobby, dir } = world();
-      writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+      writeFileSync(join(dir, 'team.yaml'), file(lobby));
       await approve(root, home);
       wait(dir, 'lead');
       const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -1186,7 +1213,7 @@ describe('team answer', () => {
 
     test('a record the approved copy does not carry sends no key', async () => {
       const { root, home, lobby, dir } = world();
-      writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+      writeFileSync(join(dir, 'team.yaml'), file(lobby));
       await approve(root, home);
       updateState(dir, (state) => {
         state.sessions.acme = {
@@ -1213,7 +1240,7 @@ describe('team answer', () => {
 
   test('a lobby path in another case sends nothing', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     // The reviewer's case probe: on a case-insensitive volume the path lands on the
@@ -1233,7 +1260,7 @@ describe('team answer', () => {
 
   test('a path the row could have padded, a pane in the padded folder, and its sibling send nothing', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     // The folder the padding could hide: the lobby's name plus one trailing space. The
     // extractor strips the row's padding, so the lobby and this folder read the same on
@@ -1242,7 +1269,7 @@ describe('team answer', () => {
     const hidden = `${lobby} `;
     mkdirSync(hidden);
     for (const cli of ['cursor', 'antigravity'] as const) {
-      writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator', cli));
+      writeFileSync(join(dir, 'team.yaml'), file(lobby, cli));
       await approve(root, home);
       const source = cli === 'cursor' ? cursorTrust : agyTrust;
       const token = cli === 'cursor' ? '<untrusted-directory>' : '<project-worktree>';
@@ -1258,7 +1285,7 @@ describe('team answer', () => {
     }
     // The plain case, with the sibling gone and the pane in the lobby, still answers.
     rmdirSync(hidden);
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const plain = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -1270,7 +1297,7 @@ describe('team answer', () => {
 
   test("a pane folder that is not the lobby, or cannot be read, sends nothing", async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
 
@@ -1308,7 +1335,7 @@ describe('team answer', () => {
 
   test("a sibling name the lobby's plus whitespace, and an unlistable parent, send nothing", async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
     // The screen shows the lobby exactly and the pane is in it; the name beside it still
@@ -1338,7 +1365,7 @@ describe('team answer', () => {
 
   test('antigravity without the mark or the footer sends nothing', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator', 'antigravity'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'antigravity'));
     await approve(root, home);
     const trust = withPath(agyTrust, '<project-worktree>', lobby);
     for (const screen of [trust.replace('> Yes, I trust this folder', '  Yes, I trust this folder'), trust.replace('enter Confirm', 'enter ConfirX')]) {
@@ -1353,7 +1380,7 @@ describe('team answer', () => {
 
   test('codex, a claude seat, an owner policy, and the wrong caller send nothing', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator', 'codex'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'codex'));
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, codexRepo, 'cursor');
@@ -1363,7 +1390,7 @@ describe('team answer', () => {
     expect(host.keys).toEqual([]);
     expect(io.err).toBe('lead: this version has no trust answer\n');
 
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator', 'claude-code'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'claude-code'));
     await approve(root, home);
     wait(dir, 'lead');
     const claude = fake(home, root, codexRepo, 'cursor');
@@ -1372,7 +1399,10 @@ describe('team answer', () => {
     expect(claude.keys).toEqual([]);
     expect(claudeIo.err).toBe('lead: this version has no trust answer\n');
 
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'owner'));
+    // The setting off: a revocation ends the lease's grant at the next read, and the dialog is
+    // held for the owner whatever the file says.
+    revokeTrust(home);
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const policy = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -1380,12 +1410,16 @@ describe('team answer', () => {
     expect(await runAnswer([...FILE, 'lead', 'trust'], policyIo, policy)).toBe(1);
     expect(policy.keys).toEqual([]);
     expect(policy.versions).toBe(0);
-    expect(policyIo.err).toBe('lead: use team up and [o]\n');
+    expect(policyIo.err).toBe('lead: use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)\n');
     const unknown = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'nobody', 'trust'], unknown, policy)).toBe(1);
-    expect(unknown.err).toBe('nobody: use team up and [o]\n');
+    expect(unknown.err).toBe('nobody: use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)\n');
+    // The owner re-grants: the next dialog is answered.
+    grantTrust(root, home);
+    const regranted = testIo(root, { kind: 'owner' });
+    expect(await runAnswer([...FILE, 'lead', 'trust'], regranted, policy)).toBe(0);
 
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const seat = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -1399,9 +1433,31 @@ describe('team answer', () => {
     expect(lost.err).toBe('its parent processes can\'t be read to the top\n');
   });
 
+  test('a revocation ends trust answering at the next dialog', async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
+    await approve(root, home);
+    wait(dir, 'lead');
+    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+    expect(await runAnswer(['lead', 'trust'], io, host)).toBe(0);
+    expect(host.keys).toEqual(['a']);
+
+    // The owner revokes: the next dialog is held for the owner — the very next one, with no
+    // restart and no file edit in between.
+    revokeTrust(home);
+    wait(dir, 'lead');
+    const after = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const again = testIo(root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+    expect(await runAnswer(['lead', 'trust'], again, after)).toBe(1);
+    expect(after.keys).toEqual([]);
+    expect(after.versions).toBe(0);
+    expect(again.err).toBe('lead: use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)\n');
+  });
+
   test('a refusal log names the caller class the caller check returned', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -1424,17 +1480,20 @@ describe('team answer', () => {
     expect(log).not.toContain('answer [owner] lead: refused trust: caller');
   });
 
-  test('an unapproved file and a lock already held send nothing', async () => {
+  test('a file never approved still answers, and a lock already held sends nothing', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     wait(dir, 'lead');
+    // No approval on this machine: trust answering is the grant's to give, not an approval's,
+    // so the dialog is answered on a machine that never approved the file.
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
     const io = testIo(root, { kind: 'owner' });
-    expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
-    expect(host.keys).toEqual([]);
-    expect(io.err).toBe('the file was never approved on this machine\n');
+    expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(0);
+    expect(host.keys).toEqual(['a']);
+    expect(io.err).toBe('');
 
     await approve(root, home);
+    wait(dir, 'lead');
     const hanging = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
     let release = () => {};
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -1479,17 +1538,18 @@ describe('team answer', () => {
     expect(bad.err).toBe('');
     expect(JSON.parse(bad.out).error.code).toBe('configuration');
 
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'owner'));
+    revokeTrust(home);
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     const refused = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, '--json', 'lead', 'trust'], refused, fake(home, root, '', 'cursor'))).toBe(1);
     expect(refused.err).toBe('');
-    expect(JSON.parse(refused.out)).toEqual({ seat: 'lead', dialog: 'trust', status: 'refused', reason: 'lead: use team up and [o]' });
+    expect(JSON.parse(refused.out)).toEqual({ seat: 'lead', dialog: 'trust', status: 'refused', reason: 'lead: use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)' });
   });
 
   test('a folder outside the trust list, a key that is not sent, and a seat that is not live', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator').replace(`trust:\n  - ${lobby}\n  - ${root}`, 'trust:\n  - .'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby).replace(`trust:\n  - ${lobby}\n  - ${root}`, 'trust:\n  - .'));
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -1498,7 +1558,7 @@ describe('team answer', () => {
     expect(host.keys).toEqual([]);
     expect(io.err).toBe('lead: this folder is not an exact trust entry\n');
 
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const refused = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -1512,42 +1572,9 @@ describe('team answer', () => {
     expect(await runAnswer([...FILE, 'gone', 'trust'], missing, refused)).toBe(1);
     expect(missing.err).toBe('gone: it is not a live seat\n');
   });
-  test('the folder check reads the live trust entries despite a stale or invalid stored copy', async () => {
-    const { root, home, lobby, dir } = world();
-    const live = file(lobby, 'coordinator');
-    writeFileSync(join(dir, 'team.yaml'), live);
-    await approve(root, home);
-    const standing = approvalStanding(root, home);
-    if (standing.kind !== 'verified') throw new Error('expected a verified approval');
-    const checked = validateTeamFile(live);
-    if (!checked.ok) throw new Error('expected a valid fixture');
-    // A record whose fingerprints are the live file's — nothing drifts — while the
-    // copy it stored carries a different `trust:` list: only the copy says what the
-    // owner approved. The folder check must read the entry list from that copy.
-    const copy = live.replace(`trust:\n  - ${lobby}\n  - ${root}`, 'trust:\n  - .');
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
-    host.standing = () => ({
-      ...standing,
-      record: { ...standing.record, file: copy, approval: { ...standing.record.approval, fingerprints: fingerprints(checked.team) } },
-    });
-    wait(dir, 'lead');
-    const io = testIo(root, { kind: 'owner' });
-    expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(0);
-    expect(host.keys).toEqual(['a']);
-    expect(io.err).toBe('');
-
-    const broken = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
-    broken.standing = () => ({ ...standing, record: { ...standing.record, file: 'format: [' } });
-    wait(dir, 'lead');
-    const brokenIo = testIo(root, { kind: 'owner' });
-    expect(await runAnswer([...FILE, 'lead', 'trust'], brokenIo, broken)).toBe(0);
-    expect(broken.keys).toEqual(['a']);
-    expect(brokenIo.err).toBe('');
-  });
-
   test('json success and recovery are the stated objects', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
@@ -1576,7 +1603,7 @@ describe('team answer', () => {
 
   test('status and doctor say what is waiting', async () => {
     const { root, home, lobby, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'coordinator'));
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
     const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
@@ -1601,6 +1628,15 @@ describe('team answer', () => {
     expect(await runStatus([...FILE, '--json'], json, sources)).toBe(1);
     const row = (JSON.parse(json.out) as { rows: { name: string; state: string }[] }).rows.find((item) => item.name === 'lead');
     expect(row?.state).toBe('waiting-owner');
+
+    // The setting off: the same dialog is still reported, and the repair is the owner's
+    // `team up` — never the `team answer` the grant would allow.
+    revokeTrust(home);
+    const held = testIo(root, { kind: 'owner' });
+    expect(await runStatus(FILE, held, sources)).toBe(1);
+    expect(held.out).toContain('waiting for owner (trust)');
+    expect(held.out).not.toContain('team answer lead trust');
+    grantTrust(root, home);
 
     const doctorSources: DoctorSources = {
       version: () => '2026.10.01-14929f9',

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { relative, resolve } from 'node:path';
 import { budgetsInForceOf, notInForce, watchInForceOf } from '../approve/approval.ts';
+import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { overridesInForceOf, type OverrideForce } from '../profiles/overrides.ts';
 import { readArgs } from '../args.ts';
 import { budgetLine, budgetTable, type BudgetRow } from '../budgets/table.ts';
@@ -251,7 +252,14 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // one that has lapsed. Read before the comparison below, whose held seats it marks.
   const hold = liveHold(whole, now);
   const budgets = budgetTable(budgetsInForceOf(standing, team), recall(whole.budgets), now.getTime());
-  const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
+  const comparison = compare(
+    team, session, state, live, now,
+    watchInForceOf(standing, team),
+    undefined,
+    // The owner's live grant, read fresh: the `team answer` repair line appears only while the
+    // team grant carries `dialogs.trust`.
+    dialogsTrustInForce(sources.home ?? homedir(), root, now),
+  );
   const all = args.flags.has('all');
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is

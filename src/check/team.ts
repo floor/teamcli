@@ -10,6 +10,7 @@
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
@@ -26,6 +27,7 @@ import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, worksp
 import type { Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
+import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
 import { rosterOf } from '../permissions/who.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
@@ -194,7 +196,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     stale = staleState(team, session, whole);
   }
   const state = whole.sessions[session] ?? emptySession();
-  const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team));
+  // The same live grant `status` reads, so the two readings offer `team answer` together or not
+  // at all: the setting is one record, never a file key and never a stale approval.
+  const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team), undefined, dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...signingDifferences(team, state, live, root, sources.home),

@@ -374,7 +374,7 @@ team) for any other, to establish one by a run. A stored classification is valid
 own read against the closed list above: anything else the file holds reads `unknown` in the record,
 the log line, the prompt, `team status` and `team doctor`.
 
-Under `dialogs.trust: orchestrator`, a seat waiting at `trust` is also re-read on a tick: every
+Under a `dialogs.trust` team grant in force for this project's team id (read fresh on every run), a seat waiting at `trust` is also re-read on a tick: every
 prompt timeout and every return from `o` takes the lock and reads the state and the pane fresh,
 and follows what they show — a seat `team answer` made ready in the meantime, the
 `trust-sent-recovery` state it may have left behind (shown as

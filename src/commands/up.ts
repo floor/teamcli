@@ -9,6 +9,7 @@ import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, 
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
 import { devMode, logDevMode } from '../dev_mode.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
+import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
@@ -60,7 +61,6 @@ import { recordWhat, progressWriter, classificationOf } from '../launch/progress
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { processSignals, terminalReader, type Terminal } from '../launch/terminal.ts';
-import { trustPolicy } from '../file/dialogs.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
@@ -1625,7 +1625,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       sleep: (ms) => rawSleep(ms),
       now: () => now().getTime(),
       idleTimeout: profileFor(seatCli(input.seat))?.idleTimeout ?? 90,
-      polled: trustPolicy(team) === 'coordinator' && input.classification === 'trust',
+      // The key is the lead answering, and the setting is the owner's live grant: a team grant
+      // carrying `dialogs.trust`, read fresh here. No file key and no approval turn it on.
+      polled: dialogsTrustInForce(sources.home, root, now()) && input.classification === 'trust',
     });
 
     const report = await executePlan(plan, session, host, { concurrency });

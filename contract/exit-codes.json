@@ -474,7 +474,7 @@
       "code": 1,
       "command": "answer",
       "id": "answer.policy",
-      "meaning": "the file leaves trust dialogs to the owner",
+      "meaning": "the dialogs.trust grant is not in force",
       "trigger": "team answer lead trust"
     },
     {

@@ -1,10 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
-import { notInForce } from '../approve/approval.ts';
+import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
-import { trustPolicy } from '../file/dialogs.ts';
 import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
@@ -156,9 +155,15 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
 
   const callerProblem = callerProblemOf(caller, team, seatName, standingOf(dir, session, caller));
   if (callerProblem) return refused(callerProblem);
+  // The setting is the owner's live grant: a team grant carrying `dialogs.trust`, read fresh
+  // here. No file key and no approval stand behind it — off is the default, the owner turns it
+  // on with `team grant @team --capabilities dialogs.trust`, and a revocation ends it at the
+  // next dialog. The recovery path below still receives the standing, whose rules delivery
+  // reads no approval gate.
   const standing = host.standing(root);
-  if (standing.kind !== 'verified') return refused({ class: 'caller', message: notInForce(standing) });
-  if (trustPolicy(team) !== 'coordinator') return refused({ class: 'policy', message: `${seatName}: use team up and [o]` });
+  if (!dialogsTrustInForce(host.home, root, host.now())) {
+    return refused({ class: 'policy', message: `${seatName}: use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)` });
+  }
 
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) return refused({ class: 'state', message: `${seatName}: another command holds it` });

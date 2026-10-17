@@ -12,6 +12,8 @@ import { sessionState, setHerdrRun, workspacePanes, type HerdrAgent, type HerdrW
 import { upFingerprint, OWNER_APPROVAL_ENV } from '../../src/approve/owner-token.ts';
 import { approvalStanding, readApproval, storePath, writeApproval } from '../../src/store/store.ts';
 import { readState } from '../../src/state.ts';
+import { writeGrant } from '../../src/permissions/grants.ts';
+import { teamIdOf } from '../../src/registry/teams.ts';
 import { parseMemoryPressure, parseSwapUsage, type Machine } from '../../src/watch/machine.ts';
 import type { Key } from '../../src/launch/terminal.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
@@ -3306,12 +3308,17 @@ describe('team up, the pause', () => {
     return { calls, typed, lockedWhileWaiting };
   }
 
-  /** The team file with the coordinator owning trust decisions; call before `approve`. */
-  function withCoordinatorPolicy(): void {
-    writeFileSync(
-      join(root, '.agents/team.yaml'),
-      readFileSync(join(root, '.agents/team.yaml'), 'utf8').replace('format: 1\n', 'format: 1\ndialogs:\n  trust: coordinator\n'),
-    );
+  /** The owner's live grant: the coordinator may answer trust dialogs for this project. */
+  function grantCoordinatorTrust(): void {
+    const written = writeGrant(home, {
+      name: `team-${teamIdOf(root)}`,
+      kind: 'team',
+      grantee: teamIdOf(root),
+      capabilities: ['dialogs.trust'],
+      roots: [root],
+      scope: [root],
+    });
+    if (!written.ok) throw new Error(`the scene's grant was refused: ${written.why}`);
   }
 
   /** A seat under coordination whose trust dialog the coordinator may answer mid-prompt. */
@@ -3621,7 +3628,7 @@ describe('team up, the pause', () => {
   });
 
   test('under coordination, a seat answered ready between polls is this run\'s ready', async () => {
-    withCoordinatorPolicy();
+    grantCoordinatorTrust();
     await approve();
     // What `team answer` leaves on its success: the seat ready, its waiting record gone.
     const { made, typed } = coordinated((seat) => { seat.stage = 'ready'; delete seat.waiting; });
@@ -3637,7 +3644,7 @@ describe('team up, the pause', () => {
   });
 
   test('under coordination, a recovery left between polls is shown, and the owner still chooses', async () => {
-    withCoordinatorPolicy();
+    grantCoordinatorTrust();
     await approve();
     const { made, typed } = coordinated((seat) => {
       seat.waiting = { state: 'trust-sent-recovery', classification: 'trust', sentAt: '2026-10-03T14:01:00.000Z' };
@@ -3657,7 +3664,7 @@ describe('team up, the pause', () => {
   });
 
   test('the same recovery prompt reaches a redirected stdout: what the record says, on stderr', async () => {
-    withCoordinatorPolicy();
+    grantCoordinatorTrust();
     await approve();
     const { made, typed } = coordinated((seat) => {
       seat.waiting = { state: 'trust-sent-recovery', classification: 'trust', sentAt: '2026-10-03T14:01:00.000Z' };
@@ -3674,7 +3681,7 @@ describe('team up, the pause', () => {
   });
 
   test('under coordination, an unchanged state re-prompts from the fresh reading, no key sent', async () => {
-    withCoordinatorPolicy();
+    grantCoordinatorTrust();
     await approve();
     const { made, typed } = coordinated();
     const io = testIo(root, { kind: 'owner' });

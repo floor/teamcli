@@ -73,7 +73,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.folder` | `answer` | 1 | the dialog's folder is not the lobby's exact trust entry | `team answer lead trust` |
 | `answer.label` | `answer` | 1 | the trust choice is not the recorded one | `team answer lead trust` |
 | `answer.no-pane` | `answer` | 1 | the state records no pane for the caller's seat | `team answer lead trust` |
-| `answer.policy` | `answer` | 1 | the file leaves trust dialogs to the owner | `team answer lead trust` |
+| `answer.policy` | `answer` | 1 | the dialogs.trust grant is not in force | `team answer lead trust` |
 | `answer.process` | `answer` | 1 | the process in the pane is not the one team launched | `team answer lead trust` |
 | `answer.recovery` | `answer` | 1 | the trust answer did not complete: the seat stays in recovery | `team answer lead trust` |
 | `answer.screen` | `answer` | 1 | the pane is not the trust dialog | `team answer lead trust` |

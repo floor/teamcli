@@ -1,4 +1,3 @@
-import { trustPolicy } from '../file/dialogs.ts';
 import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel } from '../file/validate.ts';
@@ -68,7 +67,7 @@ export type Comparison = { rows: Row[]; differences: Difference[]; notes: string
 function waitingView(
   name: string,
   recorded: SeatState | undefined,
-  team: TeamFile,
+  trust: boolean,
 ): { state: string; stored: string; difference: Difference } | null {
   const waiting = recorded?.waiting;
   if (!waiting) return null;
@@ -85,7 +84,7 @@ function waitingView(
     };
   }
   const phrase = `waiting for owner (${waiting.classification})`;
-  const answer = trustPolicy(team) === 'coordinator' && waiting.classification === 'trust';
+  const answer = trust && waiting.classification === 'trust';
   return {
     state: phrase,
     stored: 'waiting-owner',
@@ -134,7 +133,9 @@ function limitMark(seat: Seat | undefined, screen: Screen): string | null {
 // Compares the file and the state with the live session. Pure over what is handed in, but for
 // one probe: a seat reads `socket` only while the session's socket file is really there, so the
 // filesystem decides that word. `watch` is the watch values in force — the live file's under a
-// verified standing, the defaults under none — so the verdict reads one object.
+// verified standing, the defaults under none — so the verdict reads one object. `trust` is
+// whether the owner's live grant turns trust answering on for this team: the caller passes
+// `dialogsTrustInForce`, so the repair line offers `team answer` only while the setting is on.
 export function compare(
   team: TeamFile,
   session: string,
@@ -143,6 +144,7 @@ export function compare(
   now: Date = new Date(),
   watch: TeamFile['watch'] = team.watch,
   sockets: string | readonly string[] = defaultSocketsDirs(),
+  trust = false,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -207,7 +209,7 @@ export function compare(
       // A shell has no model to compare. Reading it would add an "unread" note beside the
       // repair that already says the pane runs no CLI.
       const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified);
-      const held = waitingView(seat.name, recorded, team);
+      const held = waitingView(seat.name, recorded, trust);
       if (held) {
         rows.push({
           name: seat.name,
@@ -351,7 +353,7 @@ export function compare(
     // A waiting record is read only of a pane that may still hold the seat: one that lost the
     // launched process reads `missing` or `restored, not launched by team` above — never
     // `waiting for owner`, and never under the declared model for a replaced one.
-    const waiting = recorded?.pane ? waitingView(seat.name, recorded, team) : null;
+    const waiting = recorded?.pane ? waitingView(seat.name, recorded, trust) : null;
     if (waiting && recorded?.pane) {
       rows.push({
         name: seat.name,
@@ -414,7 +416,7 @@ export function compare(
     const agent = live.agents.find((candidate) => candidate.name === name);
     if (agent) {
       claimed.add(agent.pane);
-      const held = waitingView(name, recorded, team);
+      const held = waitingView(name, recorded, trust);
       if (held) {
         rows.push({
           name,

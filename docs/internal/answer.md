@@ -11,13 +11,13 @@ Presses the one recorded key of a folder-trust dialog, and only that key. Every 
 
 ## What it reads and writes
 
-Reads the team file, this machine's approval and the approved copy the trust entries are read from, the seat's state, the installed CLI's version, and the pane — the screen's own lines, the folder herdr reports the pane working in, and the lobby's parent directory. The version must match a record whose own capture is registered (`src/profiles/trust-answer.ts`); Codex's record also needs a registered capture of its folder layout in the real lobby and none exists, so Codex answers nothing today. The command holds the seat's lock (`<state dir>/seat-locks/<session>/<seat>`) for its whole run, so a launch of the same seat cannot act beside it.
+Reads the team file, the seat's state, the installed CLI's version, and the pane — the screen's own lines, the folder herdr reports the pane working in, and the lobby's parent directory. The version must match a record whose own capture is registered (`src/profiles/trust-answer.ts`); Codex's record also needs a registered capture of its folder layout in the real lobby and none exists, so Codex answers nothing today. The command holds the seat's lock (`<state dir>/seat-locks/<session>/<seat>`) for its whole run, so a launch of the same seat cannot act beside it.
 
 On success it writes `trust-sent-recovery` into the seat's state and reads it back **before** sending the key: a crash between the two leaves a recovery a retry only observes, never a dialog answered twice. Under the seat lock, on both of its fresh reads of the pane, and immediately before every terminal input — the trust key, the typed rules line, and Enter — if the seat's state holds a `launched` record (a seat stopped at a dialog has one: its launch records the identity in the same write as the waiting record; a launch from before the field existed, or one whose process herdr could not read when it stopped, has none and keeps today's check), the pane's process identity must match the recorded process (`same`); if herdr cannot read the process or it is `gone` or `replaced`, the command refuses without sending that input. Refusals before the recovery write — caller, policy, state, version, screen, label, folder and action, and both inspections — write nothing. The one refusal between the write and the key, this process check, puts the record back to exactly what it was (`waiting-owner`), written and read back under the same lock: a later `team answer` can still answer the seat, and only a crash in that window leaves `trust-sent-recovery` for a retry to observe. After the key — a send that failed, an idle prompt that did not come, rules not delivered — a refusal leaves `trust-sent-recovery` as well. If refusal happens between typing and Enter, the line notes that rules were typed and not sent. It then sends one key, waits for the idle prompt, delivers the ordinary rules, and writes the seat `ready`.
 
 ## Who may run it
 
-The owner, from outside herdr, or the orchestrator from its own seat — the seat of that name in a session this project's state records, the file's session first and then a session the state records the caller's pane in (any session key the state holds is a session the check will try), on the pane the state records for it: a seat of another session, or a pane merely renamed to the orchestrator's name, is refused — and so is a seat the state records no pane for, or records on another pane than this call is on; those two refusals name the seat and the repair. What that proves is placement, and no more: the state file is in the project, and a process of the same user that writes its own pane there under the orchestrator's name, and renames its pane, passes. The check guards a mistaken agent, not a hostile process running as the same user. `--file` and `--session` are the owner's alone, from a terminal outside herdr: a non-owner aiming either is refused before the flagged file or session is read at all. With `dialogs.trust: owner` (the value when `dialogs` is omitted) nobody sends a key, the owner included.
+The owner, from outside herdr, or the orchestrator from its own seat — the seat of that name in a session this project's state records, the file's session first and then a session the state records the caller's pane in (any session key the state holds is a session the check will try), on the pane the state records for it: a seat of another session, or a pane merely renamed to the orchestrator's name, is refused — and so is a seat the state records no pane for, or records on another pane than this call is on; those two refusals name the seat and the repair. What that proves is placement, and no more: the state file is in the project, and a process of the same user that writes its own pane there under the orchestrator's name, and renames its pane, passes. The check guards a mistaken agent, not a hostile process running as the same user. `--file` and `--session` are the owner's alone, from a terminal outside herdr: a non-owner aiming either is refused before the flagged file or session is read at all. Trust answering is the owner's live grant: with a team grant carrying `dialogs.trust` in force for this project's team id (`team grant @team --capabilities dialogs.trust`) the dialog is answered; with none — the default — nobody sends a key, the owner included, and the refusal names the setting: `<seat>: use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)`. The record is read fresh on every run, so a revocation takes effect at the next dialog, and no approval stands behind the answer.
 
 ## What it prints
 
@@ -48,8 +48,8 @@ Every refusal line is `<seat>: <reason>` except an unplaced caller's, which is i
 
 | Class | Reasons |
 | --- | --- |
-| caller | `only the owner, or the orchestrator from its own seat, can answer`; the unplaced caller's reason; `--session is the owner's…`; `no pane is recorded for seat <name>…`; `the state records pane <pane> for seat <name>…`; `the file was never approved on this machine`; `approved before records were signed`; the approval verification's own reason; `the file is not the approved one (<section> changed; …)`; `the approved copy of the team file cannot be read` |
-| policy | `use team up and [o]` |
+| caller | `only the owner, or the orchestrator from its own seat, can answer`; the unplaced caller's reason; `--session is the owner's…`; `no pane is recorded for seat <name>…`; `the state records pane <pane> for seat <name>…` |
+| policy | `use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)` |
 | state | `another command holds it`; `it is not a live seat`; `its record is not an approved seat; left as it is (the owner cleans it: team remove <seat> --abandon)`; `herdr lists more than one agent of this name; left as it is`; `the owner has the pane open`; `it is not waiting at a trust dialog`; `its recovery state could not be recorded`; the process refusal's own reason with `(it is still recorded as a recovery)` appended, when the rollback itself did not take |
 | version | `this version has no trust answer` |
 | screen | `the pane is not the trust dialog` |
@@ -74,13 +74,13 @@ Every refusal line is `<seat>: <reason>` except an unplaced caller's, which is i
 | 1 | `answer.folder` | the dialog's folder is not the lobby's exact trust entry |
 | 1 | `answer.label` | the trust choice is not the recorded one |
 | 1 | `answer.no-pane` | the state records no pane for the caller's seat |
-| 1 | `answer.policy` | the file leaves trust dialogs to the owner |
+| 1 | `answer.policy` | the dialogs.trust grant is not in force |
 | 1 | `answer.process` | the process in the pane is not the one team launched |
 | 1 | `answer.recovery` | the trust answer did not complete: the seat stays in recovery, and the key may or may not have been sent |
 | 1 | `answer.screen` | the pane is not the trust dialog |
 | 1 | `answer.session-owner` | `--session` is the owner's |
 | 1 | `answer.state` | the seat is not waiting at a trust dialog |
-| 1 | `answer.unverified` | the name is not a seat of the approved copy |
+| 1 | `answer.unverified` | the name is not a declared seat |
 | 1 | `answer.version` | this version has no trust answer |
 | 2 | `answer.configuration` | the team file cannot be read |
 | 2 | `answer.usage` | the invocation is not a seat and trust |
@@ -92,7 +92,7 @@ Every transition writes one line to `team.log`: `<ISO timestamp> answer [<who>] 
 | Message | When |
 | --- | --- |
 | `refused trust: caller` | the caller check refused |
-| `refused trust: policy` | the file leaves trust dialogs to the owner |
+| `refused trust: policy` | the dialogs.trust grant is not in force |
 | `refused trust: state` | the lock, seat, waiting state, or recovery write refused |
 | `refused trust: version` | no record matches the printed version, or it changed between reads |
 | `refused trust: screen` | the pane is not the trust dialog |

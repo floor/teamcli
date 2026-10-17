@@ -63,6 +63,7 @@ import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
 import type { Key, Terminal } from '../src/launch/terminal.ts';
+import { writeGrant } from '../src/permissions/grants.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
@@ -2353,8 +2354,21 @@ scene('team.command-threw', async (place) => {
 const CURSOR_TRUST = readFileSync(new URL('./fixtures/cursor/2026.10.01/trust.txt', import.meta.url), 'utf8');
 const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
 
-function cursorTeam(lobby: string, dialogs: 'owner' | 'coordinator', root: string): string {
-  const section = dialogs === 'coordinator' ? 'dialogs:\n  trust: coordinator\n' : '';
+/** The owner's live grant, the way `team grant @team --capabilities dialogs.trust` writes it. */
+function trustGranted(home: string, root: string): void {
+  const written = writeGrant(home, {
+    name: `team-${teamIdOf(root)}`,
+    kind: 'team',
+    grantee: teamIdOf(root),
+    capabilities: ['dialogs.trust'],
+    roots: [root],
+    scope: [root],
+  }, { now: NOW });
+  if (!written.ok) throw new Error(`the scene's grant was refused: ${written.why}`);
+}
+
+function cursorTeam(lobby: string, dialogs: 'owner' | 'coordinator', root: string, home: string): string {
+  if (dialogs === 'coordinator') trustGranted(home, root);
   return `format: 1
 project: acme
 coordinator: lead
@@ -2362,7 +2376,7 @@ operator: lead
 session: acme
 workspace:
   mode: shared
-${section}trust:
+trust:
   - ${lobby}
   - ${root}
 seats:
@@ -2431,7 +2445,7 @@ scene('answer.configuration', async (place) => show(await answered(place, ['lead
 scene('answer.caller', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   return show(await answered(place, ['lead', 'trust'], other, answerHost(place, '')), 'only the owner');
 });
 scene('answer.file-owner', async (place) => {
@@ -2441,19 +2455,19 @@ scene('answer.file-owner', async (place) => {
 scene('answer.no-pane', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   return show(await answered(place, ['lead', 'trust'], leadSeat, answerHost(place, '')), 'no pane is recorded for seat lead');
 });
 scene('answer.session-owner', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   return show(await answered(place, ['lead', 'trust', '--session', 'other'], leadSeat, answerHost(place, '')), "--session is the owner's");
 });
 scene('answer.another-pane', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   updateState(join(place.root, '.agents'), (state) => {
     (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w2:p1' };
   });
@@ -2462,13 +2476,13 @@ scene('answer.another-pane', async (place) => {
 scene('answer.policy', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'owner', place.root));
-  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, '')), 'use team up and [o]');
+  approve(place, cursorTeam(lobby, 'owner', place.root, place.home));
+  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, '')), 'use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)');
 });
 scene('answer.process', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = {
       seats: {
@@ -2490,7 +2504,7 @@ scene('answer.process', async (place) => {
 scene('answer.unverified', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { extra: { stage: 'ready', pane: 'w9:p1' } }, worktrees: {} };
   });
@@ -2499,7 +2513,7 @@ scene('answer.unverified', async (place) => {
 scene('answer.ambiguous', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1' } }, worktrees: {} };
   });
@@ -2513,7 +2527,7 @@ scene('answer.ambiguous', async (place) => {
 scene('answer.state', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   const host = answerHost(place, '');
   host.agents = () => [];
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, host), 'not a live seat');
@@ -2521,7 +2535,7 @@ scene('answer.state', async (place) => {
 scene('answer.version', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
@@ -2530,7 +2544,7 @@ scene('answer.version', async (place) => {
 scene('answer.screen', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
@@ -2541,7 +2555,7 @@ scene('answer.label', async (place) => {
   // as the screen. The label return is the same exit, reached when a trust screen lacks the mark.
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
@@ -2551,7 +2565,7 @@ scene('answer.label', async (place) => {
 scene('answer.folder', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root).replace(`trust:\n  - ${lobby}\n  - ${place.root}`, 'trust:\n  - .'));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home).replace(`trust:\n  - ${lobby}\n  - ${place.root}`, 'trust:\n  - .'));
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
@@ -2561,7 +2575,7 @@ scene('answer.folder', async (place) => {
 scene('answer.recovery', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'trust-sent-recovery', classification: 'trust' } } }, worktrees: {} };
   });
@@ -2570,7 +2584,7 @@ scene('answer.recovery', async (place) => {
 scene('answer.ready', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
-  approve(place, cursorTeam(lobby, 'coordinator', place.root));
+  approve(place, cursorTeam(lobby, 'coordinator', place.root, place.home));
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
