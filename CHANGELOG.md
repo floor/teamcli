@@ -19,6 +19,20 @@ commands read them.
 
 ### Added
 
+- **One output contract, and `team --about`.** Every command prints under one contract across its
+  plain text, `--json` documents, `--help` usage and exit codes: a reading opens with
+  `team <project>, session "<session>"` (or the project line), prints an uppercase-headered
+  table, notes and any `difference:`/`repair:`/`who:` blocks, and closes with one summary line; an
+  action prints its plan steps under `--dry-run` and one summary line. `--json` prints one
+  document per command, its `schema` first (`team.<command>`, format 1) and a refusal as a
+  `team.error` document carrying the contract's exit id and repair; the schemas are published
+  under `schema/`. Output is quiet by default: stopped seats wait for `--all`, repeated notes
+  collapse to one line with `(x<n>)`, the `what 0.5.0 must not pretend` block prints only in
+  `team doctor` and `team --about`, and a deprecation warning only in `team check` and
+  `team doctor`, with its repair. Colour reaches a terminal only — never `--json`, never under
+  `NO_COLOR`. `team --about` prints the version, the licence, the docs link and the block; `watch`
+  and `broker` keep their foreground loops and take no `--json`.
+
 - **The registry, and `team register`.** The machine keeps records of the agents it has seen, the
   teams and the projects they sit in, under `~/.config/team/`. `team register <seat>` writes the
   record for one seat that is already running — a pane herdr places under that name, holding a
@@ -182,15 +196,23 @@ commands read them.
   file's `tasks.policy` filtering every record before it crosses. A broker runs as the same OS
   principal as the seats: that is integrity, not authenticity, and it isolates nothing.
 
+- **The rebuilt `team usage`.** `team usage` reads the machine rather than one project: every
+  team with an approval store here, in one report — each account and window with what is left and
+  used, when it was last read and from which source, its reserve and its state, under a header
+  that counts the machine's teams, labs and accounts. Anyone may run it from any folder, and it
+  only reads: no check runs, no CLI is launched, no pane is read, nothing is written. The owner at
+  a terminal reads every team, and `--all` adds each team's seat-to-account breakdown; every other
+  caller reads the restricted view, a closed list built before anything prints. Shared machine
+  subscriptions live once in `~/.config/team/accounts.yaml`, and `--json` carries the same report
+  as one document, format 1.
+
 - **Around the seats.** `team list` shows the herdr sessions on this machine — the running ones
   unless `--all`, `--seats` for the active breakdown, `--watch` to refresh every two seconds;
   `team feed` reads and follows the project's message history, `--all` merging every project on
   the machine; `team messages` verifies a waiting message, prints its body and writes the
   receipt; `team proc` keeps the processes the seats started as a register in the team's state;
-  `team usage --all`
-  reads every team's seat-to-account breakdown for the owner, and machine-wide shared
-  subscriptions are listed once in `~/.config/team/accounts.yaml`; `team hold <reason>` places a
-  note on the team's work (`--release` clears it) that `status` and `doctor` show; `team tempo`
+  `team hold <reason>` places a note on the team's work (`--release` clears it) that `status` and
+  `doctor` show; `team tempo`
   sets the watch's pace; `team lock` and `team unlock` take and release a named machine lock, so
   one heavy run holds it at a time; `team mcp status` and `team mcp doctor` read the MCP bridge's
   legs; `team ask-show` prints one signed ask; `team reload` and `team restart` bring a later
