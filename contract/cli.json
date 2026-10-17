@@ -1400,6 +1400,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--keep",
           "repeatable": false,
           "takesValue": false
@@ -1428,7 +1434,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]"
+        "team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]"
       ]
     },
     {

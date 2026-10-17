@@ -826,7 +826,7 @@ Hidden: no
 
 Usage:
 
-    team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]
+    team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]
 
 ### Flags
 
@@ -835,6 +835,7 @@ Usage:
 | `--abandon` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--keep` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |

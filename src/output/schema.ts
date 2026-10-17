@@ -714,6 +714,19 @@ export const UP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** Published `--json` output schema for `team remove` (`schema/remove.schema.json`). */
+export const REMOVE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.remove',
+  fileName: 'remove.schema.json',
+  title: 'team remove --json output',
+  statuses: ['removed', 'kept', 'temporary', 'swapped'],
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -734,6 +747,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   RESTART_OUTPUT_SCHEMA,
   DOWN_OUTPUT_SCHEMA,
   UP_OUTPUT_SCHEMA,
+  REMOVE_OUTPUT_SCHEMA,
 ];
 
 
