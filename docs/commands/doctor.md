@@ -58,7 +58,7 @@ trust:
 workspace:
   mode: shared
 
-budgets:                       # owner-only; the checks run from the approved copy
+budgets:                       # owner-only; the checks run from this section once a record verifies
   accounts:
     openai: { kind: subscription, reserve: 10%, sources: [check], check: .agents/openai-quota }
 
