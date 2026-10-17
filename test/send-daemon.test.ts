@@ -18,6 +18,8 @@ import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { acquireSeatLock, seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import {
   daemonDropDir,
   daemonLockPath,
@@ -806,6 +808,54 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const io2 = ownerIo(w.root);
     expect(await runSend(['native', 'recovers cleanly'], io2, host)).toBe(0);
     expect(io2.out).toBe('team acme, session "acme"\nnative: delivered\n');
+  });
+
+  test('a nickname sent through the daemon keeps the spec and the id it resolved to in history', async () => {
+    const w = setupWorld();
+    // The lead seat carries a human name, and the registry holds it: the daemon's own history
+    // line must keep both what the caller wrote and the record it reached.
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('    launch: claude\n  - role: implementer', '    launch: claude\n    nickname: zeus\n  - role: implementer'));
+    const loaded = loadTeamFile(w.root, { home: w.home });
+    if (!loaded.ok) throw new Error('fixture team.yaml failed to reload with the nickname');
+    const id = teamIdOf(w.root);
+    const lead = registerAgent(w.home, {
+      name: 'lead',
+      signing: { model: 'Test', version: '1', role: 'coordinator' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: id, seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    upsertTeam(w.home, id, {
+      project: 'acme',
+      entity: 'acme',
+      session: 'acme',
+      root: w.root,
+      lobby: lobbyDir(w.home),
+      roster: [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true, nickname: 'zeus' }],
+      lifecycle: 'running',
+    });
+    const host = makeHost(w);
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: loaded.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    const io = ownerIo(w.root);
+    expect(await runSend(['zeus', 'by the human name'], io, host)).toBe(0);
+    expect(io.out).toBe('lead: delivered\n');
+
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (!hist.ok) return;
+    expect(hist.entries).toEqual([
+      expect.objectContaining({ to: 'lead', spec: 'zeus', resolved: lead.id, outcome: 'delivered' }),
+    ]);
   });
 });
 

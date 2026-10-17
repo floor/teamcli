@@ -110,14 +110,17 @@ writes no drop file and types nothing; it appends one line to
 | `agt_<12 hex>` | one agent by its id, from the agent registry |
 | `<seat>@<team>` | a seat in a named team — whoever its registry record holds now; `<team>` is a team id, a project or a session |
 | `<nickname>@<team>` | the seat that human name belongs to, in a named team — a nickname confers nothing: its seat talks and is judged by its own record |
-| `@<team>` | the team's lead: the seat its file marks `leads: true`. A team with no lead answers with the owner, and the owner has no channel a send can reach, so the send is refused and names the owner |
+| `@<team>` | the team's lead: the seat its file marks `leads: true`. A team with no lead is refused — there is no one to deliver to; a roster marking two leads is refused naming both |
 | `<seat>` or `<nickname>` | a seat of the caller's own team, by its name or its human name |
 
 A role is never an address: `coordinator@api` names nobody even when a seat of that team holds
 the role `coordinator`. Every form resolves to one seat's registry record before any rule runs,
 and the admission rule judges that record's seat — a nickname added or removed never changes who
 may reach whom. A spec that two entries answer — one seat's name and another seat's nickname of
-the same team — is refused naming both and sending nothing. A `<seat>@<team>` and a nickname
+the same team — is refused naming both and sending nothing. A team-level address is refused the
+same way when the roster marks two leads; a roster with no lead is refused because there is no
+one to deliver to, and the refusal names both repairs: `team send --list` to name a seat, or
+`leads` on one seat to give the team a lead. A `<seat>@<team>` and a nickname
 resolve only through the team's roster; when the roster has no line for it, the agent records are
 asked by the same seat name, so a registry whose roster has not caught up still addresses the seat.
 

@@ -14,6 +14,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { registerAgent, updateAgent, type Agent } from '../src/registry/agents.ts';
 import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, senderHeader } from '../src/send/admit.ts';
+import { historyPath } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type LiveAgent } from '../src/send/resolve.ts';
 import { updateState } from '../src/state.ts';
@@ -249,13 +250,30 @@ describe('resolveTarget by the team\'s own address and by nickname', () => {
     expect(resolveTarget(w.home, 'coordinator@alpha', { cwd: w.root })).toEqual({ error: 'coordinator@alpha: no registered agent holds the seat or nickname "coordinator" in that team; `team up` records a seat it launches, or `team register coordinator` records one already running' });
   });
 
-  test('a team with no lead answers with the owner, and an owner has no channel', () => {
+  test('a team with no lead refuses its team-level address: there is no one to deliver to', () => {
     const w = world('alpha', 'alpha', 'lead', [seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
     const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
     team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [{ agent: builder.id, seat: 'builder-1', role: 'builder', leads: false }]);
 
     expect(resolveTarget(w.home, '@alpha', { cwd: w.root })).toEqual({
-      error: '@alpha: the team "alpha" has no lead; the owner is its team-level address, and a send cannot reach an owner',
+      error: '@alpha: this team has no lead seat, so there is no one to deliver to; name a seat (team send --list) or give a seat `leads`',
+    });
+  });
+
+  test('two leads refuse the team-level address, naming both rather than taking the first', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('coordinator', 'lead-2', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const second = agent(w.home, { name: 'lead-2', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead-2', session: 'alpha', pane: 'pane-alpha-lead-2' });
+    // The file load refuses two leads; a registry written elsewhere can still hold them, and
+    // `@alpha` must not deliver to whichever line came first.
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: second.id, seat: 'lead-2', role: 'coordinator', leads: true },
+    ]);
+
+    expect(resolveTarget(w.home, '@alpha', { cwd: w.root })).toEqual({
+      error: '@alpha: this team has more than one lead seat — "lead" and "lead-2"; nothing was sent',
+      kind: 'ambiguous',
     });
   });
 
@@ -272,9 +290,11 @@ describe('resolveTarget by the team\'s own address and by nickname', () => {
 
     expect(resolveTarget(w.home, 'lead@alpha', { cwd: w.root })).toEqual({
       error: 'lead@alpha: the spec matches two seats — the seat "lead" and the nickname "lead" of the seat "builder-1"; nothing was sent',
+      kind: 'ambiguous',
     });
     expect(resolveTarget(w.home, 'lead', { cwd: w.root })).toEqual({
       error: 'lead: the spec matches two seats — the seat "lead" and the nickname "lead" of the seat "builder-1"; nothing was sent',
+      kind: 'ambiguous',
     });
   });
 });
@@ -571,5 +591,59 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(io.err).toContain('`team register lead` records the seat where it already runs, or `team up` registers a seat it leaves standing');
     expect(chiefPane.typed).toEqual([]);
     expect(AGENT_ID.test(chief.id)).toBe(true);
+  });
+
+  test('a bare spec two registry entries answer is refused before the declared seat, in a send and a record', async () => {
+    const alpha = world('alpha', 'alpha', 'lead', [
+      seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'),
+      seatBlock('web', 'web-lead', 'claude-code', 'anthropic'),
+      seatBlock('builder', 'builder-1', 'claude-code', 'anthropic'),
+    ]);
+    const lead = agent(alpha.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const webLead = agent(alpha.home, { name: 'web-lead', role: 'web', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'web-lead', session: 'alpha', pane: 'pane-web-lead' });
+    const builder = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    // `web-lead` is one seat's name and another seat's nickname. The file cannot carry that
+    // collision — the load refuses it — but a registry written elsewhere can, and a bare spec
+    // must never fall through to the declared seat of that name while `web-lead@alpha` refuses.
+    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: webLead.id, seat: 'web-lead', role: 'web', leads: false },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'web-lead' },
+    ]);
+    const webPane = scripted(['idle', 'working']);
+    const host = sendHost(alpha, 'alpha', { 'web-lead': { pane: 'pane-web-lead', paneStatus: webPane }, 'builder-1': { pane: 'pane-builder', paneStatus: scripted(['idle']) } });
+    const refusal = 'team send: refused: web-lead: the spec matches two seats — the seat "web-lead" and the nickname "web-lead" of the seat "builder-1"; nothing was sent\n';
+
+    const dry = testIo(alpha.root, OWNER);
+    expect(await runSend(['web-lead', BODY, '--dry-run'], dry, host)).toBe(1);
+    expect(dry.err).toBe(refusal);
+    const recorded = testIo(alpha.root, OWNER);
+    expect(await runSend(['--record', 'web-lead', '--channel', 'native', '--ms', '812'], recorded, host)).toBe(1);
+    expect(recorded.err).toBe(refusal);
+    expect(webPane.typed).toEqual([]);
+    expect(existsSync(join(alpha.root, '.agents', 'send-drops'))).toBe(false);
+    expect(existsSync(historyPath('alpha', alpha.root, alpha.home))).toBe(false);
+  });
+
+  test('a bare nickname the registry has no record for resolves through the local file', async () => {
+    const alpha = world('alpha', 'alpha', 'lead', [
+      seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'),
+      `${seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')}    nickname: hephaestus\n`,
+    ]);
+    // No registry record at all: the declared-seat path answers the bare nickname by the file's
+    // own seats, instead of calling the seat undeclared.
+    const helperPane = scripted(['idle', 'working']);
+    const host = sendHost(alpha, 'alpha', { 'builder-1': { pane: 'pane-builder', paneStatus: helperPane } });
+    const io = testIo(alpha.root, OWNER);
+
+    const code = await runSend(['hephaestus', BODY], io, host);
+
+    expect(code).toBe(0);
+    expect(helperPane.typed.length).toBe(1);
+    const typed = helperPane.typed[0] as Typed;
+    expect(typed.pane).toBe('pane-builder');
+    const drop = dropOf(typed.text);
+    expect(drop.text).toBe(`from the owner — admitted by: the owner\n\n${BODY}`);
+    expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
   });
 });

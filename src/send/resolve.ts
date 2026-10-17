@@ -14,6 +14,13 @@ import { findTeam, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 /** What a spec resolves to: the owning team record, the agent, and the pane to type into. */
 export type Target = { team: TeamRecord; agent: Agent; pane: string };
 
+/**
+ * A spec the resolver refuses. `kind` labels the refusals a caller must act on before any
+ * fallback: an ambiguous spec names two seats (or two leads for `@<team>`), and no declared-seat
+ * path may pick one of them by accident.
+ */
+export type ResolveProblem = { error: string; kind?: 'ambiguous' };
+
 /** One live agent as the herdr read returns it: a name and a pane. */
 export type LiveAgent = { name?: string | null; pane: string };
 
@@ -29,8 +36,8 @@ export function isRegistrySpec(spec: string): boolean {
 }
 
 /** What a spec's text names, before the registry is asked: an agent id, a `<target>@<scope>`
- *  pair (an empty target is the team's own address: its lead, or the owner), or a plain seat or
- *  nickname of the caller's own team. The parse reads no file. */
+ *  pair (an empty target is the team's own address: its lead), or a plain seat or nickname of
+ *  the caller's own team. The parse reads no file. */
 export type ParsedSpec =
   | { kind: 'id'; id: string }
   | { kind: 'at'; target: string; scope: string }
@@ -68,7 +75,7 @@ export function resolveTarget(
   spec: string,
   io: Pick<Io, 'cwd'>,
   live: LiveRead = liveFromHerdr,
-): Target | { error: string } {
+): Target | ResolveProblem {
   const parsed = parseSpec(spec);
   if ('error' in parsed) return parsed;
   if (parsed.kind === 'id') return fromId(home, parsed.id, live);
@@ -95,7 +102,7 @@ export function seatAgent(home: string, teamKeys: string[], seat: string): Agent
   return null;
 }
 
-function fromId(home: string, id: string, live: LiveRead): Target | { error: string } {
+function fromId(home: string, id: string, live: LiveRead): Target | ResolveProblem {
   const agent = getAgent(home, id);
   if (!agent) return { error: `${id}: no registered agent carries that id` };
   if (agent.lifecycle === 'retired') return { error: `${id}: the agent is retired; nothing was sent` };
@@ -122,7 +129,7 @@ function lookupInTeam(
   team: TeamRecord,
   target: string,
   live: LiveRead,
-): Target | { error: string } {
+): Target | ResolveProblem {
   const chosen = seatOfTarget(team, spec, target);
   if (chosen !== null && 'error' in chosen) return chosen;
   const seat = chosen === null ? target : chosen.seat;
@@ -147,21 +154,28 @@ function lookupInTeam(
 /**
  * The seat a target names in one team, from the team's roster: `''` is the team's lead — the
  * entry its file marks `leads: true` — and a written target is a seat's name or a nickname. A
- * team with no lead answers with the owner as its team-level address; an owner has no seat or
- * pane this build can reach, so the send is refused rather than silently dropped. A target that
- * two entries answer is refused naming both: the load refuses that collision, so only a registry
- * written elsewhere can hold it, and no address in it may pick a seat by accident. `null` leaves
- * the target to the agent-record lookup below.
+ * team with no lead has no one its team-level address can reach, so the send is refused rather
+ * than silently dropped; a roster marking two leads refuses that address too, naming both. A
+ * target that two entries answer is refused naming both: the load refuses that collision, so
+ * only a registry written elsewhere can hold it, and no address in it may pick a seat by
+ * accident. `null` leaves the target to the agent-record lookup below.
  */
 function seatOfTarget(
   team: TeamRecord,
   spec: string,
   target: string,
-): { seat: string } | { error: string } | null {
+): { seat: string } | ResolveProblem | null {
   if (target === '') {
-    const lead = team.roster.find((entry) => entry.leads === true);
-    if (lead !== undefined) return { seat: lead.seat };
-    return { error: `${spec}: the team "${team.project}" has no lead; the owner is its team-level address, and a send cannot reach an owner` };
+    const [lead, ...otherLeads] = team.roster.filter((entry) => entry.leads === true);
+    if (lead === undefined) {
+      // TODO 0.5.1: resolve to the owner once the owner is reachable through team send
+      return { error: `${spec}: this team has no lead seat, so there is no one to deliver to; name a seat (team send --list) or give a seat \`leads\`` };
+    }
+    if (otherLeads.length > 0) {
+      const named = [lead, ...otherLeads].map((entry) => `"${entry.seat}"`);
+      return { error: `${spec}: this team has more than one lead seat — ${named.join(' and ')}; nothing was sent`, kind: 'ambiguous' };
+    }
+    return { seat: lead.seat };
   }
   const seatNames = team.roster.filter((entry) => entry.seat === target).map((entry) => entry.seat);
   const nicknameSeats = team.roster
@@ -173,7 +187,7 @@ function seatOfTarget(
       ...seatNames.map((seat) => `the seat "${seat}"`),
       ...nicknameSeats.filter((seat) => !seatNames.includes(seat)).map((seat) => `the nickname "${target}" of the seat "${seat}"`),
     ];
-    return { error: `${spec}: the spec matches two seats — ${named.join(' and ')}; nothing was sent` };
+    return { error: `${spec}: the spec matches two seats — ${named.join(' and ')}; nothing was sent`, kind: 'ambiguous' };
   }
   if (seatNames.length > 0) return { seat: seatNames[0] as string };
   if (nicknameSeats.length > 0) return { seat: nicknameSeats[0] as string };

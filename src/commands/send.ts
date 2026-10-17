@@ -293,7 +293,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const who = logWho(caller, team);
   const from = caller.kind === 'seat' ? caller.name : 'owner';
   const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
-  if ('error' in resolved && isRegistrySpec(seatName)) return refuse(io, dir, who, resolved.error, host, report);
+  // An ambiguous spec is refused wherever it is written, not only when it looks like a registry
+  // spec: the declared-seat path below must never pick one of the two seats the registry named.
+  if ('error' in resolved && (resolved.kind === 'ambiguous' || isRegistrySpec(seatName))) {
+    return refuse(io, dir, who, resolved.error, host, report);
+  }
   const hit = 'error' in resolved ? null : resolved;
 
   // The authority rule, `admitSend` over the registry's records, default deny, judging the
@@ -314,13 +318,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (hit === null) {
     const placement = placementProblemOf(caller, standing);
     if (placement) return refuse(io, dir, who, placement, host, report);
-    admission = admissionOf(caller, team, null, seatName, host.home, fileTeamId, () => host.now(), standing);
+    // A bare nickname the registry cannot answer is still a declared seat's nickname: the local
+    // file maps it, and the rules judge the seat it names, never the human name the caller wrote.
+    const configured =
+      team.seats.find((seat) => seat.name === seatName) ??
+      team.seats.find((seat) => seat.nickname !== undefined && seat.nickname === seatName);
+    const seat = configured === undefined ? seatName : configured.name;
+    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
-    const configured = team.seats.find((seat) => seat.name === seatName);
     if (!configured) {
       return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
     }
-    to = { seat: seatName, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
+    to = { seat, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
     admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
@@ -573,7 +582,11 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   const who = logWho(caller, team);
   const from = caller.kind === 'seat' ? caller.name : 'owner';
   const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
-  if ('error' in resolved && isRegistrySpec(seatName)) return refuse(io, dir, who, resolved.error, host, report);
+  // An ambiguous spec is refused wherever it is written, not only when it looks like a registry
+  // spec: the declared-seat path below must never pick one of the two seats the registry named.
+  if ('error' in resolved && (resolved.kind === 'ambiguous' || isRegistrySpec(seatName))) {
+    return refuse(io, dir, who, resolved.error, host, report);
+  }
   const hit = 'error' in resolved ? null : resolved;
   const standing = standingOf(dir, judged.session, caller);
   let to: Aim;
@@ -581,13 +594,18 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   if (hit === null) {
     const placement = placementProblemOf(caller, standing);
     if (placement) return refuse(io, dir, who, placement, host, report);
-    admission = admissionOf(caller, team, null, seatName, host.home, fileTeamId, () => host.now(), standing);
+    // A bare nickname the registry cannot answer is still a declared seat's nickname: the local
+    // file maps it, and the rules judge the seat it names, never the human name the caller wrote.
+    const configured =
+      team.seats.find((seat) => seat.name === seatName) ??
+      team.seats.find((seat) => seat.nickname !== undefined && seat.nickname === seatName);
+    const seat = configured === undefined ? seatName : configured.name;
+    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
-    const configured = team.seats.find((seat) => seat.name === seatName);
     if (!configured) {
       return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
     }
-    to = { seat: seatName, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
+    to = { seat, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
     admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
