@@ -3,7 +3,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { budgetsInForceOf, notInForce } from '../approve/approval.ts';
+import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
@@ -11,7 +11,7 @@ import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
-import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
+import { insideTrust, isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { declaredModel } from '../file/model.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -50,7 +50,7 @@ import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
-import { lobbyPretrustLine } from '../launch/pretrust.ts';
+import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -67,6 +67,10 @@ import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
+import { registerRun } from '../registry/sync.ts';
+import { findAgent } from '../registry/agents.ts';
+import { teamIdOf } from '../registry/teams.ts';
+import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
@@ -272,11 +276,11 @@ type Running = { name: string; vendor: string; temporary: boolean };
 function overCeiling(ceilings: Ceilings, running: readonly Running[], seat: Seat): string | null {
   if (running.some((item) => item.name === seat.name)) return null;
   const count = running.length + 1;
-  if (count > ceilings.seats) return `the approval allows ${ceilings.seats} seats; ${count} would be running`;
+  if (count > ceilings.seats) return `the file allows ${ceilings.seats} seats; ${count} would be running`;
   const cap = ceilings.vendors[seat.vendor];
   if (cap !== undefined) {
     const vendors = running.filter((item) => item.vendor === seat.vendor).length + 1;
-    if (vendors > cap) return `the approval allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
+    if (vendors > cap) return `the file allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
   }
   return null;
 }
@@ -588,58 +592,51 @@ function denyUp(out: { stderr(text: string): void }): number {
   // exit: up.deny
   // exit: up.delegate
   // exit: up.delegate-approval
-  // exit: up.delegate-approved-copy
-  // exit: up.delegate-drift
   // exit: up.delegate-evidence
   // exit: up.delegate-placement
   // exit: up.delegate-command
   // exit: up.grant-another-pane
   // exit: up.grant-approval
-  // exit: up.grant-approved-copy
   // exit: up.grant-caller
-  // exit: up.grant-drift
   // exit: up.grant-no-pane
   // exit: up.grant-scope
   return 1;
 }
 
-/** Doctor's never-approved line. The other two non-verified cases share `notInForce`'s text. */
-const NEVER_APPROVED_DOCTOR = 'run `team approve`: this file was never approved on this machine';
+/** The sentence a caller the run does not admit is refused with. One spelling, so the bare
+ *  `deny` a real run answers with, the warning dev mode folds it into, and the `! up would
+ *  refuse:` line a dry run prints are the same words. */
+function placementRefusal(caller: Caller): string {
+  return `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+}
+
+/** The one command that unblocks a run this caller cannot start: the owner's own, in this folder,
+ *  from a terminal outside herdr. The flags the caller named are kept, spelled the way the plan
+ *  spells a word, so the printed line is a command that runs. */
+function ownerUpRun(values: { file?: string; session?: string }): string {
+  const words = ['team up'];
+  if (values.file !== undefined) words.push('--file', shellQuote(values.file));
+  if (values.session !== undefined) words.push('--session', shellQuote(values.session));
+  return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+}
 
 /** Pulls the dev-mode warnings out of `refusals` and joins them into the one line. */
 function devWarningLine(refusals: string[], standing: Standing, caller: Caller): string {
-  const placement = `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-  const mismatches = new Set(
-    refusals.map(approvedCopyMismatch).filter((inner): inner is string => inner !== null),
-  );
+  const placement = placementRefusal(caller);
   const kept: string[] = [];
   const warnings: string[] = [];
   for (const line of refusals) {
-    if (devModeWarning(line, standing, placement, mismatches)) warnings.push(line);
+    if (devModeWarning(line, standing, placement)) warnings.push(line);
     else kept.push(line);
   }
   refusals.splice(0, refusals.length, ...kept);
   return [...new Set(warnings)].join('; ');
 }
 
-/** The approved-copy mismatch `up` itself says. A grant or a delegation says the same words
- *  after its own prefix, and those stay refusals. The returned text is the parenthetical. */
-function approvedCopyMismatch(line: string): string | null {
-  const prefix = 'the file is not the approved one (';
-  const suffix = '): run `team approve`';
-  if (!line.startsWith(prefix) || !line.endsWith(suffix)) return null;
-  return line.slice(prefix.length, line.length - suffix.length);
-}
-
-function devModeWarning(line: string, standing: Standing, placement: string, mismatches: ReadonlySet<string>): boolean {
+function devModeWarning(line: string, standing: Standing, placement: string): boolean {
   if (line === placement) return true;
-  if (approvedCopyMismatch(line) !== null) return true;
-  // Doctor says the same mismatch as `run \`team approve\`: <differences>`, and that miss
-  // blocks the launch on its own. It joins the warning; it is not a second refusal.
-  if (standing.kind === 'verified' && mismatches.has(line.slice('run `team approve`: '.length))) return true;
   if (standing.kind === 'verified') return false;
-  if (line === notInForce(standing)) return true;
-  return standing.kind === 'none' && line === NEVER_APPROVED_DOCTOR;
+  return line === notInForce(standing);
 }
 
 export async function runUp(argv: string[], io: Io, sources: UpSources): Promise<number> {
@@ -723,8 +720,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     return 1;
   }
   // Dev mode does not return here: the file is mounted, and the same sentence is a warning below.
+  // One return answers both runs: a real one with the bare word, a dry one never denied but told
+  // the reason and the owner's own command. Either way the flagged file stays unread, so the dry
+  // run prints no plan for it.
   if (!mayLaunchSeats(walked) && aimed && verdict === null && grantRefusal === null && !dev) {
-    out.stderr('deny\n');
+    if (dry) {
+      out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}\n`);
+      out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
+    } else {
+      out.stderr('deny\n');
+    }
     // exit: up.not-owner
     return 1;
   }
@@ -769,10 +774,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // and nothing here tells the caller to run a herdr command.
   let clearStopped = false;
 
-  // One verified snapshot carries the whole command: the refusal when there is
-  // one, and the ceilings the launch holds. A legacy or refused record is not
-  // an approval in force, and says so in its own words. Read before the caller
-  // gate so an out-of-band owner token can be matched against what `up` would launch.
+  // Read the approval before the caller gate so an out-of-band owner token can be
+  // matched against its fingerprints and generation. Launch limits come from the live file.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   // The out-of-band owner authorization: a non-owner caller is admitted as the owner for this one
   // launch when the token equals the fingerprint of the approved record `up` would launch — its
@@ -803,20 +806,23 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
-  if (detached !== undefined) {
+  // A detached run is refused unless a create-grant admits it: the grant holder's own runner
+  // outside herdr is the one detached caller the grant may name.
+  if (detached !== undefined && !createGranted) {
     refusals.push(detached);
   } else if (!named) {
-    // Dev mode mounts and says the placement as a warning. Anyone else is denied.
-    if (!dev) return denyUp(out);
-    refusals.push(`only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
+    // Dev mode mounts and says the placement as a warning; a dry run says it beside the plan it
+    // would refuse. Anyone else is denied, and the bare word is the whole answer.
+    if (!dev && !dry) return denyUp(out);
+    refusals.push(placementRefusal(caller));
   }
   // The live file is the record. A verified copy that no longer matches is not a refusal.
   // A legacy or refused record still is: its text is the case, and dev mode warns instead.
   if (standing.kind === 'none') {
     if (dev) refusals.push(notInForce(standing));
   } else if (standing.kind !== 'verified') refusals.push(notInForce(standing));
-  // The budget readings the gate refuses on are the approved ones: an unapproved lower reserve
-  // unblocks nothing, not even the seat a dry run would plan.
+  // The budget readings the gate refuses on are the live file's own: a standing that is not
+  // verified names no account at all, not even for a dry run's plan.
   const budgets = budgetsInForceOf(standing, team);
 
   // A file a CLI reads at start refuses only a launch into the lobby. `doctor` reports it
@@ -934,7 +940,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // What makes a standing that is not verified safe is not the defaults' own values —
   // `defaultBudgets` names no account, and `seatBudget` reads it `clear`: permissive as a
   // value. It is the ordering: the refusal above is carried into every exit below, and this
-  // guard keeps the planning pass from consulting a budget at all, so an unapproved file
+  // guard keeps the planning pass from consulting a budget at all, so a file no approval
+  // covers
   // buys nothing from the budget, not even a mark in a dry run's plan.
   const budgetGate = sources.seatBudget ?? seatBudget;
   const budgetOf = (seat: (typeof team.seats)[number]) =>
@@ -1113,6 +1120,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     }
   };
 
+  // A run an entity create-grant admitted trusts the folders its own seats start in — the project,
+  // for a lead — in each seat CLI's record: no one is at a terminal to answer that CLI's folder
+  // dialog. A folder is written only when the grant's paths cover it and the file's `trust:` lists
+  // it. The owner at a terminal, and every caller the grant does not admit, write nothing here.
+  const stampGrantedTrust = () => {
+    if (!createGranted || mayLaunchSeats(caller)) return;
+    const now = sources.now?.() ?? new Date();
+    const grant = {
+      covers: (folder: string) => entityGrantAdmits(root, io, { home: sources.home, now, cwd: folder }),
+      listed: (folder: string) => insideTrust(folder, team.trust ?? [], root, sources.home),
+    };
+    for (const seat of seats) grantedFolderPretrust(seat, sources.home, { now, grant });
+  };
+
   // Dev mode says the no-approval lines and the caller-placement line once, as a warning,
   // and mounts. Every other refusal stays a refusal. Unset, the list is unchanged.
   const warning = dev ? devWarningLine(refusals, standing, caller) : '';
@@ -1123,7 +1144,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // The same cause can reach the list twice — the gate and `doctor` both read the
     // approval — so a refusal is said once. A refusal leaves through the real run's
     // return below, so the status and the exit id are that refusal's; the words stay these.
-    for (const refusal of [...new Set(refusals)]) out.stdout(`! up would refuse: ${plainText(refusal)}\n`);
+    const said = [...new Set(refusals)];
+    for (const refusal of said) out.stdout(`! up would refuse: ${plainText(refusal)}\n`);
+    // A caller the run does not admit is the one refusal with a command of its own behind it:
+    // nothing in the file changes it, the owner's run does. So the dry run names that command.
+    if (said.includes(placementRefusal(caller))) {
+      out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
+    }
     out.stdout(plainText(formatPlan(buildPlan())));
   }
   if (refusals.length) {
@@ -1209,10 +1236,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // The trust record is written for that path, before the workspace, and a seat whose
     // record cannot be written is left out of the launch.
     stampLobbyTrust(true);
+    stampGrantedTrust();
     const plan = buildPlan();
 
-    // The ceilings the launch holds are the verified record's own, fixed at approval.
-    const ceilings: Ceilings | null = standing.kind === 'verified' ? standing.record.approval.ceilings : null;
+    // Every launch uses the limits declared in the live file, with or without a stored approval.
+    const ceilings = ceilingsOf(team);
     const running: Running[] = [];
     if (agents) {
       const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
@@ -1328,7 +1356,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           }
         }
         const seat = team.seats.find((item) => item.name === name);
-        if (!seat || !ceilings) return null;
+        if (!seat) return null;
         return overCeiling(ceilings, running, seat);
       },
       record(name, patch) {
@@ -1534,6 +1562,27 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const projectionNote = reachProjectionNote(writeReachProjection(team, sources.home));
     if (projectionNote) logLine(dir, 'up', callerLabel(caller), projectionNote, now());
     const afterwards = readState(dir).sessions[session]?.seats ?? {};
+    // The registry follows the state this run left: a ready seat is registered, or re-pointed to
+    // its pane when it was relaunched; a seat the file stops, or one not ready, is stopped.
+    for (const note of registerRun(
+      { home: sources.home, team, root, by: callerLabel(caller), session },
+      team.seats.map((seat) => ({
+        seat,
+        pane: afterwards[seat.name]?.stage === 'ready' ? (afterwards[seat.name]?.pane ?? null) : null,
+        ...(afterwards[seat.name]?.id ? { handle: afterwards[seat.name]?.id } : {}),
+      })),
+    )) logLine(dir, 'up', callerLabel(caller), note, now());
+    // The address: a claude-code seat this run left ready records the socket its session answers
+    // at, so a later send reaches it without re-reading herdr. A pane herdr cannot read leaves
+    // whatever the record holds; the note, if any, is a log line like the registry's own.
+    for (const seat of team.seats) {
+      const held = afterwards[seat.name];
+      if (seat.cli !== 'claude-code' || held?.stage !== 'ready' || !held.pane) continue;
+      const agent = findAgent(sources.home, { team: teamIdOf(root), seat: seat.name });
+      if (!agent) continue;
+      const refreshed = refreshAgentAddress(sources.home, agent.id, held.pane, session);
+      if (refreshed.note) logLine(dir, 'up', callerLabel(caller), refreshed.note, now());
+    }
     const pending = team.seats.filter((seat) => {
       if (seat.stopped || !profileFor(seat.cli)) return false;
       return afterwards[seat.name]?.stage !== 'ready';

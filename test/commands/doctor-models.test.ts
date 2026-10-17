@@ -90,9 +90,9 @@ describe('team doctor on a file of every model shape', () => {
         // notice before the seats' own warnings, and counts it.
         'warn  the file, line 4: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
         // the message seats' rules files: written by `up`, absent in this fixture
-        'warn  plain-codex: its rules file is missing; run `team remove plain-codex --keep` then `team add plain-codex` (or `team down` then `team up` for the whole team)',
-        'warn  plain-voyager: its rules file is missing; run `team remove plain-voyager --keep` then `team add plain-voyager` (or `team down` then `team up` for the whole team)',
-        'warn  plain-reviewer: its rules file is missing; run `team remove plain-reviewer --keep` then `team add plain-reviewer` (or `team down` then `team up` for the whole team)',
+        'warn  plain-codex: its rules file is missing; run team reload plain-codex',
+        'warn  plain-voyager: its rules file is missing; run team reload plain-voyager',
+        'warn  plain-reviewer: its rules file is missing; run team reload plain-reviewer',
         'ok    herdr 0.7.1',
         '--    session pilot is not running',
         'ok    claude 2.1.288 (Claude Code)',
@@ -149,9 +149,9 @@ describe('team doctor on a file of every model shape', () => {
     const warns = run.out.split('\n').filter((line) => line.startsWith('warn'));
     expect(warns).toEqual([
       'warn  the file, line 4: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
-      'warn  plain-codex: its rules file is missing; run `team remove plain-codex --keep` then `team add plain-codex` (or `team down` then `team up` for the whole team)',
-      'warn  plain-voyager: its rules file is missing; run `team remove plain-voyager --keep` then `team add plain-voyager` (or `team down` then `team up` for the whole team)',
-      'warn  plain-reviewer: its rules file is missing; run `team remove plain-reviewer --keep` then `team add plain-reviewer` (or `team down` then `team up` for the whole team)',
+      'warn  plain-codex: its rules file is missing; run team reload plain-codex',
+      'warn  plain-voyager: its rules file is missing; run team reload plain-voyager',
+      'warn  plain-reviewer: its rules file is missing; run team reload plain-reviewer',
       'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.299: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into',
       'warn  script-seat: the launch runs zsh, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
     ]);
@@ -342,7 +342,9 @@ describe('modelFlagFinding', () => {
       ['codex', 'codex/0.157.0'],
       ['cursor', 'cursor/2026.10.01'],
       ['antigravity', 'antigravity/1.2.16'],
+      ['gemini', 'gemini/0.64.0'],
       ['grok', 'grok/1.0.50'],
+      ['muse', 'muse/1.4.9'],
     ];
     for (const [cli, dir] of dirs) {
       const shown = readdirSync(join(import.meta.dir, '../fixtures', dir))
@@ -368,7 +370,9 @@ describe('the declared models and versions, on the captured screens', () => {
     ['codex', 'codex/0.157.0'],
     ['cursor', 'cursor/2026.10.01'],
     ['antigravity', 'antigravity/1.2.16'],
+    ['gemini', 'gemini/0.64.0'],
     ['grok', 'grok/1.0.50'],
+    ['muse', 'muse/1.4.9'],
   ];
   const VERSIONS = ['9.8.7', '9.8', '9'];
 
@@ -550,6 +554,8 @@ describe('the declared models and versions, on the captured screens', () => {
       // cursor spells single words: its doubled-space case is its other multi-word name
       ['cursor', 'Grok', ['grok', 'GROK', 'Grok ', ' Grok', 'GPT  Sol']],
       ['antigravity', 'Gemini Flash', ['gemini flash', 'GEMINI FLASH', 'Gemini Flash ', ' Gemini Flash', 'Gemini  Flash']],
+      ['gemini', 'Gemini Pro', ['gemini pro', 'GEMINI PRO', 'Gemini Pro ', ' Gemini Pro', 'Gemini  Pro']],
+      ['muse', 'Muse Wonder', ['muse wonder', 'MUSE WONDER', 'Muse Wonder ', ' Muse Wonder', 'Muse  Wonder']],
       ['grok', 'Grok', ['grok', 'GROK', 'Grok ', ' Grok', 'Grok  Fast']],
     ];
     for (const [cli, declared, variants] of CASES) {

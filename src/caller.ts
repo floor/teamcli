@@ -6,7 +6,7 @@ import { agentList, paneRootPid } from './herdr.ts';
 import type { HerdrAgent } from './herdr.ts';
 import type { Io } from './io.ts';
 import { readState } from './state.ts';
-import { CLI_PROCESSES } from './clis.ts';
+import { CLI_PROCESSES, processNameMatches } from './clis.ts';
 
 // Who runs this command, placed by its parent processes, never by its environment. This guards
 // against a mistaken agent, not a hostile one: every seat runs as the owner's user.
@@ -85,6 +85,12 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
 // it might stand in — naming that seat would mean reading a session, and the refusal of a
 // non-owner's `--session` must come before any session is read. The same walk as `placeCaller`'s
 // first half, byte for byte on every case a session would not have decided.
+/** The caller's parent processes, nearest first, from the same source `walkCaller` reads; null when they can't be read. */
+export function callerAncestors(io: Pick<Io, 'callerSources'>): Process[] | null {
+  const sources = io.callerSources?.(undefined);
+  return sources ? sources.ancestors() : readAncestors();
+}
+
 export function walkCaller(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>): Caller {
   if (io.caller !== undefined) return io.caller;
   const sources = io.callerSources?.(undefined);
@@ -99,7 +105,7 @@ export function walkCaller(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'calle
 }
 
 function walkOutside(ancestors: Process[], sources: Pick<CallerSources, 'env' | 'stdinIsTTY'>): Caller {
-  const cli = ancestors.find((process) => CLI_PROCESSES.includes(process.name));
+  const cli = ancestors.find((process) => processNameMatches(process.name, CLI_PROCESSES));
   if (cli) return { kind: 'unplaced', reason: `it is run by an agent (${cli.name}) outside herdr` };
   if (sources.env.AGENT_UNATTENDED) return { kind: 'unplaced', reason: 'AGENT_UNATTENDED is set' };
   if (!sources.stdinIsTTY) return { kind: 'owner-no-tty' };
@@ -208,7 +214,8 @@ export function noPaneRefusal(name: string): string {
  * bails on the record it can still read (`herdr no longer shows this seat on its recorded pane;
  * nothing closed`), and `team add` bails with the same line; `team remove` of the orchestrator's
  * or the operator's name — the two this refusal can name — is refused by the file's own
- * validation (`names no declared seat` / `can't be a stopped seat`, exit 2); with the recorded
+ * validation (`names no declared seat`, exit 2) or, with `--keep`, is a swap that is not this
+ * seat's to run on itself (`remove.swap-self`); with the recorded
  * pane gone (unreadable) `team up` alone does launch the seat afresh. `team down` then `team up`
  * repairs all three: the stop stops every seat it reaches and clears the session, the start
  * launches the seat again and records the pane it starts on (exit 0, 0; the caller then passes

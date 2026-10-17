@@ -4,8 +4,10 @@ import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
-/** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation. */
-export const GRANT_SCOPES = ['up', 'down', 'approve', 'init', 'reload'] as const;
+/** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation.
+ *  `swap` lets the granted seat stop another lead seat for a replacement (`team remove <lead>
+ *  --keep`, then `team add <lead>`); never its own seat. */
+export const GRANT_SCOPES = ['up', 'down', 'approve', 'init', 'reload', 'swap'] as const;
 export type GrantScope = (typeof GRANT_SCOPES)[number];
 
 /**
@@ -128,7 +130,7 @@ export type TeamFile = {
   /**
    * Who may answer a folder-trust dialog. Omitted in the file means owner. The file may spell the
    * second value `orchestrator`; it normalises to `coordinator` here, the value every record's
-   * digest was written with, so a file rewritten to the new word stays the approved one.
+   * digest was written with, so a file rewritten to the new word keeps its approval.
    */
   dialogs: { trust: 'owner' | 'coordinator' };
   workspace: {

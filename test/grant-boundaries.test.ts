@@ -207,7 +207,6 @@ function gate(opts: {
   const approved = opts.approved ?? opts.live;
   const sources: GrantSources = {
     standing: () => verified(approved, opts.dropGrant),
-    approvedCopy: () => approved,
   };
   return grantGate({ act: opts.act, io: opts.io(dir), home: join(dir, 'home'), sources });
 }
@@ -323,10 +322,10 @@ describe('the grant\'s scope', () => {
 
   test('a token outside the closed set never validates, alone or beside a real one', () => {
     expect(messages(`${ONE}grant:\n  session: arena\n  seat: lead\n  scope: [ship]\n`)).toContain(
-      'grant.scope must name up, down, approve, init, reload: "ship" is not one',
+      'grant.scope must name up, down, approve, init, reload, swap: "ship" is not one',
     );
     expect(messages(`${ONE}grant:\n  session: arena\n  seat: lead\n  scope:\n    - up\n    - ship\n`)).toContain(
-      'grant.scope must name up, down, approve, init, reload: "ship" is not one',
+      'grant.scope must name up, down, approve, init, reload, swap: "ship" is not one',
     );
   });
 
@@ -334,7 +333,7 @@ describe('the grant\'s scope', () => {
     const empty = `${ONE}grant:\n  session: arena\n  seat: lead\n  scope: []\n`;
     const blank = `${ONE}grant:\n  session: arena\n  seat: lead\n  scope:\n`;
     for (const text of [empty, blank]) {
-      expect(messages(text)).toContain('grant.scope must name at least one of: up, down, approve, init, reload');
+      expect(messages(text)).toContain('grant.scope must name at least one of: up, down, approve, init, reload, swap');
     }
   });
 
@@ -403,7 +402,7 @@ describe('an ordinary approve that also moves a sovereign section', () => {
       act: 'approve',
       io: ORCHESTRATOR(dir),
       home: join(dir, 'home'),
-      sources: { standing: () => standing, approvedCopy: () => GRANTED_UP },
+      sources: { standing: () => standing },
     });
     expect(verdict).toEqual({ kind: 'refused', id: 'grant.not-ordinary', text: 'this change needs the owner: `grant` changed' });
     expect(standing.record).toEqual(recordOf(GRANTED_UP));
@@ -445,7 +444,7 @@ describe('the granted seat aiming the owner\'s flags', () => {
       act: 'up',
       io: testIo(dir, SEAT),
       home: join(dir, 'home'),
-      sources: { standing: () => verified(GRANTED), approvedCopy: () => GRANTED },
+      sources: { standing: () => verified(GRANTED) },
     })).toEqual({ kind: 'passed', grant: { session: 'arena', seat: 'lead', scope: ['up', 'down', 'approve', 'init'] } });
 
     const text = `team status: --file is the owner's, from a terminal outside herdr; this call is lead\n`;

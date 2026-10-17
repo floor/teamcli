@@ -71,15 +71,14 @@ missing line either way: `up` and `add` refuse, and the approved copy stays in f
 shipped profiles, when nothing was approved), each account whose `check`
 command is unapproved, or no longer matches the file hashed at approval (a warning either way: that
 account reads unknown, and `up` and `add` still
-run), the budget checks, then each seat of the approved file whose rules travel as a first
+run), the budget checks, then each seat of the live file whose rules travel as a first
 message: its file in the project state folder — missing, a symbolic link, not a regular file,
-wider than `0600`, not the owner's, unreadable, or holding something other than the approved
-rules text — is one `warn` (`codex-scribe: its rules file differs from the approved rules; run
-\`team remove codex-scribe --keep\` then \`team add codex-scribe\` (or \`team down\` then \`team up\` for
-the whole team)` — for an orchestrator or operator, `team down` then `team up` (to restart the whole team) —
-`up` skips a ready seat, so only the relaunch writes the file),
-never a rewrite. herdr, one CLI at a time (its
-version, its login, then each of its seats' launchers and models), one line per seat whose launch
+wider than `0600`, not the owner's, unreadable, or holding something other than the rules text the
+live file gives it — is one `warn` (`codex-scribe: its rules file differs from the team file's
+rules; run team reload codex-scribe`), never a rewrite: the file is written at a delivery, and a
+delivery happens only at a launch — which `up` skips for a ready seat, so the line names
+`team reload`, which closes the ready seat and launches the file's line. herdr, one CLI at a
+time (its version, its login, then each of its seats' launchers and models), one line per seat whose launch
 line can't run where the seat starts (the `MISS` names the start folder, the program that is missing
 or not executable, and when the same file resolves from the project root, its path to write
 instead; a line only said to be unchecked, or a relative path that exists nowhere yet, is a `--  `

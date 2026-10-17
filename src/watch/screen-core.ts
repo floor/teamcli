@@ -139,9 +139,29 @@ function statusIndex(
  * The one line a quota figure may be read from: the composer's own status row, or null when the
  * window shows none. A dialog, a transcript line, the input box — anything the seat printed or
  * typed — is never the row. The caller still has to know the screen is a composer screen.
+ *
+ * A box composer draws its status row under the box's closing rule — the rule the classification
+ * itself reads (`boxToRule`'s own last rule row) — so the row is the last line under that rule
+ * matching the profile's `status` grammar, and a grammar-less box reads none. The box itself
+ * sits above the rule: a line the seat typed cannot be the row, wherever the box's text wraps.
  */
 export function statusRowOf(data: ScreenData, lines: string[], options?: ScreenOptions): string | null {
   const composer = data.composer;
+  if (composer.mode === 'box-to-rule') {
+    if (composer.status.length === 0) return null;
+    let close = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (ruleRun(composer, lines[i] ?? '') !== null) {
+        close = i;
+        break;
+      }
+    }
+    if (close < 0) return null;
+    for (let i = lines.length - 1; i > close; i--) {
+      if (composer.status.some((pattern) => pattern.test(lines[i] ?? ''))) return lines[i] ?? null;
+    }
+    return null;
+  }
   if (composer.mode !== 'status-last' && composer.mode !== 'status-then-one') return null;
   const at = statusIndex(composer, lines, composer.mode === 'status-then-one', () => false, options?.cwd, options?.home);
   return at === 'stop' || at < 0 ? null : (lines[at] ?? null);
@@ -321,12 +341,22 @@ function kindOfStage(name: StageName): Screen['kind'] {
 }
 
 /** The reset time a rate-limit window names, from the phrase the seat printed. Null when the
- *  window matches the limit and does not name a time. */
+ *  window matches the limit and does not name a time. Two CLIs' phrases are captured: Claude
+ *  Code's `Your limit will reset at 11:00`, and Gemini's `Access resets at 2:10 PM GMT+2.` —
+ *  its trailing period is the sentence's, not the time's. A dialog draws the sentence inside a
+ *  box, so the time stops at the box's closing border. */
+const RESET_PHRASES = [
+  /Your limit will reset at\s+([^│|]+?)\.?\s*(?:[│|]\s*)?$/,
+  /Access resets at\s+([^│|]+?)\.?\s*(?:[│|]\s*)?$/,
+];
+
 function resetOf(lines: string[]): string | null {
   for (const line of lines) {
-    const found = /Your limit will reset at\s+(.+?)\s*$/.exec(line);
-    const time = found?.[1]?.trim();
-    if (time) return time;
+    for (const phrase of RESET_PHRASES) {
+      const found = phrase.exec(line);
+      const time = found?.[1]?.trim();
+      if (time) return time;
+    }
   }
   return null;
 }
@@ -824,6 +854,13 @@ function ruleRun(composer: { rule: RegExp }, line: string): string | null {
   return hit === null ? null : hit[0];
 }
 
+/** Two rule rows of one box: the same run, or — for a CLI whose opening rule carries a label in
+ *  its run — the same number of columns. */
+function sameRuleWidth(top: string | null, bottom: string | null): boolean {
+  if (top === null || bottom === null) return false;
+  return top === bottom || [...top].length === [...bottom].length;
+}
+
 function boxToRule(lines: string[], styled: string[], composer: Extract<ScreenData['composer'], { mode: 'box-to-rule' }>, tick: () => boolean): Hit {
   // The frame first, as the captures draw it (unsent-typed-ansi.txt): a rule is an unbroken run
   // from the pane's first column — the profile's rule pattern is anchored to it — and the box's
@@ -853,7 +890,7 @@ function boxToRule(lines: string[], styled: string[], composer: Extract<ScreenDa
   let from: number;
   if (open >= 0) {
     // The two rules of one box are drawn at one width (53 columns in unsent-typed-ansi.txt).
-    if (ruleRun(composer, lines[close] ?? '') !== ruleRun(composer, lines[open] ?? '')) return { kind: 'unknown' };
+    if (!sameRuleWidth(ruleRun(composer, lines[open] ?? ''), ruleRun(composer, lines[close] ?? ''))) return { kind: 'unknown' };
     // The input row is the box's first row under its opening frame, and it carries the prompt
     // at the capture's own column. A row there that does not is not this box's input — the read
     // fails closed rather than take some later row whose content begins with a prompt glyph,
@@ -1049,6 +1086,12 @@ function statusThenOne(
   return { kind: 'unknown' };
 }
 
+function sameRulePair(top: string | null, bottom: string | null): boolean {
+  if (top === null || bottom === null) return false;
+  if (top === bottom) return true;
+  return top.length === bottom.length && /^▄+$/.test(top) && /^▀+$/.test(bottom);
+}
+
 function twoRules(lines: string[], styled: string[], composer: Extract<ScreenData['composer'], { mode: 'two-rules-footer-below' }>, tick: () => boolean): Hit {
   // The frame first: the box's bottom rule is the window's last rule row, and its top rule is
   // the nearest rule row above it — the captures draw exactly two rules around the box, both
@@ -1065,9 +1108,10 @@ function twoRules(lines: string[], styled: string[], composer: Extract<ScreenDat
   }
   if (top < 0 || bottom < 0) return { kind: 'unknown' };
   // The two rules of one box are drawn at one width (53 columns in unsent.txt, 54 in
-  // folded-rules.txt). A window whose rules differ is not that frame — the box the caller
+  // folded-rules.txt), either as the same rule line or as an upper-and-lower half-block pair
+  // (▄… above, ▀… below). A window whose rules differ is not that frame — the box the caller
   // compares against typed text cannot be established — and the read fails closed.
-  if (ruleRun(composer, lines[bottom] ?? '') !== ruleRun(composer, lines[top] ?? '')) return { kind: 'unknown' };
+  if (!sameRulePair(ruleRun(composer, lines[top] ?? ''), ruleRun(composer, lines[bottom] ?? ''))) return { kind: 'unknown' };
   // The input row is the box's first row under its opening frame, and it carries the prompt at
   // the capture's own column. A row there that does not — a folded box's marker row
   // (folded-rules.txt) — is not this box's input, and the read fails closed rather than take

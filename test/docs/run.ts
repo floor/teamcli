@@ -18,8 +18,10 @@ import { pr } from '../../src/commands/pr.ts';
 import { runDoctor } from '../../src/commands/doctor.ts';
 import { runDown } from '../../src/commands/down.ts';
 import { runFeed } from '../../src/commands/feed.ts';
+import { runHold } from '../../src/commands/hold.ts';
 import { runInit } from '../../src/commands/init.ts';
 import { runMcp } from '../../src/commands/mcp.ts';
+import { runRegister } from '../../src/commands/register.ts';
 import { runRemove } from '../../src/commands/remove.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
@@ -32,6 +34,7 @@ import { runMessages } from '../../src/commands/messages.ts';
 import { runIssues } from '../../src/commands/issues.ts';
 import { runNext } from '../../src/commands/next.ts';
 import { runPlan } from '../../src/commands/plan.ts';
+import { runProc } from '../../src/commands/proc.ts';
 import { runUsage } from '../../src/commands/usage.ts';
 import { runLock } from '../../src/commands/lock.ts';
 import { runUnlock } from '../../src/commands/unlock.ts';
@@ -171,6 +174,10 @@ async function setup(page: Page): Promise<void> {
   page.ready = true;
 }
 
+/** The one pid the fixture's `team proc` records call running; every other number is a process
+ *  that is gone. A page records this one, or a number that is clearly not running. */
+const PROC_PID = 4243;
+
 async function command(page: Page, line: string, io: Io, answer?: string, waiting: Waiting = 'empty', reply?: string): Promise<number> {
   const [first, ...argv] = words(line);
   if (first !== 'team') throw new Error(`a console line runs \`team …\`, not "${first ?? ''}"`);
@@ -217,6 +224,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runDown(rest, io, world.downSources());
     case 'feed':
       return runFeed(rest, io, { home: fixture.home, poll: async () => false });
+    case 'hold':
+      return runHold(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'messages':
       return runMessages(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'issues':
@@ -230,6 +239,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runInit(rest, io, fixture.home, undefined, { loggedIn: () => false });
     case 'mcp':
       return runMcp(rest, io, world.mcpSources());
+    case 'register':
+      return runRegister(rest, io, world.registerSources());
     case 'remove':
       return runRemove(rest, io, world.removeSources());
     case 'restart':
@@ -260,6 +271,15 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
         // The page's clock is pinned. A sleep that left it there would spin, so a wait ends
         // after one look — the same refusal, and the lock is not broken.
         sleep: () => {},
+      });
+    case 'proc':
+      return runProc(rest, io, {
+        home: fixture.home,
+        now: () => new Date(spec.now),
+        // The page's pids are the fixture's own: `PROC_PID` names the one process that is
+        // running, and every other number is one that is gone, so no example depends on a pid
+        // the machine running the suite happens to have.
+        alive: (pid) => pid === PROC_PID,
       });
     case 'tempo':
       return runTempo(rest, io, { home: fixture.home });
@@ -309,14 +329,19 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
   const sockets = join(fixture.home, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
   writeFileSync(join(sockets, `${String(SEND_PID)}.sock`), '');
+  // The seat's own evidence for this line: idle until the Enter, working after it.
+  let working = false;
   return {
     agents: () => seats.map((name, index) => ({ name, pane: `w1:p${String(index + 1)}` })),
     processInfo: () => ({ shell: SEND_PID, foreground: [] }),
     socketsDir: sockets,
     native: {
       typeText: () => true,
-      pressEnter: () => true,
-      status: () => 'working',
+      pressEnter: () => {
+        working = true;
+        return true;
+      },
+      status: () => (working ? 'working' : 'idle'),
       wait: async () => {},
     },
     deliver: async () => {

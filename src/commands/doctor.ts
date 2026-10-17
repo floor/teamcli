@@ -26,7 +26,7 @@ import { rulesOf } from '../launch/rules.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
-import { readState, type SeatState } from '../state.ts';
+import { holdText, liveHold, readState, type SeatState } from '../state.ts';
 import { canShowModel, seatModel } from '../status/statusline.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -364,7 +364,16 @@ export function machineFindings(team: TeamFile, root: string, sources: DoctorSou
   return problem === null ? [] : [{ level: 'warn', text: plainLine(problem) }];
 }
 
-// `watch` is the watch values in force — the approved ones — so an unapproved interval edit can't
+// The team's hold, when one stands (`team hold`). A `--` line like the readings around it: a
+// hold is intended state, so it counts in nothing and blocks nothing, and a record past its
+// `until` reads as no hold at all. The line names the way out, because doctor is where a
+// reader goes to ask what is going on.
+export function holdFindings(dir: string, sources: DoctorSources): Finding[] {
+  const hold = liveHold(readState(dir), sources.now());
+  return hold === null ? [] : [{ level: 'note', text: `${holdText(hold)} (\`team hold --release\` clears it)` }];
+}
+
+// `watch` is the watch values in force — the live file's under a verified standing — so a standing
 // move the verdict either way.
 function watchFindings(
   watch: TeamFile['watch'],
@@ -484,8 +493,9 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
 
 // The repair that relaunches one seat `up` leaves as it is: `up` never restarts a ready seat,
 // so a line that names `up` alone names a command that skips the seat. For an orchestrator or
-// an operator, `team remove <seat> --keep` is refused (the file can't have a stopped lead),
-// so only the whole-team sequence is offered. For every other seat — stop it, keep it in the
+// an operator, `team remove <seat> --keep` is a swap: it never marks the lead stopped
+// in the file, and it is the owner's or an authorised swapper's; the line still offers the
+// whole-team sequence, which every caller of these lines may follow. For every other seat — stop it, keep it in the
 // file, add it again: the add launches it fresh, which is what records the process, writes the
 // rules file and starts the seat in the machine lobby — or the whole team at once.
 export const relaunch = (team: Pick<TeamFile, 'orchestrator' | 'operator'>, name: string): string =>
@@ -506,6 +516,20 @@ function identityFindings(team: TeamFile, dir: string, session: string): Finding
       level: 'note',
       text: `${seat.name}: launched before team recorded its process; run ${relaunch(team, seat.name)} to launch it again`,
     });
+  }
+  return findings;
+}
+
+// A lead `team remove <lead> --keep` stopped for a swap and nothing started again: the file still
+// names it the lead, the state no longer records it running. Said as the swap it is, with the one
+// command that ends it, so the gap never reads as a lost orchestrator. A record whose seat runs
+// again (an `up` relaunched it) is stale and says nothing.
+export function swapFindings(team: TeamFile, dir: string, session: string): Finding[] {
+  const current = readState(dir).sessions[session];
+  const findings: Finding[] = [];
+  for (const [name, swap] of Object.entries(current?.swapping ?? {})) {
+    if (current?.seats[name] || !team.seats.some((seat) => seat.name === name)) continue;
+    findings.push({ level: 'warn', text: `${name}: stopped for a swap by ${swap.by} at ${swap.at}; run \`team add ${name}\` to start its new agent` });
   }
   return findings;
 }
@@ -562,7 +586,8 @@ export function doctorFindings(
   warnings: { line: number; message: string }[],
   /** The one read of the approval store, done by the caller — `runDoctor`, `up` or `add`. */
   standing: Standing,
-  /** The file as approved. `add` hands the team about to run, whose `stopped` mark is already cleared. */
+  /** The file whose seats are judged — the live file, or for `add` the team about to run, whose
+   *  `stopped` mark is already cleared. */
   approved: TeamFile = team,
   /** The budget-check lines, which only the report runs: `up` and `add` scan, they never run a check. */
   budgetChecks: Finding[] = [],
@@ -586,15 +611,15 @@ export function doctorFindings(
   // that differs is warned about, never rewritten here. A stopped seat is not checked: its
   // file is written at the launch that starts it again. The file is written at a delivery,
   // and a delivery happens only at a launch — which `up` skips for a ready seat, so the line
-  // names the relaunch that performs one. The check runs only once a record exists, so a
-  // file that was never approved does not grow a warning for a file no launch has written.
+  // names `team reload`, which closes a ready seat and launches the file's line. The check
+  // runs only once a record exists, so a folder no launch has delivered to grows no warning.
   if (standing.kind === 'verified') {
     for (const seat of approved.seats) {
       if (seat.stopped || profileFor(seat.cli)?.rulesOption != null) continue;
       const path = rulesFilePath(approved.project, root, sources.home, seat.name);
       if (path === null) continue;
       const check = checkRulesFile(path, rulesOf(approved, seat, root));
-      if (!check.ok) findings.push({ level: 'warn', text: `${seat.name}: ${check.what}; run ${relaunch(team, seat.name)}` });
+      if (!check.ok) findings.push({ level: 'warn', text: `${seat.name}: ${check.what}; run team reload ${seat.name}` });
     }
   }
 
@@ -621,6 +646,7 @@ export function doctorFindings(
   findings.push(...launchLines);
 
   findings.push(...identityFindings(team, dir, session));
+  findings.push(...swapFindings(team, dir, session));
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
 
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
@@ -811,6 +837,8 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
         ),
         // The machine's own reading, last: the one check no machine can ever meet here.
         ...machineFindings(team, root, sources),
+        // The team's hold, when one stands: the last line before the summary.
+        ...holdFindings(dirname(loaded.path), sources),
       ];
 
   const label: Record<Level, string> = { ok: 'ok  ', warn: 'warn', miss: 'MISS', note: '--  ' };

@@ -114,13 +114,15 @@ describe('the swap the check can never meet', () => {
     expect(withMachine.code).toBe(plain.code);
     expect(withMachine.out).toContain(`note: ${SENTENCE}\n`);
     expect(withMachine.out.replace(`note: ${SENTENCE}\n`, '')).toBe(plain.out);
-    // It sits with the approval note, above it, and below the session's own note.
+    // It is the first note after the session's own, with nothing between them.
     const lines = withMachine.out.split('\n');
+    const notes = lines.filter((line) => line.startsWith('note: '));
     expect(lines.filter((line) => line.includes(SENTENCE))).toHaveLength(1);
-    expect(lines.indexOf(`note: ${SENTENCE}`) + 1).toBe(lines.findIndex((line) => line.startsWith('note: approval #')));
+    expect(notes[1]).toBe(`note: ${SENTENCE}`);
     // `--json` carries the same sentence, in the same place among the notes.
     const doc = JSON.parse((await status(statusSources(() => SMALL), '--json')).out) as { notes: string[] };
-    expect(doc.notes[doc.notes.findIndex((note) => note.startsWith('approval #')) - 1]).toBe(SENTENCE);
+    expect(doc.notes.filter((note) => note.includes(SENTENCE))).toHaveLength(1);
+    expect(doc.notes[1]).toBe(SENTENCE);
     // The check that can pass in principle says nothing here either.
     const roomy = await status(statusSources(() => ROOMY));
     expect(roomy.out).toBe(plain.out);

@@ -9,17 +9,18 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
+import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
-import { clearStopped, hasSeat, restoreSeat, seatIsStopped } from '../file/lines.ts';
-import { loadTeamFile, placedProblems } from '../file/load.ts';
+import { clearStopped, seatIsStopped } from '../file/lines.ts';
+import { findRoot, loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
-import { relaunchRepair } from '../file/sections/lead.ts';
+import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel, validateTeamFile } from '../file/validate.ts';
@@ -43,8 +44,10 @@ import { logLine } from '../log.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
+import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
-import { approvalStanding, approvedCopy, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
+import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
@@ -127,8 +130,6 @@ export const USAGE = `Usage: team add <name> [--model <model>] [--effort <effort
 function delegateRefused(out: { stderr(text: string): void }, verdict: { text: string }): number {
   out.stderr(`team add: ${plainText(verdict.text)}\n`);
   // exit: add.delegate-approval
-  // exit: add.delegate-approved-copy
-  // exit: add.delegate-drift
   // exit: add.delegate-evidence
   // exit: add.delegate-placement
   // exit: add.delegate
@@ -153,8 +154,22 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.invocation
     return 2;
   }
+  // A create-grant's own runner is the one detached caller the record may name: this sentence is
+  // not for it, exactly as `init` asks it. Only the cwd's root is known this early, before any
+  // file is read, so this decision answers this refusal alone — the loaded file's root decides
+  // the caller rule below, and a team outside the granted paths still refuses there.
   const detached = detachedRefusal(walkCaller(io));
-  if (detached !== undefined) {
+  // Asked only for the placement that would be refused, and only when a record exists, so a
+  // caller with none is refused without reading a repository or a clock —
+  // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
+  // order, exactly as `down` and `init` ask it.
+  let runnerGranted = false;
+  if (detached !== undefined && readEntityCreateGrants(sources.home).length > 0) {
+    const hereRoot = findRoot(io.cwd);
+    runnerGranted = hereRoot !== null
+      && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
+  }
+  if (detached !== undefined && !runnerGranted) {
     out.stderr(`team add: ${detached}\n`);
     // exit: add.detached
     return 1;
@@ -217,6 +232,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 2;
   }
   const { team, root, path } = loaded;
+  // The create-grant, decided on the loaded root: the team this run would change must be under
+  // the granted paths. The early `runnerGranted` above answered the detached sentence alone.
   const dir = dirname(path);
   // The gate judges the caller placed in the session this command asks about — the proof its pane
   // is that session's. With no `--session` the session judged is the caller's own placement: the
@@ -229,6 +246,18 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const { caller, shown } = judged;
   const session = judged.session;
   const mayChange = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
+  // A create-grant the record holds for this loaded root is the run's admission: the ordinary
+  // rule's sentence is then not a refusal, and the delegate gate — which the ordinary refusal
+  // alone summons — has nothing to replace. Asked only where the ordinary rule has just refused,
+  // and only when a record exists, so a caller with none reads no clock for it, exactly as
+  // `down` asks it. A lead seat is not granted: the second half of a swap is the owner's, the
+  // granted seat's or an approved delegate's, as `remove`'s own gate says, so a run naming a
+  // lead seat is not admitted by the record and the ordinary caller refusal below stands.
+  const leadSeat = !temporary && isLeadSeat(team, args.rest[0] ?? '');
+  const createGranted = mayChange.kind !== 'ok'
+    && !leadSeat
+    && readEntityCreateGrants(sources.home).length > 0
+    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
   // The delegate branch, tried only when the ordinary rule just refused and the file names a
   // delegate at all: with no `delegates` section every refusal below stays exactly today's, and
   // the gate is never asked. A refused verdict takes the ordinary refusal's place; a passed one
@@ -238,7 +267,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // command performs is then a delegated one: the would-edit refusal below keeps it from
   // writing the file or the approval, and `logDelegated` attributes it at its effects.
   let delegatePane: string | null = null;
-  if (mayChange.kind !== 'ok' && team.delegates) {
+  if (mayChange.kind !== 'ok' && team.delegates && !createGranted) {
     const verdict = (sources.delegateGate ?? delegateGate)({
       command: 'add',
       team,
@@ -247,6 +276,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       flags: [...args.flags, ...Object.keys(args.values)],
       io,
       home: sources.home,
+      // The second half of a swap: an entry that lists `swap` starts the lead it
+      // stopped, as an entry that lists `add` already could.
+      ...(!temporary && isLeadSeat(team, args.rest[0] ?? '') ? { swap: true } : {}),
     });
     if (verdict.kind === 'refused') return delegateRefused(out, verdict);
     delegatePane = verdict.pane;
@@ -261,7 +293,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.another-pane
     return 1;
   }
-  if (mayChange.kind === 'refused' && delegatePane === null) {
+  if (mayChange.kind === 'refused' && delegatePane === null && !createGranted) {
     out.stderr(`team add: only the owner, the orchestrator or the operator runs it; this call is ${plainLine(describeCaller(shown))}\n`);
     // exit: add.caller
     return 1;
@@ -271,9 +303,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.default-session
     return 1;
   }
-  // A missing record is the live file, and so is a verified one: the edit starts from
-  // the live text. A seat the live file no longer names is put back from the stored
-  // copy's stanza alone. A legacy or refused record is still not in force.
+  // A missing record is the live file, and so is a verified one: the edit starts from the live
+  // text, and a seat is read from the file as it stands. A legacy or refused record is still not
+  // in force.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
     out.stderr(`team add: ${plainText(notInForce(standing))}\n`);
@@ -281,8 +313,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.ceilings
     return 1;
   }
-  const approvedText = readFileSync(path, 'utf8');
-  const approvedTeam = team;
   const ceilings = ceilingsOf(team);
 
   const live = sources.sessionState(session);
@@ -309,18 +339,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
   const original = readFileSync(path, 'utf8');
   const asked = args.rest[0] ?? '';
-  const stored = seatSource(standing, root, sources.home);
-  const fromStore = stored !== null && !team.seats.some((seat) => seat.name === asked);
   const built = temporary
-    ? temporarySeat(args.values, original, approvedTeam, recorded, agents, root, team.workspace.base)
-    : declaredSeat(
-      asked,
-      original,
-      fromStore ? stored.text : approvedText,
-      fromStore ? stored.team : approvedTeam,
-      sources.home,
-      sources.fs,
-    );
+    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base)
+    : declaredSeat(asked, original, team, sources.home, sources.fs);
   if ('error' in built) {
     out.stderr(`team add: ${plainText(built.error)}\n`);
     // exit: add.no-seat
@@ -520,7 +541,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const doctorTeam = built.temporary
     ? { ...prepared.team, seats: prepared.team.seats.map((item) => item.name === built.temporary?.like ? { ...item, stopped: false } : item) }
     : { ...prepared.team, seats: prepared.team.seats.map((item) => item.name === built.name ? built.seat : item) };
-  // `team` is the file on disk, already the approved one. `doctorTeam` is the
+  // `team` is the file on disk, the one every read trusts. `doctorTeam` is the
   // seat about to run, so a stopped seat's CLI is still checked. The digest is
   // recorded with the write, after a refusal has left the file alone. The seat's own launch
   // line is the last finding: a miss refuses this `add` like any other doctor finding. A dry
@@ -743,6 +764,19 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const report = await executePlan(plan, session, host);
     const afterwards = readState(dir).sessions[session]?.seats[built.name];
     const launched = !report.held && !report.dropped.includes(built.name) && afterwards?.stage === 'ready';
+    // A lead stopped for a swap runs again: the swap's record goes, and the log says who closed it.
+    // A launch that did not reach ready keeps it, so `doctor` still names the gap as a swap.
+    const swapped = launched ? readState(dir).sessions[session]?.swapping?.[built.name] : undefined;
+    if (swapped) {
+      updateState(dir, (file) => {
+        const current = file.sessions[session];
+        if (current?.swapping) {
+          delete current.swapping[built.name];
+          if (Object.keys(current.swapping).length === 0) delete current.swapping;
+        }
+      });
+      logLine(dir, 'add', who, `${built.name} runs its new agent (swap started by ${swapped.by} at ${swapped.at})`, sources.now());
+    }
     if (launched && built.temporary) {
       recordLedger(storePath(team.project, root, sources.home), [built.seat]);
     }
@@ -755,26 +789,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 }
 
-/** The stored copy, when this standing has one that still parses. Used only to put back a
- *  seat the live file no longer names. The edit itself stays on the live text. */
-function seatSource(standing: Standing, root: string, home: string | undefined): { text: string; team: TeamFile } | null {
-  if (standing.kind !== 'verified') return null;
-  const text = approvedCopy(root, home);
-  if (text === null) return null;
-  const parsed = validateTeamFile(text, { home });
-  return parsed.ok ? { text, team: parsed.team } : null;
-}
-
 function declaredSeat(
-  name: string, current: string, approvedText: string, approved: TeamFile, home: string, fs?: FsReader,
+  name: string, current: string, team: TeamFile, home: string, fs?: FsReader,
 ): { name: string; seat: Seat; edited: string; temporary?: undefined } | { error: string } {
-  const seat = approved.seats.find((item) => item.name === name);
-  if (!seat) return { error: `the approved file has no seat ${JSON.stringify(name)}` };
-  let edited = hasSeat(current, name) ? current : restoreSeat(current, approvedText, name);
+  const seat = team.seats.find((item) => item.name === name);
+  if (!seat) return { error: `the file has no seat ${JSON.stringify(name)}` };
+  let edited = current;
   if (seat.stopped || seatIsStopped(edited, name)) edited = clearStopped(edited, name);
   const again = validateTeamFile(edited, { home, fs });
   const restored = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
-  if (!restored) return { error: `couldn't put ${name} back from the approved copy` };
+  if (!restored) return { error: `couldn't put ${name} back into the file` };
   return { name, seat: { ...restored, stopped: false }, edited, temporary: undefined };
 }
 
@@ -783,7 +807,7 @@ function temporarySeat(
   root: string, base: string | null,
 ): { name: string; seat: Seat; edited: string; temporary: NonNullable<SeatState['temporary']> } | { error: string } {
   const like = approved.seats.find((item) => item.name === values.like);
-  if (!like) return { error: `the approved file has no seat ${JSON.stringify(values.like)}` };
+  if (!like) return { error: `the file has no seat ${JSON.stringify(values.like)}` };
   const until = parseUntil(values.until ?? '');
   if (!until) return { error: '--until is result:<path> or merged:<branch>' };
   let own: boolean | undefined;
@@ -900,14 +924,14 @@ function runningOf(agents: readonly HerdrAgent[], team: TeamFile, state: Session
 
 function ceilingProblem(ceilings: Ceilings, running: readonly Running[], seat: Seat, temporary: boolean): string | null {
   if (running.some((item) => item.name === seat.name)) return null;
-  if (running.length + 1 > ceilings.seats) return `the approval allows ${ceilings.seats} seats; ${running.length + 1} would be running`;
+  if (running.length + 1 > ceilings.seats) return `the file allows ${ceilings.seats} seats; ${running.length + 1} would be running`;
   if (temporary && running.filter((item) => item.temporary).length + 1 > ceilings.temporary) {
-    return `the approval allows ${ceilings.temporary} temporary seats; ${running.filter((item) => item.temporary).length + 1} would be running`;
+    return `the file allows ${ceilings.temporary} temporary seats; ${running.filter((item) => item.temporary).length + 1} would be running`;
   }
   const cap = ceilings.vendors[seat.vendor];
   if (cap !== undefined) {
     const vendors = running.filter((item) => item.vendor === seat.vendor || item.vendor === 'unknown').length + 1;
-    if (vendors > cap) return `the approval allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
+    if (vendors > cap) return `the file allows ${cap} ${seat.vendor} seats; ${vendors} would be running`;
   }
   return null;
 }
@@ -1104,6 +1128,21 @@ function hostOf(input: {
       if (patch.pane) {
         if (replaced) forgetLaunchedPane(input.home, replaced, session);
         noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
+        // The registry: the seat's agent is registered at its first launch, re-pointed after.
+        if (name === seat.name) {
+          const made = registerLaunch(
+            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
+            seat,
+            patch.pane,
+            readState(dir).sessions[session]?.seats[name]?.id,
+          );
+          if ('note' in made) logLine(dir, 'add', input.caller, made.note, input.now());
+          else {
+            // The address: the live session socket this launch answers at, recorded on the agent.
+            const refreshed = refreshAgentAddress(input.home, made.id, patch.pane, session);
+            if (refreshed.note) logLine(dir, 'add', input.caller, refreshed.note, input.now());
+          }
+        }
       }
     },
     running(name) {
@@ -1128,6 +1167,11 @@ function hostOf(input: {
         delete current.seats[name];
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
+      // The registry: a temporary seat's agent ends with it; a declared seat's comes back as itself.
+      if (name === seat.name) {
+        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, temporary ? 'retired' : 'stopped');
+        if (ended) logLine(dir, 'add', input.caller, ended.note, input.now());
+      }
     },
     // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
     // here with the same function the records use: no escape sequence or bidi override reaches

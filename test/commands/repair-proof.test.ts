@@ -16,10 +16,10 @@ import { readState } from '../../src/state.ts';
 import { upFingerprint, OWNER_APPROVAL_ENV } from '../../src/approve/owner-token.ts';
 import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { readScreen } from '../../src/watch/screen.ts';
-import { claudeBox, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const TRUST = 'Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit\n';
 const FILE = ['--file', '.agents/team.yaml'];
 const SESSION = 'acme-web';

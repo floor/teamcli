@@ -4,7 +4,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { dropDir, fake, owner, scripted, world } from './send-native-fixtures.ts';
+import { dropDir, fake, filed, owner, scripted, world } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
 
@@ -16,7 +16,7 @@ afterEach(() => {
 test('a plain send to a claude-code seat writes the drop and types one trigger', async () => {
   const made = world();
   cleanup = made.cleanup;
-  const pane = scripted(['working']);
+  const pane = scripted(['idle', 'working']);
   const host = fake(made, { native: pane });
 
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
@@ -29,7 +29,7 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops);
   expect(files.length).toBe(1);
-  expect(readFileSync(join(drops, files[0] as string), 'utf8')).toBe('hello');
+  expect(readFileSync(join(drops, files[0] as string), 'utf8')).toBe(filed('hello'));
 });
 
 test('--wait to a claude-code seat writes the socket frame and no drop', async () => {
@@ -44,7 +44,7 @@ test('--wait to a claude-code seat writes the socket frame and no drop', async (
   expect(code).toBe(1);
   expect(host.frames.length).toBe(1);
   const frame = JSON.parse((host.frames[0] as string).trim()) as { message: { content: string } };
-  expect(frame.message.content).toBe('hello');
+  expect(frame.message.content).toBe(filed('hello'));
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);

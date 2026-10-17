@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { relative, resolve } from 'node:path';
-import { approvalCase, budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
+import { budgetsInForceOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { overridesInForceOf, type OverrideForce } from '../profiles/overrides.ts';
 import { readArgs } from '../args.ts';
 import { budgetLine, budgetTable, type BudgetRow } from '../budgets/table.ts';
@@ -10,9 +10,10 @@ import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../c
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
+import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { emptySession, readState, type SessionState } from '../state.ts';
+import { emptySession, holdText, liveHold, liveProcs, pidAlive, readState, type HoldRecord, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -30,8 +31,8 @@ export type StatusSources = {
   live(session: string, team: TeamFile, state: SessionState): Live | null;
   branch(path: string): string | null;
   // The approval store's one snapshot, read once for the whole report: the
-  // drift, the watch and budget values in force, and the overrides all derive
-  // from it, so no later read can disagree with the first.
+  // file's case, the watch and budget values in force, and the overrides all
+  // derive from it, so no later read can disagree with the first.
   standing(root: string): Standing;
   now(): Date;
   /** The home whose store holds the override file and the key. Absent in a test that does not set one. */
@@ -39,6 +40,9 @@ export type StatusSources = {
   /** This machine's own figures, read for the one check no machine can ever meet. Absent in a test
    *  that does not read them; absent is not "fine", it is nothing said. */
   machine?(root: string): Machine;
+  /** Whether a recorded process id names something still running, for the `team proc` note.
+   *  The real reading when absent; a test stands in for it so no fixture depends on a pid. */
+  alive?(pid: number): boolean;
   /** The approved pane's read gate's own reads; the real ones when absent. */
   gate?: DelegateSources;
 };
@@ -129,6 +133,16 @@ export interface StatusJson {
   notice: string | null;
   /** Present when the file names an account, or a reading is stored. */
   budgets?: BudgetRow[];
+  /** Present while a hold stands and has not lapsed (`team hold`). */
+  hold?: HoldRecord;
+  /** The live records of `team proc`, present only when the session's seats hold some. */
+  procs?: Array<{
+    name: string;
+    by: string;
+    at: string;
+    pid?: number;
+    note?: string;
+  }>;
 }
 
 export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n';
@@ -163,7 +177,16 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
 
   const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
   if (!owner) {
-    if (!current.ok || !mayReadTeam(current, io, sources)) {
+    const read = current.ok && mayReadTeam(current, io, sources);
+    // A create-grant admits its holder's runner to the read, for a team whose root is under the
+    // granted paths: the same record `init` and `up` consult. It buys the read alone — `--file`
+    // and `--session` above stay the owner's, and this run keeps no `last_valid` copy. Asked only
+    // where the read gate has refused, and only when a record exists, so a seat's own reading
+    // reads no clock for it.
+    const granted = current.ok && !read
+      && readEntityCreateGrants(sources.home ?? homedir()).length > 0
+      && entityGrantAdmits(current.root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
+    if (!current.ok || (!read && !granted)) {
       out.stderr('team status: this team is not yours to read\n');
       // exit: status.not-yours
       return 2;
@@ -200,11 +223,6 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const all = args.flags.has('all');
   const registryRows = all ? seatRegistryRows(team, state, live, comparison, now, true) : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
-  if (standing.kind === 'verified') {
-    const key = sources.home ? keyState(sources.home) : { kind: 'missing' as const };
-    const ofKey = key.kind === 'key' ? `, key ${keyFingerprint(key.key)}` : '';
-    comparison.notes.unshift(`approval #${standing.generation} (${standing.signedAt.slice(0, 10)})${ofKey}`);
-  }
   // The one machine check this reading cannot pass — the same fact `doctor` reports as a finding,
   // as one note, in the reading's own words. `up`'s refusal on it is its own line, and nothing
   // here changes an exit.
@@ -214,12 +232,35 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     if (problem !== null) comparison.notes.unshift(problem);
   }
   if (!live.running) comparison.notes.unshift(`the herdr session "${session}" is not running`);
+  // The team's hold first of all, the way it is the first thing a reader should know: a hold
+  // past its `until` reads as none (`liveHold`), so neither the note nor the document carries
+  // one that has lapsed.
+  const hold = liveHold(whole, now);
+  if (hold) comparison.notes.unshift(holdText(hold));
+  // What the seats recorded with `team proc add`: one note per live process, read the same way
+  // `team proc list` reads it — a record whose pid is gone is skipped here and left for the next
+  // write to clear. The reading is the note and the document, one derivation for both.
+  // `--json` is the one text not cleaned: the document carries each string as it was read, so the
+  // rows here are raw, and the note below is cleaned where it is printed like every other note.
+  const procs = liveProcs(state, sources.alive ?? pidAlive).map(([name, held]) => ({
+    name,
+    by: held.by,
+    at: held.at,
+    ...(held.pid !== undefined ? { pid: held.pid } : {}),
+    ...(held.note !== undefined ? { note: held.note } : {}),
+  }));
+  for (const held of procs) {
+    comparison.notes.push(`proc ${held.name}: ${held.by} since ${held.at}${held.pid !== undefined ? `, pid ${held.pid}` : ''}`);
+  }
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),
-    ...approvalDrift(approvalCase(standing, team)),
+    // `approve` is gone: a machine that never approved this file is the ordinary case now, not a
+    // difference, and the reading exits 0 for it. A legacy record and one the verification refused
+    // still say what they are.
+    ...approvalCaseRow(standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null),
     ...overrideDrift(overrides),
-    // The approved file's own rules files, only when there is an approval to write them.
+    // The file's own rules files, only once a record exists for a launch to have written them.
     ...rulesFileDifferences(standing, team, root, sources.home),
   ]);
 
@@ -248,6 +289,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       differences: comparison.differences.map(({ what, repair }) => ({ what, repair })),
       notice: current.notice ?? null,
       ...(budgets.length ? { budgets } : {}),
+      ...(hold ? { hold } : {}),
+      ...(procs.length ? { procs } : {}),
     };
     io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
   } else {
@@ -274,19 +317,21 @@ export function overrideDrift(report: OverrideForce): Difference[] {
   ];
 }
 
-// A file that was never approved, or was changed since, runs nothing until the owner approves it.
-// A legacy or refused record is the whole case and its repair in one line of its own.
-export function approvalDrift(approval: { differences: string[] | null; reason: string | null }): Difference[] {
-  const withApproval = (what: string): Difference => ({ what, repair: APPROVAL_REPAIR, approval: true, owner: true });
-  if (approval.reason !== null) return [withApproval(approval.reason)];
-  if (approval.differences === null) return [withApproval('the file was never approved on this machine')];
-  return approval.differences.map((line) => withApproval(`the file differs from the approved one: ${line}`));
+// The file's case as one row of its own, for a standing that still says something: a legacy
+// record, or one the verification refused. No record on this machine is not one of those — with
+// `approve` gone it is the ordinary file, nothing for the owner to repair, and it never fails a
+// reading. A record in force is nothing to say either, and nothing is compared against it — the
+// live file is what the commands read, so an edit to it is not a difference.
+export function approvalCaseRow(reason: string | null): Difference[] {
+  if (reason === null) return [];
+  return [{ what: reason, repair: APPROVAL_REPAIR, approval: true, owner: true }];
 }
 
 
 /** Every message-rules seat's file, against the rules the live file gives it. A file that
- *  differs is a difference for the owner to repair with `up` — never rewritten here. An option
- *  seat has no file, and a seat whose rules can't travel at all is `up`'s to refuse. */
+ *  differs is a difference for the owner to repair with `team reload <seat>` — never rewritten
+ *  here. An option seat has no file, and a seat whose rules can't travel at all is `up`'s to
+ *  refuse. */
 export function rulesFileDifferences(standing: Standing, team: TeamFile, root: string, home: string | undefined): Difference[] {
   // Like the overrides: no home set is a test that stands in for no store at all. The check
   // runs only once a record exists, so a file that was never approved does not grow a
@@ -303,7 +348,7 @@ export function rulesFileDifferences(standing: Standing, team: TeamFile, root: s
     if (path === null) continue;
     const text = rulesOf(team, seat, root);
     const check = checkRulesFile(path, text);
-    if (!check.ok) out.push({ what: `${seat.name}: ${check.what}`, repair: 'the owner runs team up', owner: true });
+    if (!check.ok) out.push({ what: `${seat.name}: ${check.what}`, repair: `team reload ${seat.name}`, owner: true });
   }
   return out;
 }
@@ -344,6 +389,9 @@ function render(
       state: plainLine(row.state),
       model: plainLine(row.model),
       pane: plainLine(row.pane),
+      // How a send would reach the seat: the socket its session answers at, else the typed
+      // delivery. The JSON row keeps its published shape; this is the plain table's word.
+      reach: row.reach ?? 'typed',
     }));
     const widths = [0, 0, 0];
     for (const row of rows) {
@@ -352,7 +400,7 @@ function render(
       widths[2] = Math.max(widths[2] as number, row.model.length);
     }
     for (const row of rows) {
-      lines.push(`  ${row.name.padEnd(widths[0] as number)}  ${row.state.padEnd(widths[1] as number)}  ${row.model.padEnd(widths[2] as number)}  ${row.pane}`.trimEnd());
+      lines.push(`  ${row.name.padEnd(widths[0] as number)}  ${row.state.padEnd(widths[1] as number)}  ${row.model.padEnd(widths[2] as number)}  ${row.pane.padEnd(4)}  ${row.reach}`.trimEnd());
     }
   }
   if (budgets.length) {
