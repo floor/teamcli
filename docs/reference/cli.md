@@ -1119,6 +1119,7 @@ Usage:
 
     team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send --confirm <id> [--json] [--dry-run]
     team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
     team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
     team send --list [--json]
@@ -1128,6 +1129,7 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--channel` | yes | no | no |
+| `--confirm` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |

@@ -2,9 +2,9 @@
 // the order a plain send walks (native, mcp-inbox, typed, drop when nothing declares one); a level
 // may drop legs or reorder the ones it keeps, and may never add one nor empty it — an empty word is
 // set aside; a leg that definitely cannot take the send hands it on and is recorded as a failure
-// on the history line; and the legs this build does not carry — mcp-inbox always, native while
-// its frame path is a socket write this build does not make — are recorded `unavailable` in the
-// walk's own words. A waited send is refused unless the native leg leads the order: the frame the
+// on the history line; and the legs this build does not carry — mcp-inbox always, native for a
+// sender that cannot make its own SendMessage — are recorded `unavailable` in the walk's own
+// words. A waited send is refused unless the native leg leads the order: the frame the
 // reply listener stands beside is that leg. The drop leg writes the typed leg's own file and types
 // nothing: a scene here proves the pane sees no keystroke at all.
 //
@@ -43,7 +43,7 @@ const RULE = '─'.repeat(30);
 const HEADER = 'from the owner — admitted by: the owner\n\n';
 
 /** What the walk records for the two legs this build cannot take, exactly as send.ts words it. */
-const NATIVE_SKIP = 'native: unavailable; the frame path is a socket write this build does not make';
+const NATIVE_SKIP = "native: unavailable; the native leg is the sending session's own SendMessage";
 const MCP_SKIP = 'mcp-inbox: unavailable; this build carries no mcp-inbox leg';
 
 type Delivery = Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>;

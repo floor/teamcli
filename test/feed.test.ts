@@ -66,11 +66,11 @@ seats:
     launch: claude
   - role: implementer
     name: helper
-    cli: claude-code
+    cli: codex
     vendor: test
     model: Test
     version: "1"
-    launch: claude
+    launch: codex -m implementer
   - role: reviewer
     name: native
     cli: codex
@@ -132,7 +132,7 @@ function recordSeat(dir: string, seat: string, pane: string): void {
 
 /** The agent record `up` writes for a launched seat: the identity admission reads, and the id
  *  the drop file's header names. */
-function registerSeat(home: string, seat: string, role: string): void {
+function registerSeat(home: string, seat: string, role: string, cli = 'claude-code'): void {
   const id = `agt_${Buffer.from(seat).toString('hex').slice(0, 12).padEnd(12, '0')}`;
   const file = join(home, '.config', 'team', 'agents', `${id}.yaml`);
   mkdirSync(dirname(file), { recursive: true });
@@ -146,7 +146,7 @@ function registerSeat(home: string, seat: string, role: string): void {
       '  version: "1"',
       `  role: "${role}"`,
       'lab: "test"',
-      'cli: "claude-code"',
+      `cli: "${cli}"`,
       'launcher: null',
       'launch: "claude"',
       'reach:',
@@ -176,7 +176,7 @@ describe('team send history log & team feed', () => {
     const { root, dir, home, sockets } = world();
     // A seat to its own team's orchestrator: the pair the authority rules admit without a grant.
     recordSeat(dir, 'helper', 'pane-helper');
-    registerSeat(home, 'helper', 'implementer');
+    registerSeat(home, 'helper', 'implementer', 'codex');
     const host = hostFor(home, sockets);
     const callerIo = testIo(root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
 
@@ -208,10 +208,10 @@ describe('team send history log & team feed', () => {
       outcome: 'delivered',
       ms: 0,
       via: 'typed',
-      // The walk landed on the typed leg through both legs ahead of it: the socket write this
-      // build does not make, and the mcp-inbox leg it does not carry.
+      // The walk landed on the typed leg through both legs ahead of it: the native leg only the
+      // sending session's own SendMessage can make, and the mcp-inbox leg it does not carry.
       failed: [
-        'native: unavailable; the frame path is a socket write this build does not make',
+        'native: unavailable; the native leg is the sending session\'s own SendMessage',
         'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
       ],
     });
@@ -250,7 +250,7 @@ describe('team send history log & team feed', () => {
       via: 'typed',
     });
     expect(doc.events[0]?.failed).toEqual([
-      'native: unavailable; the frame path is a socket write this build does not make',
+      'native: unavailable; the native leg is the sending session\'s own SendMessage',
       'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
     ]);
   });

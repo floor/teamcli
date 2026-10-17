@@ -13,6 +13,7 @@ import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
+import { PENDING_ID, dropTaken, markPending, readPending, restoreTaken, takePending, writePending, type PendingNative } from '../send/pending.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
@@ -27,7 +28,6 @@ import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendRespon
 import { deliveryChainOf } from '../send/delivery.ts';
 import { bindPane, deliverTrigger, showsHeldFrameDialog, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
-import { markPending } from '../send/pending.ts';
 import { markTaken } from '../send/taken.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
@@ -37,17 +37,19 @@ import { deliveryOrder } from '../settings/resolve.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+       team send --confirm <id> [--json] [--dry-run]
        team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
        team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
        team send --list [--json]
 
 Writes one message to one seat. A plain send writes the body whole to a drop file
-(mode 0600, atomic rename) and types one short trigger line, for every seat. The
-body is never split across several writes. A seat whose CLI builds its own work
-item from its screens — a profile with a compose module — still gets the drop
-file, but the body is typed through those screens and never becomes a trigger
-line; delivered there means the CLI printed the line that creates the item.
-delivered means herdr reported
+(mode 0600, atomic rename) and types one short trigger line, for every seat; a
+sender whose own file declares Claude Code, to a Claude Code seat, gets the native
+handoff below instead. The body is never split across several writes. A seat whose
+CLI builds its own work item from its screens — a profile with a compose module —
+still gets the drop file, but the body is typed through those screens and never
+becomes a trigger line; delivered there means the CLI printed the line that creates
+the item. delivered means herdr reported
 the seat working — or done or blocked, changed from the status read before Enter —
 after that line and Enter, or the transcript shows the drop being read, and the line has
 left the seat's input box, and the pane is not a dialog this command already classifies
@@ -128,6 +130,19 @@ session, seats, summary}. A run that exits 1 or 2 writes the structured error
 document instead — {error: {id, message, repair}} — and stderr stays empty.
 --file reads the body from a file instead of the one <message> argument.
 
+A Claude Code seat's native leg is the sender's own cross-session SendMessage, which this
+process cannot make for it. A sender whose own file declares Claude Code gets the handoff
+instead of a skip: the recipient's live pane is found, its socket resolved, and the pair is
+admitted exactly as a plain send's is; one pending record is written to the caller's own
+project state (mode 0600, one file per id) and the run prints the exact target, the body and
+the one line that records the delivery — then exits 0, status native. Nothing is delivered by
+that run. The sender makes the call itself, and \`team send --confirm <id>\` writes the one
+history line (outcome delivered, via native, the span from the handoff to the confirm) and
+clears the pending record. A confirm is the handoff's own decision: the pair, the body and
+the address are the ones the record carries, and the caller must be the sender that printed
+it. A delivery that is never confirmed has no history line; --record below writes one by
+hand.
+
 --record writes no drop file, sends no frame and touches no pane: the sender
 delivered with its own tool (a Claude Code seat's cross-session message), and this
 writes down that delivery — one history line, outcome delivered, via native, with
@@ -164,6 +179,9 @@ export type SendHost = {
   /** Types a native seat's trigger and reads herdr's status. Tests pass a fake. */
   native: NativePane;
   now(): Date;
+  /** The id a native handoff prints and records under; the real host mints a UUID, and a test or
+   *  the docs runner pins one so the printed confirm line is exact. */
+  newId?: () => string;
   home: string;
   /** The project registry, for the project each seat's team sits in. The real one when absent;
    *  a test stands in for it. */
@@ -366,7 +384,7 @@ function homeless(io: Io, host: SendHost, seatName: string): Prologue | Ended {
 }
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  const args = readArgs(argv, ['file', 'timeout', 'record', 'channel', 'ms'], ['wait', 'json', 'list', 'dry-run']);
+  const args = readArgs(argv, ['file', 'timeout', 'record', 'channel', 'ms', 'confirm'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
@@ -381,6 +399,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return 1;
   }
   if (args.flags.has('list')) return listSeats(io, host, report);
+  // The confirm half of the native channel: the delivery the sender made itself is written down
+  // here, from the pending record the handoff left (`confirmRun`).
+  if (args.values.confirm !== undefined) return confirmRun(args, io, host, json);
   // The native half of the channel: nothing is delivered here, so the seat is named by
   // `--record` and the rest of the line is the record's own options, judged on their own.
   if (args.values.record !== undefined) return recordRun(args, io, host, json);
@@ -419,6 +440,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return refuse(io, pro.dir, pro.who, pro.reason, host, report);
   }
   const { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit } = pro;
+  // Whether this sender can make the native leg itself: a seat whose own file declares Claude
+  // Code carries the cross-session SendMessage the leg is made with. The owner's terminal, and
+  // every other CLI, do not, and their native leg stays a skip.
+  const declaredCaller = caller.kind === 'seat' ? team.seats.find((seat) => seat.name === caller.name) : undefined;
+  const callerNative = declaredCaller?.cli === 'claude-code';
 
   // The authority rule, `admitSend` over the registry's records, default deny, judging the
   // resolved target when there is one. A sender the store holds no record for is judged as the
@@ -567,7 +593,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
   const dropPath = join(dropDir, msgId);
   if (dry) {
-    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli)}; nothing was written`, report);
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative)}; nothing was written`, report);
   }
 
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
@@ -598,6 +624,17 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // skipped without a failure, since no send of this seat's could ever leave by it.
       if (to.cli !== 'claude-code') continue;
       if (!SOCKET_SEND) {
+        // A sender whose own file declares Claude Code can make the leg itself: the handoff
+        // writes the pending record, prints the exact target and body, and the sender's own
+        // SendMessage carries the message. Any other sender gets the skip, as before. A handoff
+        // that cannot name a live address hands the send to the leg after this one.
+        if (callerNative) {
+          const off = handOff(team.project, root, from, to, body, admission, host);
+          if (off.kind === 'refused') return refuse(io, dir, who, off.why, host, report);
+          if (off.kind === 'handed') return handed(io, to.dir, who, to.seat, off.record, host, report);
+          failures.push(`native: ${off.reason}`);
+          continue;
+        }
         failures.push(`native: ${NATIVE_LEG_UNAVAILABLE}`);
         continue;
       }
@@ -674,15 +711,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 }
 
 /** The channel a dry run names: the legs of the order this build can actually walk, in words.
- *  A leg this build does not carry — mcp-inbox always, native while SOCKET_SEND
- *  (src/send/uds.ts) is off — is not a channel a run would take, and a seat whose CLI has no
- *  cross-session socket has no native leg at all; none of them is named. What is left is the
- *  drop channel when it leads, the native channel when it leads with the typed channel behind it,
- *  or the typed channel alone. The where-nothing-is-carried phrase is unreachable by the default
- *  order of a codex seat — mcp-inbox out, native out, typed left — and only an order that drops
- *  the typed leg too prints it. */
-function walkPhrase(order: readonly DeliveryLeg[], cli: string): string {
-  const walkable = order.filter((leg) => leg === 'drop' || (leg === 'native' ? cli === 'claude-code' && SOCKET_SEND : leg === 'typed'));
+ *  A leg this build does not carry — mcp-inbox always, native for a sender that cannot make its
+ *  own SendMessage (src/send/uds.ts's SOCKET_SEND is off) — is not a channel a run would take,
+ *  and a seat whose CLI has no cross-session socket has no native leg at all; none of them is
+ *  named. The handoff counts as the native leg only for a sender whose own file declares Claude
+ *  Code, since only that sender makes the call the leg is. What is left is the drop channel when
+ *  it leads, the native channel when it leads with the typed or drop channel behind it, or the
+ *  typed channel alone. The where-nothing-is-carried phrase is unreachable by the default order
+ *  of a codex seat — mcp-inbox out, native out, typed left — and only an order that drops the
+ *  typed leg too prints it. */
+function walkPhrase(order: readonly DeliveryLeg[], cli: string, callerNative: boolean): string {
+  const nativeWalkable = cli === 'claude-code' && (SOCKET_SEND || callerNative);
+  const walkable = order.filter((leg) => leg === 'drop' || (leg === 'native' ? nativeWalkable : leg === 'typed'));
   if (walkable.length === 0) return 'no leg of its delivery order this build can walk';
   // The drop leg is a file and no keystroke, whether or not the CLI's typed leg builds its brief
   // through its own screens.
@@ -690,9 +730,95 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string): string {
   // A compose seat's brief is not a drop-file trigger: it is typed through the CLI's screens.
   if (profileFor(cli)?.compose != null) return 'a typed brief through its own screens';
   if (walkable[0] !== 'native') return 'a 0600 drop file and one trigger line';
-  return walkable.includes('typed')
-    ? 'its cross-session socket, falling back to a 0600 drop file and one trigger line'
-    : 'its cross-session socket';
+  const nextWalkable = walkable[1];
+  const fallbackClause =
+    nextWalkable === 'typed'
+      ? ', falling back to a 0600 drop file and one trigger line'
+      : nextWalkable === 'drop'
+        ? ', falling back to a 0600 drop file, with nothing typed into the pane'
+        : '';
+  if (!SOCKET_SEND) {
+    return `the native handoff (your own SendMessage, then --confirm)${fallbackClause}`;
+  }
+  return `its cross-session socket${fallbackClause}`;
+}
+
+/** What a native handoff leaves behind, or why the send goes to the leg behind native. */
+type HandOff =
+  | { kind: 'handed'; record: PendingNative }
+  | { kind: 'fallback'; reason: string }
+  | { kind: 'refused'; why: string };
+
+/**
+ * The native leg for a sender whose own file declares Claude Code: the recipient's live pane and
+ * socket are resolved exactly as a socket send's are, and one pending record is written to the
+ * caller's own project state — the receiving team's project, root and rule ride the record, so
+ * the confirm writes the history line where the send would have. Nothing is delivered here. A
+ * record that cannot be written refuses: an unrecorded native send is never the easy path. An
+ * address that cannot be resolved is the ordinary fallback to the leg behind native.
+ */
+function handOff(
+  storeProject: string,
+  storeRoot: string,
+  from: string,
+  to: Aim,
+  body: string,
+  admission: Admission,
+  host: SendHost,
+): HandOff {
+  if (!admission.ok) return { kind: 'refused', why: 'the send was not admitted' };
+  const found = findAgent(host, to.session, to.seat);
+  if (!found.ok) return { kind: 'fallback', reason: found.reason };
+  const at = socketPathFor(host, to, found.pane);
+  if (at === null) {
+    return { kind: 'fallback', reason: `no socket was found for its pane's processes (looked in ${socketDirs(host)})` };
+  }
+  const record: PendingNative = {
+    v: 1,
+    id: host.newId?.() ?? randomUUID(),
+    ts: host.now().toISOString(),
+    from,
+    from_id: admission.sender === 'owner' ? null : 'id' in admission.sender ? admission.sender.id : null,
+    to: to.seat,
+    to_id: null,
+    team: teamIdOf(to.root),
+    session: to.session,
+    cli: to.cli,
+    pane: found.pane,
+    address: `uds:${at.path}`,
+    rule: admission.rule,
+    project: to.project,
+    root: to.root,
+    body,
+  };
+  if (!PENDING_ID.test(record.id)) {
+    return { kind: 'refused', why: 'the handoff id is not a UUID; no pending record was written and nothing was sent' };
+  }
+  const written = writePending(storeProject, storeRoot, host.home, record);
+  if (!written.ok) {
+    return { kind: 'refused', why: `the native handoff could not be written down (${written.reason}); nothing was sent` };
+  }
+  return { kind: 'handed', record };
+}
+
+/** The handoff's own exit: the next call is the sender's, and the confirm line is the receipt.
+ *  Nothing was delivered by this run; exit 0, always. */
+function handed(io: Io, dir: string, who: string, seat: string, record: PendingNative, host: SendHost, report: Report): number {
+  report.sent = record.id;
+  const line = `team send --confirm ${record.id}`;
+  logLine(dir, 'send', who, `${seat}: native handoff ${record.id} (${record.address})`, host.now());
+  if (report.json) {
+    io.stdout(document({ seat, status: 'native', exit: 0, to: record.address, confirm: line, message: record.body, ids: { sent: record.id, reply: null } }));
+  } else {
+    const body = record.body.endsWith('\n') ? record.body : `${record.body}\n`;
+    io.stdout(
+      `${seat}: native: nothing was sent; make the call with your own SendMessage, then record it\n` +
+        `to: ${record.address}\n` +
+        `message:\n${body}` +
+        `${line}\n`,
+    );
+  }
+  return 0; // exit: send.native
 }
 
 /**
@@ -845,6 +971,88 @@ function recordDryRun(io: Io, seat: string, ms: number, report: Report): number 
     io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.record-dry-run
+}
+
+/**
+ * `team send --confirm <id>`: the half the handoff printed. The pending record is read from the
+ * caller's own project state, and the caller must be the sender it names, standing where the
+ * handoff judged it. The pair, the body and the address are the record's own: a confirm cannot
+ * substitute a recipient or a message a later rule would not have admitted. The record is taken
+ * atomically before the one history line is written — outcome delivered, via native, the span
+ * from the handoff to this call — so two confirms of one id never both record it; a history
+ * write that fails puts the record back.
+ */
+function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
+  const id = args.values.confirm as string;
+  const report: Report = { json, seat: null, sent: null, project: null, session: null };
+  if (args.flags.has('wait') || args.values.timeout !== undefined) {
+    return usage(io, '--wait and --timeout are not meaningful with --confirm: nothing is delivered here', report);
+  }
+  if (args.values.record !== undefined || args.values.channel !== undefined || args.values.ms !== undefined || args.values.file !== undefined) {
+    return usage(io, '--confirm takes no other option: the pending record carries the seat, the body and the span', report);
+  }
+  if (args.rest.length > 0) return usage(io, '--confirm takes the id the handoff printed and no message', report);
+  if (!PENDING_ID.test(id)) return usage(io, `--confirm takes the id a native handoff printed (got "${id}")`, report);
+
+  const loaded = loadTeamFile(io.cwd, { home: host.home });
+  if (!loaded.ok) {
+    const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
+    return configuration(io, message || 'the team file cannot be read', report);
+  }
+  const { team, root } = loaded;
+  const dir = dirname(loaded.path);
+  const judged = judgeCallerIn(io, dir, team);
+  const { caller } = judged;
+  const who = logTag(caller);
+  const from = caller.kind === 'seat' ? caller.name : 'owner';
+  const read = readPending(team.project, root, host.home, id);
+  if (!read.ok) return refuse(io, dir, who, `${id}: the pending record cannot be read (${read.reason}); nothing was recorded`, host, report);
+  if (read.record === null) return refuse(io, dir, who, `${id}: no pending native record holds that id; nothing was recorded`, host, report);
+  const record = read.record;
+  report.seat = record.to;
+  const senderHere = caller.kind === 'owner' ? record.from === 'owner' : caller.kind === 'seat' && caller.name === record.from;
+  if (!senderHere) {
+    return refuse(io, dir, who, `${id}: it was printed for ${record.from}, and this call is ${from}; nothing was recorded`, host, report);
+  }
+  // The sender stands where the handoff judged it — the owner always does; a seat is the seat it
+  // names, in the session judged, on the pane the state records for it.
+  const standing = standingOf(dir, judged.session, caller);
+  const placement = placementProblemOf(caller, standing);
+  if (placement !== null) return refuse(io, dir, who, placement, host, report);
+  // The span the handoff measured, from the record's own clock to this run's: the host's clock,
+  // so a test or the docs runner reads a fixed count.
+  const ms = Math.max(0, host.now().getTime() - Date.parse(record.ts));
+  if (args.flags.has('dry-run')) return recordDryRun(io, record.to, ms, report);
+  // Take before writing: only the confirm that renamed the record writes the line.
+  const taken = takePending(team.project, root, host.home, id);
+  if (!taken.ok) return refuse(io, dir, who, `${id}: ${taken.reason}`, host, report);
+  const written = appendHistory(record.project, record.root, host.home, {
+    ts: host.now().toISOString(),
+    from: record.from,
+    to: record.to,
+    body: record.body,
+    id: record.id,
+    outcome: 'delivered',
+    ms,
+    via: NATIVE_CHANNEL,
+  });
+  if (!written.ok) {
+    restoreTaken(taken.taken, team.project, root, host.home, id);
+    return refuse(io, dir, who, `the delivery could not be recorded: ${written.reason}`, host, report);
+  }
+  dropTaken(taken.taken);
+  logLine(join(record.root, '.agents'), 'send', who, `${record.to}: confirmed (native, ${String(ms)} ms)`, host.now());
+  return confirmed(io, record.to, ms, record.id, report);
+}
+
+/** The confirm wrote the one history line the handoff promised. Exit 0, always. */
+function confirmed(io: Io, seat: string, ms: number, id: string, report: Report): number {
+  if (report.json) {
+    io.stdout(document({ seat, status: 'confirmed', exit: 0, ids: { sent: id, reply: null } }));
+  } else {
+    io.stdout(`${seat}: confirmed (native, ${String(ms)} ms)\n`);
+  }
+  return 0; // exit: send.confirmed
 }
 
 function finishDaemonSend(
@@ -1444,10 +1652,11 @@ const HELD_FRAME_REASON =
  *  reaches it skips the leg, records it unavailable, and hands the send to the next leg. */
 const MCP_INBOX_UNAVAILABLE = 'unavailable; this build carries no mcp-inbox leg';
 
-/** What the walk records for the native leg while SOCKET_SEND (src/send/uds.ts) is off: the
- *  frame path is a socket write this build does not make, so the leg cannot take a send, and the
- *  walk skips and records it exactly as it records the mcp-inbox leg's skip. */
-const NATIVE_LEG_UNAVAILABLE = 'unavailable; the frame path is a socket write this build does not make';
+/** What the walk records for the native leg when the sender cannot make the leg itself: the
+ *  frame is the sending session's own cross-session SendMessage, which this process cannot make,
+ *  so the leg cannot take this send, and the walk skips and records it exactly as it records the
+ *  mcp-inbox leg's skip. A sender whose own file declares Claude Code gets the handoff instead. */
+const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending session's own SendMessage";
 
 /** How long a socket write's pane is read for the held-message dialog, in all. */
 const HELD_READ_MS = 1000;
@@ -1967,4 +2176,22 @@ function openText(io: Io, report: Report): void {
   if (report.project !== null && report.session !== null) {
     io.stdout(`${contextLine(report.project, report.session)}\n`);
   }
+}
+
+/** The native handoff and confirm JSON document (`handed` and `confirmed`). */
+function document(fields: {
+  seat: string | null;
+  status: 'native' | 'confirmed';
+  exit: 0;
+  to?: string;
+  confirm?: string;
+  message?: string;
+  ids: { sent: string | null; reply: string | null };
+}): string {
+  const out: Record<string, unknown> = { seat: fields.seat, status: fields.status, exit: fields.exit };
+  if (fields.to !== undefined) out.to = fields.to;
+  if (fields.confirm !== undefined) out.confirm = fields.confirm;
+  if (fields.message !== undefined) out.message = fields.message;
+  out.ids = fields.ids;
+  return `${JSON.stringify(out)}\n`;
 }

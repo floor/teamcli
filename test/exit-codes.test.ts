@@ -25,7 +25,8 @@ import { runFeed } from '../src/commands/feed.ts';
 import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runRoute } from '../src/commands/route.ts';
-import { historyPath } from '../src/send/history.ts';
+import { historyPath, readHistory } from '../src/send/history.ts';
+import { pendingPath } from '../src/send/pending.ts';
 import { plantMessage, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
@@ -3404,6 +3405,55 @@ scene('send.recorded', async (place) => {
 scene('send.record-dry-run', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['--record', 'lead', '--channel', 'native', '--ms', '812', '--dry-run'], owner, sendHost(place)), 'lead: would record (native, 812 ms); nothing was written');
+});
+
+/** The state `up` leaves for the file's lead, on the pane `leadSeat` stands on: the handoff's
+ *  sender is placed where the state records it, exactly as a plain send's caller is. */
+function placeLead(place: Place): void {
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+}
+
+/** The id the handoff prints, pinned so the scene's output is exact. */
+const SEND_NATIVE_ID = '11111111-1111-4111-8111-111111111111';
+
+/** TWO without the worker's `stopped` mark: a live claude-code seat for a claude-code sender. */
+const LIVE_TWO = TWO.replace('    stopped: true\n', '');
+
+/** The handoff: a claude-code sender gets the pending record and the exact target, and nothing
+ *  is delivered by that run. */
+scene('send.native', async (place) => {
+  write(place, LIVE_TWO);
+  placeLead(place);
+  const host = sendHost(place);
+  // The recipient is the one live agent of that name, on its own pane; the socket sits at the
+  // pid the fake pane process reports.
+  host.agents = () => [{ name: 'worker', pane: 'w2:p1', cli: 'claude' }];
+  host.newId = () => SEND_NATIVE_ID;
+  const ran = await sent(place, ['worker', 'hello'], leadSeat, host);
+  expect(ran.code).toBe(0);
+  expect(existsSync(pendingPath('acme', place.root, place.home, SEND_NATIVE_ID))).toBe(true);
+  expect(existsSync(historyPath('acme', place.root, place.home))).toBe(false);
+  return show(ran, 'worker: native: nothing was sent; make the call with your own SendMessage');
+});
+
+/** The confirm: the handoff's own decision, written as the one history line, and the record
+ *  cleared. */
+scene('send.confirmed', async (place) => {
+  write(place, LIVE_TWO);
+  placeLead(place);
+  const host = sendHost(place);
+  host.agents = () => [{ name: 'worker', pane: 'w2:p1', cli: 'claude' }];
+  host.newId = () => SEND_NATIVE_ID;
+  expect((await sent(place, ['worker', 'hello'], leadSeat, host)).code).toBe(0);
+  const ran = await sent(place, ['--confirm', SEND_NATIVE_ID], leadSeat, host);
+  expect(ran.code).toBe(0);
+  const history = readHistory('acme', place.root, place.home);
+  expect(history.ok && history.entries.map((entry) => [entry.outcome, entry.via, entry.ms])).toEqual([['delivered', 'native', 0]]);
+  expect(existsSync(pendingPath('acme', place.root, place.home, SEND_NATIVE_ID))).toBe(false);
+  return show(ran, 'worker: confirmed (native, 0 ms)');
 });
 
 async function fed(place: Place, argv: string[]): Promise<Ran> {

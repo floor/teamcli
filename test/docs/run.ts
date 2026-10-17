@@ -348,6 +348,9 @@ function answerHost(home: string): AnswerHost {
  *  native leg returns. No session is read and no pane is touched. */
 const SEND_PID = 4200;
 
+/** The id a page's native handoff prints, so its `--confirm` line is exact. */
+const SEND_NATIVE_ID = '22222222-2222-4222-8222-222222222222';
+
 function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string): SendHost {
   const sockets = join(fixture.home, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
@@ -386,6 +389,7 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
       return { ok: true };
     },
     now: () => new Date(now),
+    newId: () => SEND_NATIVE_ID,
     home: fixture.home,
     // The roster's project column reads the fixture's own registry: a page that seeds
     // `~/.config/team/projects.yaml` shows the registry's grouping, one that does not shows

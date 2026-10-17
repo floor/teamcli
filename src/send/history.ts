@@ -104,9 +104,10 @@ function fileProblem(at: string): string | null {
 
 /**
  * Ensures `<home>/.config`, `<home>/.config/team`, and `<storeDir>` exist as real directories
- * of this user's, with `<storeDir>` at mode 0700. Never walks through a symbolic link.
+ * of this user's, with `<storeDir>` at mode 0700. Never walks through a symbolic link. Shared
+ * with the pending records (`pending.ts`), which live in the same store beside the history.
  */
-function ensureStoreLadder(storeDir: string, home: string): string | null {
+export function ensureStoreLadder(storeDir: string, home: string): string | null {
   const stateRoot = storesFolder(home);
   const configDir = dirname(stateRoot);
   const levels: Array<{ at: string; seal: boolean }> = [
