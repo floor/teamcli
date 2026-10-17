@@ -507,18 +507,24 @@ export const relaunch = (team: Pick<TeamFile, 'orchestrator' | 'operator'>, name
 
 // A seat the state records from a launch that predates the process identity: neither the watch
 // nor `status` can tell whether its pane still holds what team launched, and nothing would
-// notice a restore. One note per such seat; only a launch records the identity, so the note
-// says what relaunches it. A seat the state doesn't record was not left running by this
-// session, and a stopped seat is never started by `up`: neither is told.
+// notice a restore. One note per such seat, naming `team register <seat>`: it completes the
+// record where the seat stands — the id and the process identity a launch would have written,
+// without relaunching anything. A lead's own seat draws no note: it is the seat reading this
+// line, and the whole-team restart these lines used to name is never the repair. A seat the
+// state doesn't record was not left running by this session, and a stopped seat is never
+// started by `up`: neither is told.
 function identityFindings(team: TeamFile, dir: string, session: string): Finding[] {
   const recorded = readState(dir).sessions[session]?.seats ?? {};
   const findings: Finding[] = [];
   for (const seat of team.seats) {
     const held = recorded[seat.name];
     if (seat.stopped || !held || held.launched) continue;
+    // An orchestrator or an operator is the seat this line is read from: telling it to register
+    // its own pane is a whole-team act dressed as a repair, and is never shown.
+    if (isLeadSeat(team, seat.name)) continue;
     findings.push({
       level: 'note',
-      text: `${seat.name}: launched before team recorded its process; run ${relaunch(team, seat.name)} to launch it again`,
+      text: `${seat.name}: launched before team recorded its process; run \`team register ${seat.name}\` to record its process`,
     });
   }
   return findings;

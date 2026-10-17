@@ -563,7 +563,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // signing, the roster, the team's project pointers and the address — so the repair `team
   // check` names lands where the seat stands, and a file that gained `in_project` or a new
   // signing since the launch reaches the registry. The session's own record is left exactly as
-  // it is.
+  // it is, save for a launch's id and process identity it is missing, which this run completes.
   if (held !== undefined && held.pane === pane && held.stage === 'ready') {
     // One more repair from the same run, and a dry run paints nothing for it either: the seat's
     // two sidebar lines are re-applied from the file, so a label or display that drifted is put
@@ -584,6 +584,24 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     let wroteRoster = false;
     if (!dry) {
       const refreshedAt = sources.now();
+      // The launch's own record, completed where this version reads a gap a launch that predates
+      // it left: the seat id (`team seats`' `-`, and the registry agent's missing `seat_handle`)
+      // and the process identity (`team doctor`'s "launched before team recorded its process").
+      // The same id chain and the same identity read the launch path below writes; a record that
+      // holds both is left byte for byte as it is.
+      const seatId = held.id ?? recorded.retained_seats?.[name]?.id ?? mintSeatId();
+      if (held.id === undefined || held.launched === undefined) {
+        updateState(dir, (state) => {
+          const current = (state.sessions[session] ??= emptySession());
+          if (current.retained_seats?.[name]) delete current.retained_seats[name];
+          const carried = current.seats[name] ?? held;
+          current.seats[name] = {
+            ...carried,
+            id: seatId,
+            ...(carried.launched === undefined ? { launched: identity } : {}),
+          };
+        });
+      }
       relabel(out, sources, session, seat, pane, listed?.workspace, name);
       // The audit lines a delegated and a granted act write, the same ones the launch path
       // writes below: this path is that act too, and its early return must not skip them.
@@ -592,7 +610,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // The record names the caller the run admitted, not the process the walk saw: a seat under
       // a pane override walks as unplaced and is judged as the seat its pane proves it is, and
       // `registered_by` must say the seat.
-      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, held.id);
+      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, seatId);
       if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
       else {
         refreshed = true;
@@ -600,7 +618,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
         // The address, re-read the way a launch reads it, on the id the write above returned.
         const address = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, pane, session);
         if (address.note) logLine(dir, 'register', callerLabel(walked), address.note, refreshedAt);
-        logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${held.id ?? wrote.id} — pane ${pane}`, refreshedAt);
+        logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${seatId} — pane ${pane}`, refreshedAt);
         if (wroteRoster) logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${pane}`, refreshedAt);
       }
     }

@@ -60,7 +60,10 @@ no pane at all, is never overwritten from here: stopping the team and starting i
 owner's own act. On a seat the pane already holds ready, the run is the repair: the pane's live
 CLI is verified again — a pane whose CLI exited or was replaced is refused, never re-recorded as
 running — and the registry record — the signing, the roster, the address and the team's project
-pointers — is written again from the file, and the session's own record is left exactly as it is.
+pointers — is written again from the file, and the session's own record is left exactly as it is,
+save for a launch's id and process identity it is missing: a record a launch that predates them
+left short is completed where the seat stands — the id `team seats` shows, and the identity
+`team doctor`'s "launched before team recorded its process" note names — and nothing is launched.
 
 A team the registry holds no record of — a team started before this version kept registry
 records — is written by the repair too: the team record, the seat's agent record and its roster

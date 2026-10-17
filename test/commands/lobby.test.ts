@@ -10,7 +10,9 @@ import { loadConfig } from '../../src/commands/check.ts';
 import { commits } from '../../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { runDown } from '../../src/commands/down.ts';
+import { runRegister, type RegisterSources } from '../../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
+import { runSeats, type SeatsSources } from '../../src/commands/seats.ts';
 import { runStatus, standingSource, type StatusSources } from '../../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { runWorktree, type WorktreeSources } from '../../src/commands/worktree.ts';
@@ -22,7 +24,7 @@ import { rulesText, seatRules, type RulesInput } from '../../src/launch/rules.ts
 import { defaultFs, findRepoRoot, lobbyDir, recheckLobby, verifyLobby, type FsReader } from '../../src/lobby/gate.ts';
 import { shippedStartupReads } from '../../src/profiles/index.ts';
 import { seatStart } from '../../src/worktree/place.ts';
-import { readState, updateState } from '../../src/state.ts';
+import { readState, SEAT_ID_PATTERN, updateState } from '../../src/state.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
 import { approvalStanding, LEGACY_LINE, storePath, writeApproval } from '../../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
@@ -274,6 +276,58 @@ async function runStatusCmd(argv: string[] = []) {
     home,
   };
   const code = await runStatus([...argv, ...FILE], io, sources);
+  return { code, out: io.out, err: io.err };
+}
+
+async function runSeatsCmd(argv: string[] = []) {
+  const io = testIo(root, OWNER);
+  const sources: SeatsSources = {
+    live: () => ({
+      running: true,
+      agents: [
+        { name: 'lead', agent: 'claude', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: root },
+        { name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: lobby },
+      ],
+      workspaces: [
+        { id: 'w0', label: 'lead' },
+        { id: 'w1', label: 'worker' },
+      ],
+      screens: {},
+    }),
+    branch: () => 'main',
+    standing: standingSource(home),
+    now: () => NOW,
+    home,
+  };
+  const code = await runSeats([...argv, ...FILE], io, sources);
+  return { code, out: io.out, err: io.err };
+}
+
+/** `team register` on a fake host: one agent on the pane, the processes a launch reads, and no
+ *  herdr write behind the sidebar relabel or the address refresh. */
+async function runRegisterCmd(
+  seat: string,
+  pane: string,
+  workspace: string,
+  over: Partial<RegisterSources> = {},
+) {
+  const io = testIo(root, OWNER);
+  const sources: RegisterSources = {
+    home,
+    sessionState: () => 'running',
+    agents: () => [{ name: seat, agent: 'claude', pane, workspace, status: 'idle', cwd: null }],
+    processInfo: () => ({ shell: 900, foreground: [901] }),
+    foreground: () => ['claude'],
+    paneText: () => IDLE,
+    renameWorkspace: () => true,
+    reportDisplayAgent: () => true,
+    refreshAddress: () => ({ address: null }),
+    now: () => NOW,
+    ...over,
+  };
+  // `team register` reads the file from the caller's folder (it takes no `--file`): the test's
+  // cwd is the project root, whose `.agents/team.yaml` the scene approved.
+  const code = await runRegister([seat], io, sources);
   return { code, out: io.out, err: io.err };
 }
 
@@ -2265,7 +2319,7 @@ describe('the upgrade from 0.2.1', () => {
     };
   }
 
-  test("the identity note's repair works: remove --keep then add relaunches with the process recorded", async () => {
+  test("the identity note's repair works: register records the process where the seat stands", async () => {
     approveYaml(migratedTeamYaml());
     updateState(dir, (st) => {
       st.sessions['acme'] = { seats: { worker: { stage: 'ready', pane: 'w1:p1', workspace: 'w1' } }, worktrees: {} };
@@ -2273,25 +2327,25 @@ describe('the upgrade from 0.2.1', () => {
     const live = claudeLive('worker', 'w1:p1', 'w1');
     const before = await runDoctorCmd([], live);
     expect(before.out).toContain(
-      'worker: launched before team recorded its process; run `team remove worker --keep` then `team add worker` '
-        + '(or `team down` then `team up` for the whole team) to launch it again',
+      'worker: launched before team recorded its process; run `team register worker` to record its process',
     );
 
-    // Run the repair the line names, on the fake host, and read the note again.
-    expect(
-      await runRemove(['worker', '--keep', ...FILE], testIo(root, OWNER), removeKeepSources({ name: 'worker', pane: 'w1:p1', workspace: 'w1' }, 'claude', claudeBox)),
-    ).toBe(0);
-    const made = world();
-    made.session = 'running';
-    made.launch.processInfo = () => ({ shell: 900, foreground: [901] });
-    expect((await runAddCmd(['worker'], made)).code).toBe(0);
+    // Run the repair the line names, on the fake host: the pane the seat stands in is read
+    // again, and nothing is relaunched.
+    const registered = await runRegisterCmd('worker', 'w1:p1', 'w1');
+    expect(registered.code).toBe(0);
+    expect(registered.out).toContain('worker: already registered — pane w1:p1');
 
     const after = await runDoctorCmd([], live);
     expect(after.out).not.toContain('launched before team recorded its process');
     const worker = readState(dir).sessions['acme']?.seats.worker;
     expect(worker?.launched).toEqual({ shell: 900, cli: [901] });
-    expect(worker?.start_cwd).toBe(canonicalLanding(lobby).landing);
+    expect(worker?.id).toMatch(SEAT_ID_PATTERN);
     expect(worker?.stage).toBe('ready');
+    // The record the repair writes is the one `team seats` reads its ID column from: the row
+    // that showed `-` before shows the seat's id.
+    const seats = await runSeatsCmd();
+    expect(seats.out).toContain(worker!.id!);
   });
 
   function codexCapture(name: string): string {
@@ -2487,7 +2541,7 @@ describe('the upgrade from 0.2.1', () => {
     );
   });
 
-  test('coordinator and operator relaunch lines offer only whole-team repair, their rules-file line names team reload, and down/up clears both', async () => {
+  test('coordinator and operator draw no identity note, the register repair clears an ordinary seat\'s, their rules-file line names team reload, and down/up clears both', async () => {
     // Separate coordinator and operator seats
     const withOp = migratedTeamYaml()
       .replace('operator: lead', 'operator: opSeat')
@@ -2500,7 +2554,7 @@ describe('the upgrade from 0.2.1', () => {
     mkdirSync(oldLobby, { recursive: true });
     const oldLanding = canonicalLanding(oldLobby).landing;
 
-    // 1. Identity note: coordinator and operator name only team down/up; ordinary names both
+    // 1. Identity note: never for a lead's own seat; an ordinary seat names `team register`
     updateState(dir, (st) => {
       st.sessions['acme'] = {
         seats: {
@@ -2520,28 +2574,22 @@ describe('the upgrade from 0.2.1', () => {
       ],
     };
     const docIdent = await runDoctorCmd([], liveLeads);
-    expect(docIdent.out).toContain(
-      'lead: launched before team recorded its process; run `team down` then `team up` (to restart the whole team) to launch it again',
-    );
-    expect(docIdent.out).toContain(
-      'opSeat: launched before team recorded its process; run `team down` then `team up` (to restart the whole team) to launch it again',
-    );
+    // The orchestrator and the operator stand in the seat that reads the line: their own gaps
+    // draw no note, and no identity line names a whole-team restart any more.
+    expect(docIdent.out.split('\n').filter((line) => line.includes('launched before team recorded its process'))).toEqual([
+      '--    worker: launched before team recorded its process; run `team register worker` to record its process',
+    ]);
     expect(docIdent.out).not.toContain('team remove lead --keep');
     expect(docIdent.out).not.toContain('team remove opSeat --keep');
-    expect(docIdent.out).toContain('team remove worker --keep');
+    expect(docIdent.out).not.toContain('team remove worker --keep');
 
-    // Run whole-team repair on fake host; afterwards the identity note is gone
-    const seatsToDown = [
-      { name: 'lead', pane: 'w0:p1', workspace: 'w0' },
-      { name: 'opSeat', pane: 'w1:p1', workspace: 'w1' },
-      { name: 'worker', pane: 'w2:p1', workspace: 'w2' },
-    ];
-    expect(await runDown([...FILE], testIo(root, OWNER), downSourcesFor(seatsToDown))).toBe(0);
-    const madeUp = world();
-    madeUp.launch.processInfo = () => ({ shell: 900, foreground: [901] });
-    expect((await runUpCmd([], madeUp)).code).toBe(0);
+    // Run the repair the line names: the worker's record is completed where it stands.
+    const registered = await runRegisterCmd('worker', 'w2:p1', 'w2');
+    expect(registered.code).toBe(0);
+    expect(registered.out).toContain('worker: already registered — pane w2:p1');
     const docIdentAfter = await runDoctorCmd([], liveLeads);
     expect(docIdentAfter.out).not.toContain('launched before team recorded its process');
+    expect(readState(dir).sessions['acme']?.seats.worker?.id).toMatch(SEAT_ID_PATTERN);
 
     // 2. Rules-file warning: every seat, a lead included, is repaired with team reload — the
     // command that closes the ready seat and launches the file's line, which writes the rules file
@@ -2569,6 +2617,11 @@ describe('the upgrade from 0.2.1', () => {
     expect(docRules.out).not.toContain('team remove opSeat --keep');
 
     // Run whole-team repair on fake host; afterwards the rules warning is gone
+    const seatsToDown = [
+      { name: 'lead', pane: 'w0:p1', workspace: 'w0' },
+      { name: 'opSeat', pane: 'w1:p1', workspace: 'w1' },
+      { name: 'worker', pane: 'w2:p1', workspace: 'w2' },
+    ];
     const codexSeatsToDown = seatsToDown.map((s) => ({ ...s, cli: 'codex' }));
     expect(await runDown([...FILE], testIo(root, OWNER), downSourcesFor(codexSeatsToDown))).toBe(0);
     const madeCodex = world();

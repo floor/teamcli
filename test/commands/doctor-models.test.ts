@@ -210,8 +210,8 @@ describe('the note for a seat launched before team recorded its process', () => 
     expect(run.code).toBe(0);
     const notes = run.out.split('\n').filter((line) => line.includes('launched before team recorded its process'));
     expect(notes).toEqual([
-      '--    plain-codex: launched before team recorded its process; run `team remove plain-codex --keep` then `team add plain-codex` (or `team down` then `team up` for the whole team) to launch it again',
-      '--    other-model: launched before team recorded its process; run `team remove other-model --keep` then `team add other-model` (or `team down` then `team up` for the whole team) to launch it again',
+      '--    plain-codex: launched before team recorded its process; run `team register plain-codex` to record its process',
+      '--    other-model: launched before team recorded its process; run `team register other-model` to record its process',
     ]);
   });
 });

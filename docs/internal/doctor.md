@@ -84,9 +84,10 @@ or not executable, and when the same file resolves from the project root, its pa
 instead; a line only said to be unchecked, or a relative path that exists nowhere yet, is a `--  `
 note — `not checked: the command may create it`), one note per seat the state records from a launch
 that predates the process identity — `--    <seat>: launched before team recorded its process; run
-\`team remove <seat> --keep\` then \`team add <seat>\` (or \`team down\` then \`team up\` for the whole
-team) to launch it again` (for an orchestrator or operator, `team down` then `team up` (to restart the whole
-team)), the relaunch being what records the identity — one note per live seat
+\`team register <seat>\` to record its process` — the registration being what completes the record
+(the seat's id and the pane's process identity, nothing relaunched). A lead's own seat — the
+orchestrator or the operator — draws no such note: it is the seat reading this line, and a
+whole-team restart is never the repair — one note per live seat
 whose file still carries the placeholder `version: "0"` `init` writes, saying what it runs and the
 one edit that pins it (or a warning when the model family differs, so the one edit covers both) — the watch, and the
 `trust` note. A seat the file

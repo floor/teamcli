@@ -1,8 +1,10 @@
 // `team register` on a seat a pane already holds ready: the second run is the repair. The
 // registry record a launch writes is written again from the file as it now stands — the signing,
 // the roster and the team's project pointers — while the session's own record and the pane are
-// left exactly as they are. Fake herdr, a temporary home and a pinned caller: no live session is
-// read.
+// left exactly as they are, save for the seat id and process identity a launch that predates
+// them left short: those are completed where the seat stands, which is the repair the doctor's
+// "launched before team recorded its process" note names. Fake herdr, a temporary home and a
+// pinned caller: no live session is read.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -15,7 +17,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { findAgent, readAgents, updateAgent } from '../src/registry/agents.ts';
 import { get as getProject, projectIdOf, readProjects } from '../src/registry/projects.ts';
 import { getTeam, setRoster, teamIdOf, teamsFile } from '../src/registry/teams.ts';
-import { LOG_FILE, readState, STATE_FILE } from '../src/state.ts';
+import { emptySession, LOG_FILE, readState, SEAT_ID_PATTERN, STATE_FILE, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T09:00:00Z');
@@ -245,5 +247,107 @@ describe('registering a seat the pane already holds ready', () => {
     expect(second.code).toBe(0);
     expect(second.out).toContain('lead: already registered — pane w1:p1');
     expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('grant [grant] lead up: register');
+  });
+});
+
+// A record from a launch that predates the seat id and the process identity: the state's seat is
+// ready on the pane, with neither `id` nor `launched`. `team register <seat>` completes both from
+// the same reads a launch makes, and leaves the registry agent's `seat_handle` on the id — the
+// whole of the repair `team doctor`'s "launched before team recorded its process" note names.
+describe('completing a record a launch that predates the seat id left short', () => {
+  test("records the id and the pane's process identity where the seat stands", async () => {
+    const w = world();
+    updateState(w.dir, (state) => {
+      state.sessions.acme = {
+        ...emptySession(),
+        seats: { lead: { stage: 'ready', pane: PANE, workspace: 'ws-1' } },
+      };
+    });
+
+    const run = await register(w, ['lead']);
+
+    expect(run.code).toBe(0);
+    // The registry held no record of this team either — the launch that predates the id predates
+    // it — so the run writes the roster line and says so.
+    expect(run.out).toContain('lead: already registered — pane w1:p1; the team registry\'s roster did not list it, and was written');
+    const seat = readState(w.dir).sessions.acme?.seats.lead;
+    expect(seat?.id).toMatch(SEAT_ID_PATTERN);
+    expect(seat?.launched).toEqual({ shell: 400, cli: [401] });
+    // The registry's own handle is the id: the record `team seats` and the sync read.
+    expect(recordOf(w)?.seat_handle).toBe(seat?.id);
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain(`lead: refreshed ${seat?.id} — pane ${PANE}`);
+  });
+
+  test('keeps the id a record already holds, and writes only the missing identity', async () => {
+    const w = world();
+    updateState(w.dir, (state) => {
+      state.sessions.acme = {
+        ...emptySession(),
+        seats: { lead: { id: 'seat_aaaaaaaaaaaa', stage: 'ready', pane: PANE, workspace: 'ws-1' } },
+      };
+    });
+
+    const run = await register(w, ['lead']);
+
+    expect(run.code).toBe(0);
+    const seat = readState(w.dir).sessions.acme?.seats.lead;
+    expect(seat?.id).toBe('seat_aaaaaaaaaaaa');
+    expect(seat?.launched).toEqual({ shell: 400, cli: [401] });
+    expect(recordOf(w)?.seat_handle).toBe('seat_aaaaaaaaaaaa');
+  });
+
+  test('adopts the id a stopped session retained, and retires the retained line', async () => {
+    const w = world();
+    updateState(w.dir, (state) => {
+      state.sessions.acme = {
+        ...emptySession(),
+        seats: { lead: { stage: 'ready', pane: PANE, workspace: 'ws-1' } },
+        retained_seats: { lead: { id: 'seat_bbbbbbbbbbbb' } },
+      };
+    });
+
+    const run = await register(w, ['lead']);
+
+    expect(run.code).toBe(0);
+    const session = readState(w.dir).sessions.acme;
+    expect(session?.seats.lead?.id).toBe('seat_bbbbbbbbbbbb');
+    expect(session?.retained_seats?.lead).toBeUndefined();
+    expect(recordOf(w)?.seat_handle).toBe('seat_bbbbbbbbbbbb');
+  });
+
+  test('a second run leaves the completed record as it is', async () => {
+    const w = world();
+    updateState(w.dir, (state) => {
+      state.sessions.acme = {
+        ...emptySession(),
+        seats: { lead: { stage: 'ready', pane: PANE, workspace: 'ws-1' } },
+      };
+    });
+    expect((await register(w, ['lead'])).code).toBe(0);
+    const state = readFileSync(join(w.dir, STATE_FILE), 'utf8');
+
+    const again = await register(w, ['lead']);
+
+    expect(again.code).toBe(0);
+    expect(readFileSync(join(w.dir, STATE_FILE), 'utf8')).toBe(state);
+  });
+
+  test('--dry-run leaves a record short of its id and identity untouched', async () => {
+    const w = world();
+    updateState(w.dir, (state) => {
+      state.sessions.acme = {
+        ...emptySession(),
+        seats: { lead: { stage: 'ready', pane: PANE, workspace: 'ws-1' } },
+      };
+    });
+    const state = readFileSync(join(w.dir, STATE_FILE), 'utf8');
+
+    const dry = await register(w, ['lead', '--dry-run']);
+
+    expect(dry.code).toBe(0);
+    expect(dry.out).toContain('lead: already registered — pane w1:p1; the team registry\'s roster would be written');
+    expect(readFileSync(join(w.dir, STATE_FILE), 'utf8')).toBe(state);
+    // Nothing was written to the registry either.
+    expect(recordOf(w)).toBeNull();
   });
 });
