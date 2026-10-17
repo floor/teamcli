@@ -86,8 +86,11 @@ export function beatWatch(
   updateState(dir, (state) => {
     const record = (state.sessions[session] ??= emptySession());
     const prior = record.watch;
+    // `'keep'` preserves the pane this same pid recorded — or, on the first pass, the pane the
+    // hand-over recorded with no pid yet: herdr not naming the watch's own pane must not erase
+    // where the watch is known to run.
     const kept = place === 'keep'
-      ? (prior?.pid === pid && prior.pane
+      ? (prior && (prior.pid === pid || prior.pid === undefined) && prior.pane
         ? { pane: prior.pane, ...(prior.workspace ? { workspace: prior.workspace } : {}) }
         : undefined)
       : place;
