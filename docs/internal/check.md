@@ -130,8 +130,9 @@ and open nothing: the target is the file the caller's own place finds.
   young (`state_hook_working_seconds`, 2m shipped, the project free to loosen it), past which a screen
   that still reads answers instead — an interrupted turn leaves the file's `working` behind while
   the prompt shows again — and a screen it cannot read leaves the hook to answer; a fresh `idle`
-  idle; an older reading or one this version cannot parse is no reading, so the screen answers
-  again. `team down`, `team remove` and `team register` take the seat's state file with the record
+  idle; an older reading, one dated ahead of this machine's clock, or one this version cannot
+  parse is no reading, so the screen answers again. `team down`, `team remove` and `team register`
+  take the seat's state file with the record
   they change, so a stopped seat starts from no reading. A blocked screen outranks
   the hook, which cannot see a dialog the CLI stopped at after its last turn ended. `done` from the file's
   `stopped` or from a retained record stands only while herdr names no agent for the seat: a live

@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { seatRegistryRows, type SeatRegistryRow } from '../src/commands/seats.ts';
 import type { TeamFile } from '../src/file/types.ts';
-import { CLI_HOOK_FRESH_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
+import { CLI_HOOK_FRESH_SECONDS, CLI_HOOK_FUTURE_SKEW_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import {
   cliHookSettingsPath, cliHookStatePath, installCliHooks, plannedCliHooks, readCliHook, resetCliHookState,
@@ -279,6 +279,23 @@ describe('the reading the hook feeds', () => {
     expect(seatState({ hook: { state: 'working', since: ago(CLI_HOOK_FRESH_SECONDS + 1) } }, NOW))
       .toEqual({ state: 'unknown', source: 'none', blind: true });
     expect(seatState({ screen: { kind: 'idle' }, hook: { state: 'working', since: ago(CLI_HOOK_FRESH_SECONDS + 1) } }, NOW))
+      .toEqual({ state: 'idle', source: 'cli', blind: false });
+  });
+
+  test('an instant ahead of the clock answers only within a small skew', () => {
+    const ahead = (seconds: number): string => new Date(NOW.getTime() + seconds * 1000).toISOString();
+    // A writer whose clock runs a little fast is not a writer from the future.
+    expect(seatState({ hook: { state: 'working', since: ahead(CLI_HOOK_FUTURE_SKEW_SECONDS) } }, NOW))
+      .toEqual({ state: 'working', source: 'cli-hook', blind: false });
+    expect(seatState({ hook: { state: 'idle', since: ahead(CLI_HOOK_FUTURE_SKEW_SECONDS) } }, NOW))
+      .toEqual({ state: 'idle', source: 'cli-hook', blind: false });
+    // Further ahead the file says nothing: with no screen the seat is unknown, never held fresh
+    // until the wall clock reaches a timestamp the reader cannot trust.
+    expect(seatState({ hook: { state: 'working', since: ahead(CLI_HOOK_FUTURE_SKEW_SECONDS + 1) } }, NOW))
+      .toEqual({ state: 'unknown', source: 'none', blind: true });
+    expect(seatState({ hook: { state: 'idle', since: ahead(CLI_HOOK_FRESH_SECONDS) } }, NOW))
+      .toEqual({ state: 'unknown', source: 'none', blind: true });
+    expect(seatState({ screen: { kind: 'idle' }, hook: { state: 'working', since: ahead(CLI_HOOK_FUTURE_SKEW_SECONDS + 1) } }, NOW))
       .toEqual({ state: 'idle', source: 'cli', blind: false });
   });
 

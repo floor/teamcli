@@ -39,6 +39,12 @@ export type CliHookReading = {
  *  longer speaks for this one, and the screen and herdr answer again. */
 export const CLI_HOOK_FRESH_SECONDS = 24 * 60 * 60;
 
+/** How far ahead of its reader's clock a hook's instant may sit and still answer. The hook runs
+ *  `date -u` beside the reader on the same machine, so a well-formed file is never ahead of it
+ *  by more than a clock nudge; a file dated further ahead is no reading — otherwise a future
+ *  timestamp, skewed or hand-written, would read fresh until the wall clock passed it. */
+export const CLI_HOOK_FUTURE_SKEW_SECONDS = 60;
+
 /** What one seat's reading is made of, already gathered: the caller reads panes and records,
  *  this module only decides. */
 export type SeatStateObservation = {
@@ -108,11 +114,14 @@ export function seatState(
   // Past the short working window (`state_hook_working_seconds`) a screen that still reads —
   // an interrupted turn leaves the file's `working` behind, and the prompt shows again — is the
   // fresher word and answers instead; a screen it cannot read leaves the hook to answer for the
-  // rest of its day. A reading older than the day says nothing about the seat now at all.
+  // rest of its day. A reading older than the day, or dated further ahead of this machine's
+  // clock than a small skew, says nothing about the seat now at all.
   const hook = observation.hook;
   if (hook !== undefined && hook !== null) {
     const wrote = Date.parse(hook.since);
-    if (Number.isFinite(wrote) && now.getTime() - wrote <= CLI_HOOK_FRESH_SECONDS * 1000) {
+    if (Number.isFinite(wrote)
+      && wrote - now.getTime() <= CLI_HOOK_FUTURE_SKEW_SECONDS * 1000
+      && now.getTime() - wrote <= CLI_HOOK_FRESH_SECONDS * 1000) {
       if (hook.state === 'working') {
         const fresh = now.getTime() - wrote <= limits.hook_working_seconds * 1000;
         if (fresh || screen === undefined || screen.kind === 'unknown') {
