@@ -571,10 +571,9 @@ function restartNote(
   return {};
 }
 
-/** A caller who is not the owner and is not named for `up`. Stderr is the word `deny`, and
- *  the clause naming an expired dev-mode declaration when that is why the gate is quiet. */
-function denyUp(out: { stderr(text: string): void }, note = ''): number {
-  out.stderr(`deny${note}\n`);
+/** A caller who is not the owner and is not named for `up`. Stderr is the word `deny`. */
+function denyUp(out: { stderr(text: string): void }): number {
+  out.stderr('deny\n');
   // exit: up.deny
   // exit: up.delegate
   // exit: up.delegate-approval
@@ -735,14 +734,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     if (gates.verdict === null && !aimedDev.on) {
       // The state the aim's chain owed once, before the refusal ends the run: the variable
       // ignored under a governing policy, an expiry, a source that could not be read. The
-      // run never reaches the main log below, so it writes the lines here; the refusal then
-      // names an expiry, as every caller-gate refusal does.
+      // run never reaches the main log below, so it writes the lines here; the dry run's
+      // refusal names the expiry, while a real run keeps the page's bare word.
       if (!dry) logDevModeState(aimedDir, 'up', callerLabel(walked), aimedDev, sources.now?.() ?? new Date());
       if (dry) {
         out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}${devModeExpiryNote(aimedDev)}\n`);
         out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
       } else {
-        out.stderr(`deny${devModeExpiryNote(aimedDev)}\n`);
+        out.stderr('deny\n');
       }
       // exit: up.not-owner
       return 1;
@@ -874,7 +873,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   } else if (!named) {
     // Dev mode mounts and says the placement as a warning; a dry run says it beside the plan it
     // would refuse. Anyone else is denied, and the bare word is the whole answer.
-    if (!dev.on && !dry) return denyUp(out, devModeExpiryNote(dev));
+    if (!dev.on && !dry) return denyUp(out);
     refusals.push(placementRefusal(caller));
   }
   // The live file is the record. A verified copy that no longer matches is not a refusal.
