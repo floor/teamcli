@@ -67,6 +67,31 @@ commands read them.
   to its entity's main coordinator; any seat to its own team's orchestrator; and an owner-signed
   `send` grant to what it names.
 
+- **The send grammar: `@<nickname>`, `<seat>@<team>`, `lead@<team>`.** One grammar answers
+  `team send` and `team route`: an agent id (`agt_` and twelve hex), `@<nickname>`,
+  `<seat>@<team>`, `<nickname>@<team>`, `lead@<team>`, or a bare seat or nickname of the caller's
+  own team. `<team>` is a team's registry id, its project or its session, as the record spells
+  it. `lead@<team>` reaches the seat its file marks `leads: true` — never a seat merely named
+  `lead`, and never a role's name — and a team with no lead is refused, because there is no one
+  to deliver to; a roster marking two leads refuses the address, naming both. A nickname is the
+  file's `nickname:` line, unique inside its team and free to repeat across teams:
+  `@<nickname>` asks the caller's own team first, then the other teams of its entity, and from a
+  folder that is no team every team the registry holds. Exactly one match sends; several are
+  refused, each named by the `<nickname>@<team>` spelling that picks it; none points at
+  `team send --list`. A spec two roster entries answer — one seat's name and another seat's
+  nickname of the same team — is refused naming both, before anything is typed. Every form
+  resolves to one seat's registry record before admission runs, and admission judges that
+  record's seat: a nickname added or removed never changes who may reach whom. A full address
+  reaches another team from any folder — and from a folder that holds no team file, where that
+  send is the owner's — the receiving team's file judges it, and the drop lands under that
+  team's `.agents`; a bare name from a folder that is no team is refused with the forms that
+  need none. `lead` is reserved from this release on: no new seat and no nickname takes the
+  word, and a file written before it that declares a seat named `lead` still loads and answers
+  its bare name, `team check` noting the repair `team rename lead <new-name>`. A history line
+  keeps the address as written: where the caller wrote a form rather than the seat's name, it
+  carries `spec` and `resolved` (`agt_…`), and `team send --list` prints each seat's `NICKNAME`
+  — `-`, an `@<nickname>` in the file's own roster, a `<nickname>@<team>` in another's.
+
 - **Projects.** Entity, then project, then team, then seat. A team names its project in its team
   file, a team that names none is its own project, and a team two projects name is refused by
   `team check`, naming both. `team projects` lists the registry's projects — immutable id,
@@ -98,9 +123,38 @@ commands read them.
   label and the display line under it — are the file's own text, re-applied from the file by
   `team register` without a relaunch, and `team check` reports one that reads as neither.
 
+- **`team rename`, and the seat numbering.** `team rename <seat> <new-seat>` renames a seat in
+  the live team file and carries what the old name held: the file's references to it — the
+  `coordinator:` and `operator:` lines, a `grant:`'s `seat:` — the registry record under its
+  agent id, the herdr agent's name, its task leases, pending send-drops, mailbox messages (a
+  signature this machine can check is remade under the new name), its rules, queue and notes
+  files, the state's records and the message history, so nothing is left addressed to a name no
+  seat holds. Comments, order and every other seat stay as written: the edit is by the line,
+  never a rewrite of the file. `team rename --renumber [--dry-run]` rewrites every numbered seat
+  to the width and separator the `seat-numbering` setting in force asks for (`builder-1` →
+  `builder-01`), leaves a name with no number plain and skips a seat written with `count`; a dry
+  run prints each `from -> to (dry run)` and writes nothing. A seat number is read as a number,
+  so a roster naming the same role and number twice — `builder-1` beside `builder-01` — is
+  refused at load rather than left for an address to pick between. The owner or `leads` renames;
+  a target already declared, a target another seat's nickname holds, a counted seat renamed
+  partially and a name outside the seat grammar are each refused with the reason. A verified copy
+  of the file this machine still holds is carried across the rename where the renamed digests
+  match it, so a rename alone reports no drift.
+
 - **Three more launch profiles.** `grok`, `gemini` and `muse` join `claude-code`, `codex`,
   `cursor` and `antigravity`, each with its own screen reading, unattended flags, login check
-  where the CLI offers one, and tested range.
+  where the CLI offers one, and tested range. The Claude Code profile is tested with CLI
+  2.1.288 to 2.1.302.
+
+- **Jules as a pane seat.** `jules` joins the profiles with its 0.1.42 CLI: a send to a jules seat
+  still writes its drop file, and the body is typed through the CLI's own screens, so a new
+  remote session on the seat's own repo is the delivery. A seat sends only to the repo of its own
+  folder; when the account's repo list does not hold that repo, the send is refused with nothing
+  typed rather than sent elsewhere. The profile never deletes a session: a turn is ended with
+  `ctrl+c` alone, and every jules seat's rules carry `Never delete a Jules session.` herdr cannot
+  report a jules pane's agent, so the profile declares `herdr_status: unreliable` and the screen
+  is the reading — an idle session table is a free seat, a running card a working one — across
+  `status`, `check`, `watch`, `list` and `down`.
 
 - **Grants, and delegates, the owner's alone.** `team grant <seat> --scope <acts>` sets the team
   file's one grant — the seat the file's orchestrator marks, and the complete scope it may run; a
