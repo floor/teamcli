@@ -41,6 +41,14 @@ A process a seat recorded with `team proc add` shows too: one `note:` line per l
 notes. A record whose process has ended is not printed, and a team that recorded none shows no
 such line. `--json` carries the same reading as a `procs` array, absent when there is none.
 
+The watch the state records is one `note:` of its own, before the proc notes: `watch: pane <pane>,
+pid <n>, last heartbeat <age>` — where it runs, whose process it is once a pass has recorded one
+(`pid not recorded yet` in the moment between `up` and that first pass, `pane not recorded` for a
+watch that has not seen itself in a pane), and how old its last heartbeat is. When every seat is
+running and that heartbeat is older than two in-force intervals, the reading also carries the
+difference `the watch's last pass was <n> minute(s) ago`, repaired with `team watch --session
+<session>`, which starts the watch in its workspace again.
+
 ## Synopsis
 
     team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
@@ -209,6 +217,7 @@ budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
+note: watch: pane w9:p1, pid 4242, last heartbeat 0s ago
 difference: claude-keeper is in the file and is not running
   repair: team add claude-keeper
 1 difference(s)

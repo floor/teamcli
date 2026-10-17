@@ -84,7 +84,7 @@ describe('Codex launch and captured screens', () => {
   });
   test('the plan delivers the one line through the guarded path, never a config file', () => {
     const line = rulesLine('/home/owner/.config/team/demo-3f9c2a8e1d7b/rules/coder.md', '5e1d0a9c4b2f');
-    const plan = upPlan({ root: '.', session: 'scratch', sessionRunning: true, watchAlive: true,
+    const plan = upPlan({ root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
       seats: [{ name: 'coder', cli: 'codex', launch: 'codex', cwd: '.', label: 'coder', stopped: false, rules: 'Rules.',
         repairLine: '`team remove coder --keep` then `team add coder`',
         rulesFile: { path: '/home/owner/.config/team/demo-3f9c2a8e1d7b/rules/coder.md', line } }] });
@@ -94,7 +94,7 @@ describe('Codex launch and captured screens', () => {
     expect(plan.some((step) => step.do?.do === 'ready')).toBe(false);
   });
   test('a message seat whose rules file has no typeable path is refused before anything is typed', () => {
-    const plan = upPlan({ root: '.', session: 'scratch', sessionRunning: true, watchAlive: true,
+    const plan = upPlan({ root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
       seats: [{ name: 'coder', cli: 'codex', launch: 'codex', cwd: '.', label: 'coder', stopped: false, rules: 'Rules.',
         repairLine: '`team remove coder --keep` then `team add coder`',
         rulesRefusal: "its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -" }] });

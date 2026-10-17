@@ -94,7 +94,6 @@ function launch(): Launch {
     foreground: () => ['claude'],
     sleep: async () => {},
     now: () => NOW,
-    spawnWatch: () => 1,
   };
 }
 

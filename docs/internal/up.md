@@ -8,7 +8,7 @@ The lines that begin with `-` are as they stood there.
 ## Starting state: a stopped session, the lobby, trust
 
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
-declares and this machine can run, and the watch, started detached with no workspace. Seats already ready
+declares and this machine can run, and the watch, in a workspace of its own. Seats already ready
 are left as they are; a seat stopped in the file is left out until `team add` starts it. `--dry-run`
 prints the plan and runs nothing.
 
@@ -59,10 +59,10 @@ Reads the team file (or the one `--file` names), this machine's approval store, 
 (`.agents/team.state.json`, for each seat's stage), herdr (whether the session is up, its agents and
 workspaces), the doctor's findings, and the machine's load, free memory, free disk and free swap.
 Writes `.agents/team.state.json` (each seat's stage, pane, workspace and the CLI it was launched
-with; a waiting seat's classification, process identity and `manual` flag; the watch's pid and
+with; a waiting seat's classification, process identity and `manual` flag; the watch's pane, pid and
 heartbeat), `.agents/team.log`, the machine lobby folder
 (`~/.config/team/lobby`) every seat starts in, and, through herdr: the server, one workspace per seat
-each seat's launch, and the watch as a detached process. A real run holds the session mutator
+and one for the watch's pane, each seat's launch, and the watch. A real run holds the session mutator
 lock (`<state dir>/seat-locks/<session>/.run`), the one lock `up`, `add`, `down` and `remove`
 share, from before its first effect to its end — its first effect being the make of an absent
 lobby, itself under the lock, so two fresh runs cannot race their components. One session-mutating
@@ -650,8 +650,9 @@ $ team up --dry-run ; echo "exit $?"
 + herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
   skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
-+ 'team watch --session beacon'
-    (detached; the state records its pid)
++ herdr --session beacon workspace create --cwd . --label 'Watch · beacon' --no-focus
++ herdr --session beacon pane run <pane of Watch · beacon> 'team watch --session beacon'
+    (a desktop notification follows when the watch exits)
 dry run: nothing was run
 exit 0
 ```

@@ -17,6 +17,7 @@ import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { parseLoadavg, parseMeminfo, parseMemoryPressure, parseSwapUsage, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, NUDGE_TEXT, pass, RING_TEXT } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './helpers.ts';
@@ -471,7 +472,7 @@ describe('a pass of the watch', () => {
     const now = live({ 'claude-coordinator-acme': { screen: busy.replace('Opus 5.5', 'Fable 5.1') } });
     now.agents = now.agents.filter((one) => one.name !== 'deepseek-acme-2');
     now.agents.push(agent('stranger', 'w8', 'working'), agent(null, 'w9', 'working'));
-    now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: 'watchdog' });
+    now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: watchLabel('acme-web') });
     const texts = pass({ team: team(), watch: team().watch, state: emptySession(), live: now, machine: fine, now: 0, memory: newMemory() }).reports.map((report) => report.text);
     expect(texts).toEqual([
       'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)',

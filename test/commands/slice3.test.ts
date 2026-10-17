@@ -688,8 +688,11 @@ describe('team up', () => {
     expect(run.out).toContain('AGENT_UNATTENDED=1 codex -m gpt-6-sol -c model_reasoning_effort=high -a never -s danger-full-access');
     expect(run.out).toContain('pane send-text <pane of codex-acme>');
     expect(run.out).toContain('  skip grok-acme: stopped in the file; start it with `team add grok-acme`\n');
-    expect(run.out).toContain('detached; the state records its pid');
+    // The plan's last steps: the watch's own workspace, then its command in that pane.
+    expect(run.out).toContain(`+ herdr --session acme-web workspace create --cwd ${root} --label 'Watch · acme-web' --no-focus\n`);
+    expect(run.out).toContain("+ herdr --session acme-web pane run <pane of Watch · acme-web> '");
     expect(run.out).toContain('watch --session acme-web');
+    expect(run.out).toContain('    (a desktop notification follows when the watch exits)\n');
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 

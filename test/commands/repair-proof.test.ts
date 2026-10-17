@@ -16,6 +16,7 @@ import { readState } from '../../src/state.ts';
 import { upFingerprint, OWNER_APPROVAL_ENV } from '../../src/approve/owner-token.ts';
 import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { readScreen } from '../../src/watch/screen.ts';
+import { watchLabel } from '../../src/watch/pane.ts';
 import { CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
@@ -170,7 +171,7 @@ function table() {
       const id = `w${n}`;
       const pane = `${id}:p1`;
       panes.set(pane, { text: IDLE, agent: false, name: null });
-      if (label === 'watchdog') scripts.add(pane);
+      if (label === watchLabel(SESSION)) scripts.add(pane);
       spaces.set(id, label);
       created.push(label);
       return { pane, workspace: id };

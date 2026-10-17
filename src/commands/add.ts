@@ -54,6 +54,7 @@ import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
+import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
 
@@ -626,6 +627,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
           }],
           watchAlive: true,
           cliHooks: plannedCliHooks(dir, [planned]),
+          watchLabel: watchLabel(prepared.team.project),
         });
         out.stdout(plainText(formatPlan(preview)));
       } else {
@@ -725,6 +727,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       seats: [seatForPlan],
       watchAlive: true,
       cliHooks: plannedCliHooks(dir, [seatForPlan]),
+      watchLabel: watchLabel(prepared.team.project),
     });
     out.stdout(plainText(formatPlan(preview)));
     // exit: add.dry-run
@@ -800,7 +803,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, cliHooks: installed });
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, [planSeat.name]);
     const host = hostOf({
