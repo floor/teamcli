@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 import { runGrant } from '../../src/commands/grant.ts';
 import { runRevoke } from '../../src/commands/revoke.ts';
 import { grantsDir } from '../../src/grant.ts';
-import { activeGrants, covers, readGrants } from '../../src/permissions/grants.ts';
+import { activeGrants, covers, readGrants, writeGrant } from '../../src/permissions/grants.ts';
 import { registerAgent } from '../../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
 import { testIo, type TestIo } from '../helpers.ts';
@@ -391,5 +391,61 @@ describe('team revoke <name> appends the revocation record', () => {
     expect(await runRevoke([name], io, { home: place.home })).toBe(2);
     expect(io.err).toStartWith('team revoke: ');
     expect(readGrants(place.home).revocations).toEqual([]);
+  });
+
+  test('a revocation whose record name another grant holds is refused, naming the rule, and neither grant is touched', async () => {
+    const place = folder();
+    const id = agentOf(place, 'helper');
+    const name = `seat-${id}`;
+    expect(await runGrant(['helper', '--capabilities', 'gate'], owner(place), { home: place.home })).toBe(0);
+    // Another grant's file already holds the name this revocation would take.
+    const clash = writeGrant(place.home, {
+      name: `revoke-${name}`,
+      kind: 'seat',
+      grantee: id,
+      capabilities: ['read'],
+      scope: ['~/Code/acme'],
+      roots: ['~/Code/acme'],
+    });
+    expect(clash.ok).toBe(true);
+    const grantFile = join(grantsDir(place.home), `${name}.json`);
+    const clashFile = join(grantsDir(place.home), `revoke-${name}.json`);
+    const grantBefore = fs.readFileSync(grantFile);
+    const clashBefore = fs.readFileSync(clashFile);
+
+    const io = owner(place);
+    expect(await runRevoke([name], io, { home: place.home })).toBe(2);
+    expect(io.err).toStartWith('team revoke: ');
+    expect(io.err).toContain('a separate record');
+    expect(io.err).toContain('never writes over');
+    expect(io.out).toBe('');
+    expect(fs.readFileSync(grantFile).equals(grantBefore)).toBe(true);
+    expect(fs.readFileSync(clashFile).equals(clashBefore)).toBe(true);
+    expect(readGrants(place.home).revocations).toEqual([]);
+    expect(activeGrants(place.home, new Date())).toHaveLength(2);
+  });
+
+  test('a revocation the folder refuses to take is refused loudly and leaves the grant byte-identical', async () => {
+    const place = folder();
+    const id = agentOf(place, 'helper');
+    const name = `seat-${id}`;
+    expect(await runGrant(['helper', '--capabilities', 'gate'], owner(place), { home: place.home })).toBe(0);
+    const grantFile = join(grantsDir(place.home), `${name}.json`);
+    const before = fs.readFileSync(grantFile);
+
+    // The folder takes no new file: the write fails, and the command reports it, never a success.
+    fs.chmodSync(grantsDir(place.home), 0o500);
+    try {
+      const io = owner(place);
+      expect(await runRevoke([name], io, { home: place.home })).toBe(1);
+      expect(io.out).toBe('');
+      expect(io.err).toStartWith('team revoke: ');
+      expect(io.err).toMatch(/EACCES|permission denied/);
+      expect(fs.readFileSync(grantFile).equals(before)).toBe(true);
+      expect(readGrants(place.home).revocations).toEqual([]);
+      expect(activeGrants(place.home, new Date())).toHaveLength(1);
+    } finally {
+      fs.chmodSync(grantsDir(place.home), 0o700);
+    }
   });
 });
