@@ -263,6 +263,183 @@ describe('the watch reads a seat\'s figures onto its own account', () => {
       { account: 'openai-work', seat: 'codex-temp', left: 12 },
     ]);
   });
+
+  test('a pattern for another lab is not folded under either account, while a matching vendor or account is', () => {
+    const withDeepseek = TEAM
+      .replace(
+        '  accounts:\n',
+        '  accounts:\n    deepseek: { kind: subscription, reserve: 10%, sources: [status_line] }\n',
+      )
+      .replace(
+        'budgets:\n',
+        [
+          '  - role: implementer',
+          '    name: deepseek-acme',
+          '    label: deepseek-acme',
+          '    cli: claude-code',
+          '    vendor: deepseek',
+          '    model: DeepSeek Reasoner',
+          '    version: "3.2"',
+          '    launch: claude-deepseek.sh',
+          '  - role: implementer',
+          '    name: codex-deepseek',
+          '    label: codex-deepseek',
+          '    cli: codex',
+          '    vendor: deepseek',
+          '    model: DeepSeek Reasoner',
+          '    version: "3.2"',
+          '    launch: team-deepseek',
+          '  - role: implementer',
+          '    name: codex-anthropic',
+          '    label: codex-anthropic',
+          '    cli: codex',
+          '    vendor: anthropic',
+          '    model: Claude Opus',
+          '    version: "5.5"',
+          '    launch: codex',
+          'budgets:',
+          '',
+        ].join('\n'),
+      );
+    const rule = '─'.repeat(40);
+    const claudeScreen = (used: number) =>
+      `✶ Transfiguring… (9m 34s · ↓ 64.5k tokens)\n\n${rule}\n❯ \n${rule}\n  main · …/acme · Opus 5.5 · S: $1.2 · W: ${used}%\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n`;
+    const statusScreen = (used: number, left: number) =>
+      `• Working (2m 10s • esc to interrupt)\n\n  GPT-5.6-Terra medium · L: 13% (44m) · W: ${used}% · weekly ${left}% left\n`;
+    const anthropicPattern = {
+      account: 'anthropic',
+      window: 'weekly' as const,
+      match: /W: (\d{1,3})%/,
+      side: 'used' as const,
+      figure: '{1}%',
+      resets: null,
+    };
+    const codexPattern = {
+      account: 'openai',
+      window: 'weekly' as const,
+      match: /weekly (\d{1,3})% left/,
+      side: 'left' as const,
+      figure: '{1}%',
+      resets: null,
+    };
+    const workSessionPattern = {
+      account: 'openai-work',
+      window: 'session' as const,
+      match: /L: (\d{1,3})%/,
+      side: 'used' as const,
+      figure: '{1}%',
+      resets: null,
+    };
+    const state: SessionState = emptySession();
+    state.seats['deepseek-temp'] = {
+      stage: 'ready',
+      temporary: { like: 'deepseek-acme', until: 'result:briefs/x.result.md' },
+    };
+    state.seats['codex-deepseek-temp'] = {
+      stage: 'ready',
+      temporary: { like: 'codex-deepseek', until: 'result:briefs/y.result.md' },
+    };
+    state.seats['codex-work-temp'] = {
+      stage: 'ready',
+      temporary: { like: 'codex-work', until: 'result:briefs/z.result.md' },
+    };
+
+    // Only the DeepSeek seats and their temporary like-seats run: none records under anthropic, openai or deepseek.
+    const foreignOnly = pass({
+      team: team(withDeepseek),
+      watch: team(withDeepseek).watch,
+      state,
+      live: live({
+        'deepseek-acme': claudeScreen(12),
+        'deepseek-temp': claudeScreen(25),
+        'codex-deepseek': statusScreen(12, 39),
+        'codex-deepseek-temp': statusScreen(25, 45),
+      }),
+      machine: fine,
+      now: NOW,
+      memory: newMemory(),
+      approval: [],
+      foreground: { 'w0:p1': ['claude'], 'w1:p1': ['claude'], 'w2:p1': ['codex'], 'w3:p1': ['codex'] },
+      quotaFor: (cli) => (cli === 'claude-code' ? [anthropicPattern] : [anthropicPattern, codexPattern]),
+    });
+    expect(foreignOnly.readings).toEqual([]);
+    expect(foreignOnly.machineReadings).toEqual([]);
+
+    // Alongside an Anthropic seat and the Codex seat on openai-work (plus its temporary like-seat):
+    // only the matching vendor/account figures record, and each foreign figure on the same row is dropped.
+    const mixed = pass({
+      team: team(withDeepseek),
+      watch: team(withDeepseek).watch,
+      state,
+      live: live({
+        'deepseek-acme': claudeScreen(30),
+        'codex-deepseek': statusScreen(30, 50),
+        'codex-anthropic': statusScreen(12, 50),
+        'codex-work': statusScreen(30, 39),
+        'codex-work-temp': CODEX(15),
+      }),
+      machine: fine,
+      now: NOW,
+      memory: newMemory(),
+      approval: [],
+      foreground: {
+        'w0:p1': ['claude'],
+        'w1:p1': ['codex'],
+        'w2:p1': ['codex'],
+        'w3:p1': ['codex'],
+        'w4:p1': ['codex'],
+      },
+      quotaFor: (cli) => (cli === 'claude-code' ? [anthropicPattern] : [anthropicPattern, codexPattern, workSessionPattern]),
+    });
+    expect(mixed.readings.map(({ account, window, seat, left }) => ({ account, window, seat, left }))).toEqual([
+      { account: 'openai-work', window: 'weekly', seat: 'codex-work', left: 39 },
+      { account: 'openai-work', window: 'session', seat: 'codex-work', left: 87 },
+      { account: 'anthropic', window: 'weekly', seat: 'codex-anthropic', left: 88 },
+      { account: 'openai-work', window: 'weekly', seat: 'codex-work-temp', left: 15 },
+    ]);
+  });
+
+  test('an override status_line pattern naming an unrelated account is ignored by pass(), while backing vendor or paying account patterns fold under payer', () => {
+    const makePattern = (account: string, window: 'session' | 'daily' | 'weekly' = 'weekly') => ({
+      account,
+      window,
+      match: /weekly (\d+)% left/,
+      side: 'left' as const,
+      figure: '{1}%',
+      resets: null,
+    });
+
+    const resultUnrelated = pass({
+      team: team(),
+      watch: team().watch,
+      state: emptySession(),
+      live: live({ 'codex-work': CODEX(39) }),
+      machine: fine,
+      now: NOW,
+      memory: newMemory(),
+      approval: [],
+      foreground: { 'w0:p1': ['codex'] },
+      quotaFor: () => [makePattern('unrelated-account')],
+    });
+    expect(resultUnrelated.readings).toEqual([]);
+
+    const resultPayer = pass({
+      team: team(),
+      watch: team().watch,
+      state: emptySession(),
+      live: live({ 'codex-work': CODEX(39) }),
+      machine: fine,
+      now: NOW,
+      memory: newMemory(),
+      approval: [],
+      foreground: { 'w0:p1': ['codex'] },
+      quotaFor: () => [makePattern('openai'), makePattern('openai-work', 'daily')],
+    });
+    expect(resultPayer.readings.map(({ account, window, seat, left }) => ({ account, window, seat, left }))).toEqual([
+      { account: 'openai-work', window: 'weekly', seat: 'codex-work', left: 39 },
+      { account: 'openai-work', window: 'daily', seat: 'codex-work', left: 39 },
+    ]);
+  });
 });
 
 // A seat the owner has not approved is drift: the watch reports the difference, and the figures
