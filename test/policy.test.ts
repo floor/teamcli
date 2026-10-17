@@ -1186,4 +1186,115 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(expiredDevChain.policies['dev-mode']?.level).toBe('default');
     }
   });
+
+  test('scene: unsigned legacy delivery_order loosening a signed project policy points repair at .agents/team.yaml with who: the team’s lead, and a signed entry shadowing a legacy line emits a note', () => {
+    const fx = makeFixture();
+    try {
+      // Signed project policy delivery-order [typed]
+      const wroteProject = writePolicySet(
+        fx.home,
+        {
+          level: 'project',
+          target: 'beacon',
+          name: 'delivery-order',
+          value: ['typed'],
+        },
+        { now: NOW },
+      );
+      expect(wroteProject.ok).toBe(true);
+
+      // Team file carries legacy delivery_order: [native, typed]
+      const teamYamlPath = join(fx.root, '.agents', 'team.yaml');
+      const baseYaml = readFileSync(teamYamlPath, 'utf8');
+      writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [native, typed]\n`);
+
+      let out1 = '';
+      let err1 = '';
+      const io1: Io = {
+        stdout: (t: string) => void (out1 += t),
+        stderr: (t: string) => void (err1 += t),
+        cwd: fx.root,
+        env: {},
+        stdinIsTTY: false,
+        caller: { kind: 'owner' },
+      };
+      const code1 = runTeamCheck({ file: '.agents/team.yaml' }, io1, {
+        live: () => QUIET_LIVE,
+        branch: () => 'main',
+        standing: (at) => approvalStanding(at, fx.home),
+        now: () => NOW,
+        home: fx.home,
+      });
+      expect(code1).toBe(1);
+      expect(err1).toBe('');
+      expect(out1).toContain(
+        'difference: policy "delivery-order" at level team ("native, typed") loosens level project ("typed")\n' +
+          '  repair: remove or narrow delivery_order in .agents/team.yaml\n' +
+          "  who: the team's lead\n",
+      );
+      expect(out1).toContain('1 difference(s)\n');
+      expect(out1).not.toContain('for the owner');
+
+      // Apply the printed repair: remove delivery_order from .agents/team.yaml, then check is clean.
+      writeFileSync(teamYamlPath, baseYaml);
+      let out2 = '';
+      const io2: Io = {
+        stdout: (t: string) => void (out2 += t),
+        stderr: () => {},
+        cwd: fx.root,
+        env: {},
+        stdinIsTTY: false,
+        caller: { kind: 'owner' },
+      };
+      const code2 = runTeamCheck({ file: '.agents/team.yaml' }, io2, {
+        live: () => QUIET_LIVE,
+        branch: () => 'main',
+        standing: (at) => approvalStanding(at, fx.home),
+        now: () => NOW,
+        home: fx.home,
+      });
+      expect(code2).toBe(0);
+      expect(out2).toContain('0 difference(s)\n');
+
+      // When a signed team entry shadows a legacy delivery_order line in the same file, check shows a note naming the shadowed line.
+      writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [native, typed]\n`);
+      const wroteTeam = writePolicySet(
+        fx.home,
+        {
+          level: 'team',
+          target: fx.teamId,
+          teamRoot: fx.root,
+          name: 'delivery-order',
+          value: ['typed'],
+        },
+        { now: NOW },
+      );
+      expect(wroteTeam.ok).toBe(true);
+
+      let out3 = '';
+      const io3: Io = {
+        stdout: (t: string) => void (out3 += t),
+        stderr: () => {},
+        cwd: fx.root,
+        env: {},
+        stdinIsTTY: false,
+        caller: { kind: 'owner' },
+      };
+      const code3 = runTeamCheck({ file: '.agents/team.yaml' }, io3, {
+        live: () => QUIET_LIVE,
+        branch: () => 'main',
+        standing: (at) => approvalStanding(at, fx.home),
+        now: () => NOW,
+        home: fx.home,
+      });
+      expect(code3).toBe(0);
+      expect(out3).toContain(
+        'note: delivery_order [native, typed] in .agents/team.yaml is shadowed by the signed team delivery-order policy; remove delivery_order from .agents/team.yaml so team policy unset does not bring it back\n',
+      );
+      expect(out3).toContain('0 difference(s)\n');
+    } finally {
+      fx.cleanup();
+    }
+  });
 });
+

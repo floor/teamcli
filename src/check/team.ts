@@ -45,7 +45,13 @@ import {
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { rosterOf } from '../permissions/who.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
-import { loadAndResolvePolicyChain, type PolicyLoadRefusal } from '../policy/index.ts';
+import {
+  loadAndResolvePolicyChain,
+  readProjectPolicySource,
+  readSeatPolicySource,
+  readTeamPolicySource,
+  type PolicyLoadRefusal,
+} from '../policy/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
@@ -794,15 +800,20 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
  */
 function deliveryOrderDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
   let projectOrder: readonly DeliveryLeg[] | undefined;
+  let signedTeamOrder = false;
   if (home !== undefined) {
     try {
       projectOrder = ofTeam(home, teamIdOf(root))?.deliveryOrder;
     } catch {
       projectOrder = undefined;
     }
+    const teamSource = readTeamPolicySource(home, root, team);
+    if (teamSource.ok && teamSource.policies.some((p) => p.name === 'delivery-order' && p.setter === 'owner')) {
+      signedTeamOrder = true;
+    }
   }
   const out: Difference[] = [];
-  if (team.deliveryOrder !== null) {
+  if (team.deliveryOrder !== null && !signedTeamOrder) {
     const res = resolveOrderSetting(
       DELIVERY_ORDER,
       orderDeclarationsOf<DeliveryLeg>({
@@ -824,7 +835,7 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
       DELIVERY_ORDER,
       orderDeclarationsOf<DeliveryLeg>({
         ...(projectOrder !== undefined ? { project: projectOrder } : {}),
-        ...(team.deliveryOrder ? { team: team.deliveryOrder } : {}),
+        ...(!signedTeamOrder && team.deliveryOrder ? { team: team.deliveryOrder } : {}),
         seat: seat.deliveryOrder,
       }),
     );
@@ -912,6 +923,12 @@ function deprecationRepairOf(message: string, shownFile: string): string | undef
 }
 
 function policyRefusalRepair(refusal: PolicyLoadRefusal, seatName?: string): string {
+  if ((refusal.kind === 'loosening' || refusal.kind === 'invalid-policy') && refusal.unsigned === true) {
+    if (seatName) {
+      return `remove or narrow delivery_order for ${seatName} in .agents/team.yaml`;
+    }
+    return 'remove or narrow delivery_order in .agents/team.yaml';
+  }
   const seatFlag = seatName ? ` --seat ${seatName}` : '';
   if (refusal.kind === 'loosening') {
     return `team policy unset ${refusal.lowerLevel} ${refusal.policy}${seatFlag}`;
@@ -930,7 +947,10 @@ function policyRefusalRepair(refusal: PolicyLoadRefusal, seatName?: string): str
  * Policy chain verification and `dev-mode` migration notice (Kernel Amendment 02, Gap 6 & Gap 7):
  * - Reads and resolves the policy chain (`entity → project → team`, plus each registered `seat`).
  * - Any unreadable/unverified source, invalid policy, or load-time loosening refusal is reported
- *   as an owner difference with a `team policy unset` repair.
+ *   as an owner difference with a `team policy unset` repair (or, when the loosening declaration
+ *   is an unsigned legacy field in `.agents/team.yaml`, a lead file-edit repair).
+ * - When a signed policy entry shadows a legacy `delivery_order:` line in the same file, emits a
+ *   note naming the shadowed line so `team policy unset` does not silently bring it back.
  * - While no `dev-mode` policy is set in the chain (`devModeGoverned === false`) and
  *   `TEAMCLI_DEV_MODE=1` is set in the environment, emits the one migration note.
  */
@@ -952,12 +972,16 @@ function policyCheck(
   }
 
   let projectId: string | null = null;
+  let legacyProjectDeliveryOrder: readonly DeliveryLeg[] | undefined;
   try {
     const byTeam = ofTeam(home, teamIdOf(root));
     if (byTeam) {
       projectId = byTeam.id ?? null;
+      legacyProjectDeliveryOrder = byTeam.deliveryOrder;
     } else if (team.inProject) {
-      projectId = byName(home, team.inProject)?.id ?? projectIdOf(team.inProject);
+      const proj = byName(home, team.inProject);
+      projectId = proj?.id ?? projectIdOf(team.inProject);
+      legacyProjectDeliveryOrder = proj?.deliveryOrder;
     } else {
       projectId = projectIdOf(team.project);
     }
@@ -967,6 +991,30 @@ function policyCheck(
 
   const legacyDeliveryDiffs = deliveryOrderDifferences(team, root, home);
   const differences: Difference[] = [];
+  const notes: string[] = [];
+
+  const projectSource = readProjectPolicySource(home, projectId);
+  if (
+    projectSource.ok &&
+    projectSource.policies.some((p) => p.name === 'delivery-order' && p.setter === 'owner') &&
+    legacyProjectDeliveryOrder !== undefined
+  ) {
+    notes.push(
+      `delivery_order [${legacyProjectDeliveryOrder.join(', ')}] in ~/.config/team/projects.yaml is shadowed by the signed project delivery-order policy; remove delivery_order from ~/.config/team/projects.yaml so team policy unset does not bring it back`,
+    );
+  }
+
+  const teamSource = readTeamPolicySource(home, root, team);
+  if (
+    teamSource.ok &&
+    teamSource.policies.some((p) => p.name === 'delivery-order' && p.setter === 'owner') &&
+    team.deliveryOrder !== null
+  ) {
+    notes.push(
+      `delivery_order [${team.deliveryOrder.join(', ')}] in .agents/team.yaml is shadowed by the signed team delivery-order policy; remove delivery_order from .agents/team.yaml so team policy unset does not bring it back`,
+    );
+  }
+
   const teamChain = loadAndResolvePolicyChain(
     {
       home,
@@ -988,10 +1036,12 @@ function policyCheck(
       ) {
         continue;
       }
+      const isUnsigned =
+        (refusal.kind === 'loosening' || refusal.kind === 'invalid-policy') && refusal.unsigned === true;
       differences.push({
         what: refusal.message,
         repair: policyRefusalRepair(refusal),
-        owner: true,
+        ...(isUnsigned ? {} : { owner: true }),
       });
     }
   }
@@ -1004,7 +1054,17 @@ function policyCheck(
     } catch {
       agentId = null;
     }
-    if (!agentId) continue;
+    if (!agentId && seat.deliveryOrder === undefined) continue;
+    const seatSource = readSeatPolicySource(home, agentId, seat);
+    if (
+      seatSource.ok &&
+      seatSource.policies.some((p) => p.name === 'delivery-order' && p.setter === 'owner') &&
+      seat.deliveryOrder !== undefined
+    ) {
+      notes.push(
+        `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in .agents/team.yaml is shadowed by the signed seat delivery-order policy; remove delivery_order for ${seat.name} from .agents/team.yaml so team policy unset does not bring it back`,
+      );
+    }
     const seatChain = loadAndResolvePolicyChain(
       {
         home,
@@ -1030,16 +1090,17 @@ function policyCheck(
         ) {
           continue;
         }
+        const isUnsigned =
+          (refusal.kind === 'loosening' || refusal.kind === 'invalid-policy') && refusal.unsigned === true;
         differences.push({
           what: `${seat.name}: ${refusal.message}`,
           repair: policyRefusalRepair(refusal, seat.name),
-          owner: true,
+          ...(isUnsigned ? {} : { owner: true }),
         });
       }
     }
   }
 
-  const notes: string[] = [];
   const expiredDevMode = teamChain.expired.filter((exp) => exp.name === 'dev-mode').at(-1);
   if (expiredDevMode && (!teamChain.ok || teamChain.policies['dev-mode']?.value === 'off')) {
     notes.push(`dev-mode expired at ${expiredDevMode.expiry ?? 'now'} for ${expiredDevMode.level}; off since`);
