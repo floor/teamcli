@@ -5,7 +5,7 @@
 // Fake herdr, a temporary home and a pinned caller: no live session is read.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
@@ -210,6 +210,19 @@ describe('registering an unnamed pane with --pane', () => {
 
   test('is refused when another seat\'s record already holds the pane', async () => {
     const w = world();
+    // The file declares the seat whose record holds the pane, so the record really is another
+    // seat's. (A record for a seat the file no longer declares holds nothing — the file is the
+    // truth; `test/state-departed-seats.test.ts` reads that side.)
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, `${readFileSync(file, 'utf8')}  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`);
     const calls: string[] = [];
     updateState(w.dir, (state) => {
       (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'w2:p2' };

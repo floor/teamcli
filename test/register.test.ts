@@ -332,8 +332,20 @@ describe('a pane herdr does not place as that seat', () => {
 describe('a pane another seat of the session holds', () => {
   test('is refused on a run without --pane: one pane is one seat\'s', async () => {
     const w = world();
-    // Herdr answers to `lead` on the pane `worker`'s record still holds — a pane renamed in
-    // herdr while the old record stayed. Recording it here would hold one pane for two seats.
+    // The file declares the seat whose record holds the pane: herdr answers to `lead` on it — a
+    // pane renamed in herdr while the other seat's record stayed. Recording it here would hold
+    // one pane for two seats. (A record for a seat the file does NOT declare holds nothing: the
+    // file is the truth, and `test/state-departed-seats.test.ts` reads that side.)
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, `${readFileSync(file, 'utf8')}  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`);
     updateState(w.dir, (state) => {
       (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: PANE };
     });
