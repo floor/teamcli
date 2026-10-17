@@ -20,7 +20,7 @@ import {
   type Caller,
   type SeatStanding,
 } from '../caller.ts';
-import { devMode, devModeCallerGate, logDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
@@ -187,6 +187,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     ? { ...judgeCallerOf(io, args.values.session === 'default' ? undefined : args.values.session), session: args.values.session }
     : judgeCallerIn(io, dir, team, verdictOf);
   const { caller, shown, session } = judged;
+  // Dev mode, from the file this run restarts against: a `dev-mode` value anywhere in the
+  // caller's chain governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the
+  // variable set to exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  const dev = resolveDevMode('restart', io, { home: sources.home, team, root, now: sources.now() });
+  if (!dry) logDevModeState(dir, 'restart', describeCaller(caller), dev, sources.now());
+  let devFolded = false;
   if (session === 'default') {
     return callerRefused(out, 'session can\'t be "default", herdr\'s own session');
   }
@@ -210,8 +216,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       : mayChange.kind === 'refused' ? `only the owner or \`leads\` restarts a seat; this call is ${plainLine(describeCaller(shown))}`
         : null;
   if (mayRun !== null) {
-    const folded = devModeCallerGate('restart', io, mayRun);
+    const folded = devModeCallerGate(dev, mayRun);
     if (folded !== null) {
+      devFolded = true;
       if (dry) out.stdout(`! ${folded}\n`);
       else {
         out.stderr(`team restart: ${plainText(folded)}\n`);
@@ -424,7 +431,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       seat: declared,
       caller: who,
       owner: caller.kind === 'owner',
-      devMode: devMode(io),
+      devMode: devModeMark(dev, devFolded),
       now: sources.now,
       launch: sources.upLaunch,
       readMachine: sources.machine,

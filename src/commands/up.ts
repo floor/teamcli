@@ -7,7 +7,7 @@ import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
-import { devMode, logDevMode } from '../dev_mode.ts';
+import { devModeLevelNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
@@ -636,8 +636,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     return 2;
   }
   const dry = args.flags.has('dry-run');
-  // Set to exactly `1`. Anything else, including unset, leaves every refusal where it is.
-  const dev = devMode(io);
   // §RFC0007: a caller the ordinary rule refuses is judged by the delegate gate against the
   // DEFAULT live file of this cwd, read with no flag — before any `--file` or `--session` is
   // honoured. Both are the owner's alone: the gate refuses them for a delegated run, and a
@@ -655,6 +653,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // or the token. The refusal is one sentence, on the dry run and the real run.
   const detached = detachedRefusal(walked);
   const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : loadTeamFile(io.cwd, { home: sources.home });
+  // Dev mode, as the default live file's chain states it: this folder's own file is the caller's
+  // place, never a file the caller names. The aimed branch below decides before that file is
+  // mounted, so it reads this verdict; the run's own, after the load, is the one every later
+  // line uses (`dev`). An owner's `--file` therefore cannot carry a laxer policy in with it.
+  const aimedDev = resolveDevMode('up', io, {
+    home: sources.home,
+    team: defaultLoad !== null && defaultLoad.ok ? defaultLoad.team : null,
+    root: defaultLoad !== null && defaultLoad.ok ? defaultLoad.root : null,
+    now: sources.now?.() ?? new Date(),
+  });
   // A non-owner passing `--session`, or a `--file` other than this folder's own team file, is
   // refused before the map is walked for this run: the aim is the owner's, the walk reads a
   // session and asks the host, and the flagged path and the named session are never read. The
@@ -720,7 +728,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // One return answers both runs: a real one with the bare word, a dry one never denied but told
     // the reason and the owner's own command. Either way the flagged file stays unread, so the dry
     // run prints no plan for it.
-    if (gates.verdict === null && !dev) {
+    if (gates.verdict === null && !aimedDev.on) {
       if (dry) {
         out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}\n`);
         out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
@@ -803,6 +811,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // no longer waits behind the first lobby.
   const teamLobby = lobbyOf(sources.home, root, { ...team, session });
   const dir = dirname(loaded.path);
+  // The run's own dev mode, from the file it mounts: a policy value anywhere in the caller's
+  // chain governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value, the variable
+  // set to exactly `1` keeps its behaviour. Only the caller gate is ever folded (below).
+  const dev = resolveDevMode('up', io, { home: sources.home, team, root, now: sources.now?.() ?? new Date() });
+  // The configuration lines the run owes once: the variable ignored under a governing policy,
+  // and a policy source that could not be read or ordered. Written before any refusal returns,
+  // and never by a dry run.
+  if (!dry) logDevModeState(dir, 'up', callerLabel(caller), dev, sources.now?.() ?? new Date());
   let state = resolveState(sources, session);
   // A stopped session this team's state records is cleared under the run lock, then started.
   // The plan below is built as for an absent session. One the state does not record is refused,
@@ -849,13 +865,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   } else if (!named) {
     // Dev mode mounts and says the placement as a warning; a dry run says it beside the plan it
     // would refuse. Anyone else is denied, and the bare word is the whole answer.
-    if (!dev && !dry) return denyUp(out);
+    if (!dev.on && !dry) return denyUp(out);
     refusals.push(placementRefusal(caller));
   }
   // The live file is the record. A verified copy that no longer matches is not a refusal.
   // A legacy or refused record still is: its text is the case, and dev mode warns instead.
   if (standing.kind === 'none') {
-    if (dev) refusals.push(notInForce(standing));
+    if (dev.on) refusals.push(notInForce(standing));
   } else if (standing.kind !== 'verified') refusals.push(notInForce(standing));
   // The budget readings the gate refuses on are the live file's own: a standing that is not
   // verified names no account at all, not even for a dry run's plan.
@@ -868,7 +884,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const findings = doctorFindings(team, root, dir, session, sources.doctor, loaded.warnings, standing);
     for (const finding of findings) {
       if (!blocksLaunch(finding)) continue;
-      if (!dev && (finding.text.includes('team approve') || finding.text.includes('never approved'))) continue;
+      if (!dev.on && (finding.text.includes('team approve') || finding.text.includes('never approved'))) continue;
       if (finding.text.includes(' is read at start by ')) startupReadRefusals.push(finding.text);
       else refusals.push(finding.text);
     }
@@ -1189,8 +1205,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   };
 
   // Dev mode says the no-approval lines and the caller-placement line once, as a warning,
-  // and mounts. Every other refusal stays a refusal. Unset, the list is unchanged.
-  const warning = dev ? devWarningLine(refusals, standing, caller) : '';
+  // and mounts. Every other refusal stays a refusal. Unset, the list is unchanged. A policy
+  // says which level set it.
+  const warning = dev.on ? `${devWarningLine(refusals, standing, caller)}${devModeLevelNote(dev)}` : '';
   // The audit line the fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
   if (!dry && warning) logDevMode(dir, 'up', callerLabel(caller), `warning: ${warning}`, sources.now?.() ?? new Date());
@@ -1645,7 +1662,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // else's write in force leaves the mark for the owner.
     for (const note of registerRun(
       {
-        home: sources.home, team, root, by: callerLabel(caller), session, devMode: dev, owner: caller.kind === 'owner',
+        home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning !== ''), owner: caller.kind === 'owner',
         // The delegation this run was admitted by, on the record it writes: the owner as signer,
         // the gate's pane as actor, the one command `up` — never the pane as signer.
         ...(delegated === null ? {} : { delegated: { actor: delegated, command: 'up' as const } }),

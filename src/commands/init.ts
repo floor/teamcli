@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { devModeCallerGate, logDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { TEAM_FILE, findRoot, loadTeamFile } from '../file/load.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
@@ -172,13 +172,20 @@ export async function runInit(
     // exit: init.detached
     return 1;
   }
-  // The who-may-run-it gate: set to exactly `1`, dev mode says the owner line once, as a
-  // warning, and the run continues — exactly as `up` does. Every other refusal stays a
-  // refusal. The warning is logged where the run knows the folder it writes in.
+  // Dev mode, from the caller's place: the entity's chain, read before the team file this run
+  // writes exists. A `dev-mode` value anywhere in it governs, and `TEAMCLI_DEV_MODE` is then
+  // ignored; before any such value, the variable set to exactly `1` keeps its behaviour.
+  const dev = resolveDevMode('init', io, {
+    ...(home !== undefined ? { home } : {}),
+    now: sources.now?.() ?? new Date(),
+  });
+  // The who-may-run-it gate: dev mode says the owner line once, as a warning, and the run
+  // continues — exactly as `up` does. Every other refusal stays a refusal. The warning is
+  // logged where the run knows the folder it writes in.
   let devOwnerLine: string | null = null;
   if (!isOwner(caller) && !createGranted) {
     const ownerLine = `only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-    const folded = devModeCallerGate('init', io, ownerLine);
+    const folded = devModeCallerGate(dev, ownerLine);
     if (folded === null) {
       io.stderr(`team init: ${ownerLine}\n`);
       // exit: init.not-owner
@@ -195,6 +202,7 @@ export async function runInit(
   }
   const path = join(root, TEAM_FILE);
   if (devOwnerLine !== null) logDevMode(dirname(path), 'init', describeCaller(caller), devOwnerLine, sources.now?.());
+  logDevModeState(dirname(path), 'init', describeCaller(caller), dev, sources.now?.());
   if (git(root, 'ls-files', '--error-unmatch', TEAM_FILE) !== null) {
     io.stderr(`team init: ${TEAM_FILE} is tracked by git, and a team file is private. Untrack it, keeping the file:\n  git rm --cached ${TEAM_FILE}\nthen run team init again. History is not rewritten.\n`);
     // exit: init.tracked

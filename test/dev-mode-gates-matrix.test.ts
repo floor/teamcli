@@ -20,10 +20,12 @@ import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
-import { DEV_MODE_COMMANDS } from '../src/dev_mode.ts';
+import { runReload, type ReloadSources } from '../src/commands/reload.ts';
+import { resolveDevMode, DEV_MODE_COMMANDS } from '../src/dev_mode.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { readState } from '../src/state.ts';
 import type { Screen } from '../src/watch/screen.ts';
@@ -33,10 +35,11 @@ const IDLE = CLAUDE_IDLE;
 const NOW = new Date('2026-10-15T12:00:00Z');
 const UNPLACED = { kind: 'unplaced' as const, reason: 'it runs under herdr' };
 
-test('the dev-mode scope is one list: exactly these seven commands', () => {
-  // The one place the scope is written (`src/dev_mode.ts`). A command added here is a caller
-  // gate dev mode folds; a command left off stays owner-only in every mode.
-  expect([...DEV_MODE_COMMANDS]).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init']);
+test('the dev-mode scope is one list: exactly these eight commands', () => {
+  // The one place the scope is written (`src/policy/types.ts`, re-exported by `src/dev_mode.ts`).
+  // A command added here is a caller gate dev mode folds; a command left off stays owner-only in
+  // every mode.
+  expect([...DEV_MODE_COMMANDS]).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init', 'reload']);
 });
 
 let dirs: string[] = [];
@@ -622,4 +625,120 @@ describe('the owner-only edits are not dev-mode gates', () => {
     expect(await runApprove([], on, sources())).toBe(1);
     expect(on.err).toBe(off.err);
   });
+});
+
+// --- the policy, and the variable it retires --------------------------------------------------
+// Once a `dev-mode` value is set anywhere in the caller's chain, it governs: `on` lifts the
+// caller gate with the level that set it, `off` refuses as unset does, and `TEAMCLI_DEV_MODE=1`
+// is ignored — said once per command, in the log. The value is a signed team-level entry here.
+
+function setDevMode(
+  home: string,
+  root: string,
+  value: 'on' | 'off',
+  options: { expiry?: string; now?: Date } = {},
+): void {
+  const written = writePolicySet(
+    home,
+    {
+      level: 'team',
+      target: root,
+      teamRoot: root,
+      name: 'dev-mode',
+      value,
+      ...(options.expiry !== undefined ? { expiry: options.expiry } : {}),
+    },
+    { now: options.now ?? NOW },
+  );
+  if (!written.ok) throw new Error(written.why);
+}
+
+test('a governing off refuses the gate and the variable is ignored once, in the log', async () => {
+  const { root, home } = repo();
+  setDevMode(home, root, 'off');
+  const world = upWorld();
+  const io = testIo(root, UNPLACED);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(await runUp([], io, upSources(home, world.launch))).toBe(1);
+  expect(io.err).toBe('deny\n');
+  expect(world.runs).toEqual([]);
+  // One line, and the gate never folded: the policy's `off` is the whole answer.
+  expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toBe(
+    `${NOW.toISOString()} up [unplaced (it runs under herdr)] dev-mode: TEAMCLI_DEV_MODE=1 ignored because dev-mode policy is off\n`,
+  );
+});
+
+test('a governing on lifts the gate alone: the warning and the log carry the level that set it', async () => {
+  const { root, home } = repo();
+  // The policy is written before the approval, so the file the owner approves is the file the
+  // run reads: a record signed over the earlier text would not stand for this one.
+  setDevMode(home, root, 'on');
+  approve(home, root);
+  const didStop = { n: 0 };
+  const io = testIo(root, UNPLACED);
+  // The variable is set as well, and the policy wins: nothing is ignored, so nothing says so.
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  const placement = 'only the owner or `leads` stops the team; this call is unplaced (it runs under herdr)';
+  expect(await runDown([], io, downSources(home, didStop))).toBe(0);
+  expect(io.err).toBe(`team down: warning: ${placement} (dev-mode on at team level)\n`);
+  expect(didStop.n).toBe(1);
+  const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+  expect(log).toBe(
+    `${NOW.toISOString()} down [unplaced (it runs under herdr)] warning: ${placement} (dev-mode on at team level)\n`,
+  );
+  expect(log).not.toContain('ignored because dev-mode policy is off');
+});
+
+test('reload: the grant gate folds (the caller gate), and the run goes on past it', async () => {
+  const { root, home } = repo();
+  approve(home, root);
+  const sources: ReloadSources = { home, now: () => NOW, launch: upWorld().launch };
+  const line = 'the file grants nothing';
+
+  const refused = testIo(root, UNPLACED);
+  expect(await runReload(['lead'], refused, sources)).toBe(1);
+  expect(refused.err).toBe(`team reload: ${line}\n`);
+
+  const folded = testIo(root, UNPLACED);
+  folded.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(await runReload(['lead'], folded, sources)).toBe(1);
+  // The warning is the gate moved aside; the line after it is the run having moved with it.
+  expect(folded.err).toBe(
+    `team reload: warning: ${line}; dev mode continues\n`
+    + 'team reload: lead has no ready pane to close\n',
+  );
+  expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toBe(
+    `${NOW.toISOString()} reload [unplaced (it runs under herdr)] warning: ${line}; dev mode continues\n`,
+  );
+});
+
+test('reload: the owner\'s --file stays a refusal in every mode, after the fold is said', async () => {
+  const { root, home } = repo();
+  approve(home, root);
+  const sources: ReloadSources = { home, now: () => NOW, launch: upWorld().launch };
+  const io = testIo(root, UNPLACED);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(await runReload(['lead', '--file', 'other.yaml'], io, sources)).toBe(1);
+  expect(io.err).toBe(
+    'team reload: warning: the file grants nothing; dev mode continues\n'
+    + "team reload: --file is the owner's; the granted seat cannot use it\n",
+  );
+  // The refusal lands before the file is read, so the run owes no audit line of its own.
+  expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
+});
+
+test('an expired dev-mode declaration still governs: the gate reads off and the variable stays ignored', () => {
+  // The migration trigger is a dev-mode value SET anywhere in the chain; an expired value is
+  // unset at its own level (the effective policy falls back to the default `off`), but the
+  // declaration is still what retires the variable. Pinned here so the reading is a decision,
+  // not an accident of `resolvePolicyChain`.
+  const { root, home } = repo();
+  setDevMode(home, root, 'on', { now: new Date('2026-10-15T12:00:00Z'), expiry: '2026-10-16T12:00:00Z' });
+  const loaded = loadTeamFile(root, { home });
+  if (!loaded.ok) throw new Error(loaded.errors.map((error) => error.message).join('; '));
+  const after = new Date('2026-10-17T12:00:00Z');
+  const run = resolveDevMode('up', { env: { TEAMCLI_DEV_MODE: '1' } }, { home, team: loaded.team, root, now: after });
+  expect(run.on).toBe(false);
+  expect(run.governed).toBe(true);
+  expect(run.ignored).toBe(true);
 });

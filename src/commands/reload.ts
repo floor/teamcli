@@ -21,6 +21,7 @@ import {
 } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
+import { devModeCallerGate, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
@@ -103,21 +104,42 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   const owner = isOwner(caller);
   const flagged = args.values.file;
   const foreign = flagged !== undefined && resolve(io.cwd, flagged) !== resolve(io.cwd, TEAM_FILE);
+  // Dev mode, from this folder's own file: the caller's place, never a file the caller names.
+  // A `dev-mode` value anywhere in its chain governs, and `TEAMCLI_DEV_MODE` is then ignored;
+  // before any such value, the variable set to exactly `1` keeps its behaviour. The grant gate
+  // below is the caller gate dev mode folds; the grant's approval, its `caller` and an absent
+  // grant are that gate, while its placement (`no-pane`, `another-pane`), its scope list, a
+  // file that will not load and the owner's `--file` stay refusals in every mode.
+  const policyLoad = loadTeamFile(io.cwd, { ...(sources.home ? { home: sources.home } : {}) });
+  const dev = resolveDevMode('reload', io, {
+    ...(sources.home ? { home: sources.home } : {}),
+    team: policyLoad.ok ? policyLoad.team : null,
+    root: policyLoad.ok ? policyLoad.root : null,
+    now: sources.now ? sources.now() : new Date(),
+  });
+  let devWarning: string | null = null;
   let grantSeat: string | null = null;
   if (!owner) {
     const said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home });
     if (said.kind === 'refused') {
-      out.stderr(`team reload: ${said.text}\n`);
-      // exit: reload.grant-another-pane
-      // exit: reload.grant-approval
-      // exit: reload.grant-caller
-      // exit: reload.grant-file
-      // exit: reload.grant-no-pane
-      // exit: reload.grant-omitted
-      // exit: reload.grant-scope
-      return 1;
+      const foldable = said.id === 'grant.approval' || said.id === 'grant.caller' || said.id === 'grant.omitted';
+      const folded = foldable ? devModeCallerGate(dev, said.text) : null;
+      if (folded === null) {
+        out.stderr(`team reload: ${said.text}\n`);
+        // exit: reload.grant-another-pane
+        // exit: reload.grant-approval
+        // exit: reload.grant-caller
+        // exit: reload.grant-file
+        // exit: reload.grant-no-pane
+        // exit: reload.grant-omitted
+        // exit: reload.grant-scope
+        return 1;
+      }
+      devWarning = folded;
+      out.stderr(`team reload: ${folded}\n`);
+    } else {
+      grantSeat = said.grant.seat;
     }
-    grantSeat = said.grant.seat;
     if (foreign) {
       out.stderr(`team reload: --file is the owner's; the granted seat cannot use it\n`);
       // exit: reload.grant-flag
@@ -151,6 +173,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   }
 
   const dir = dirname(loaded.path);
+  // The audit line the fold owes, and the configuration lines the run owes once: written where
+  // the gate is used, before any later refusal ends the run. Nothing is written when the gate
+  // did not fold and the chain had nothing to say.
+  if (devWarning !== null) logDevMode(dir, 'reload', describeCaller(caller), devWarning, sources.now ? sources.now() : new Date());
+  logDevModeState(dir, 'reload', describeCaller(caller), dev, sources.now ? sources.now() : new Date());
   const session = team.session;
   const recorded = readState(dir).sessions[session]?.seats[seat.name];
   if (seat.stopped || !recorded || recorded.stage !== 'ready' || !recorded.pane || !recorded.workspace || !recorded.launched) {
