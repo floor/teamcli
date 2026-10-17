@@ -310,7 +310,7 @@ check, and this build acts on what the commands below read.
 | `team status` | prints the file's seats against the running session, each difference with its repair; `--json` outputs a stable JSON document (`format: 1`) for scripts; exit 1 when they differ | the owner, a seat of that team on its recorded pane, or a pane the approved file names; `--file` and `--session` are the owner's; read only |
 | `team list` | lists the herdr sessions on this machine, running ones by default; `--all` includes stopped sessions; `--json` prints a stable array, empty when there is nothing; an orphan session and an unreadable seat do not fail it | anyone, from any folder; read only |
 | `team projects` | lists the registry's projects — each one's immutable id, display name, entity, lead by agent id and teams; `--json` prints the records as one document; a team that names no project reads as its own project | anyone, from any folder; read only |
-| `team up` / `team down` | starts / stops the session and its seats | `up`: the owner; `down`: the owner, the coordinator or the operator seat |
+| `team up` / `team down` | starts / stops the session and its seats | `up`: the owner; `down`: the owner or the team's lead seat, or a delegate entry |
 | `team hold <reason> [--until <time>]` / `team hold --release` | records a hold on the team's work in the team state, shown as the first `note:` in `team status` and a `--  ` line in `team doctor`; `--until` is a local `<HH:MM>` or an ISO 8601 instant, and a record past it reads as no hold at all; `--release` clears it; nothing else consults a hold in this build | the owner, the coordinator or the operator seat |
 | `team watch` | watches the session, reports idle seats and nudges the operator; `--no-nudge` and `--no-notify` are the owner's and do not silence a report addressed to the owner | anyone, one per session; it types only a fixed line into an empty idle prompt: the report nudge, or `Team: run team messages` when a message is already waiting |
 | `team tempo <word>` | sets the team's tempo to relaxed, normal or urgent, which scales the watch's idle and nudge waits; normal is the file with the key omitted | the owner |
@@ -324,7 +324,7 @@ check, and this build acts on what the commands below read.
 | `team register <seat>` | writes the record for a seat that is already running — a pane herdr places under that name, holding a CLI at the seat's prompt — so `team send`, `team seats`, `team watch` and `team down` can address it; it types nothing into the pane, and never overwrites a record that names another pane; `--dry-run` prints the line the real run would print and writes nothing | the owner, a delegate the file names for `up`, or the seat a grant names for it |
 | `team answer <seat> trust` | presses the one recorded key of a seat's folder-trust dialog, when the file's `dialogs` policy allows it; every check passes on two fresh reads of the pane, and anything else sends nothing | the owner, or the coordinator from its own seat |
 | `team release check <package@version>` | checks one release's public npm and GitHub records: the version and its checksums, the tag, the release, the changelog entry; warns, without running it, when npm's `next` dist-tag points below `latest` | anyone; read only |
-| `team remove <name>` | stops one seat, then takes it out of the file; `--keep` leaves it stopped; `--abandon` is the owner's, and types nothing | the owner, the coordinator or the operator; only the owner removes the coordinator or the operator |
+| `team remove <name>` | stops one seat, then takes it out of the file; `--keep` leaves it stopped; `--abandon` is the owner's, and types nothing | the owner or the team's lead seat, or a delegate entry; only the owner removes the orchestrator's or the operator's seat |
 | `team worktree list` / `team worktree new <task>` / `team worktree remove <task>` | lists the recorded worktrees, creates one from an up-to-date base, or removes its folder; a failed setup is kept and recorded; the branch is never deleted; ignored files in the worktree are deleted with it; `list` writes nothing | the owner, the coordinator or the operator |
 
 Each command has its own page in [docs/commands](https://github.com/floor/teamcli/tree/main/docs/commands): the synopsis, what it reads and
@@ -344,19 +344,16 @@ that reads the file also takes `--file <path>` for a file other than `.agents/te
 
 A pane outside the team's session can be an approved **delegate**: the file's `delegates` section
 names panes — `<herdr session>/<pane id>` — and, per pane, which of `up`, `down`, `add`, `remove`
-and `approve` it may run. The caller is matched on the session and pane id, never on a seat, a
-role or an agent name. `up`, `down`, `add` and `remove` read the live file, and a command the entry does not list, or a prohibited
-flag, is refused with the gate's own words and exit id; `--file` and `--session` are refused
-outright. Every delegated run writes one line to the file's log naming the pane and the command.
-A delegated `approve` is for ordinary changes — the roster, a launch line, a rule — and never
-for any other owner section: the guard is an allowlist, and `rules` is all it admits, so
-`delegates` first, and `budgets`, `limits`, identity, `trust`, the workspace, the operator and
-orchestrator sections, and any section a later version adds are refused with `this change
-needs the owner`, judged against the approved copy before anything else is read, so a delegate
-can never approve a widening of its own grant.
+and `swap` it may run. `swap` is the word that admits `remove <lead> --keep` and `add <lead>` —
+the replacement of the agent on the orchestrator's or the operator's seat — and `remove` alone
+never admits a lead. The caller is matched on the session and pane id, never on a seat, a role or
+an agent name. `up`, `down`, `add` and `remove` read the live file, and a command the entry does
+not list, or a prohibited flag, is refused with the gate's own words and exit id; `--file` and
+`--session` are refused outright. Every delegated run writes one line to the file's log naming the
+pane and the command.
 
 `team status --json` prints the facts `status` prints as one JSON document (`format: 1`) on stdout:
-`project`, `session`, `rows` (`name`, `state`, `model`, `pane`), `notes`, `differences` (`what`, `repair`), and `notice`.
+`project`, `session`, `rows` (`name`, `state`, `seat_state`, `seat_state_source`, `model`, `pane`; the two seat-state fields appear where a reading was found), `notes`, `differences` (`what`, `repair`), and `notice`.
 
 `team doctor --login` checks read-only that each CLI in the file is signed in, using each profile's
 existing login check command (`cursor-agent status`, `agy models`, `codex login status`, `claude auth status`, `grok models`).
