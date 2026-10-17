@@ -12,7 +12,7 @@
 // team's file names its `entity:`. Every scene pins its caller: a seat of the team whose file is
 // the working folder, standing on the pane the state records for it.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -20,7 +20,10 @@ import { runSend, type SendHost } from '../src/commands/send.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { updateState } from '../src/state.ts';
+import { updateAgent } from '../src/registry/agents.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
+import { readTeams, teamIdOf } from '../src/registry/teams.ts';
+import { historyPath } from '../src/send/history.ts';
 import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
@@ -198,6 +201,24 @@ function refused(reading: Reading): void {
   expect(reading.err).toContain('no rule admits it');
 }
 
+/** One `--list` run from a team's own folder: the same pinned caller a send scene uses. */
+async function list(from: { team: string; seat: string }, extra: string[] = []): Promise<Reading> {
+  const file = world.files[from.team] as TeamFile;
+  const caller: Caller = { kind: 'seat', name: from.seat, pane: paneOf(from.team, from.seat), session: file.session };
+  const io = testIo(world.roots[from.team] as string, caller);
+  const code = await runSend(['--list', ...extra], io, host());
+  return { code, out: io.out, err: io.err };
+}
+
+/** One `--record` run from a team's own folder, with the caller pinned the same way. */
+async function record(from: { team: string; seat: string }, spec: string, extra: string[] = []): Promise<Reading> {
+  const file = world.files[from.team] as TeamFile;
+  const caller: Caller = { kind: 'seat', name: from.seat, pane: paneOf(from.team, from.seat), session: file.session };
+  const io = testIo(world.roots[from.team] as string, caller);
+  const code = await runSend(['--record', spec, '--channel', 'native', '--ms', '812', ...extra], io, host());
+  return { code, out: io.out, err: io.err };
+}
+
 describe('cross-team sends inside an entity', () => {
   test('a team lead reaches another team lead of the same entity', async () => {
     admitted(await send({ team: 'web', seat: 'web-lead' }, 'api-lead@api'));
@@ -221,5 +242,71 @@ describe('cross-team sends inside an entity', () => {
     // Another entity: to a team's lead, and to a plain seat.
     refused(await send({ team: 'web', seat: 'web-helper' }, 'data-lead@data'));
     refused(await send({ team: 'web', seat: 'web-helper' }, 'data-helper@data'));
+  });
+});
+
+describe('cross-team --list', () => {
+  test("the caller's entity's other teams' seats follow the file's own, each as seat@team", async () => {
+    const reading = await list({ team: 'api', seat: 'api-lead' });
+
+    expect(reading.code).toBe(0);
+    expect(reading.err).toBe('');
+    // The file's own rows first, then the entity's other teams by their own name: acme, then
+    // web. beta and data belong to another entity and are not addressable from here, so they
+    // never show; every name in the name column is a spec the resolver takes as it stands.
+    expect(reading.out).toBe(
+      [
+        'api-lead  claude-code  guide  api',
+        'api-helper  claude-code  coordinator  api',
+        'coord@acme  claude-code  facilitator  acme',
+        'acme-helper@acme  claude-code  builder  acme',
+        'web-lead@web  claude-code  guide  web',
+        'web-helper@web  claude-code  lead  web',
+      ].join('\n') + '\n',
+    );
+    expect(reading.out).not.toContain('@beta');
+    expect(reading.out).not.toContain('@data');
+  });
+
+  test('--json carries the same rows, and a stopped or retired seat is marked as it is', async () => {
+    const acmeId = teamIdOf(world.roots.acme as string);
+    const roster = readTeams(world.home)[acmeId]?.roster ?? [];
+    const helper = roster.find((entry) => entry.seat === 'acme-helper');
+    if (!helper) throw new Error('the test world has no acme-helper roster line');
+    updateAgent(world.home, helper.agent, { lifecycle: 'stopped' });
+
+    const reading = await list({ team: 'api', seat: 'api-helper' }, ['--json']);
+
+    expect(reading.code).toBe(0);
+    const doc = JSON.parse(reading.out) as { status: string; seats: { name: string; cli: string; role: string; stopped: boolean; project: string }[] };
+    expect(doc.status).toBe('listed');
+    const byName = new Map(doc.seats.map((row) => [row.name, row]));
+    expect(doc.seats.length).toBe(6);
+    expect(byName.get('acme-helper@acme')).toEqual({ name: 'acme-helper@acme', cli: 'claude-code', role: 'builder', stopped: true, project: 'acme' });
+    expect(byName.get('web-lead@web')).toEqual({ name: 'web-lead@web', cli: 'claude-code', role: 'guide', stopped: false, project: 'web' });
+    expect(byName.get('api-lead')).toEqual({ name: 'api-lead', cli: 'claude-code', role: 'guide', stopped: false, project: 'api' });
+    expect(byName.has('data-lead@data')).toBe(false);
+  });
+});
+
+describe('cross-team --record', () => {
+  test('a delivery by address is recorded in the receiving team\'s own history', async () => {
+    const reading = await record({ team: 'web', seat: 'web-lead' }, 'api-lead@api');
+
+    expect(reading.code).toBe(0);
+    expect(reading.out).toBe('api-lead: recorded (native, 812 ms)\n');
+    const written = readFileSync(historyPath('api', world.roots.api as string, world.home), 'utf8');
+    expect(written).toContain('"from":"web-lead"');
+    expect(written).toContain('"to":"api-lead"');
+    expect(written).toContain('"via":"native"');
+  });
+
+  test('a dry run resolves the same address and writes nothing; another entity is refused', async () => {
+    const dry = await record({ team: 'web', seat: 'web-lead' }, 'api-lead@api', ['--dry-run']);
+    expect(dry.code).toBe(0);
+    expect(dry.out).toBe('api-lead: would record (native, 812 ms); nothing was written\n');
+    expect(dry.out).not.toContain('recorded (native');
+
+    refused(await record({ team: 'web', seat: 'web-lead' }, 'data-lead@data'));
   });
 });

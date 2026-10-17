@@ -13,7 +13,7 @@ import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
-import { readTeams, teamIdOf } from '../registry/teams.ts';
+import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { liveSocketOf } from '../send/address.ts';
 import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
@@ -49,8 +49,9 @@ owner; an orchestrator to an orchestrator of its own team or entity; an assistan
 seat to its entity's coordinator; any seat to its own team's orchestrator; or an
 owner-signed grant naming send. The drop file's first line
 names the sender and the rule that admitted it. --list sends nothing: it prints
-the file's seats, each with the project its team sits in, and needs no caller
-check. --dry-run resolves the seat and the
+the file's seats and the seats of the other teams of the same entity, each
+with the project its team sits in — another team's seat reads <seat>@<team> —
+and needs no caller check. --dry-run resolves the seat and the
 legs the run would walk, writes no drop file, and types nothing. It appends one
 line to the team log.
 
@@ -907,7 +908,12 @@ function dryRun(io: Io, dir: string, who: string, seat: string, what: string, ho
   return 0; // exit: send.dry-run
 }
 
-/** `--list`: the file's seats, nothing sent and no caller check. Exit 0, always. */
+/** One `--list` row: the name to type, its CLI, its role, the project its team sits in, and
+ *  whether its seat is stopped. A seat of another team reads `<seat>@<team>` in the name. */
+type SeatRow = { name: string; cli: string; role: string; stopped: boolean; project: string; reach: 'socket' | 'typed' };
+
+/** `--list`: the file's seats and its entity's other teams' seats, nothing sent and no caller
+ *  check. Exit 0, always. */
 function listSeats(io: Io, host: SendHost, report: Report): number {
   const loaded = loadTeamFile(io.cwd, { home: host.home });
   if (!loaded.ok) {
@@ -926,7 +932,7 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
   // The reach a send would take, judged from the declared CLI alone: a Claude Code seat carries
   // the cross-session channel, every other CLI the typed trigger. `--list` reads no pane and
   // dials nothing, so it claims no live address; a stopped seat renders `stopped` in its place.
-  const seats = loaded.team.seats.map((seat) => ({
+  const seats: SeatRow[] = loaded.team.seats.map((seat) => ({
     name: seat.name,
     cli: seat.cli,
     role: seat.role,
@@ -934,6 +940,18 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
     reach: seat.cli === 'claude-code' ? 'socket' : 'typed',
     stopped: seat.stopped === true,
   }));
+  // The caller's entity reaches past its own file: the machine's team registry holds every other
+  // team of the same entity, and each of their seats is addressable as `<seat>@<team>` — the
+  // team's own project name is the scope. A registry the home cannot read is reported as the
+  // team file's own read is; a team whose record names another entity, or none, adds no row.
+  let teams: Record<string, TeamRecord>;
+  try {
+    teams = readTeams(host.home);
+  } catch (error) {
+    return configuration(io, (error as Error).message, report);
+  }
+  const entity = teams[teamId]?.entity ?? loaded.team.entity ?? null;
+  if (entity !== null) seats.push(...crossTeamRows(host, teams, teamId, entity));
   const summary = `${String(seats.length)} seat(s)`;
   if (report.json) {
     writeJson(io, 'team.send.list', {
@@ -950,6 +968,39 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
     io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.listed
+}
+
+/**
+ * The seats of the other teams of one entity, as `--list` rows: each roster line's seat and role,
+ * the CLI and lifecycle the agent record carries, and the project its team sits in. A roster line
+ * whose agent record is gone or retired is skipped — no address reaches it. A team record that is
+ * stopped or archived marks every seat it carries as stopped, as a stopped seat's own file does.
+ * Teams are ordered by their own name, so the rows a person reads do not follow the registry's
+ * key order.
+ */
+function crossTeamRows(host: SendHost, teams: Record<string, TeamRecord>, ownId: string, entity: string): SeatRow[] {
+  const agents = new Map(readAgents(host.home).map((agent) => [agent.id, agent]));
+  const rows: SeatRow[] = [];
+  const others = Object.entries(teams)
+    .filter(([id, record]) => id !== ownId && record.entity === entity)
+    .sort(([, left], [, right]) => left.project.localeCompare(right.project));
+  for (const [id, record] of others) {
+    const found = host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id);
+    const project = found?.name ?? record.project;
+    for (const entry of record.roster) {
+      const agent = agents.get(entry.agent);
+      if (!agent || agent.lifecycle === 'retired') continue;
+      rows.push({
+        name: `${entry.seat}@${record.project}`,
+        cli: agent.cli,
+        role: entry.role,
+        stopped: agent.lifecycle === 'stopped' || record.lifecycle === 'stopped' || record.lifecycle === 'archived',
+        project,
+        reach: agent.cli === 'claude-code' ? 'socket' : 'typed',
+      });
+    }
+  }
+  return rows;
 }
 
 /**
