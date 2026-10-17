@@ -13,6 +13,7 @@ import { getPolicySpec, type PolicySpec, type PolicyValue } from '../policy/inde
 import {
   declarationsOf,
   DELIVERY_ORDER,
+  isLivenessSeconds,
   LIVENESS_KEYS,
   LIVENESS_RULE,
   orderDeclarationsOf,
@@ -220,11 +221,27 @@ export function stateThresholds(
   };
 }
 
+/** A declared number as the invalid-word line says it: `1.5s`, `0s`, `600.5s` — the value as
+ *  written, never rounded into minutes the way a valid threshold is. */
+function sayDeclared(seconds: number): string {
+  return Number.isFinite(seconds) ? `${seconds}s` : String(seconds);
+}
+
+/** The line for a word that is not a liveness word at all: it is set aside as invalid, and the
+ *  line never calls it looser — a fraction is not a longer window, it is not a window. */
+function invalidWordText(setting: string, level: SettingLevel, seconds: number): string {
+  const broken = Number.isInteger(seconds)
+    ? 'which is less than one second'
+    : 'which is not a whole number of seconds';
+  return `${setting}: the ${level} declared ${sayDeclared(seconds)}, ${broken}; it is set aside`;
+}
+
 /**
  * Every liveness word the chain set aside, each with the rule it broke. The values themselves
  * come from the same `stateThresholds` call the reading makes, so a report never disagrees with
  * the number in force: a looser word changes nothing, and a project may only open a window the
- * setting allows that level to open.
+ * setting allows that level to open. A word that is not whole seconds of at least one is not a
+ * looser word: it is invalid, reported as such, and the inherited value stands.
  */
 export function thresholdRefusals(
   declared: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>,
@@ -235,12 +252,20 @@ export function thresholdRefusals(
     const spec = STATE_THRESHOLDS[setting];
     const resolution = resolveNumberSetting(spec, thresholdDeclarations(declared, setting), options);
     for (const word of resolution.refused) {
+      const invalid = !isLivenessSeconds(word.value);
+      const badExpiry = !invalid && word.expiry !== undefined && word.expiry !== null
+        && !Number.isFinite(Date.parse(word.expiry));
+      const text = invalid
+        ? invalidWordText(spec.name, word.level, word.value)
+        : badExpiry
+          ? `${spec.name}: the ${word.level} declared an expiry this build cannot read; it is set aside`
+          : `${spec.name}: the ${word.level} declared ${sayThreshold(word.value)}, longer than the ${sayThreshold(word.inherited)} in force — ${LIVENESS_RULE}`;
       refused.push({
         setting,
         level: word.level,
         value: word.value,
         inherited: word.inherited,
-        text: `${spec.name}: the ${word.level} declared ${sayThreshold(word.value)}, longer than the ${sayThreshold(word.inherited)} in force — ${LIVENESS_RULE}`,
+        text,
       });
     }
   }

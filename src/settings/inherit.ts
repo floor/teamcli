@@ -190,6 +190,15 @@ export function livenessOf(thresholds: StateThresholds): LivenessThresholds {
   };
 }
 
+/**
+ * What a liveness word must be: a whole number of seconds, at least one. The resolver judges
+ * every word by this rule, and the loaders that check a record name the same rule at the field;
+ * a word that fails it is set aside, never reported as a loosening.
+ */
+export function isLivenessSeconds(value: number): boolean {
+  return Number.isInteger(value) && value >= 1;
+}
+
 /** A threshold said the way a report says it: 90s, 5m, 2h. */
 export function sayThreshold(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;

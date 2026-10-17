@@ -192,8 +192,11 @@ line of its own (never a report and never a nudge):
     liveness_idle_lead_seconds: the team declared 10m, longer than the 5m in force — a liveness threshold may be tightened, never loosened, unless the level above allows it
 
 A reader is silent about a file it cannot read, or a `liveness` map with an unknown key or a value
-that is not a positive number of seconds: that word is no word at all, and the value in force
-stands.
+that is not a number of seconds: that word is no word at all, and the value in force stands. A
+liveness word must be whole seconds of at least one. A fraction or a zero is not a window, so it
+is set aside as invalid — never called a loosening — and the value in force stands:
+
+    state_blind_after_seconds: the team declared 1.5s, which is not a whole number of seconds; it is set aside
 
 The blind window is the one `team status` and `team check` read as `unknown (blind)`.
 `watch.idle_repeat` repeats the lead's line only: the owner is told once per idle period.
