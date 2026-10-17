@@ -1130,7 +1130,9 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   // read of the same account and window is newer, so it wins the merge inside `quotaOf`. A wall
   // screen is a fact of its own and rides beside the figures. An account this view hides is never
   // built here, so no aggregate can leak a walled account from another team.
-  const observations: QuotaObservation[] = machine.readings.map((reading) => ({
+  // A reading stamped after this report's own moment is no observation of the present — the
+  // account rows above drop the same entries — so the block never reads it as a fresh figure.
+  const observations: QuotaObservation[] = machine.readings.filter((reading) => reading.observedAt <= now).map((reading) => ({
     account: reading.account,
     ...(reading.pool ? { pool: reading.pool } : {}),
     window: reading.window === 'daily' ? null : reading.window,
