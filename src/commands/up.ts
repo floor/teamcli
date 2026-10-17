@@ -830,8 +830,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
 
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   // The map's admission, the trusted owner token, the granted seat, a passed delegation, a pane
-  // the live file names for `up`, or an agent with an active entity create-grant. A grant is not
-  // a constraint on an admitted run: it was never asked, and its audit line is never written.
+  // the live file names for `up`, or the seat whose own registry record an active entity
+  // create-grant names. A grant is not a constraint on an admitted run: it was never asked, and
+  // its audit line is never written.
   const named =
     ordinaryAdmitted ||
     ownerToken ||
@@ -842,8 +843,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: string[] = [];
-  // A detached run is refused unless a create-grant admits it: the grant holder's own runner
-  // outside herdr is the one detached caller the grant may name.
+  // No create-grant admits a run with no terminal: the record matches the caller's own registry
+  // record, and a caller outside herdr has none.
   if (detached !== undefined && !createGranted) {
     refusals.push(detached);
   } else if (!named) {

@@ -3,8 +3,8 @@
 Writes the team file: a skeleton for this project, or with `--restore` the copy of
 `.agents/team.yaml` you last approved on this machine. It also lists the team file and its runtime
 files in `.git/info/exclude`, so git never sees them and a fresh clone never carries them. The owner
-runs it, from a terminal outside herdr; a create-grant's `runner` admits a caller outside herdr as
-well. A file that already exists is never overwritten.
+runs it, from a terminal outside herdr; a seat whose own registry record an active create-grant
+names may run it as well. A file that already exists is never overwritten.
 
 ## Synopsis
 
@@ -22,29 +22,37 @@ well. A file that already exists is never overwritten.
 | Caller | May |
 | --- | --- |
 | the owner, from a terminal outside herdr | run it |
-| a caller outside herdr whose ancestry names a create-grant's `runner` | run it, on the paths that record covers and before it expires; `--restore` is not granted |
-| a run with no terminal | nothing, unless a create-grant's `runner` names the caller: `team init: only the owner runs this, from a terminal outside herdr` |
-| a seat, or an agent-run CLI a runner record does not name | nothing: `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` |
+| a seat an active create-grant names by its own registry id | run it, on the paths that record covers and before it expires; `--restore` is not granted |
+| a run with no terminal | nothing: `team init: only the owner runs this, from a terminal outside herdr` — a caller outside herdr has no registry record, so no record admits it |
+| a seat no record names, or an agent-run CLI with no registry record | nothing: `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` |
 
-## A create-grant's runner
+## A create-grant's seat
 
-A create-grant — a record in `~/.config/team/grants/` — admits a caller outside herdr, with or
-without a terminal, when its `runner` field (or `runners: [<name>, …]` for several) names one of
-the caller's parent processes. The name is the base name of what `ps -o comm=` prints for it:
+A create-grant — a record in `~/.config/team/grants/` — admits a seat whose own registry record the
+record names. The holder is a registry agent id (`agt_` and twelve lowercase hex characters), or a
+registry team id (twelve lowercase hex characters) for every seat of that team:
 
 ```text
-agent: gemini-beacon
+agent: agt_0123456789ab
 paths:
   - ~/Code/beacon
 expires: "2026-10-17T00:00:00Z"
-runner: gemini
 ```
 
-That caller runs `init` — the skeleton, never `--restore` — on a folder under `paths`, before
-`expires`. Every other case keeps its refusal: a name that is not in the ancestry, an expired
-record, a folder outside the covered paths or one reached through a `..` segment or a symlink, and
-a record with no `runner`. A caller under herdr is never admitted this way, and the owner needs no
-record.
+```text
+team: abcd012345678
+paths:
+  - ~/Code/beacon
+expires: "2026-10-17T00:00:00Z"
+```
+
+Admission matches the caller's own registry record id, and nothing else. A record that spells its
+holder as a name, a seat, a pane, a session or a runner process grants nothing: the program skips
+it, and the ordinary refusal stands. That seat runs `init` — the skeleton, never `--restore` — on a folder
+under `paths`, before `expires`. Every other case keeps its refusal: an expired record, a folder
+outside the covered paths or one reached through a `..` segment or a symlink, and a record naming
+both an agent and a team. A caller outside herdr has no registry record, so no record admits it,
+and the owner needs no record.
 
 A record covers only the paths it names itself (`paths:`, or one `path:`). When it names an
 `entity:` and no path, it covers the roots that entity declares in

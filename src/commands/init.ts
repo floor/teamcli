@@ -164,8 +164,8 @@ export async function runInit(
       const candidateRoot = rootOf();
       return candidateRoot !== null && entityGrantAdmits(candidateRoot, io, { home, now: sources.now?.(), cwd: io.cwd });
     })();
-  // A detached run is refused unless a create-grant admits it: the grant holder's own runner
-  // outside herdr is the one detached caller the grant may name.
+  // No create-grant admits a run with no terminal: the record matches the caller's own registry
+  // record, and a caller outside herdr has none.
   const detached = detachedRefusal(caller);
   if (detached !== undefined && !createGranted) {
     io.stderr(`team init: ${detached}\n`);

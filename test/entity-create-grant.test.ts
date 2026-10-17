@@ -1,10 +1,10 @@
 // Independent scenes for the standing create-grant: a record in the store home's
-// `.config/team/grants/` names an agent, its session, a covered path and an expiry. Under
+// `.config/team/grants/` names an agent by its registry id, a covered path and an expiry. Under
 // that record the agent creates and mounts a team below the covered path with no approval
 // record anywhere, and every way around it is refused with exit 1 — an empty store, a
 // path outside the grant reached through `..` or a symlink, a sibling that shares the
-// grant's string prefix, another seat, the grantee's own name in another session, and a
-// record whose expiry has passed. The scenes drive the command entry points the way the
+// grant's string prefix, another seat, the grantee's own registry record in another session,
+// and a record whose expiry has passed. The scenes drive the command entry points the way the
 // shipped grant tests do,
 // with every machine read stubbed and the clock pinned through the sources, so the expiry
 // scenes cannot drift with the wall clock. `init` answers a refusal with its owner-only
@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
@@ -25,6 +26,8 @@ import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 const NOW = new Date('2026-10-14T09:00:00Z');
 const LATER = '2026-10-22T12:00:00Z';
 const EARLIER = '2026-10-13T12:00:00Z';
+
+const TEAM = 'aaaaaaaaaaaa';
 
 // The grantee: session `hq`, seat `iris`, standing on the pane its home root's state records.
 const IRIS = { kind: 'seat' as const, name: 'iris', pane: 'w1:p1', session: 'hq' };
@@ -39,6 +42,7 @@ let lobby: string;
 let hqRoot: string;
 let radioRoot: string;
 let repoRoot: string;
+let irisId: string;
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], {
@@ -57,11 +61,10 @@ function repoAt(root: string): void {
 }
 
 /** The standing create-grant record the scenes vary: one file in the store home's
- * `.config/team/grants/`, naming the agent, its session, the covered path and the expiry. */
+ * `.config/team/grants/`, naming the agent by its registry id, the covered path and the expiry. */
 function writeGrant(record: { paths: string[]; expires: string }): void {
   const lines = [
-    'agent: iris',
-    'session: hq',
+    `agent: ${irisId}`,
     'paths:',
     ...record.paths.map((path) => `  - ${path}`),
     `expires: ${record.expires}`,
@@ -188,6 +191,21 @@ beforeEach(() => {
   mkdirSync(join(hqRoot, '.agents'), { recursive: true });
   repoAt(repoRoot);
   placeIris();
+  // The grantee's registry record: the id the record names, and the placement herdr gives the
+  // caller (`w1:p1` in session `hq`, seat `iris`).
+  irisId = registerAgent(home, {
+    name: 'iris',
+    signing: { model: 'Claude Opus', version: '5.5', role: 'builder' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: TEAM, seat: 'iris', session: 'hq', pane: 'w1:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'owner',
+  }).id;
 });
 
 afterEach(() => {

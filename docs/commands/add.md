@@ -39,10 +39,10 @@ owner's in 0.5.0, where no `agree` or `grant` holders stand, so every seat meets
 line — `team add: only the owner or a standing grant (delegate) runs it; this call is <caller>` —
 whatever pane it sits on and whatever the state records. The one standing that opens a seat's run
 is the file's own `delegates` section, below. A run with no terminal is refused before the file is
-read, unless the record below names the caller: `team add: only the owner runs this, from a
-terminal outside herdr`. What still admits a caller outside herdr is the create-grant record: one
-whose ancestry names its `runner` — the record [`team init`](init.md) describes — on a file whose
-root and this call's folder both sit under the paths that record covers, before it expires. A seat
+read: `team add: only the owner runs this, from a terminal outside herdr` — a caller outside herdr
+has no registry record, so no record admits it. A seat an active create-grant names by its own
+registry id — the record [`team init`](init.md) describes — is admitted on a file whose root and
+this call's folder both sit under the paths that record covers, before it expires. A seat
 that leads is not granted: the second half of a swap, `add <lead>`, stays the owner's. `--file`
 and `--session` are the owner's alone, from a terminal outside herdr: a non-owner aiming either is
 refused before the flagged file or session is read at all. Everything `up` refuses on — a `MISS`

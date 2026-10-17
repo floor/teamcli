@@ -323,9 +323,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const { team, root, path } = loaded;
   const dir = dirname(path);
 
-  // The one detached caller a record write may be made by: the entity runner with an active
-  // create-grant, the carve-out `up` and `add` honour. Every other run without a terminal is
-  // refused here, before a session or a pane is read.
+  // A seat whose own registry record an active create-grant names may write a record here — the
+  // carve-out `up` and `add` honour. A caller outside herdr has no registry record, so a detached
+  // run is refused here, before a session or a pane is read.
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
   if (detached !== undefined && !createGranted) return detachedExit(out, detached);
 
@@ -361,9 +361,10 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const ordinaryAdmitted = mayLaunchSeats(walked) || rule?.kind === 'ok';
   // The fallbacks, `up`'s own, asked only where the map refused: a delegate this file names for
   // `up` — the act that would have written this record in the first place — then the seat the
-  // file's `grant` names for `up`, then the create-granted runner. The run launches nothing, so
-  // no launch is granted; but the record is what lets `team send` type into the pane, so it is
-  // the owner's authority, judged by the same gates and in the same order.
+  // file's `grant` names for `up`, then the seat whose own registry record an active create-grant
+  // names. The run launches nothing, so no launch is granted; but the record is what lets
+  // `team send` type into the pane, so it is the owner's authority, judged by the same gates and
+  // in the same order.
   const verdict =
     ordinaryAdmitted || detached !== undefined || !team.delegates
       ? null
@@ -385,7 +386,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       ? (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home })
       : null;
   const grantedSeat = grantSaid?.kind === 'passed' ? grantSaid.grant.seat : null;
-  // The map's admission, the create-granted runner, a passed delegation, or the granted seat.
+  // The map's admission, the create-grant's own seat, a passed delegation, or the granted seat.
   const named = ordinaryAdmitted || delegated !== null || createGranted || grantedSeat !== null;
   if (!named && grantSaid?.kind === 'refused') return grantRefused(out, grantSaid.text);
   if (!named && verdict?.kind === 'refused') return delegateRefused(out, verdict.text);

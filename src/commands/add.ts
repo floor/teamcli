@@ -19,7 +19,7 @@ import { rulesOf } from '../launch/rules.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, seatIsStopped } from '../file/lines.ts';
-import { findRoot, loadTeamFile, placedProblems } from '../file/load.ts';
+import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -161,22 +161,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.invocation
     return 2;
   }
-  // A create-grant's own runner is the one detached caller the record may name: this sentence is
-  // not for it, exactly as `init` asks it. Only the cwd's root is known this early, before any
-  // file is read, so this decision answers this refusal alone — the loaded file's root decides
-  // the caller rule below, and a team outside the granted paths still refuses there.
+  // No create-grant admits a run with no terminal: the record matches the caller's own registry
+  // record, and a caller outside herdr has none. This sentence is answered before any file is
+  // read, as `down` and `init` ask it.
   const detached = detachedRefusal(walkCaller(io));
-  // Asked only for the placement that would be refused, and only when a record exists, so a
-  // caller with none is refused without reading a repository or a clock —
-  // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
-  // order, exactly as `down` and `init` ask it.
-  let runnerGranted = false;
-  if (detached !== undefined && readEntityCreateGrants(sources.home).length > 0) {
-    const hereRoot = findRoot(io.cwd);
-    runnerGranted = hereRoot !== null
-      && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
-  }
-  if (detached !== undefined && !runnerGranted) {
+  if (detached !== undefined) {
     out.stderr(`team add: ${detached}\n`);
     // exit: add.detached
     return 1;
@@ -245,7 +234,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
   const { team, root, path } = loaded;
   // The create-grant, decided on the loaded root: the team this run would change must be under
-  // the granted paths. The early `runnerGranted` above answered the detached sentence alone.
+  // the granted paths. The early detached sentence above stands alone: no record admits a
+  // caller with no terminal.
   const dir = dirname(path);
   // The gate judges the caller placed in the session this command asks about — the proof its pane
   // is that session's. With no `--session` the session judged is the caller's own placement: the

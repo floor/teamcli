@@ -11,12 +11,14 @@ import { join } from 'node:path';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { grantsDir } from '../src/grant.ts';
 import type { Terminal } from '../src/launch/terminal.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T10:00:00Z');
 const FUTURE = '2026-12-31T23:59:59Z';
 const SESSION = 'dispatch';
+const TEAM = 'aaaaaaaaaaaa';
 
 const AMPLE: Machine = {
   loadPerCore: 0.2,
@@ -86,14 +88,27 @@ function makeSandbox() {
   const base = realpathSync(mkdtempSync('/tmp/dr-'));
   const home = join(base, 'home');
   mkdirSync(grantsDir(home), { recursive: true });
-  return { base, home };
+  // The record's holder: a registry record for the seat the scenes call from.
+  const agent = registerAgent(home, {
+    name: 'worker-1',
+    signing: { model: 'Claude Opus', version: '5.5', role: 'builder' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: TEAM, seat: 'worker-1', session: SESSION, pane: 'pane-w1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'owner',
+  }).id;
+  return { base, home, agent };
 }
 
-function writeGrant(home: string, name: string, lines: string[]): void {
-  mkdirSync(grantsDir(home), { recursive: true });
-  writeFileSync(join(grantsDir(home), name), [
-    `session: ${SESSION}`,
-    'agent: worker-1',
+function writeGrant(sb: ReturnType<typeof makeSandbox>, name: string, lines: string[]): void {
+  mkdirSync(grantsDir(sb.home), { recursive: true });
+  writeFileSync(join(grantsDir(sb.home), name), [
+    `agent: ${sb.agent}`,
     `expires: "${FUTURE}"`,
     ...lines,
     '',
@@ -190,12 +205,12 @@ describe('entity create-grant coverage: declared roots, never a built-in default
     try {
       const root = project(sb.home, join(sb.base, 'declared', 'v1'));
 
-      writeGrant(sb.home, 'rec-1.yaml', ['paths:', `  - ${root}`]);
+      writeGrant(sb, 'rec-1.yaml', ['paths:', `  - ${root}`]);
       const io = testIo(root, seatCaller);
       expect(await runUp(['--dry-run'], io, upSources(sb.home)), said(io.out, io.err)).toBe(0);
       expect(io.out).toContain('worker-1');
 
-      writeGrant(sb.home, 'rec-1.yaml', [`path: ${root}`]);
+      writeGrant(sb, 'rec-1.yaml', [`path: ${root}`]);
       const singular = testIo(root, seatCaller);
       expect(await runUp(['--dry-run'], singular, upSources(sb.home)), said(singular.out, singular.err)).toBe(0);
       expect(singular.out).toContain('worker-1');
@@ -210,7 +225,7 @@ describe('entity create-grant coverage: declared roots, never a built-in default
       const declared = join(sb.base, 'declared');
       const root = project(sb.home, join(declared, 'v1'));
       writeEntities(sb.home, 'acme', [declared]);
-      writeGrant(sb.home, 'rec-2.yaml', ['entity: acme']);
+      writeGrant(sb, 'rec-2.yaml', ['entity: acme']);
 
       const io = testIo(root, seatCaller);
       expect(await runUp(['--dry-run'], io, upSources(sb.home)), head(io.out)).toBe(0);
@@ -231,7 +246,7 @@ describe('entity create-grant coverage: declared roots, never a built-in default
       const root = project(sb.home, join(sb.home, 'Code', name, 'v1'));
       if (builtin !== null) mkdirSync(join(sb.home, 'Code', builtin), { recursive: true });
       // No entities file: nothing declares roots for this entity.
-      writeGrant(sb.home, 'rec-3.yaml', [`entity: ${name}`]);
+      writeGrant(sb, 'rec-3.yaml', [`entity: ${name}`]);
 
       const io = testIo(root, seatCaller);
       const code = await runUp(['--dry-run'], io, upSources(sb.home));
@@ -250,7 +265,7 @@ describe('entity create-grant coverage: declared roots, never a built-in default
       const outside = project(sb.home, join(sb.base, 'elsewhere', 'v1'));
       mkdirSync(declared, { recursive: true });
       writeEntities(sb.home, 'acme', [declared]);
-      writeGrant(sb.home, 'rec-4.yaml', ['entity: acme']);
+      writeGrant(sb, 'rec-4.yaml', ['entity: acme']);
 
       const io = testIo(outside, seatCaller);
       const code = await runUp(['--dry-run'], io, upSources(sb.home));
