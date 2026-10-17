@@ -196,12 +196,23 @@ describe('the old spelling is the new run, one notice line first', () => {
     writeFileSync(join(repo.path, 'body.md'), `${PR_SIGNATURE}\n`);
     const old = await run(check, [hash.clean, '--pr', 'body.md']);
     expect(old.code).toBe(0);
-    expect(old.stdout).toBe('team commits check: 1 commit checked, 1 pull request body checked: ok\n');
+    expect(old.stdout).toBe(
+      'COMMIT      STATUS  DETAIL\n' +
+        `${hash.clean.slice(0, 10)}  ok      feat: a clean one\n` +
+        'team commits check: 1 commit checked, 1 pull request body checked: ok\n',
+    );
     expect(old.stderr).toBe(`${NOTICE}${TWIN}`);
 
     const committed = await run(commits, ['check', hash.clean]);
     const body = await run(pr, ['check', 'body.md']);
-    expect(committed).toEqual({ code: 0, stdout: 'team commits check: 1 commit checked: ok\n', stderr: '' });
+    expect(committed).toEqual({
+      code: 0,
+      stdout:
+        'COMMIT      STATUS  DETAIL\n' +
+        `${hash.clean.slice(0, 10)}  ok      feat: a clean one\n` +
+        'team commits check: 1 commit checked: ok\n',
+      stderr: '',
+    });
     expect(body).toEqual({ code: 0, stdout: 'team pr check: 1 pull request body checked: ok\n', stderr: '' });
   });
 
@@ -257,9 +268,7 @@ describe('team pr check needs no repository', () => {
       const code = await pr(['check', 'body.md'], io, (cwd, file) => loadConfig(cwd, file, home));
       expect(code).toBe(0);
       expect(stdout).toBe('team pr check: 1 pull request body checked: ok\n');
-      expect(stderr).toBe(
-        'team pr check: warning: line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read\n',
-      );
+      expect(stderr).toBe('');
     } finally {
       rmSync(folder, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });

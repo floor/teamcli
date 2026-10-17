@@ -60,8 +60,6 @@ export async function pr(argv: string[], io: Io, load: LoadConfig = loadConfig):
     return 2;
   }
 
-  for (const warning of loaded.warnings) io.stderr(`team pr check: warning: ${place(warning)}\n`);
-
   let body: string;
   try {
     body = bodyText(file, io.cwd);
