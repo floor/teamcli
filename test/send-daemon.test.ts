@@ -848,7 +848,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io = ownerIo(w.root);
     expect(await runSend(['zeus', 'by the human name'], io, host)).toBe(0);
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
 
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);

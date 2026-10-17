@@ -776,7 +776,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           format: 1 as const,
           project: 'beacon',
           session: 'beacon',
-          seats: [{ name: 'worker', cli: 'claude', role: 'builder', project: 'beacon', reach: 'socket', stopped: false }],
+          seats: [{ name: 'worker', nickname: null, cli: 'claude', role: 'builder', project: 'beacon', reach: 'socket', stopped: false }],
           summary: '1 seat',
         }),
       ],

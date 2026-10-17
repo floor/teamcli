@@ -649,10 +649,10 @@ describe('team send: --list', () => {
     // project it sits in, and the reach a send would take.
     expect(io.out).toBe(
       'team acme, session "acme"\n'
-        + '  SEAT    ROLE         PROJECT  REACH\n'
-        + '  lead    coordinator  acme     socket\n'
-        + '  helper  implementer  acme     socket\n'
-        + '  native  reviewer     acme     typed\n'
+        + '  SEAT    NICKNAME  ROLE         PROJECT  REACH\n'
+        + '  lead    -         coordinator  acme     socket\n'
+        + '  helper  -         implementer  acme     socket\n'
+        + '  native  -         reviewer     acme     typed\n'
         + '3 seat(s)\n',
     );
   });
@@ -665,7 +665,7 @@ describe('team send: --list', () => {
     const code = await runSend(['--list'], io, fake(sockets));
 
     expect(code).toBe(0);
-    expect(io.out).toContain('  lead    coordinator  acme     socket');
+    expect(io.out).toContain('  lead    -         coordinator  acme     socket');
   });
 
   test("a registry that names the team's project shows that project on every row", async () => {

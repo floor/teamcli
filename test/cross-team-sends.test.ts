@@ -274,12 +274,15 @@ describe('cross-team --list', () => {
     // never show; every name in the name column is a spec the resolver takes as it stands.
     expect(reading.out).toBe(
       [
-        'api-lead  claude-code  guide  api  @zeus',
-        'api-helper  claude-code  coordinator  api',
-        'coord@acme  claude-code  facilitator  acme',
-        'acme-helper@acme  claude-code  builder  acme',
-        'web-lead@web  claude-code  guide  web',
-        'web-helper@web  claude-code  lead  web  hephaestus@web',
+        'team api, session "api"',
+        '  SEAT              NICKNAME        ROLE         PROJECT  REACH',
+        '  api-lead          @zeus           guide        api      socket',
+        '  api-helper        -               coordinator  api      socket',
+        '  coord@acme        -               facilitator  acme     socket',
+        '  acme-helper@acme  -               builder      acme     socket',
+        '  web-lead@web      -               guide        web      socket',
+        '  web-helper@web    hephaestus@web  lead         web      socket',
+        '6 seat(s)',
       ].join('\n') + '\n',
     );
     expect(reading.out).not.toContain('@beta');
@@ -305,13 +308,14 @@ describe('cross-team --list', () => {
     const reading = await list({ team: 'api', seat: 'api-helper' }, ['--json']);
 
     expect(reading.code).toBe(0);
-    const doc = JSON.parse(reading.out) as { status: string; seats: { name: string; nickname: string | null; cli: string; role: string; stopped: boolean; project: string }[] };
-    expect(doc.status).toBe('listed');
+    const doc = JSON.parse(reading.out) as { project: string; session: string; summary: string; seats: { name: string; nickname: string | null; cli: string; role: string; stopped: boolean; project: string; reach: string }[] };
+    expect(doc.session).toBe('api');
+    expect(doc.summary).toBe('6 seat(s)');
     const byName = new Map(doc.seats.map((row) => [row.name, row]));
     expect(doc.seats.length).toBe(6);
-    expect(byName.get('acme-helper@acme')).toEqual({ name: 'acme-helper@acme', nickname: null, cli: 'claude-code', role: 'builder', stopped: true, project: 'acme' });
-    expect(byName.get('web-lead@web')).toEqual({ name: 'web-lead@web', nickname: null, cli: 'claude-code', role: 'guide', stopped: false, project: 'web' });
-    expect(byName.get('api-lead')).toEqual({ name: 'api-lead', nickname: '@zeus', cli: 'claude-code', role: 'guide', stopped: false, project: 'api' });
+    expect(byName.get('acme-helper@acme')).toEqual({ name: 'acme-helper@acme', nickname: null, cli: 'claude-code', role: 'builder', project: 'acme', reach: 'socket', stopped: true });
+    expect(byName.get('web-lead@web')).toEqual({ name: 'web-lead@web', nickname: null, cli: 'claude-code', role: 'guide', project: 'web', reach: 'socket', stopped: false });
+    expect(byName.get('api-lead')).toEqual({ name: 'api-lead', nickname: '@zeus', cli: 'claude-code', role: 'guide', project: 'api', reach: 'socket', stopped: false });
     expect(byName.has('data-lead@data')).toBe(false);
   });
 });
@@ -321,7 +325,7 @@ describe('cross-team --record', () => {
     const reading = await record({ team: 'web', seat: 'web-lead' }, 'api-lead@api');
 
     expect(reading.code).toBe(0);
-    expect(reading.out).toBe('api-lead: recorded (native, 812 ms)\n');
+    expect(reading.out).toBe('team api, session "api"\napi-lead: recorded (native, 812 ms)\n');
     const written = readFileSync(historyPath('api', world.roots.api as string, world.home), 'utf8');
     expect(written).toContain('"from":"web-lead"');
     expect(written).toContain('"to":"api-lead"');
@@ -332,7 +336,7 @@ describe('cross-team --record', () => {
     const reading = await record({ team: 'web', seat: 'web-lead' }, 'zeus@api');
 
     expect(reading.code).toBe(0);
-    expect(reading.out).toBe('api-lead: recorded (native, 812 ms)\n');
+    expect(reading.out).toBe('team api, session "api"\napi-lead: recorded (native, 812 ms)\n');
     const teams = readTeams(world.home);
     const zeus = teams[teamIdOf(world.roots.api as string)]?.roster.find((line) => line.seat === 'api-lead');
     if (!zeus) throw new Error('the test world has no api-lead roster line');
@@ -353,7 +357,7 @@ describe('cross-team --record', () => {
   test('a dry run resolves the same address and writes nothing; another entity is refused', async () => {
     const dry = await record({ team: 'web', seat: 'web-lead' }, 'api-lead@api', ['--dry-run']);
     expect(dry.code).toBe(0);
-    expect(dry.out).toBe('api-lead: would record (native, 812 ms); nothing was written\n');
+    expect(dry.out).toBe('team api, session "api"\napi-lead: would record (native, 812 ms); nothing was written\n');
     expect(dry.out).not.toContain('recorded (native');
 
     refused(await record({ team: 'web', seat: 'web-lead' }, 'data-lead@data'));
