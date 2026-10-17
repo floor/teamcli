@@ -138,7 +138,12 @@ export function registerLaunch(
     const teamId = teamIdOf(input.root);
     const unrecorded = ensureTeam(input);
     if (unrecorded) return { note: unrecorded };
-    const known = findAgent(home, { team: teamId, seat: seat.name });
+    const known = findAgent(home, {
+      team: teamId,
+      seat: seat.name,
+      seatHandle: SEAT_HANDLE.test(handle ?? '') ? handle : null,
+    });
+    const priorSeat = known && known.reach.seat !== seat.name ? known.reach.seat : null;
     // The seat's stable handle, kept on the agent for continuity: set when the agent has none, and
     // never changed after, so a handle the state minted later does not rewrite the record.
     const seatHandle = SEAT_HANDLE.test(handle ?? '') && !known?.seat_handle ? { seat_handle: handle as string } : {};
@@ -165,7 +170,7 @@ export function registerLaunch(
     const stated = Object.keys(provenance).length === 0 ? undefined : provenance;
     const agent = known
       ? updateAgent(home, known.id, {
-        signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
+        name: seat.name, signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
         ...(stated === undefined ? {} : { provenance: stated }), ...seatHandle,
       })
       : registerAgent(home, {
@@ -173,9 +178,47 @@ export function registerLaunch(
         reach, mcp: [], skills: [], lifecycle: 'running', by, devMode,
         ...(delegation === undefined || delegation === null ? {} : { delegated: delegation }), ...seatHandle,
       });
+    if (priorSeat) writeRoster(input, teamId, priorSeat, null);
     writeRoster(input, teamId, seat.name, { agent: agent.id, role: seat.role });
     recordProjectLead(input, teamId);
     return { id: agent.id };
+  } catch (error) {
+    return { note: noteOf(error) };
+  }
+}
+
+/**
+ * A seat was renamed from `fromSeat` to `toSeat`: its agent record keeps the same `agt_…` id
+ * (so grants keyed by agent id continue to cover the seat) while `name` and `reach.seat` move
+ * to `toSeat` and the team's roster is re-keyed. Returns `{ id }` when an agent record was
+ * updated, `{ id: null }` when no live agent record existed yet, or `{ note }` on failure.
+ */
+export function registerRename(
+  input: RegistryTeam,
+  fromSeat: string,
+  toSeat: string,
+  handle?: string,
+): { id: string | null } | { note: string } {
+  try {
+    const { home, team } = input;
+    const teamId = teamIdOf(input.root);
+    const known = findAgent(home, {
+      team: teamId,
+      seat: fromSeat,
+      seatHandle: SEAT_HANDLE.test(handle ?? '') ? handle : null,
+    });
+    if (!known) return { id: null };
+    const seat = team.seats.find((candidate) => candidate.name === toSeat);
+    const seatHandle = SEAT_HANDLE.test(handle ?? '') && !known.seat_handle ? { seat_handle: handle as string } : {};
+    const updated = updateAgent(home, known.id, {
+      name: toSeat,
+      reach: { ...known.reach, seat: toSeat },
+      ...seatHandle,
+    });
+    writeRoster(input, teamId, fromSeat, null);
+    writeRoster(input, teamId, toSeat, { agent: updated.id, role: seat?.role ?? updated.signing.role });
+    recordProjectLead(input, teamId);
+    return { id: updated.id };
   } catch (error) {
     return { note: noteOf(error) };
   }

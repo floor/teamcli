@@ -940,6 +940,34 @@ Usage:
 | --- | --- | --- |
 | `name` | no | no |
 
+## `rename`
+
+Hidden: no
+
+Usage:
+
+    team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
+    team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--renumber` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | yes | no |
+| `new-seat` | yes | no |
+
 ## `restart`
 
 Hidden: no

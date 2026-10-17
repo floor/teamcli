@@ -1708,6 +1708,71 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--renumber",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "rename",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": true,
+          "repeatable": false
+        },
+        {
+          "name": "new-seat",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]",
+        "team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--abandon",
           "repeatable": false,
           "takesValue": false

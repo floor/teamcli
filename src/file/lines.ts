@@ -278,3 +278,42 @@ function instanceLines(approved: string, source: SeatBlock, name: string): strin
   const instance = seatBlocks(rewritten).find((block) => block.name === name);
   return instance ? body(rewritten, instance) : null;
 }
+
+/**
+ * Rewrites `fromName` to `toName` in the file's `seats:` list (splitting `count` first if needed),
+ * and also updates top-level `coordinator:` / `operator:` or `grant.seat:` when they name `fromName`.
+ */
+export function renameSeat(text: string, fromName: string, toName: string): string {
+  const ready = prepared(text, fromName);
+  if (!ready) return text;
+  const blockLines = body(ready.text, ready.block).map((line) =>
+    /^\s*(?:-\s+)?name:/.test(line) ? setValue(line, toName) : line,
+  );
+  const withSeat = replaceLines(ready.text, ready.block.start, ready.block.end, blockLines);
+  const lines = withSeat.split('\n');
+  let inGrant = false;
+  let grantIndent = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (line.trim() === '' || /^\s*#/.test(line)) continue;
+    const ind = indent(line);
+    if (inGrant && ind <= grantIndent) inGrant = false;
+    if (/^grant:\s*(#.*)?$/.test(line)) {
+      inGrant = true;
+      grantIndent = ind;
+      continue;
+    }
+    if (ind === 0) {
+      const m = /^(coordinator|operator):\s*(.*)$/.exec(line);
+      if (m && scalar(m[2] ?? '') === fromName) {
+        lines[i] = setValue(line, toName);
+      }
+    } else if (inGrant) {
+      const m = /^\s+seat:\s*(.*)$/.exec(line);
+      if (m && scalar(m[1] ?? '') === fromName) {
+        lines[i] = setValue(line, toName);
+      }
+    }
+  }
+  return lines.join('\n');
+}

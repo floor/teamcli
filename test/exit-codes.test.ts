@@ -45,6 +45,7 @@ import { runProjects, type ProjectSources, type ProjectView } from '../src/comma
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runRename } from '../src/commands/rename.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -3999,6 +4000,26 @@ for (const [name, command, args, invalidArgs] of [
   scene('policy.done', async (place) => {
     write(place, TEAM);
     return show(await policyRun(place, []), 'POLICY');
+  });
+}
+
+{
+  async function renameRun(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runRename([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+  }
+  scene('rename.invocation', async (place) => show(await renameRun(place, []), 'a seat name and a new seat name are required'));
+  scene('rename.refused', async (place) => {
+    write(place, TWO);
+    return show(await renameRun(place, ['worker', 'lead']), 'seat "lead" is already declared');
+  });
+  scene('rename.invalid', async (place) => {
+    write(place, TWO);
+    return show(await renameRun(place, ['worker', 'Bad_Name']), 'not a valid seat name');
+  });
+  scene('rename.done', async (place) => {
+    write(place, TWO);
+    return show(await renameRun(place, ['worker', 'builder-1']), 'renamed worker -> builder-1');
   });
 }
 

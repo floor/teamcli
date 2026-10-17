@@ -632,7 +632,12 @@ function workDrops(
     // in this same stretch still gets the drop.
     if (screen.kind !== 'idle') continue;
     sent[obs.name] = now;
-    due.push({ pane: obs.agent.pane, seat: obs.name, cli: obs.cli, body });
+    due.push({
+      pane: obs.agent.pane,
+      seat: obs.name,
+      cli: obs.cli,
+      body: body.replaceAll('<your seat name>', obs.name),
+    });
   }
   return due;
 }

@@ -190,6 +190,46 @@ export function recordSeatDigest(team: TeamFile, root: string, name: string, hom
   recordSeatDigestOf(approvalStanding(root, home), team, root, name, home);
 }
 
+/**
+ * Re-keys a seat's digest in the approval record when `team rename` renames `fromName` to `toName`
+ * and updates `record.file` to `nextFile` so the rename does not cause approval drift.
+ */
+export function recordSeatRenameOf(
+  standing: Standing,
+  team: TeamFile,
+  nextFile: string,
+  root: string,
+  renames: ReadonlyArray<{ from: string; to: string }>,
+  home: string = homedir(),
+): void {
+  if (standing.kind !== 'verified' || renames.length === 0) return;
+  const store = storePath(team.project, root, home);
+  const record = standing.record;
+  if (!validateTeamFile(record.file).ok) return;
+  const currentFingerprints = fingerprints(team);
+  const nextSeats = { ...record.approval.fingerprints.seats };
+  for (const { from, to } of renames) {
+    delete nextSeats[from];
+    const digest = currentFingerprints.seats[to];
+    if (digest !== undefined) nextSeats[to] = digest;
+  }
+  writeApproval(
+    store,
+    {
+      approval: {
+        ...record.approval,
+        fingerprints: {
+          sections: currentFingerprints.sections,
+          seats: nextSeats,
+        },
+      },
+      file: nextFile,
+    },
+    [],
+    home,
+  );
+}
+
 /** The differences of a file against one verified snapshot: the caller's own standing, read once. */
 export function approvalDifferencesOf(
   standing: Extract<Standing, { kind: 'verified' }>,

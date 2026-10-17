@@ -74,6 +74,7 @@ export const DEV_MODE_OPERATIONS = [
   'restart',
   'init',
   'reload',
+  'rename',
 ] as const;
 
 export type DevModeOperation = (typeof DEV_MODE_OPERATIONS)[number];
