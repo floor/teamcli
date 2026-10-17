@@ -202,6 +202,7 @@ commands read them.
   file's `tasks.policy` filtering every record before it crosses. A broker runs as the same OS
   principal as the seats: that is integrity, not authenticity, and it isolates nothing.
 
+<!-- 0.5.0 draft: the rebuilt `team usage` — release 4ea44296 carries an earlier cut; builder-7's final pass has not landed; re-verify this entry when the orchestrator says it landed, then remove this line -->
 - **The rebuilt `team usage`.** `team usage` reads the machine rather than one project: every
   team with an approval store here, in one report — each account and window with what is left and
   used, when it was last read and from which source, its reserve and its state, under a header
