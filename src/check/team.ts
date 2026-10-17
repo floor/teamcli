@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import { join, isAbsolute, relative } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
-import { blindDifferences, stateLimitsOf } from '../commands/seats.ts';
+import { blindDifferences } from '../commands/seats.ts';
 import { approvalCaseRow, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
@@ -216,7 +216,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...staleDifferences(stale),
     // A blind seat — unknown past the blind threshold — counts as not working, and is
     // a must-fix here exactly as it is in `team status`.
-    ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir, session, limits: stateLimitsOf(team, sources.home, teamIdOf(root)) }),
+    ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
   ]);
   const differences = comparison.differences;
   // A deprecated field the file still reads: the check is the one command that names it, with

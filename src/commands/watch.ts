@@ -38,7 +38,10 @@ import { profileFor } from '../profiles/index.ts';
 import { classifyWith, overridesInForceOf, quotaWith, type OverrideForce } from '../profiles/overrides.ts';
 import { ofTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import type { LivenessThresholds } from '../settings/inherit.ts';
+import type { StateThresholds } from '../settings/inherit.ts';
+import { machineLiveness, watchWords } from '../settings/declared.ts';
+import { entityLiveness } from '../entities.ts';
+import { defaultWatch } from '../file/validate.ts';
 import { LEGACY_LINE, type Standing } from '../store/store.ts';
 import { realSources, standingSource } from './status.ts';
 
@@ -476,7 +479,15 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           machineAccounts,
           team, state, live, machine, now, memory,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce,
-          liveness: { project: projectLiveness(sources.home, root) },
+          liveness: {
+            machine: machineLiveness(sources.home),
+            entity: entityLiveness(sources.home, team.entity),
+            project: projectLiveness(sources.home, root),
+          },
+          // The team's words are the watch as written, not as `tempo` scaled it: the tighten-only
+          // check reads declarations, and the tempo is applied to the resolved idle window after.
+          livenessTeam: watchWords(standing.kind === 'verified' ? team.watch : defaultWatch()),
+          tempo: standing.kind === 'verified' ? team.tempo : 'normal',
           outcomes, budgets: budget,
           quotaFor: (cli) => quotaWith(cli, overrides.profiles),
           readScreen: (cli, pane) => classifyWith(cli, pane, overrides.profiles),
@@ -780,7 +791,7 @@ async function deliver(
 /** The liveness words of the project a team sits in, or none when it sits in none, no home is
  *  known, or the registry can't be read. The registry's own errors are `team check`'s to refuse;
  *  the watch keeps watching with the values in force. */
-function projectLiveness(home: string | undefined, root: string): Partial<LivenessThresholds> | undefined {
+function projectLiveness(home: string | undefined, root: string): Partial<StateThresholds> | undefined {
   if (home === undefined) return undefined;
   try {
     return ofTeam(home, teamIdOf(root))?.liveness;

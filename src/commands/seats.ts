@@ -14,6 +14,8 @@ import { findAgent } from '../registry/agents.ts';
 import { ofTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { DEFAULT_STATE_THRESHOLDS, stateThresholds, type StateThresholds } from '../settings/inherit.ts';
+import { machineLiveness, watchWords } from '../settings/declared.ts';
+import { entityLiveness } from '../entities.ts';
 import { emptySession, isSeatId, liveHold, readState, type SessionState } from '../state.ts';
 import { compare, type Comparison, type Difference, type Live } from '../status/compare.ts';
 import { waitOrStop } from '../wait.ts';
@@ -39,25 +41,30 @@ export type SeatTraceSources = {
   /** The session the rows are read for: its own folder under the state folder holds the seats'
    *  hook files, so a seat of the same name in another session is never read here. */
   session?: string;
-  /** The thresholds the reading runs by, resolved from the team's chain. Absent is the shipped
-   *  fallbacks — the reading a caller holds no team file for. */
-  limits?: StateThresholds;
 };
 
-/** The state thresholds a team's chain puts in force: the project record's liveness word when
- *  the registry answers, then the team's own `watch.blind_after`. A registry that cannot be read
- *  declares no word here — `team check` is where that file is refused — and a word that would
- *  loosen a default is set aside by the resolver, the value in force standing. */
-export function stateLimitsOf(team: TeamFile, home: string | undefined, teamId: string): StateThresholds {
+/**
+ * The state thresholds a seat's chain puts in force: the machine's settings file, the entity's
+ * `liveness:` map, the project record's word, the team's own `watch.blind_after` and — when a
+ * seat is named — that seat's own word. Every value resolves in the one `stateThresholds` call
+ * the reading makes. A file that cannot be read declares no word here (the registry's own errors
+ * are `team check`'s to refuse), and a word that would loosen a threshold its level may not
+ * loosen is set aside by the resolver, the value in force standing.
+ */
+export function stateLimitsOf(team: TeamFile, home: string | undefined, teamId: string, seat?: string): StateThresholds {
   let project: Partial<StateThresholds> | undefined;
   try {
     project = home === undefined ? undefined : ofTeam(home, teamId)?.liveness;
   } catch {
     project = undefined;
   }
+  const word = seat === undefined ? undefined : team.seats.find((one) => one.name === seat)?.liveness;
   return stateThresholds({
+    machine: machineLiveness(home),
+    entity: entityLiveness(home, team.entity),
     ...(project !== undefined ? { project } : {}),
-    team: { blind_after_seconds: team.watch.blindAfter },
+    team: watchWords(team.watch),
+    ...(word !== undefined ? { seat: word } : {}),
   });
 }
 
@@ -153,6 +160,9 @@ export function seatRegistryRows(
   const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
   const seenIds = new Set<string>();
   const rows: SeatRegistryRow[] = [];
+  // The registry read once for the whole table: each row resolves its own chain over it.
+  const home = traceSources?.home;
+  const teamId = traceSources === undefined ? undefined : teamIdOf(traceSources.root);
   for (const row of comparison.rows) {
     if (!all && row.state === 'stopped') continue;
     const declared = byName.get(row.name);
@@ -226,7 +236,7 @@ export function seatRegistryRows(
       ...(held ? { held: true } : {}),
       reachable: live.running,
       now,
-      ...(traceSources?.limits !== undefined ? { limits: traceSources.limits } : {}),
+      limits: teamId === undefined ? DEFAULT_STATE_THRESHOLDS : stateLimitsOf(team, home, teamId, row.name),
     });
     // Working now: the reading says so — the screen, a trace inside its window, herdr or the
     // seat's own hook — or herdr's word and the record say the turn is still on. The seat's
@@ -279,14 +289,19 @@ export function blindDifferences(
   /** Where the traces are read from; absent is the old carried-forward `last_active` alone. */
   traceSources?: SeatTraceSources,
 ): Difference[] {
-  const said = sayThreshold(traceSources?.limits?.blind_after_seconds ?? DEFAULT_STATE_THRESHOLDS.blind_after_seconds);
+  const teamId = traceSources === undefined ? undefined : teamIdOf(traceSources.root);
   return seatRegistryRows(team, state, live, comparison, now, true, held, traceSources)
     .filter((row) => row.blind)
-    .map((row): Difference => ({
-      what: `${row.name}: unknown for over ${said} — blind, and it counts as not working`,
-      repair: 'the owner looks at the pane',
-      owner: true,
-    }));
+    .map((row): Difference => {
+      const limits = traceSources === undefined || teamId === undefined
+        ? DEFAULT_STATE_THRESHOLDS
+        : stateLimitsOf(team, traceSources.home, teamId, row.name);
+      return {
+        what: `${row.name}: unknown for over ${sayThreshold(limits.blind_after_seconds)} — blind, and it counts as not working`,
+        repair: 'the owner looks at the pane',
+        owner: true,
+      };
+    });
 }
 
 export function renderSeatsTable(rows: SeatRegistryRow[], indent = ''): string {
@@ -386,7 +401,6 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       home: sources.home,
       stateDir: dir,
       session,
-      limits: stateLimitsOf(team, sources.home, teamIdOf(root)),
     });
 
     if (json) {

@@ -30,7 +30,7 @@ import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
-import { blindDifferences, renderSeatsTable, seatRegistryRows, stateLimitsOf, type SeatRegistryRow } from './seats.ts';
+import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
 
 // What `status` reads from outside the file and the state, so tests can stand in for it.
 export type StatusSources = {
@@ -265,7 +265,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.
   const registryRows = all || args.flags.has('json')
-    ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir, session, limits: stateLimitsOf(team, sources.home, teamIdOf(root)) })
+    ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir, session })
     : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
   // The one machine check this reading cannot pass — the same fact `doctor` reports as a finding,
@@ -305,7 +305,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ...rulesFileDifferences(standing, team, root, sources.home),
     // A seat whose reading is blind — unknown past the blind threshold — counts as
     // not working, and is a must-fix here exactly as it is in `team check`.
-    ...blindDifferences(team, state, live, comparison, now, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir, session, limits: stateLimitsOf(team, sources.home, teamIdOf(root)) }),
+    ...blindDifferences(team, state, live, comparison, now, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
   ]);
 
   if (args.flags.has('json')) {

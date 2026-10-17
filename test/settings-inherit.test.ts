@@ -82,7 +82,7 @@ describe('seats_cross_teams', () => {
 
   test('the names and the order are the ones the chain is read in', () => {
     expect(SEATS_CROSS_TEAMS.name).toBe('seats_cross_teams');
-    expect(SETTING_LEVELS).toEqual(['entity', 'project', 'team', 'seat']);
+    expect(SETTING_LEVELS).toEqual(['machine', 'entity', 'project', 'team', 'seat']);
   });
 });
 

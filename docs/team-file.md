@@ -115,6 +115,17 @@ Nothing in the launch line reads `effort`.
 `delivery_order` is optional on a seat: its own word on the order a send to it walks, described
 [below](#delivery_order).
 
+`liveness` is optional on a seat: its own word on the three liveness windows —
+`idle_lead_seconds`, `idle_owner_seconds` and `blind_after_seconds`, each a positive number of
+seconds — and it applies to that seat alone. A seat tightens the windows in force and never
+loosens one: a longer word is set aside where the thresholds resolve, the value in force standing.
+(The blind window is the one a project may open again; a seat inside may close it, not open it
+further.) Writing the map changes the seat's approval key, because the word is part of the seat.
+The levels above a seat declare their own words — the machine's `~/.config/team/settings.yaml`,
+an entity's `entities.yaml` entry, a project's record — all under `liveness`, and the watch
+section's `idle_first`, `idle_owner` and `blind_after` are the team's own, described in
+[`team watch`](commands/watch.md).
+
 ## `delivery_order`
 
 The order a send to this team's seats walks. It is not an owner section: writing or changing it
@@ -255,9 +266,12 @@ tempo: urgent
 ```
 
 - `relaxed`, `normal` or `urgent`.
-- `relaxed` doubles `idle_first`, `idle_repeat`, `team_idle`, `nudge_wait` and `unsent_after`.
-  `urgent` halves them, to the nearest second, and never below one second. `normal` leaves
-  them as written.
+- `relaxed` doubles `idle_repeat`, `team_idle`, `nudge_wait` and `unsent_after`, and doubles
+  the idle window the liveness chain resolved (`idle_first`). `urgent` halves them, to the
+  nearest second, and never below one second. `normal` leaves them as written.
+- The idle window is scaled after the chain checks its word: the tempo is the owner's dial on
+  the timing, so `relaxed` lengthens the resolved window without reading as a team loosening a
+  liveness threshold, and `urgent` shortens it. `idle_owner` and `blind_after` are never scaled.
 - An omitted `idle_repeat` stays off. `interval` is the pass rate and is not scaled, and
   neither are the quota marks, the check switches or the liveness windows `idle_owner` and
   `blind_after`.

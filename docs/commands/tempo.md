@@ -3,6 +3,9 @@
 Sets the team's tempo. `relaxed` doubles the watch's idle and nudge waits, `urgent` halves
 them, and `normal` leaves them as written. The five waits stay as the file wrote them; the
 word is what scales them, and `relaxed` or `urgent` takes effect when the watch reads the live file.
+The idle window is scaled after the liveness chain checks its word — the tempo is the owner's dial
+on the timing, not a team loosening a threshold — so `relaxed` lengthens the window the chain
+resolved and `urgent` shortens it, neither reading as a refusal.
 The owner runs it from a terminal outside herdr; every other caller is refused, whoever it is.
 
 ## Synopsis
