@@ -180,7 +180,7 @@ describe('team mcp status', () => {
     fake.process = true;
     const { rc, out } = await run(['status'], fake);
     expect(rc).toBe(0);
-    expect(out.split('\n')[0]).toBe(`mcp ${LOBBY}`);
+    expect(out.split('\n')[0]).toBe('mcp ~/.config/team/lobby');
     expect(out).toContain('  NAME');
     expect(out).toContain('  STATE');
     expect(out).toContain('  DETAIL');
@@ -268,7 +268,7 @@ describe('team mcp doctor', () => {
     fake.process = true;
     const { rc, out } = await run(['doctor'], fake);
     expect(rc).toBe(0);
-    expect(out.split('\n')[0]).toBe(`mcp ${LOBBY}`);
+    expect(out.split('\n')[0]).toBe('mcp ~/.config/team/lobby');
     expect(out).toContain('nothing missing');
     const json = await run(['doctor', '--json'], fake);
     const doc = assertMatchesOutputSchema<Record<string, any>>(json.out, MCP_OUTPUT_SCHEMA);

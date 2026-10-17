@@ -152,7 +152,7 @@ describe('a team and its projects', () => {
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(projectsFile(home), 'not a map\n');
     const { code, out } = check(root, home);
-    expect(out).toContain(`difference: the project registry: ${projectsFile(home)}`);
+    expect(out).toContain('difference: the project registry: ~/.config/team/projects.yaml');
     expect(out).toContain('  repair: fix the project registry (~/.config/team/projects.yaml)');
     expect(code).toBe(1);
     rmSync(base, { recursive: true, force: true });
@@ -175,7 +175,7 @@ describe('a team and its projects', () => {
     const { code, out } = check(root, home);
     // The roster bridge reads this file for every seat, a lead team's or not: an unreadable one
     // leaves every team unserved, and the check names it wherever it runs.
-    expect(out).toContain(`difference: the team registry cannot be read: ${teamsFile(home)}`);
+    expect(out).toContain('difference: the team registry cannot be read: ~/.config/team/teams.yaml');
     expect(out).toContain('  repair: fix the team registry (~/.config/team/teams.yaml)');
     expect(code).toBe(1);
     rmSync(base, { recursive: true, force: true });
@@ -240,7 +240,7 @@ describe('a project and its lead teams', () => {
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(teamsFile(home), 'not a map\n');
     const { code, out } = check(root, home);
-    expect(out).toContain(`difference: the team registry cannot be read: ${teamsFile(home)}`);
+    expect(out).toContain('difference: the team registry cannot be read: ~/.config/team/teams.yaml');
     expect(out).toContain('  repair: fix the team registry (~/.config/team/teams.yaml)');
     expect(code).toBe(1);
     rmSync(base, { recursive: true, force: true });
