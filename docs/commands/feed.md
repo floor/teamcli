@@ -107,6 +107,7 @@ After a send, `team feed` prints the recorded exchange with its timestamp, sende
 
 ```console
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
+team beacon, session "beacon"
 gpt-reviewer: delivered
 exit 0
 $ team feed ; echo "exit $?"

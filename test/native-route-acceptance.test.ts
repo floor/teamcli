@@ -256,7 +256,7 @@ describe('native acceptance: the record half', () => {
     const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '1234', BODY], leadIo, run);
 
     expect(code).toBe(0);
-    expect(leadIo.out).toBe('helper: recorded (native, 1234 ms)\n');
+    expect(leadIo.out).toBe('team acme, session "acme"\nhelper: recorded (native, 1234 ms)\n');
     expect(leadIo.err).toBe('');
     const entry = parseHistoryLine(readFileSync(historyPath('acme', w.root, w.home), 'utf8'));
     expect(entry).toMatchObject({

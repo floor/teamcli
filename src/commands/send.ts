@@ -10,6 +10,7 @@ import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, 
 import type { Command, Io } from '../io.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
+import { contextLine, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
@@ -98,10 +99,14 @@ this build does not make: a --wait to a Claude Code seat is refused, naming the
 native leg (the team route and the caller's own SendMessage) that carries a waited
 send once it ships; --wait to any other seat is refused too, and so is a --wait
 whose delivery order does not lead with the native leg — the frame the reply
-listener needs is that leg. Nothing is written in any of these. --json prints one
-result document instead of the lines:
-{seat, status, exit, reply?, error?, ids}. --file reads the body from a file instead
-of the one <message> argument.
+listener needs is that leg. Nothing is written in any of these.
+
+--json prints one document instead of the lines: the action surface and the
+outcome in one — {format, dry_run, status, action_summary, project, session, seat,
+channel, ids, reply?, plan?} — and --list prints its own: {format, project,
+session, seats, summary}. A run that exits 1 or 2 writes the structured error
+document instead — {error: {id, message, repair}} — and stderr stays empty.
+--file reads the body from a file instead of the one <message> argument.
 
 --record writes no drop file, sends no frame and touches no pane: the sender
 delivered with its own tool (a Claude Code seat's cross-session message), and this
@@ -116,6 +121,10 @@ CLI. \`team route <seat>\` answers the address such a delivery uses.
 
 Not in this build: broadcast, a reply from a seat that is not Claude Code, and a
 waited send — the native leg carries it.
+
+Exits 0 when delivered, answered, listed, recorded, or resolved by --dry-run,
+1 when held, not-submitted, timed out, unreachable, stopped, or refused, 2 when
+the invocation or team file can't be read.
 `;
 
 export type SendHost = {
@@ -179,8 +188,15 @@ export const DEFAULT_WAIT_S = 120;
 export const MAX_WAIT_S = 86_400;
 
 /** What the run reports besides its streams: the caller chose the document, the seat it
- *  names, and the id of the frame it composed (null until one is built). */
-type Report = { json: boolean; seat: string | null; sent: string | null };
+ *  names, the id of the frame it composed (null until one is built), and the team and session
+ *  the send addresses, read from the receiving team file once it names one. */
+type Report = {
+  json: boolean;
+  seat: string | null;
+  sent: string | null;
+  project: string | null;
+  session: string | null;
+};
 
 /** Where one send goes: the registry's answer for the spec, or the declared seat of the
  *  caller's own file. */
@@ -201,11 +217,12 @@ type Aim = {
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
   const args = readArgs(argv, ['file', 'timeout', 'record', 'channel', 'ms'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
-  const report: Report = { json: args.flags.has('json'), seat: seatName ?? null, sent: null };
+  const report: Report = { json: args.flags.has('json'), seat: seatName ?? null, sent: null, project: null, session: null };
   if (args.error) return usage(io, args.error, report);
   const detached = detachedRefusal(callerOf(io));
   if (detached !== undefined) {
-    io.stderr(`team send: ${detached}\n`);
+    if (report.json) writeJsonError(io, 'send.detached', detached, 'run team send from a terminal outside herdr');
+    else io.stderr(`team send: ${detached}\n`);
     // exit: send.detached
     return 1;
   }
@@ -312,6 +329,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     };
   }
   report.seat = to.seat;
+  // The team and session the send addresses, for the context line and the document: the
+  // receiving team's own, read from the file that names it.
+  report.project = to.project;
+  report.session = to.session;
   // A seat the receiving team file marks `stopped: true` is not addressed at all: no leg is
   // walked, nothing is typed and nothing is written down. The dry run reports the real run's
   // refusal, and the check stands above every other delivery refusal, since none of them can
@@ -484,7 +505,7 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string): string {
  */
 function recordRun(args: Args, io: Io, host: SendHost): number {
   const seatName = args.values.record as string;
-  const report: Report = { json: args.flags.has('json'), seat: seatName, sent: null };
+  const report: Report = { json: args.flags.has('json'), seat: seatName, sent: null, project: null, session: null };
   const channel = args.values.channel;
   const msRaw = args.values.ms;
   const file = args.values.file;
@@ -567,6 +588,8 @@ function recordRun(args: Args, io: Io, host: SendHost): number {
     };
   }
   report.seat = to.seat;
+  report.project = to.project;
+  report.session = to.session;
   // A stopped seat takes no record either: the same file read and the same refusal as a real
   // send, before a dry run or a history line exists. `--record` reaches here before the
   // delivery path's own check.
@@ -593,10 +616,13 @@ function recordRun(args: Args, io: Io, host: SendHost): number {
 /** The native delivery is in the history: one line, `via: native`, the sender's own span. Exit
  *  0, always. */
 function recorded(io: Io, seat: string, ms: number, id: string, report: Report): number {
+  report.sent = id;
+  const summary = `${seat}: recorded (native, ${String(ms)} ms)`;
   if (report.json) {
-    io.stdout(document({ seat, status: 'recorded', exit: 0, ids: { sent: id, reply: null } }));
+    writeAction(io, report, { status: 'recorded', summary, channel: 'native' });
   } else {
-    io.stdout(`${seat}: recorded (native, ${String(ms)} ms)\n`);
+    openText(io, report);
+    io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.recorded
 }
@@ -604,10 +630,13 @@ function recorded(io: Io, seat: string, ms: number, id: string, report: Report):
 /** What --record would write, with nothing written and nothing read: the run's own wording.
  *  Exit 0, always. */
 function recordDryRun(io: Io, seat: string, ms: number, report: Report): number {
+  const summary = `${seat}: would record (native, ${String(ms)} ms); nothing was written`;
+  const plan: PlanStep[] = [{ step: 'record', seat, detail: `native delivery, ${String(ms)} ms; nothing was written`, prefix: '+' }];
   if (report.json) {
-    io.stdout(document({ seat, status: 'dry-run', exit: 0, ids: { sent: null, reply: null } }));
+    writeAction(io, report, { status: 'dry-run', summary, dryRun: true, channel: null, plan });
   } else {
-    io.stdout(`${seat}: would record (native, ${String(ms)} ms); nothing was written\n`);
+    openText(io, report);
+    io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.record-dry-run
 }
@@ -862,11 +891,14 @@ function sealDropTree(dir: string, session: string, seat: string): void {
 /** The seat and channel. No drop file and nothing typed. One team.log line. Exit 0, always. */
 function dryRun(io: Io, dir: string, who: string, seat: string, what: string, host: SendHost, report: Report): number {
   report.sent = null;
-  logLine(dir, 'send', who, `${seat}: dry-run: ${what}`, host.now());
+  const summary = `${seat}: dry-run: ${what}`;
+  logLine(dir, 'send', who, summary, host.now());
+  const plan: PlanStep[] = [{ step: 'send', seat, detail: what, prefix: '+' }];
   if (report.json) {
-    io.stdout(document({ seat, status: 'dry-run', exit: 0, ids: { sent: null, reply: null } }));
+    writeAction(io, report, { status: 'dry-run', summary, dryRun: true, channel: null, plan });
   } else {
-    io.stdout(`${seat}: dry-run: ${what}\n`);
+    openText(io, report);
+    io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.dry-run
 }
@@ -878,6 +910,8 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return configuration(io, message || 'the team file cannot be read', report);
   }
+  report.project = loaded.team.project;
+  report.session = loaded.team.session;
   // Phase 0b: every row carries the project its team sits in — the registry project whose teams
   // name this team, else the team's own project name (a team the registry places in none is its
   // own project). An injected registry answers for itself; with none, the registry the host's home
@@ -885,21 +919,31 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
   const teamId = teamIdOf(loaded.root);
   const found = host.projects ? host.projects.ofTeam(teamId) : projectRegistry.ofTeam(host.home, teamId);
   const project = found?.name ?? loaded.team.project;
+  // The reach a send would take, judged from the declared CLI alone: a Claude Code seat carries
+  // the cross-session channel, every other CLI the typed trigger. `--list` reads no pane and
+  // dials nothing, so it claims no live address; a stopped seat renders `stopped` in its place.
   const seats = loaded.team.seats.map((seat) => ({
     name: seat.name,
     cli: seat.cli,
     role: seat.role,
-    stopped: seat.stopped === true,
     project,
+    reach: seat.cli === 'claude-code' ? 'socket' : 'typed',
+    stopped: seat.stopped === true,
   }));
+  const summary = `${String(seats.length)} seat(s)`;
   if (report.json) {
-    io.stdout(document({ seat: null, status: 'listed', exit: 0, ids: { sent: null, reply: null }, seats }));
-  } else if (seats.length === 0) {
-    io.stdout('(no seats)\n');
+    writeJson(io, 'team.send.list', {
+      format: 1 as const,
+      project: loaded.team.project,
+      session: loaded.team.session,
+      seats,
+      summary,
+    });
   } else {
-    for (const seat of seats) {
-      io.stdout(`${seat.name}  ${seat.cli}  ${seat.role}  ${seat.project}${seat.stopped ? '  (stopped)' : ''}\n`);
-    }
+    io.stdout(`${contextLine(loaded.team.project, loaded.team.session)}\n`);
+    const rows = seats.map((seat) => [seat.name, seat.role, seat.project, seat.stopped ? 'stopped' : seat.reach]);
+    for (const line of renderTable({ headers: ['SEAT', 'ROLE', 'PROJECT', 'REACH'], rows })) io.stdout(`${line}\n`);
+    io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.listed
 }
@@ -1289,20 +1333,24 @@ function seatList(team: TeamFile): string {
  *  The note names the path the send went by — `socket`, or `typed, socket <reason>` after the
  *  frame was not taken — and is left off where the seat has one channel only. */
 function delivered(io: Io, seat: string, report: Report, note?: string): number {
+  const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
   if (report.json) {
-    io.stdout(document({ seat, status: 'delivered', exit: 0, ids: { sent: report.sent, reply: null } }));
+    writeAction(io, report, { status: 'delivered', summary, channel: note === 'socket' ? 'socket' : 'typed' });
   } else {
-    io.stdout(`${seat}: delivered${note === undefined ? '' : ` (${note})`}\n`);
+    openText(io, report);
+    io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.delivered
 }
 
 /** The reply came back: printed, and the send is over. Exit 0, always. */
 function answered(io: Io, seat: string, read: { reply: string; msg_id: string | null }, report: Report): number {
+  const summary = `${seat}: answered`;
   if (report.json) {
-    io.stdout(document({ seat, status: 'answered', exit: 0, reply: read.reply, ids: { sent: report.sent, reply: read.msg_id } }));
+    writeAction(io, report, { status: 'answered', summary, channel: 'socket', reply: read.reply, replyId: read.msg_id });
   } else {
-    io.stdout(`${seat}: answered\n${read.reply}\n`);
+    openText(io, report);
+    io.stdout(`${summary}\n${read.reply}\n`);
   }
   return 0; // exit: send.answered
 }
@@ -1310,11 +1358,9 @@ function answered(io: Io, seat: string, read: { reply: string; msg_id: string | 
 /** The frame was sent on the socket, and the window closed with no reply. Exit 1, always. */
 function timedOut(io: Io, seat: string, seconds: number, report: Report): number {
   const why = `sent, no reply within ${String(seconds)}s; a seat which does not accept messages from other sessions holds the frame until a person lets it through`;
-  if (report.json) {
-    io.stdout(document({ seat, status: 'timeout', exit: 1, error: why, ids: { sent: report.sent, reply: null } }));
-  } else {
-    io.stderr(`team send: ${seat}: timeout: ${why}\n`);
-  }
+  const message = `${seat}: timeout: ${why}`;
+  if (report.json) writeJsonError(io, 'send.timeout', message);
+  else io.stderr(`team send: ${message}\n`);
   return 1; // exit: send.timeout
 }
 
@@ -1323,12 +1369,10 @@ function timedOut(io: Io, seat: string, seconds: number, report: Report): number
  *  the path, in the delivery lines' own shape (`socket`). */
 function held(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report, note?: string): number {
   const label = note === undefined ? 'held' : `held (${note})`;
-  logLine(dir, 'send', who, `${seat}: ${label}: ${reason}`, host.now());
-  if (report.json) {
-    io.stdout(document({ seat, status: 'held', exit: 1, error: reason, ids: { sent: report.sent, reply: null } }));
-  } else {
-    io.stderr(`team send: ${seat}: ${label}: ${reason}\n`);
-  }
+  const message = `${seat}: ${label}: ${reason}`;
+  logLine(dir, 'send', who, message, host.now());
+  if (report.json) writeJsonError(io, 'send.held', message);
+  else io.stderr(`team send: ${message}\n`);
   return 1; // exit: send.held
 }
 
@@ -1342,34 +1386,27 @@ function evidenceOf(result: DeliverResult): string {
 function notSubmitted(io: Io, dir: string, who: string, seat: string, result: DeliverResult, where: string, host: SendHost, report: Report): number {
   const box = result.box === undefined ? 'the box could not be read' : result.box === '' ? 'the box is empty' : `the box holds ${JSON.stringify(result.box)}`;
   const reason = `the seat did not take the trigger after ${String(result.tries)} Enter${result.tries === 1 ? '' : 's'}; ${box}; ${where}`;
-  logLine(dir, 'send', who, `${seat}: not-submitted: ${reason}`, host.now());
-  if (report.json) {
-    io.stdout(document({ seat, status: 'not-submitted', exit: 1, error: reason, box: result.box ?? null, ids: { sent: report.sent, reply: null } }));
-  } else {
-    io.stderr(`team send: ${seat}: not-submitted: ${reason}\n`);
-  }
+  const message = `${seat}: not-submitted: ${reason}`;
+  logLine(dir, 'send', who, message, host.now());
+  if (report.json) writeJsonError(io, 'send.not-submitted', message);
+  else io.stderr(`team send: ${message}\n`);
   return 1; // exit: send.not-submitted
 }
 
 /** A refusal: the message was not written, and the reason says why. Exit 1, always. */
 function refuse(io: Io, dir: string, who: string, reason: string, host: SendHost, report: Report): number {
   logLine(dir, 'send', who, `refused: ${reason}`, host.now());
-  if (report.json) {
-    io.stdout(document({ seat: report.seat, status: 'refused', exit: 1, error: reason, ids: { sent: report.sent, reply: null } }));
-  } else {
-    io.stderr(`team send: refused: ${reason}\n`);
-  }
+  if (report.json) writeJsonError(io, 'send.refused', `refused: ${reason}`);
+  else io.stderr(`team send: refused: ${reason}\n`);
   return 1; // exit: send.refused
 }
 
 /** The seat's channel was not open, and nothing was sent. Exit 1, always. */
 function unreachable(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
-  logLine(dir, 'send', who, `${seat}: unreachable: ${reason}`, host.now());
-  if (report.json) {
-    io.stdout(document({ seat, status: 'unreachable', exit: 1, error: reason, ids: { sent: report.sent, reply: null } }));
-  } else {
-    io.stderr(`team send: ${seat}: unreachable: ${reason}\n`);
-  }
+  const message = `${seat}: unreachable: ${reason}`;
+  logLine(dir, 'send', who, message, host.now());
+  if (report.json) writeJsonError(io, 'send.unreachable', message);
+  else io.stderr(`team send: ${message}\n`);
   return 1; // exit: send.unreachable
 }
 
@@ -1379,47 +1416,62 @@ function unreachable(io: Io, dir: string, who: string, seat: string, reason: str
  *  that merely failed. Exit 1, always. */
 function stoppedSeat(io: Io, dir: string, who: string, seat: string, host: SendHost, report: Report): number {
   const reason = `${seat} is stopped`;
-  logLine(dir, 'send', who, `${seat}: unreachable: ${reason}`, host.now());
-  if (report.json) {
-    io.stdout(document({ seat, status: 'stopped', exit: 1, error: reason, ids: { sent: report.sent, reply: null } }));
-  } else {
-    io.stderr(`team send: ${seat}: unreachable: ${reason}\n`);
-  }
+  const message = `${seat}: unreachable: ${reason}`;
+  logLine(dir, 'send', who, message, host.now());
+  if (report.json) writeJsonError(io, 'send.stopped', message);
+  else io.stderr(`team send: ${message}\n`);
   return 1; // exit: send.stopped
 }
 
 function usage(io: Io, message: string, report: Report): number {
-  if (report.json) io.stdout(document({ seat: report.seat, status: 'usage', exit: 2, error: message, ids: { sent: report.sent, reply: null } }));
+  if (report.json) writeJsonError(io, 'send.usage', message);
   else io.stderr(`team send: ${message}\n${USAGE}`);
   return 2; // exit: send.usage
 }
 
 function configuration(io: Io, message: string, report: Report): number {
-  if (report.json) io.stdout(document({ seat: report.seat, status: 'configuration', exit: 2, error: message, ids: { sent: report.sent, reply: null } }));
+  if (report.json) writeJsonError(io, 'send.configuration', message);
   else io.stderr(`team send: ${message}\n`);
   return 2; // exit: send.configuration
 }
 
-type SeatLine = { name: string; cli: string; role: string; stopped: boolean };
-
-/** The one machine-readable result, in a fixed key order: seat, status, exit, reply?,
- *  error?, ids, seats?. With --json it is the run's whole stdout, every outcome. */
-function document(fields: {
-  seat: string | null;
-  status: string;
-  exit: number;
+/** The one action document's own fields: the frame is `writeAction`'s. `summary` is the closing
+ *  line the plain run prints last, so the two faces say the same thing once. */
+type ActionFields = {
+  status: 'delivered' | 'answered' | 'recorded' | 'dry-run';
+  summary: string;
+  dryRun?: boolean;
+  /** The leg that carried the send: `socket`, `typed`, or `native` for a record. */
+  channel?: 'socket' | 'typed' | 'native' | null;
+  /** The reply's text, on an answered wait. */
   reply?: string;
-  error?: string;
-  /** What a `not-submitted` seat's box held, not counting faint text; null when it could not be read. */
-  box?: string | null;
-  ids: { sent: string | null; reply: string | null };
-  seats?: SeatLine[];
-}): string {
-  const out: Record<string, unknown> = { seat: fields.seat, status: fields.status, exit: fields.exit };
-  if (fields.reply !== undefined) out.reply = fields.reply;
-  if (fields.error !== undefined) out.error = fields.error;
-  if (fields.box !== undefined) out.box = fields.box;
-  out.ids = fields.ids;
-  if (fields.seats !== undefined) out.seats = fields.seats;
-  return `${JSON.stringify(out)}\n`;
+  /** The reply frame's own id, on an answered wait. */
+  replyId?: string | null;
+  plan?: readonly PlanStep[];
+};
+
+/** Writes the `team.send` action document (the envelope's tag first, then the action surface,
+ *  then the command's own fields) — the frame every exit-0 outcome shares. */
+function writeAction(io: Io, report: Report, fields: ActionFields): void {
+  writeJson(io, 'team.send', {
+    format: 1 as const,
+    dry_run: fields.dryRun === true,
+    status: fields.status,
+    action_summary: fields.summary,
+    project: report.project,
+    session: report.session,
+    seat: report.seat,
+    ...(fields.channel !== undefined ? { channel: fields.channel } : {}),
+    ids: { sent: report.sent, reply: fields.replyId ?? null },
+    ...(fields.reply !== undefined ? { reply: fields.reply } : {}),
+    ...(fields.plan !== undefined ? { plan: [...fields.plan] } : {}),
+  });
+}
+
+/** The context line every exit-0 run opens on, when the receiving team file names the team:
+ *  `team <project>, session "<session>"`. A run refused before the file was read has none. */
+function openText(io: Io, report: Report): void {
+  if (report.project !== null && report.session !== null) {
+    io.stdout(`${contextLine(report.project, report.session)}\n`);
+  }
 }

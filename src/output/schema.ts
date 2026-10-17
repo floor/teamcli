@@ -620,6 +620,75 @@ export const ROUTE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** Published `--json` output schema for `team send` (`schema/send.schema.json`): the action
+ *  surface every send outcome prints (`team.send`), and the roster `--list` reads
+ *  (`team.send.list`). A refused or unreadable run writes the `team.error` envelope instead. */
+export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.send',
+  fileName: 'send.schema.json',
+  title: 'team send --json output',
+  required: [],
+  properties: {},
+  oneOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['schema', 'format', 'dry_run', 'status', 'action_summary', 'project', 'session', 'seat', 'ids'],
+      properties: {
+        schema: schemaTagFragment('team.send', 1),
+        format: { type: 'integer', const: 1 },
+        dry_run: { type: 'boolean' },
+        status: { type: 'string', enum: ['delivered', 'answered', 'recorded', 'dry-run'] },
+        action_summary: { type: 'string', minLength: 1 },
+        project: { type: ['string', 'null'] },
+        session: { type: ['string', 'null'] },
+        seat: { type: 'string', minLength: 1 },
+        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'native', null] },
+        ids: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['sent', 'reply'],
+          properties: {
+            sent: { type: ['string', 'null'] },
+            reply: { type: ['string', 'null'] },
+          },
+        },
+        reply: { type: 'string' },
+        address: { type: ['string', 'null'] },
+        plan: { type: 'array', items: PLAN_STEP_SCHEMA_FRAGMENT },
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['schema', 'format', 'project', 'session', 'seats', 'summary'],
+      properties: {
+        schema: schemaTagFragment('team.send.list', 1),
+        format: { type: 'integer', const: 1 },
+        project: { type: 'string', minLength: 1 },
+        session: { type: 'string', minLength: 1 },
+        seats: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name', 'cli', 'role', 'project', 'reach', 'stopped'],
+            properties: {
+              name: { type: 'string', minLength: 1 },
+              cli: { type: 'string', minLength: 1 },
+              role: { type: 'string' },
+              project: { type: 'string', minLength: 1 },
+              reach: { type: 'string', enum: ['socket', 'typed'] },
+              stopped: { type: 'boolean' },
+            },
+          },
+        },
+        summary: { type: 'string', minLength: 1 },
+      },
+    },
+  ],
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -633,5 +702,6 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ASK_SHOW_OUTPUT_SCHEMA,
   MESSAGES_OUTPUT_SCHEMA,
   ROUTE_OUTPUT_SCHEMA,
+  SEND_OUTPUT_SCHEMA,
 ];
 

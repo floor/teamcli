@@ -265,7 +265,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       expect(await runSend(['builder-1', 'first brief'], sendIo, sendHost)).toBe(0);
       // No socket file under the host's sockets folder: a plain send is the typed trigger, and
       // the outcome is the plain word.
-      expect(sendIo.out).toBe('builder-1: delivered\n');
+      expect(sendIo.out).toBe('team acme-v4, session "acme-v4"\nbuilder-1: delivered\n');
 
       // 2. Under ~/Code/acme-lab/archive: also admitted by the same record.
       const archive = join(sb.lab, 'archive');

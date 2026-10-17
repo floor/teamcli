@@ -3285,7 +3285,7 @@ scene('send.dry-run', async (place) => {
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['--list'], owner, sendHost(place)), 'lead  claude-code');
+  return show(await sent(place, ['--list'], owner, sendHost(place)), '  lead  coordinator  acme     socket');
 });
 
 /** The file's lead seat, registered and rostered: `route` hands out addresses from the registry

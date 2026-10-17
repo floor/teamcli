@@ -183,7 +183,7 @@ describe('team send: the plain send is the typed trigger again', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');

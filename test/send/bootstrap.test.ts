@@ -45,7 +45,7 @@ describe("team send: the file's seat, before its record", () => {
     expect(io.err).toBe('');
     // The delivery path stays another suite's subject: the plain word is the outcome here.
     // What this file judges is the header the receiver reads.
-    expect(io.out.startsWith('lead: delivered'), `outcome line: ${io.out}`).toBe(true);
+    expect(io.out, `outcome line: ${io.out}`).toBe('team acme, session "acme"\nlead: delivered\n');
     const drops = dropDir(one.dir, 'lead');
     expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
       "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\na note",
@@ -62,7 +62,7 @@ describe("team send: the file's seat, before its record", () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out.startsWith('native: delivered'), `outcome line: ${io.out}`).toBe(true);
+    expect(io.out, `outcome line: ${io.out}`).toBe('team acme, session "acme"\nnative: delivered\n');
     const drops = dropDir(one.dir, 'native');
     expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
       "from the file's seat lead (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team\n\na note",

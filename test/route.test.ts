@@ -582,7 +582,7 @@ describe('send --record: the delivery the sender made itself', () => {
     const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '812'], leadIo, run);
 
     expect(code).toBe(0);
-    expect(leadIo.out).toBe('helper: recorded (native, 812 ms)\n');
+    expect(leadIo.out).toBe('team acme, session "acme"\nhelper: recorded (native, 812 ms)\n');
     expect(leadIo.err).toBe('');
     const text = readFileSync(historyPath('acme', w.root, w.home), 'utf8');
     const entry = parseHistoryLine(text);
@@ -665,7 +665,7 @@ describe('send --record: the delivery the sender made itself', () => {
     const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '812', '--dry-run'], leadIo, host(w));
 
     expect(code).toBe(0);
-    expect(leadIo.out).toBe('helper: would record (native, 812 ms); nothing was written\n');
+    expect(leadIo.out).toBe('team acme, session "acme"\nhelper: would record (native, 812 ms); nothing was written\n');
     expect(existsSync(historyPath('acme', w.root, w.home))).toBe(false);
   });
 
@@ -675,8 +675,20 @@ describe('send --record: the delivery the sender made itself', () => {
     const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '812', '--json'], leadIo, host(w));
 
     expect(code).toBe(0);
-    const doc = JSON.parse(leadIo.out) as { seat: string; status: string; exit: number; ids: { sent: string } };
-    expect(doc).toMatchObject({ seat: 'helper', status: 'recorded', exit: 0 });
+    const doc = JSON.parse(leadIo.out) as {
+      schema: { name: string; version: number };
+      format: number;
+      dry_run: boolean;
+      status: string;
+      action_summary: string;
+      seat: string;
+      channel: string;
+      ids: { sent: string; reply: null };
+    };
+    expect(doc.schema).toEqual({ name: 'team.send', version: 1 });
+    expect(doc).toMatchObject({ seat: 'helper', status: 'recorded', dry_run: false, channel: 'native' });
+    expect(doc.action_summary).toBe('helper: recorded (native, 812 ms)');
+    expect(doc.ids.reply).toBeNull();
     const entry = parseHistoryLine(readFileSync(historyPath('acme', w.root, w.home), 'utf8'));
     expect(entry?.id).toBe(doc.ids.sent);
   });
