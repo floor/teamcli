@@ -450,7 +450,7 @@ test('remove: the caller gate refuses unset and is a logged warning under dev mo
 
 const ADD_LINE = 'only the owner or a standing grant (delegate) runs it; this call is unplaced (it runs under herdr)';
 const RESTART_LINE = 'only the owner or `leads` restarts a seat; this call is unplaced (it runs under herdr)';
-const INIT_LINE = 'only the owner runs init, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
+const INIT_LINE = 'only the owner runs this, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
 
 test('add: unset, the caller gate refuses; set, it warns, logs and the run reads on', async () => {
   const refused = repo();

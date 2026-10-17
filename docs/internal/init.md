@@ -51,7 +51,7 @@ named. A run with no terminal is refused with one sentence, before the repositor
 | Message | Exit |
 | --- | --- |
 | `team init: only the owner runs this, from a terminal outside herdr` — a run with no terminal | 1 |
-| `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` | 1 |
+| `team init: only the owner runs this, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team init: not inside a git repository` | 2 |
 | `team init: .agents/team.yaml is tracked by git, and a team file is private. Untrack it, keeping the file:` … | 1 |
 | `team init: .agents/team.yaml exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.` | 1 |
@@ -75,7 +75,7 @@ A seat can't run it:
 
 ```console caller=agent
 $ team init ; echo "exit $?"
-team init: only the owner runs init, from a terminal outside herdr; this call is unplaced (it is run by an agent (claude) outside herdr)
+team init: only the owner runs this, from a terminal outside herdr; this call is unplaced (it is run by an agent (claude) outside herdr)
 exit 1
 ```
 

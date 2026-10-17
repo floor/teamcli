@@ -459,7 +459,7 @@ describe("a create-grant's runner outside herdr", () => {
 
       const initIo = walkIo(v5, UNDER_HERDR);
       expect(await runInit([], initIo, sb.home, undefined, noLogin)).toBe(1);
-      expect(initIo.err).toContain('only the owner runs init');
+      expect(initIo.err).toContain('only the owner runs this');
       expect(existsSync(join(v5, '.agents', 'team.yaml'))).toBe(false);
 
       mkdirSync(join(v5, '.agents'), { recursive: true });
