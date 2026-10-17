@@ -6,7 +6,7 @@ import { loadTeamFile } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { lobbyDir } from '../lobby/gate.ts';
-import { contextLine, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
+import { contextLine, hasJsonFlag, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import {
   parseHistoryLine,
   readAllHistories,
@@ -606,7 +606,9 @@ function unreadable(io: Io, reason: string, json: boolean): number {
 
 export async function runFeed(argv: string[], io: Io, sources: FeedSources = realSources): Promise<number> {
   const args = readArgs(argv, ['seat', 'limit', 'audit', 'briefs'], ['all', 'follow', 'json']);
-  const json = args.flags.has('json');
+  // The raw argv, not the parser's flags: an unknown option before `--json`, or `--json=<value>`,
+  // must still route the refusal through the `team.feed` error document on stdout.
+  const json = hasJsonFlag(argv);
   const follow = args.flags.has('follow');
   // A follow is a stream of tables, not one document: `--json` prints one object per run.
   if (args.error || args.rest.length || (follow && json)) {

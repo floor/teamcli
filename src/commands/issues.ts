@@ -8,6 +8,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
 import {
   contextLine,
+  hasJsonFlag,
   renderTable,
   ttyStyle,
   writeJson,
@@ -88,7 +89,9 @@ function issueJson(record: TaskRecord): IssueJson {
 export async function runIssues(argv: string[], io: Io, sources: IssuesSources = {}): Promise<number> {
   const out = cleanedIo(io);
   const args = readArgs(argv, [], ['json']);
-  const json = args.flags.has('json');
+  // The raw argv, not the parser's flags: an unknown option before `--json`, or `--json=<value>`,
+  // must still route the refusal through the `team.issues` error document on stdout.
+  const json = hasJsonFlag(argv);
   if (args.error || args.rest.length) {
     const why = plainText(args.error ?? `unexpected "${args.rest[0]}"`);
     if (json) writeJsonError(io, 'issues.invocation', why, null);

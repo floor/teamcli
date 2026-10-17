@@ -22,7 +22,7 @@ import {
 import { findRoot, loadTeamFile, NOT_A_REPO } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
-import { contextLine, writeJson, writeJsonError } from '../output/index.ts';
+import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { formatRecords } from '../tasks/format.ts';
@@ -78,7 +78,9 @@ export default next;
 
 export async function runNext(argv: string[], io: Io, sources: NextSources = {}): Promise<number> {
   const args = readArgs(argv, [], ['mine', 'release', 'wait', 'json']);
-  const json = args.flags.has('json');
+  // The raw argv, not the parser's flags: an unknown option before `--json`, or `--json=<value>`,
+  // must still route the refusal through the `team.next` error document on stdout.
+  const json = hasJsonFlag(argv);
   // A wait prints its events as they happen; that stream is not one document, so the two are
   // refused together, the same way `team seats` refuses --watch with --json.
   if (args.flags.has('wait') && json) {

@@ -389,6 +389,16 @@ describe('team issues', () => {
     expect(invocation.code).toBe(2);
     expect(invocation.err).toBe('');
     assertJsonErrorShape(invocation.out, { id: 'issues.invocation', messageContains: 'unexpected "extra"' });
+    // The raw argv is scanned before the parser runs: an unknown option ahead of `--json`, or a
+    // `--json=<value>` the parser refuses, still writes the error document and leaves stderr empty.
+    const nope = await run(['--nope', '--json']);
+    expect(nope.code).toBe(2);
+    expect(nope.err).toBe('');
+    assertJsonErrorShape(nope.out, { id: 'issues.invocation', messageContains: 'unknown option --nope' });
+    const inline = await run(['--json=1']);
+    expect(inline.code).toBe(2);
+    expect(inline.err).toBe('');
+    assertJsonErrorShape(inline.out, { id: 'issues.invocation', messageContains: 'unknown option --json' });
   });
 
   test('an old approval adopts an omitted tasks section, and adding one differs', () => {

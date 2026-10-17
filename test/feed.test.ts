@@ -404,6 +404,18 @@ describe('team send history log & team feed', () => {
     expect(usage.err).toBe('');
     assertJsonErrorShape(usage.out, { id: 'feed.usage', messageContains: 'unexpected "extra"' });
 
+    // The raw argv is scanned before the parser runs: an unknown option ahead of `--json`, or a
+    // `--json=<value>` the parser refuses, still writes the error document and leaves stderr empty.
+    const nope = testIo(root);
+    expect(await runFeed(['--nope', '--json'], nope, { home })).toBe(2);
+    expect(nope.err).toBe('');
+    assertJsonErrorShape(nope.out, { id: 'feed.usage', messageContains: 'unknown option --nope' });
+
+    const inline = testIo(root);
+    expect(await runFeed(['--json=1'], inline, { home })).toBe(2);
+    expect(inline.err).toBe('');
+    assertJsonErrorShape(inline.out, { id: 'feed.usage', messageContains: 'unknown option --json' });
+
     const badLimit = testIo(root);
     expect(await runFeed(['--json', '--limit', '0'], badLimit, { home })).toBe(2);
     expect(badLimit.err).toBe('');
