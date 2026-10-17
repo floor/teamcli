@@ -2,8 +2,9 @@
 
 One answer to one question: **is anything wrong with this team that someone should act on?**
 It reads the team file, the approval, the state, herdr and the registries, and changes nothing
-but the state's two leftovers the owner's `--repair` drops — no git is needed, so it answers as
-well in a plain folder as in a repository. Where
+except the repairs the owner's `--repair` makes — the state's two leftovers dropped, the dev-mode
+mark an agent's registration left cleared, and herdr's drifted sidebar lines set back from the
+file — no git is needed, so it answers as well in a plain folder as in a repository. Where
 [`team status`](status.md) says what the team is, the check says what to act on: the differences
 alone, each with its repair.
 It is also the old name of [`team commits check`](commits.md) and [`team pr check`](pr.md), still
@@ -49,6 +50,18 @@ and a session herdr runs is still a leftover when no seat of the team is in it. 
 waits for the live read: a check whose herdr cannot answer refuses with `check.herdr`, exit 2, and
 drops nothing.
 
+The owner's `--repair` is one write over the findings the check can settle from what it already
+holds — the file is the truth — and nothing more. The state's leftovers above are dropped. A seat
+an agent registered under dev mode, the record the check counts rather than names while dev mode
+is on, is recorded again with the caller gate in force: the same write the owner's own
+`team register <seat>` makes, with the mark and the caller it named cleared. Each herdr sidebar
+line that drifted is set back from the file through the same rename and display report
+`team register <seat>` makes. Each repair is named in one `repaired:` line and written to the log;
+a herdr that will not take a sidebar line says so as `team register` does, and its difference
+stands. Everything else keeps its advice — a model drift's relaunch, a blind seat's look at the
+pane — because those are decisions, not writes the file settles, and `--repair` never starts,
+stops or relaunches a seat.
+
 ## Synopsis
 
     team check [--session <name>] [--file <path>] [--repair] [--json]
@@ -59,7 +72,7 @@ drops nothing.
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
-| `--repair` | — | drop the state's leftovers: a record for a seat the file no longer declares, and a session with no seat of the team in it; the owner's alone |
+| `--repair` | — | the owner's repair, one write: drop the state's leftovers (a record for a seat the file no longer declares, a session with no seat of the team in it), re-record a seat an agent registered under dev mode with the caller gate in force, and set herdr's drifted sidebar lines back from the file; the owner's alone |
 | `--json` | — | emit the structured `team.check` JSON document on stdout (`schema/check.schema.json`) |
 
 ## Who may run it
@@ -79,7 +92,7 @@ meet the refusal every command gives them and exit 1.
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | nothing needs acting on | `team <project>, session "<session>"`, any deprecation `warning:` or `note:` lines, and `0 difference(s)` | 0 |
-| the owner's `--repair` dropped the state's leftovers, and nothing else needs acting on | `team <project>, session "<session>"`, one `repaired: <what was dropped>` line per record, and `0 difference(s)` | 0 |
+| the owner's `--repair` repaired what it can (the state's leftovers dropped, dev-mode marks cleared, drifted sidebar lines set back), and nothing else needs acting on | `team <project>, session "<session>"`, one `repaired: <what was repaired>` line per repair, and `0 difference(s)` | 0 |
 | something needs acting on | `team <project>, session "<session>"`, one `difference:` block per finding with its `  repair:` and `  who:` lines under it, then `<n> difference(s)` (and `, <m> for the owner` when any finding is the owner's) | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | the check can't run (the loader's, the state's or herdr's own text), the invocation can't be read, or the caller may not check this team | `team check: <problem>`, or the one fixed sentence | 2 |

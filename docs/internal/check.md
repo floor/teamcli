@@ -8,9 +8,10 @@ the exit codes stay on the page.
 ## What the run does: the differences, each with its repair
 
 One answer to one question: **is anything wrong with this team that someone should act on?**
-It reads the team file, the approval, the state and herdr, and changes nothing but the two
-leftovers the owner's `--repair` drops — no git is needed, so it answers as well in a plain folder
-as in a repository. It is not
+It reads the team file, the approval, the state, herdr and the registries, and changes nothing
+except what the owner's `--repair` settles — the state's two leftovers, the dev-mode mark an
+agent's registration left, and the two herdr sidebar lines — no git is needed, so it answers as
+well in a plain folder as in a repository. It is not
 [`team status`](status.md) with fewer lines: status answers *what the team is* — the rows, the
 budgets, every difference and note — and the check answers *what to act on*: the differences
 alone, each with its repair, and the one note a file can earn.
@@ -37,10 +38,11 @@ A record with no pane reads `<seat>: left the team file but its record is still 
 repair is never an edit of the file and never a guess at which record is right: the commands that
 resolve who holds a pane read past a record the file does not declare (`seatOfFile`,
 `src/state.ts`), so a departed seat's old record no longer refuses the real seat's registration,
-and the record itself waits for the owner's `--repair`. That flag is the check's one act: it drops
-exactly the leftovers it named, in one locked state write, re-checking each record against the
-state now on disk; it prints one `repaired:` line per record, logs each line under `check` and the
-owner, and leaves the file, the approval store and every other record as they stood. A temporary
+and the record itself waits for the owner's `--repair`. That flag is the check's one act, and it
+settles three findings from what the run already holds. The state's leftovers are dropped exactly
+as named, in one locked state write, re-checking each record against the state now on disk; it
+prints one `repaired:` line per record, logs each line under `check` and the owner, and leaves the
+file, the approval store and every other record as they stood. A temporary
 seat is never a leftover: `team add --temporary` never writes one into the file, so its record is
 the only place it exists, and neither the check nor the repair touches it. A session with a seat
 of the team in it — a name the file declares, or a temporary seat — is the team's too, whatever
@@ -56,9 +58,37 @@ anything, so a refused run has changed nothing.
 
 The repair is the owner's alone. A caller that passes the gate but is not the owner meets
 `team check: --repair is the owner's` and exit 1, as it does for the two aimed flags; nothing is
-written. A `--repair` run whose drop leaves nothing else to act on is a clean check — the `repaired:`
+written. A `--repair` run whose repairs leave nothing else to act on is a clean check — the `repaired:`
 lines, then `0 difference(s)`, exit 0. A state write that fails throws, as every
 command's state write does, and the run is `team.command-threw`'s.
+
+## The other two repairs
+
+The same `--repair` settles the two findings whose repair is a write the file already settles, and
+nothing else. A file seat whose newest registry record carries the dev-mode mark — the record a
+run with a folded caller gate wrote (`devModeDifferences`, `src/check/team.ts`) — is recorded
+again with the caller gate in force: the same record `team register <seat>` writes as the owner,
+through `updateAgent`'s `provenance.dev_mode: false` patch, which clears the mark and the caller
+and time it named. The `repaired:` line reads `<seat>: re-recorded with the caller gate in force;
+the dev-mode mark is cleared`. Under a governing `dev-mode` policy the finding is the quiet count
+note rather than a row per seat, and the repair takes the mark off all the same — the note then
+counts none. A team with no `home` has no registry to read or write, and the mark is invisible to
+it, exactly as the finding is.
+
+Each herdr sidebar line that drifted — line 1 off `workspaceLabel(seat)`, line 2 one neither the
+file's display nor the watch's observation explains (`labelDrifts`) — is set back from the file
+through the same two writes `team register <seat>` makes: `workspaceRename` for the workspace
+label, `reportDisplayAgent` for the display line. Each successful write is one `repaired:` line —
+`<seat>: its herdr workspace label is set back to "<label>"` or `<seat>: its herdr display is set
+back to "<line>"` — and the live session is read again after the writes, so the comparison reports
+the sidebar the repair left. A herdr that will not take a line says `<seat>: its title was not
+reported` (or `its display was not reported`), as `team register` does, and that difference
+stands. Only the line that drifted is written: a correct display line is not re-reported because
+its workspace label moved.
+
+Nothing else is repaired. A model drift keeps its relaunch, a blind seat its look at the pane, a
+roster gap its `team register` — those are decisions the run names, and `--repair` never starts,
+stops or relaunches a seat.
 
 ## Who the check answers
 
@@ -169,7 +199,8 @@ and open nothing: the target is the file the caller's own place finds.
 
 It writes nothing at all — not the state, not the store, not the `last_valid` copy `status`
 keeps beside the file it read — for every caller, the owner included, save the one act: the
-owner's `--repair` write that drops the leftovers named above.
+owner's `--repair`, which drops the leftovers named above, clears a dev-mode mark and sets a
+drifted sidebar line back from the file.
 
 ## Output
 
@@ -196,12 +227,13 @@ The closing line counts the differences and, when any are the owner's, how many 
 (`<n> difference(s), <k> for the owner`, or `<n> difference(s)` when none are the owner's). With
 nothing to act on it is `0 difference(s)`.
 
-A `--repair` run that dropped records prints one `repaired: <what was dropped>` line per record before
-the notes and differences — `repaired: <seat>: left the team file and its record claimed pane <pane>; its record is
-dropped` and `repaired: the state's session "<name>" holds no seat of the team; its record is
-dropped` — and each line is written to the project's log under `check` and the owner's label. The
-drop runs before the comparison, so a check whose only findings were the leftovers answers
-`0 difference(s)`, exit 0.
+A `--repair` run prints one `repaired: <what was repaired>` line per repair before the notes and
+differences — the dropped records (`repaired: <seat>: left the team file and its record claimed
+pane <pane>; its record is dropped`, `repaired: the state's session "<name>" holds no seat of the
+team; its record is dropped`), the cleared marks (`repaired: <seat>: re-recorded with the caller
+gate in force; the dev-mode mark is cleared`) and the set-back sidebar lines — and each line is
+written to the project's log under `check` and the owner's label. The repairs run before the
+comparison, so a check whose only findings were among them answers `0 difference(s)`, exit 0.
 
 Under `--json`, the check writes a single JSON document on `stdout` with `schema: { name: "team.check", version: 1 }`, `format: 1`, `project`, `session`, `warnings`, `repaired`, `notes`, `differences` (`{ what, repair, who }`), and `summary` (`{ differences, owner_differences }`). Any invocation or gate refusal under `--json` writes a `team.error` JSON envelope (`schema/error.schema.json`) on `stdout` with `stderr` empty.
 
