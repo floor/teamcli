@@ -153,7 +153,7 @@ needs no caller check.
 | Caller | May send to |
 | --- | --- |
 | the owner | any agent |
-| an orchestrator | an orchestrator, in any team |
+| an orchestrator | an orchestrator of its own team or entity |
 | a team's orchestrator or operator | any seat of its own team |
 | an assistant seat | its entity's main coordinator |
 | any seat | its own team's orchestrator |
