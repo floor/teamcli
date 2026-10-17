@@ -590,7 +590,7 @@ Hidden: no
 
 Usage:
 
-    team pr check <file> [--file <path>]
+    team pr check <file> [--file <path>] [--json]
 
 ### Flags
 
@@ -609,7 +609,7 @@ Hidden: no
 
 Usage:
 
-    team pr check <file> [--file <path>]
+    team pr check <file> [--file <path>] [--json]
 
 #### Flags
 
@@ -617,6 +617,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals

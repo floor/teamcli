@@ -1040,6 +1040,12 @@
               "takesValue": false
             },
             {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -1057,12 +1063,12 @@
           ],
           "subcommands": [],
           "usage": [
-            "team pr check <file> [--file <path>]"
+            "team pr check <file> [--file <path>] [--json]"
           ]
         }
       ],
       "usage": [
-        "team pr check <file> [--file <path>]"
+        "team pr check <file> [--file <path>] [--json]"
       ]
     },
     {
