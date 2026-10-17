@@ -452,9 +452,9 @@ test('remove: the caller gate refuses unset and is a logged warning under dev mo
 // refuses — which a run still standing at the gate could never say. The exact `1` is the mode;
 // `true` is not it.
 
-const ADD_LINE = 'only the owner or a standing grant (delegate) runs it; this call is unplaced (it runs under herdr)';
+const ADD_LINE = 'only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
 const RESTART_LINE = 'only the owner or `leads` restarts a seat; this call is unplaced (it runs under herdr)';
-const INIT_LINE = 'only the owner runs init, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
+const INIT_LINE = 'only the owner runs this, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
 
 test('add: unset, the caller gate refuses; set, it warns, logs and the run reads on', async () => {
   const refused = repo();
@@ -556,12 +556,12 @@ test('register: unset, the caller gate refuses; set, it warns and the run reads 
   readIo.env = { ...readIo.env, TEAMCLI_DEV_MODE: '1' };
   expect(await runRegister(['lead'], readIo, registerSources(readOn.home))).toBe(1);
   expect(readIo.err).toBe(
-    `team register: warning: ${REGISTER_LINE}\n`
+    `team register: warning: ${REGISTER_LINE}; dev mode continues\n`
     + 'team register: no agent named lead is running in session "acme"; nothing was registered\n',
   );
   expect(readIo.out).toBe('');
   expect(readFileSync(join(readOn.root, '.agents', 'team.log'), 'utf8'))
-    .toContain(`warning: ${REGISTER_LINE}\n`);
+    .toContain(`warning: ${REGISTER_LINE}; dev mode continues\n`);
 });
 
 // --- the owner-only edits ---------------------------------------------------------------------

@@ -24,10 +24,11 @@ with the body written to a file or piped in with `-`.
 
 ## What it finds
 
-The body is printed as one section, its findings under it:
+Each finding is printed as a `difference:` block with its repair:
 
-    pull request body
-      line 5: forbidden pattern ^Claude-Session:
+    difference: pull request body, line 5: forbidden pattern ^Claude-Session: — "Claude-Session: 8f21c4a9"
+      repair: edit the pull request body so the line no longer matches (its author can edit it on the pull request)
+      who: any seat
 
 | Finding | Meaning |
 | --- | --- |
@@ -36,6 +37,12 @@ The body is printed as one section, its findings under it:
 
 The closing line says `team pr check: 1 pull request body checked: ok`, or
 `…: the pull request body refused`.
+
+Under `--json` the same report is the `team.pr` document (`schema/pr.schema.json`): the
+`differences` with their `repair` and `who`, the loader's warnings as `notes` (the plain report
+prints none: a file deprecation warning is `team check`'s to print), and a `summary` of
+the differences. A refusal is the `team.error` document on stdout, with the
+`contract/exit-codes.json` row id, and stderr stays empty.
 
 ## Refusals
 
@@ -52,9 +59,11 @@ The old spelling `team check … --pr <file>` still runs this body check, one no
 
 ## Examples, moved here whole
 
-The examples below are the page's own, moved here whole, in the order they stood in. The
-first console is also on [the `team pr check` page](../commands/pr.md); the rest stand only in this
-note and are not executed by any test — `test/docs.test.ts` reads `docs/commands/` alone.
+The examples below are the page's own, moved here whole, in the order they stood in. The first
+two consoles (a passing body, and one that forgot the signature) also stand on [the `team pr
+check` page](../commands/pr.md), where `test/docs.test.ts` executes them; the rest stand only in
+this note and are not executed — `test/docs.test.ts` reads `docs/commands/` alone. The page's own
+`--json` console is not repeated here.
 
 ```yaml file=.agents/team.yaml
 format: 1
@@ -102,7 +111,6 @@ The metrics page is ready for review.
 
 ```console
 $ team pr check pr.md ; echo "exit $?"
-team pr check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 team pr check: 1 pull request body checked: ok
 exit 0
 ```
@@ -117,9 +125,9 @@ The old one timed out on the flaky test.
 
 ```console
 $ team pr check body.md ; echo "exit $?"
-team pr check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-pull request body
-  no signature: expected "**Agent:** {display} · {role}" in the last line
+difference: pull request body: no signature: expected "**Agent:** {display} · {role}" in the last line
+  repair: end the pull request body with a seat's signature (its author can edit it on the pull request)
+  who: any seat
 team pr check: 1 pull request body checked: the pull request body refused
 exit 1
 ```
@@ -137,10 +145,9 @@ Claude-Session: 8f21c4a9
 
 ```console
 $ team pr check leak.md ; echo "exit $?"
-team pr check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-pull request body
-  line 5: forbidden pattern ^Claude-Session:
-    Claude-Session: 8f21c4a9
+difference: pull request body, line 5: forbidden pattern ^Claude-Session: — "Claude-Session: 8f21c4a9"
+  repair: edit the pull request body so the line no longer matches (its author can edit it on the pull request)
+  who: any seat
 team pr check: 1 pull request body checked: the pull request body refused
 exit 1
 ```
@@ -149,7 +156,6 @@ A body file that isn't there can't be read:
 
 ```console
 $ team pr check missing.md ; echo "exit $?"
-team pr check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 team pr check: can't read the pull request body: ENOENT: no such file or directory, open './missing.md'
 exit 2
 ```

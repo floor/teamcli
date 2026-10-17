@@ -302,6 +302,24 @@ export function renderSummary(diffs: readonly OutputDifference[]): string {
 }
 
 /**
+ * A timestamp said as its age: `12s ago`, `4m ago`, `3h ago`, `2d ago`. The value is clamped at
+ * the reading's own moment, so a stamp from the future reads `0s ago`, never a negative age.
+ * `-` stands for no timestamp and for one that is not a date.
+ */
+export function formatRelativeTime(iso: string | null | undefined, now: Date): string {
+  if (!iso) return '-';
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return '-';
+  const seconds = Math.max(0, Math.floor((now.getTime() - parsed) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+/**
  * Single severity vocabulary for diagnostic/prerequisite rows (`team doctor`, `team mcp doctor`):
  * `ok` (`ok  `), `warn` (`warn`), `miss` (`MISS`), and `note` (`--  `).
  */
@@ -373,6 +391,40 @@ export function renderDryRunPlan(header: string | null, steps: readonly PlanStep
   for (const step of steps) lines.push(renderPlanStep(step));
   lines.push('dry run: nothing was run');
   return lines;
+}
+
+/**
+ * One launch-plan step (`src/launch/plan.ts`), read structurally so the output layer never
+ * depends on the launch layer.
+ */
+export interface PlanSource {
+  readonly kind: 'run' | 'wait' | 'skip';
+  readonly argv?: readonly string[];
+  readonly text?: string;
+  readonly do?: { readonly do: string; readonly seat?: string };
+}
+
+/**
+ * The `--dry-run` plan as `PlanStep`s (§5.4): one step per plan line, carrying the same seat
+ * and the command the plain plan prints. A run step is named by the op it performs
+ * (`workspace`, `launch`, …), a wait and a skip by their own kind.
+ */
+export function planStepsOf(sources: readonly PlanSource[]): PlanStep[] {
+  return sources.map((source) => {
+    const seat = source.do?.seat;
+    if (source.kind === 'run') {
+      return {
+        step: source.do?.do === 'create' ? 'workspace' : (source.do?.do ?? 'run'),
+        ...(seat !== undefined ? { seat } : {}),
+        detail: (source.argv ?? []).map((word) => plainLine(word)).join(' '),
+        prefix: '+' as const,
+      };
+    }
+    if (source.kind === 'wait') {
+      return { step: 'wait', ...(seat !== undefined ? { seat } : {}), detail: plainLine(source.text ?? '') };
+    }
+    return { step: 'skip', ...(seat !== undefined ? { seat } : {}), detail: plainLine(source.text ?? ''), prefix: 'skip' as const };
+  });
 }
 
 export interface ActionSummarySpec {

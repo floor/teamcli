@@ -335,10 +335,11 @@ Agent: Claude Opus 5.5 · implementer
 ```console
 $ team check HEAD ; echo "exit $?"
 team check: `team check` is now `team commits check`, and is still read through 0.3.3
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-<sha> Tidy the logs
-  line 5: forbidden pattern ^Claude-Session:
-    Claude-Session: 8f21c4a9
+COMMIT      STATUS   DETAIL
+<sha>  refused  Tidy the logs
+difference: commit <sha> "Tidy the logs", line 5: forbidden pattern ^Claude-Session: — "Claude-Session: 8f21c4a9"
+  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)
+  who: any seat
 team commits check: 1 commit checked: 1 commit refused
 exit 1
 ```
@@ -355,10 +356,11 @@ The metrics page is ready for review.
 $ team check HEAD --pr pr.md ; echo "exit $?"
 team check: `team check` is now `team commits check`, and is still read through 0.3.3
 team check: `team check --pr` is now `team pr check`, and is still read through 0.3.3
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-<sha> Tidy the logs
-  line 5: forbidden pattern ^Claude-Session:
-    Claude-Session: 8f21c4a9
+COMMIT      STATUS   DETAIL
+<sha>  refused  Tidy the logs
+difference: commit <sha> "Tidy the logs", line 5: forbidden pattern ^Claude-Session: — "Claude-Session: 8f21c4a9"
+  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)
+  who: any seat
 team commits check: 1 commit checked, 1 pull request body checked: 1 commit refused
 exit 1
 ```

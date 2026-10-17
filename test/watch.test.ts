@@ -7,7 +7,7 @@ import { verifiedOf } from '../src/approve/approval.ts';
 import { loadReadings, loadSpendReadings, saveReadings, type Seen } from '../src/budgets/readings.ts';
 import { runStatus } from '../src/commands/status.ts';
 import { plantMessage, type MessagePayload } from '../src/commands/messages.ts';
-import { runWatch } from '../src/commands/watch.ts';
+import { runWatch, USAGE } from '../src/commands/watch.ts';
 import { findRoot } from '../src/file/load.ts';
 import type { WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -21,6 +21,7 @@ import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, NUDGE_TEXT, pass, RING_TEXT } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './helpers.ts';
+import { assertJsonErrorShape } from './helpers/output.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8')
   .replace('operator: claude-coordinator-acme', 'operator: claude-operator-acme')
@@ -990,6 +991,31 @@ describe('team watch', () => {
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('--json is an invocation refusal: one team.error document, stderr empty', async () => {
+    // The daemon loop takes no document: the flag itself is refused, and the refusal is read
+    // from the raw argv, so an earlier unknown option cannot lose the structured face.
+    for (const [argv, messageContains] of [
+      [['--json'], 'unknown option --json'],
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const io = testIo(dir, { kind: 'owner' });
+      expect(await runWatch([...argv], io, sources(1))).toBe(2);
+      expect(io.err).toBe('');
+      assertJsonErrorShape(io.out, { id: 'watch.invocation', messageContains, repair: null });
+    }
+  });
+
+  test('a plain invocation refusal still prints the usage, and the usage states the exits', async () => {
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runWatch(['--nope'], io, sources(1))).toBe(2);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(`team watch: unknown option --nope\n${USAGE}`);
+    expect(USAGE).toContain(
+      `Exits 0 when the watch starts or stops cleanly, 1 when it is refused or fails, 2 when\nthe invocation or team file can't be read.\n`,
+    );
   });
 
   test.each([

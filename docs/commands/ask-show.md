@@ -7,7 +7,7 @@ prints no question.
 
 ## Synopsis
 
-    team ask-show <request_id> --ask <path> --marker <path> --key <path>
+    team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]
 
 ## Flags
 
@@ -16,6 +16,7 @@ prints no question.
 | `--ask` | `<path>` | the signed ask file |
 | `--marker` | `<path>` | the marker file |
 | `--key` | `<path>` | the marker key, base64url of 32 bytes |
+| `--json` | — | one document (`format: 1`, registered as `schema/ask-show.schema.json`) instead of the text: the request id, the question, the marker's `expires_at`, and `verified: true` |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -28,10 +29,14 @@ prints no question.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the marker matches, and `expires_at` plus 5 seconds is still ahead | the question, on stdout | 0 |
+| the marker matches, and `expires_at` plus 5 seconds is still ahead | the question, then the summary line `request <request_id> verified, expires <expires_at>`, on stdout | 0 |
 | the ask is past `expires_at` plus 5 seconds | one `team ask-show: the ask has expired` line, on stderr; no question | 1 |
 | the marker does not verify, or a file cannot be read | one `team ask-show: …` line, on stderr; no question | 1 |
 | the invocation cannot be read | `team ask-show: …` and the usage | 2 |
+
+The question is the reading; the summary line that closes it names the request the marker verified
+and its deadline. Under `--json` the same reading is one document (`team.ask-show`), and a refusal
+is the structured error document (`team.error`, its `error.id` the contract row), with stderr empty.
 
 ## Example
 
@@ -51,5 +56,6 @@ TeamCLI signed ask v1
 ```console
 $ team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt ; echo "exit $?"
 Status?
+request req-ask-show-v1 verified, expires 2026-10-12T18:00:00.000Z
 exit 0
 ```

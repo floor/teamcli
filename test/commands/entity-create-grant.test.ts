@@ -265,7 +265,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       expect(await runSend(['builder-1', 'first brief'], sendIo, sendHost)).toBe(0);
       // No socket file under the host's sockets folder: a plain send is the typed trigger, and
       // the outcome is the plain word.
-      expect(sendIo.out).toBe('builder-1: delivered\n');
+      expect(sendIo.out).toBe('team acme-v4, session "acme-v4"\nbuilder-1: delivered\n');
 
       // 2. Under ~/Code/acme-lab/archive: also admitted by the same record.
       const archive = join(sb.lab, 'archive');
@@ -325,7 +325,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       initGitRepo(v4);
       const ghostInitIo = testIo(v4, grantedAgent);
       expect(await runInit([], ghostInitIo, sb.home, undefined, noLogin)).toBe(1);
-      expect(ghostInitIo.err).toContain('only the owner runs init');
+      expect(ghostInitIo.err).toContain('only the owner runs this');
       expect(existsSync(join(v4, '.agents', 'team.yaml'))).toBe(false);
 
       mkdirSync(join(v4, '.agents'), { recursive: true });
@@ -386,7 +386,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       initGitRepo(outside);
       const outsideInitIo = testIo(outside, grantedAgent);
       expect(await runInit([], outsideInitIo, sb.home, undefined, noLogin)).toBe(1);
-      expect(outsideInitIo.err).toContain('only the owner runs init');
+      expect(outsideInitIo.err).toContain('only the owner runs this');
 
       mkdirSync(join(outside, '.agents'), { recursive: true });
       writeFileSync(join(outside, '.agents', 'team.yaml'), fiveSeatTeam('other-repo', outside, sb.home));
@@ -436,7 +436,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       for (const stranger of [otherAgent, wrongSessionAgent, { kind: 'unplaced', reason: 'it runs in a herdr pane without an agent' } as const]) {
         const initIo = testIo(v4, stranger);
         expect(await runInit([], initIo, sb.home, undefined, noLogin)).toBe(1);
-        expect(initIo.err).toContain('only the owner runs init');
+        expect(initIo.err).toContain('only the owner runs this');
         expect(existsSync(join(v4, '.agents', 'team.yaml'))).toBe(false);
       }
 
@@ -469,7 +469,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
         );
         const initIo = testIo(v4, grantedAgent);
         expect(await runInit([], initIo, sb.home, undefined, noLogin)).toBe(1);
-        expect(initIo.err).toContain('only the owner runs init');
+        expect(initIo.err).toContain('only the owner runs this');
         expect(existsSync(join(v4, '.agents', 'team.yaml'))).toBe(false);
       }
 
@@ -511,7 +511,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
 
       const symInitIo = testIo(symlinkedRepo, grantedAgent);
       expect(await runInit([], symInitIo, sb.home, undefined, noLogin)).toBe(1);
-      expect(symInitIo.err).toContain('only the owner runs init');
+      expect(symInitIo.err).toContain('only the owner runs this');
       expect(existsSync(join(outside, '.agents', 'team.yaml'))).toBe(false);
 
       // 2. `..` traversal in cwd (`~/Code/acme/v4/../../other-repo`).
@@ -520,14 +520,14 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       const dotDotCwd = `${v4}/../../other-repo`;
       const dotInitIo = testIo(dotDotCwd, grantedAgent);
       expect(await runInit([], dotInitIo, sb.home, undefined, noLogin)).toBe(1);
-      expect(dotInitIo.err).toContain('only the owner runs init');
+      expect(dotInitIo.err).toContain('only the owner runs this');
 
       // 3. Prefix sibling (`~/Code/acme-evil`) is not under `~/Code/acme`.
       const sibling = join(sb.home, 'Code', 'acme-evil');
       initGitRepo(sibling);
       const sibInitIo = testIo(sibling, grantedAgent);
       expect(await runInit([], sibInitIo, sb.home, undefined, noLogin)).toBe(1);
-      expect(sibInitIo.err).toContain('only the owner runs init');
+      expect(sibInitIo.err).toContain('only the owner runs this');
 
       // Prepare team files in outside and sibling to verify `up` also denies symlink, `..`, and prefix escapes.
       mkdirSync(join(outside, '.agents'), { recursive: true });

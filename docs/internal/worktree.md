@@ -12,7 +12,7 @@ prunes, and does not delete the branch.
 
 Creates and removes a task worktree: a second checkout of the project on a branch of its own, where
 one seat does one task. `new` cuts the branch from `workspace.base`, records the worktree in the
-session's state and prints its folder; `remove` deletes a worktree that holds nothing that would be
+session's state and prints its action summary; `remove` deletes a worktree that holds nothing that would be
 lost, and keeps its branch. The branch `remove` checks and names is the worktree's own, read from
 `git worktree list --porcelain` — a branch renamed in place is still the one that must hold nothing
 unpublished, and the record's branch is only a hint. A detached HEAD, or a folder the list does not
@@ -135,8 +135,8 @@ the same way.
 | `team worktree: commits on no remote branch:` … the first twenty, one per line | 1 |
 | `team worktree: the worktree was not removed: <first line of git's error>` | 1 |
 
-When `setup` fails, the folder is still printed on stdout before the refusal: the worktree is kept,
-recorded as `setup: failed`, and the exit code is 1.
+When `setup` fails, the created line is still printed on stdout before the refusal: the worktree is
+kept, recorded as `setup: failed`, and the exit code is 1.
 
 ## Examples, moved here whole
 

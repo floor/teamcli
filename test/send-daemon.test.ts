@@ -276,8 +276,8 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     const [c1, c2] = await Promise.all([p1, p2]);
     expect(c1).toBe(0);
     expect(c2).toBe(0);
-    expect(io1.out).toBe('native: delivered\n');
-    expect(io2.out).toBe('native: delivered\n');
+    expect(io1.out).toBe('team acme, session "acme"\nnative: delivered\n');
+    expect(io2.out).toBe('team acme, session "acme"\nnative: delivered\n');
 
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
@@ -425,7 +425,7 @@ describe('working seat retry and seat-lock coexistence', () => {
     const io = ownerIo(w.root);
     const code = await runSend(['native', 'deliver after turn'], io, host);
     expect(code).toBe(0);
-    expect(io.out).toBe('native: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: delivered\n');
     expect(polls).toBeGreaterThanOrEqual(3);
     expect(host.typed.length).toBe(1);
     expect(host.enters.length).toBe(1);
@@ -459,11 +459,15 @@ describe('working seat retry and seat-lock coexistence', () => {
     const io = ownerIo(w.root);
     const code = await runSend(['native', 'do not clobber working seat', '--json'], io, host);
     expect(code).toBe(1);
-    const parsed = JSON.parse(io.out.trim()) as { seat: string; status: string; exit: number; error: string };
-    expect(parsed.seat).toBe('native');
-    expect(parsed.status).toBe('held');
-    expect(parsed.exit).toBe(1);
-    expect(parsed.error).toContain('the seat is working');
+    const parsed = JSON.parse(io.out.trim()) as {
+      schema: { name: string; version: number };
+      error: { id: string; message: string; repair: null };
+    };
+    expect(parsed.schema).toEqual({ name: 'team.error', version: 1 });
+    expect(parsed.error.id).toBe('send.held');
+    expect(parsed.error.message).toStartWith('native: held: ');
+    expect(parsed.error.message).toContain('the seat is working');
+    expect(parsed.error.repair).toBeNull();
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
 
@@ -505,7 +509,7 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const io1 = ownerIo(w.root);
     expect(await runSend(['native', 'waited for seat lock'], io1, host)).toBe(0);
-    expect(io1.out).toBe('native: delivered\n');
+    expect(io1.out).toBe('team acme, session "acme"\nnative: delivered\n');
 
     // Now hold seat lock past deliverWaitMs: daemon must return held without typing.
     host.typed.length = 0;
@@ -543,7 +547,7 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const io = ownerIo(w.root);
     expect(await runSend(['native', 'reclaim stale seat-lock'], io, host)).toBe(0);
-    expect(io.out).toBe('native: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: delivered\n');
   });
 });
 
@@ -801,7 +805,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io2 = ownerIo(w.root);
     expect(await runSend(['native', 'recovers cleanly'], io2, host)).toBe(0);
-    expect(io2.out).toBe('native: delivered\n');
+    expect(io2.out).toBe('team acme, session "acme"\nnative: delivered\n');
   });
 });
 

@@ -12,7 +12,7 @@ plan and runs nothing.
 
 ## Synopsis
 
-    team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]
+    team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
 
 ## Flags
 
@@ -23,6 +23,7 @@ plan and runs nothing.
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it; a seat this run asks and cannot stop is closed in the same run |
 | `--session` | `<name>` | the herdr session to stop, instead of `team.session`; the owner's alone — a delegate is refused it by the gate |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone — a delegate is refused it by the gate |
+| `--json` | — | one `team.down` document instead of the working lines; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -44,6 +45,16 @@ plan and runs nothing.
 | `--dry-run` | the plan; `dry run: nothing was run` | the refusal's own exit, else 0 |
 | the run was refused, or a step was held | `team down: <reason>` for a refusal; a held step ends on its own line instead, `<seat>: left out: <reason>` | 1 |
 | the invocation, the team file or herdr can't be read | `team down: <problem>` and the usage | 2 |
+
+`--json` prints one `team.down` document instead: `project`, `session`, the seat names the file
+declares as `seats`, the working lines as collapsed `notes`, and the closing line as
+`action_summary`; `dry_run` is `false` and `status` is `stopped`. A session that is not running is
+`status` `idle`, and every line it printed is a note. With `--dry-run` it prints the plan as
+`plan` — the warning first when there is one, then one step per plan line, `prefix` `+`, `!` or
+`skip` — with `dry_run` `true` and `status` `dry-run`. A refusal under `--json` prints the
+`team.error` document on stdout — its `id` is the contract row for that refusal (`down.caller`,
+`down.grant-scope`, …) — and nothing on stderr; a step that was held is the error document too,
+`down.held`.
 
 ## Example
 

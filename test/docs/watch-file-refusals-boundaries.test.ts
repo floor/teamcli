@@ -96,11 +96,11 @@ describe("the watch page's schema-refusal demo after team approve left the build
     ).toBe(true);
     const up = raw(UP_SRC);
     expect(
-      up.includes('const said = `${problem.line ? `line ${problem.line}: ` : \'\'}${plainText(problem.message)}`;'),
+      up.includes("(problem) => `${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}`,"),
       "the up printer's own line folding changed its bytes",
     ).toBe(true);
     expect(
-      up.includes('out.stderr(`team up: ${said}\\n`);'),
+      up.includes('out.stderr(`team up: ${problem}\\n`);'),
       'the printer that puts the up name on a file problem changed its bytes',
     ).toBe(true);
     const contract = JSON.parse(readFileSync(new URL(CONTRACT, import.meta.url), 'utf8'));

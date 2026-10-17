@@ -6,7 +6,9 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
-import { runReload, type ReloadSources } from '../src/commands/reload.ts';
+import { runReload, USAGE, type ReloadSources } from '../src/commands/reload.ts';
+import { RELOAD_OUTPUT_SCHEMA } from '../src/output/schema.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { loadTeamFile } from '../src/file/load.ts';
@@ -507,4 +509,54 @@ describe('team reload', () => {
     expect(logText()).toContain('reload [helper] warning: the file grants nothing; dev mode continues\n');
   });
 
+  test('--json carries the action envelope under the registered schema', async () => {
+    remember('worker', 'low');
+    const { sources } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker', '--json'], io, sources);
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, RELOAD_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      schema: { name: 'team.reload', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'reloaded',
+      action_summary: 'team reload: worker reloaded',
+      project: 'acme',
+      session: 'alpha',
+      seat: 'worker',
+    });
+    expect(typeof doc.pane).toBe('string');
+  });
+
+  test('--json: a matching seat is status same, exit 0', async () => {
+    remember('worker', 'high');
+    const { sources } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker', '--json'], io, sources);
+    expect(code).toBe(0);
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, RELOAD_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({ status: 'same', seat: 'worker', pane: 'worker-pane' });
+    expect(doc.action_summary).toBe('team reload: worker is already running what the file declares');
+  });
+
+  test('--json: a refusal writes the team.error envelope on stdout, stderr empty', async () => {
+    remember('worker', 'low');
+    const { sources } = harness({ status: 'working' });
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker', '--json'], io, sources);
+    expect(code).toBe(1);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, { id: 'reload.working', messageContains: 'is working; nothing closed' });
+  });
+
+  test('--json: a bad invocation is the invocation row, with no usage in the document', async () => {
+    const io = testIo(root, OWNER);
+    const code = await runReload(['--bogus', '--json'], io, { ...harness().sources });
+    expect(code).toBe(2);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, { id: 'reload.invocation', messageContains: 'unknown option --bogus' });
+    expect(USAGE).toContain('Exits 0 when the seat is reloaded');
+  });
 });

@@ -28,7 +28,7 @@ reloaded, then the same difference.
 
 ## Synopsis
 
-    team reload <seat> [--file <path>]
+    team reload <seat> [--file <path>] [--json]
 
 ## What it reads and writes
 
@@ -57,3 +57,18 @@ not a refusal. `--file` is the owner's. A delegate is not offered this command.
 | Flag | Meaning |
 | --- | --- |
 | `--file <path>` | The team file. The owner may name one. A granted seat may not. |
+| `--json` | the same outcome as one JSON document (`team.reload`) instead of the line |
+
+## Output and exit codes
+
+| Outcome | What is printed | Exit |
+| --- | --- | --- |
+| the seat was closed and launched again | `team reload: <seat> reloaded` | 0 |
+| the seat already runs what the file declares | `team reload: <seat> is already running what the file declares` | 0 |
+| refused, or the relaunch did not reach ready | `team reload: <reason>` | 1 |
+| it can't run: a bad option, or the team file can't be read | `team reload: <problem>`, with the usage for a bad option | 2 |
+
+`--json` prints one `team.reload` document instead: `seat`, the new `pane`, the outcome as
+`status` (`reloaded` or `same`), and the same closing line as `action_summary`. A refusal under
+`--json` prints the `team.error` document on stdout — its `id` is the contract row for that
+refusal (`reload.absent`, `reload.working`, …) — and nothing on stderr.

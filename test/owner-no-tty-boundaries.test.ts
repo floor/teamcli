@@ -596,7 +596,9 @@ describe('the owner at a terminal outside herdr still passes', () => {
     expect(code).toBe(0);
     // Each row carries the project its team sits in: no registry names this team, so the project
     // its own file writes.
-    expect(io.out).toContain('lead  claude-code  coordinator  acme\n');
+    expect(io.out).toContain('  SEAT  ROLE         PROJECT  REACH\n');
+    expect(io.out).toContain('  lead  coordinator  acme     socket\n');
+    expect(io.out).toContain('1 seat(s)\n');
   });
 });
 

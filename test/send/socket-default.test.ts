@@ -159,7 +159,7 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     // The socket is not this path's channel: it is never tried, and the live listener at the
     // pane's pid hears nothing.
     expect(host.socketsTried).toEqual([]);
@@ -183,7 +183,7 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     expect(host.socketsTried).toEqual([]);
     expect(host.pane.typed.length).toBe(1);
     expect(host.pane.enters).toBe(1);
@@ -199,7 +199,7 @@ describe('team send: a typed send with no socket at all', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
     expect(host.pane.typed.length).toBe(1);

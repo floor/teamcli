@@ -170,6 +170,7 @@ test('an unapproved file refuses, and the same file mounts when TEAMCLI_DEV_MODE
   expect(mountedCode).toBe(0);
   expect(mountedIo.err).toContain('team up: warning:');
   expect(mountedIo.err).toContain('only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)');
+  expect(mountedIo.err).toContain('; dev mode continues\n');
   expect(mountedIo.err).toContain('the file was never approved on this machine');
   expect(mountedIo.err).not.toContain('team approve');
   expect(mountedIo.err).not.toContain('team up: only the owner or `leads` starts the team');
@@ -274,6 +275,7 @@ test('an approved file that has since changed refuses, and the same file mounts 
   expect(mountedCode).toBe(0);
   expect(mountedIo.err).toContain('team up: warning:');
   expect(mountedIo.err).toContain('only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)');
+  expect(mountedIo.err).toContain('; dev mode continues\n');
   expect(mountedIo.err).not.toContain('not the approved one');
   expect(mountedIo.err).not.toContain('team approve');
   expect(mountedWorld.runs.map((run) => run.command).join('\n')).toContain('--live-mount');
@@ -304,7 +306,7 @@ test('team down refuses an unplaced caller, and the same call stops the team whe
   const stoppedCode = await runDown([], stoppedIo, downSources(stopped.home, didStop));
   expect(stoppedCode).toBe(0);
   expect(stoppedIo.err).toContain('team down: warning:');
-  expect(stoppedIo.err).toContain(placement);
+  expect(stoppedIo.err).toContain(`${placement}; dev mode continues\n`);
   // The refusal form, not the warning's: dev mode speaks the sentence as a warning, never as a
   // refusal — the needle is built from `placement`, so a re-worded sentence keeps the tooth.
   expect(stoppedIo.err).not.toContain(`team down: ${placement}`);

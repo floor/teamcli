@@ -47,9 +47,9 @@ test('hidden commands and undocumented short flags are marked', () => {
 test('contract:check fails when a command option list is broken by hand', () => {
   const rel = 'src/commands/init.ts';
   const source = readFileSync(join(root, rel), 'utf8');
-  const needle = "readArgs(argv, [], ['restore'])";
+  const needle = "readArgs(argv, [], ['restore', 'json'])";
   expect(source).toContain(needle);
-  const broken = source.replace(needle, "readArgs(argv, [], ['restore', 'force'])");
+  const broken = source.replace(needle, "readArgs(argv, [], ['restore', 'json', 'force'])");
   const result = checkContract(root, new Map([[rel, broken]]));
   expect(result.ok).toBe(false);
   expect(result.message).toContain('--force');

@@ -10,7 +10,7 @@ says the screen was not read.
 
 ## Synopsis
 
-    team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>]
+    team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
 
 ## Flags
 
@@ -20,6 +20,7 @@ says the screen was not read.
 | `--dry-run` | — | check the seat and print the stop and launch plan without touching the session |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--json` | — | one `team.restart` document instead of the working lines; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -38,6 +39,14 @@ says the screen was not read.
 | `--dry-run` succeeded | the stop line and the launch plan | 0 |
 | the run was refused, or the seat was left behind | `team restart: <reason>` | 1 |
 | the invocation or the team file can't be read | `team restart: <problem>` and the usage | 2 |
+
+`--json` prints one `team.restart` document instead: `project`, `session`, `seat`, the new `pane`,
+the working lines (the pre-close facts and the stop's own lines) as collapsed `notes`, and the
+closing line as `action_summary`; `dry_run` is `false` and `status` is `ready`. With `--dry-run` it
+prints the plan as `plan` — the stop step first, then one step per launch plan line, `prefix` `+`,
+`!` or `skip` — with `dry_run` `true` and `status` `dry-run`. A refusal under `--json` prints the
+`team.error` document on stdout — its `id` is the contract row for that refusal (`restart.unknown`,
+`restart.caller`, …) — and nothing on stderr.
 
 ## Example
 

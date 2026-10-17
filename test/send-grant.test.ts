@@ -176,7 +176,7 @@ describe('team send: the owner-signed grant on the command path', () => {
     const { code, err, out } = helperSend(root, sockets);
     expect(await code).toBe(0);
     expect(err()).toBe('');
-    expect(out()).toBe('native: delivered\n');
+    expect(out()).toBe('team acme, session "acme"\nnative: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'native');
     const path = join(drops, readdirSync(drops)[0] as string);
     expect(readFileSync(path, 'utf8')).toBe(

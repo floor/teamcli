@@ -109,7 +109,7 @@ describe('the path check, and the branch the worktree really is on', () => {
 
       const io = testIo(project, owner);
       expect(await runWorktree(['remove', 'select-width'], io, sources), `recorded branch ${JSON.stringify(branch)}`).toBe(0);
-      expect(io.out).toBe('removed select-width; the branch fix/select-width is kept\n');
+      expect(io.out).toBe('team acme, session "acme"\nremoved select-width; the branch fix/select-width is kept\n');
       expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
       expect(record('select-width')).toBeUndefined();
       git(project, 'branch', '-D', 'fix/select-width');
@@ -122,7 +122,7 @@ describe('the path check, and the branch the worktree really is on', () => {
 
     const io = testIo(project, owner);
     expect(await runWorktree(['remove', 'select-width'], io, sources)).toBe(0);
-    expect(io.out).toBe('removed select-width; the branch fix/size-of-pane is kept\n');
+    expect(io.out).toBe('team acme, session "acme"\nremoved select-width; the branch fix/size-of-pane is kept\n');
   });
 
   test('--branch naming another branch is refused with the page\'s whole line, and nothing is removed', async () => {
@@ -143,7 +143,7 @@ describe('the path check, and the branch the worktree really is on', () => {
 
     const io = testIo(project, owner);
     expect(await runWorktree(['remove', 'select-width', '--branch', 'fix/select-width'], io, sources)).toBe(0);
-    expect(io.out).toBe('removed select-width; the branch fix/select-width is kept\n');
+    expect(io.out).toBe('team acme, session "acme"\nremoved select-width; the branch fix/select-width is kept\n');
   });
 
   test('a record wrong on both counts answers the path sentence alone', async () => {

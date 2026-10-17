@@ -203,7 +203,7 @@ describe('no send path dials a session socket', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
     expect(host.typed).toHaveLength(1);
@@ -238,7 +238,7 @@ describe('a provider error in the scrollback does not make an idle seat unreacha
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     expect(io.err).toBe('');
     expect(host.typed).toHaveLength(1);
   });

@@ -8,13 +8,17 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { loadConfig, place, type LoadConfig } from '../check/load.ts';
-import { checkBody, formatBodyReport } from '../check/run.ts';
+import { bodyDifferences, checkBody, formatBodyReport } from '../check/run.ts';
+import { LINK_NOT_FOLLOWED, NOT_A_REPO } from '../file/load.ts';
+import type { Problem } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
+import { hasJsonFlag, refuse, whoOfDifference, writeJson } from '../output/index.ts';
 
-export const USAGE = `Usage: team pr check <file> [--file <path>]
+export const USAGE = `Usage: team pr check <file> [--file <path>] [--json]
 
   <file>           the pull request's body ("-" reads standard input)
   --file <path>    the team file, instead of .agents/team.yaml
+  --json           the report as a document, and a refusal as the error document
 
 Checks one pull request body and nothing else. Needs no repository.
 
@@ -30,17 +34,35 @@ export function bodyText(file: string, cwd: string): string {
 
 /** The one refusal for a body that cannot be read, shared by `team pr check` and the `team check`
  *  alias's `--pr` half: one site, one id (`pr.body`). */
-export function bodyRefused(io: Io, error: unknown): number {
-  io.stderr(`team pr check: can't read the pull request body: ${(error as Error).message}\n`);
+export function bodyRefused(io: Io, error: unknown, json = false): number {
+  const message = `can't read the pull request body: ${(error as Error).message}`;
+  if (json) {
+    refuse(io, true, 'pr check', { id: 'pr.body', message, repair: null, code: 2 });
+  } else {
+    io.stderr(`team pr check: ${message}\n`);
+  }
   // exit: pr.body
   return 2;
 }
 
+/** The row of a load failure `loadConfig` reports. The four the command documents, told apart
+ *  by the message the loader and the store write. */
+function loadProblemId(errors: Problem[]): 'pr.not-a-repo' | 'pr.file' | 'pr.file-invalid' | 'pr.ledger' {
+  const first = errors[0]?.message ?? '';
+  if (first === NOT_A_REPO || first === LINK_NOT_FOLLOWED) return 'pr.not-a-repo';
+  if (first.startsWith('no team file')) return 'pr.file';
+  if (/^can't read .*ledger\.json: /.test(first)) return 'pr.ledger';
+  return 'pr.file-invalid';
+}
+
 export async function pr(argv: string[], io: Io, load: LoadConfig = loadConfig): Promise<number> {
-  const args = readArgs(argv, ['file'], []);
+  const args = readArgs(argv, ['file'], ['json']);
+  // Read from the raw argv before the parser runs: a bad option before `--json`, or a
+  // malformed `--json=<value>`, still asks for the structured refusal.
+  const json = hasJsonFlag(argv);
   const sub = args.rest[0];
   const fail = (message: string): number => {
-    io.stderr(`team pr check: ${message}\n\n${USAGE}`);
+    refuse(io, json, 'pr check', { id: 'pr.invocation', message, repair: null, usage: USAGE, code: 2 });
     // exit: pr.invocation
     return 2;
   };
@@ -52,7 +74,16 @@ export async function pr(argv: string[], io: Io, load: LoadConfig = loadConfig):
 
   const loaded = load(io.cwd, args.values.file);
   if (!loaded.ok) {
-    for (const problem of loaded.errors) io.stderr(`team pr check: ${place(problem, loaded.path)}\n`);
+    if (json) {
+      refuse(io, true, 'pr check', {
+        id: loadProblemId(loaded.errors),
+        message: loaded.errors.map((problem) => place(problem, loaded.path)).join('; '),
+        repair: null,
+        code: 2,
+      });
+    } else {
+      for (const problem of loaded.errors) io.stderr(`team pr check: ${place(problem, loaded.path)}\n`);
+    }
     // exit: pr.not-a-repo
     // exit: pr.file
     // exit: pr.file-invalid
@@ -60,17 +91,33 @@ export async function pr(argv: string[], io: Io, load: LoadConfig = loadConfig):
     return 2;
   }
 
-  for (const warning of loaded.warnings) io.stderr(`team pr check: warning: ${place(warning)}\n`);
-
   let body: string;
   try {
     body = bodyText(file, io.cwd);
   } catch (error) {
-    return bodyRefused(io, error);
+    return bodyRefused(io, error, json);
   }
 
   const findings = checkBody(loaded.config, body);
-  io.stdout(formatBodyReport(findings));
+  if (json) {
+    const differences = bodyDifferences(findings);
+    writeJson(io, 'team.pr', {
+      format: 1 as const,
+      differences: differences.map((difference) => ({
+        what: difference.what,
+        repair: difference.repair,
+        who: whoOfDifference(difference),
+      })),
+      notes: loaded.warnings.map((warning) => place(warning)),
+      summary: {
+        differences: differences.length,
+        owner_differences: differences.filter((difference) => whoOfDifference(difference) === 'the owner').length,
+      },
+      notice: null,
+    });
+  } else {
+    io.stdout(formatBodyReport(findings));
+  }
   // exit: pr.passed
   // exit: pr.refused
   return findings.length === 0 ? 0 : 1;

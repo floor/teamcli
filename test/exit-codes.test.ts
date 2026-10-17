@@ -809,7 +809,7 @@ const refused = (id: string, text: string) => ({ kind: 'refused' as const, id, t
 const ADD_GATE_REFUSALS: [suffix: string, sentence: string, needle: string][] = [
   ['delegate-evidence', "delegation cannot verify its placement or seats: herdr doesn't answer", 'placement or seats'],
   ['delegate-placement', 'the approved delegate must be an external non-seat pane', 'non-seat pane'],
-  ['delegate', 'only the owner or a standing grant (delegate) runs it; this call is pilot', 'or a standing grant (delegate)'],
+  ['delegate', 'only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is pilot', 'or a standing grant (delegate)'],
   ['delegate-command', 'the approved delegate main/w1:p1 may not run `add`; its approved commands are remove', 'may not run'],
 ];
 for (const [suffix, sentence, needle] of ADD_GATE_REFUSALS) {
@@ -2260,7 +2260,7 @@ scene('worktree.created', async (place) => {
 });
 scene('worktree.listed', async (place) => {
   approve(place, worktreeText());
-  return show(await worktree(place, ['list']), '0 open, limit');
+  return show(await worktree(place, ['list']), '0 worktree(s)');
 });
 scene('worktree.remove-task', async (place) => {
   approve(place, worktreeText());
@@ -2349,9 +2349,12 @@ scene('team.version', async (place) => show(await entry(['--version'], testIo(pl
 scene('team.unknown', async (place) => show(await entry(['nosuch'], testIo(place.root, owner)), 'unknown command'));
 scene('team.command-help', async (place) => show(await entry(['status', '--help'], testIo(place.root, owner)), 'Usage: team status'));
 scene('team.command-threw', async (place) => {
-  const root = join(place.base, 'a b');
+  // An invalid skeleton is `init`'s own refusal now; a plain file where its folder goes still
+  // throws from the write, and the process entry point reports it on the one `team:` line.
+  const root = join(place.base, 'threw');
   mkdirSync(root);
   git(root, 'init', '-q', '-b', 'main');
+  writeFileSync(join(root, '.agents'), 'not a folder\n');
   return show(await entry(['init'], testIo(root, owner)), 'team:');
 });
 
@@ -2593,7 +2596,7 @@ scene('answer.ready', async (place) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
-  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'trust answered; ready');
+  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'answered trust');
 });
 
 // These returns are reached when a second validation disagrees with the first, or when no data
@@ -2703,12 +2706,12 @@ async function issued(place: Place, argv: string[] = []): Promise<Ran> {
 scene('issues.none', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '[]\n');
-  return show(await issued(place), 'nothing is waiting');
+  return show(await issued(place), '0 issue(s)');
 });
 scene('issues.shown', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '- id: m1\n  title: the task title\n');
-  return show(await issued(place), 'm1  the task title');
+  return show(await issued(place), 'm1  open   -         the task title');
 });
 scene('issues.file', async (place) => show(await issued(place), 'no team file here'));
 scene('issues.missing', async (place) => {
@@ -2812,7 +2815,7 @@ scene('proc.done', async (place) => {
 });
 scene('proc.listed', async (place) => {
   write(place, TEAM);
-  return show(await proced(place, ['list']), 'no processes recorded');
+  return show(await proced(place, ['list']), '0 process(es)');
 });
 scene('proc.caller', async (place) => {
   write(place, TEAM);
@@ -3115,13 +3118,13 @@ scene('plan.none', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '[]\n');
   recordLead(place);
-  return show(await planned(place), 'nothing is takeable');
+  return show(await planned(place), '0 task(s)');
 });
 scene('plan.shown', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '- id: m1\n  title: the task title\n');
   recordLead(place);
-  return show(await planned(place), 'm1  the task title');
+  return show(await planned(place), '1     open   -      the task title');
 });
 scene('plan.caller', async (place) => {
   write(place, TASKS);
@@ -3300,7 +3303,7 @@ scene('send.dry-run', async (place) => {
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['--list'], owner, sendHost(place)), 'lead  claude-code');
+  return show(await sent(place, ['--list'], owner, sendHost(place)), '  lead  coordinator  acme     socket');
 });
 
 /** The file's lead seat, registered and rostered: `route` hands out addresses from the registry
@@ -3345,7 +3348,7 @@ scene('route.routed', async (place) => {
 scene('route.dry-run', async (place) => {
   write(place, TEAM);
   registeredLead(place);
-  return show(await routed(place, ['lead', '--dry-run'], owner, sendHost(place)), '(dry run; nothing was recorded)');
+  return show(await routed(place, ['lead', '--dry-run'], owner, sendHost(place)), 'append the route to');
 });
 scene('route.detached', async (place) => show(await routed(place, ['lead'], detachedCaller, sendHost(place)), SENTENCE));
 scene('route.refused', async (place) => {
@@ -3381,7 +3384,7 @@ async function fed(place: Place, argv: string[]): Promise<Ran> {
 
 scene('feed.ok', async (place) => {
   write(place, TEAM);
-  return show(await fed(place, []), '(no messages)');
+  return show(await fed(place, []), '0 event(s)');
 });
 scene('feed.unreadable', async (place) => {
   write(place, TEAM);

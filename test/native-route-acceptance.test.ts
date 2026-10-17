@@ -206,13 +206,15 @@ describe('native acceptance: the route half', () => {
     expect(code).toBe(0);
     expect(leadIo.err).toBe('');
     expect(leadIo.out).toBe(
-      `helper  ${helper.id}  (helper)\n` +
+      'team acme, session "acme"\n' +
+        `helper  ${helper.id}  (helper)\n` +
         `session acme\n` +
         `cli claude-code\n` +
         `pane w1:p2\n` +
         `socket ${address} (live)\n` +
         `native yes\n` +
-        `admitted by: an orchestrator or operator to a seat of its own team\n`,
+        `admitted by: an orchestrator or operator to a seat of its own team\n` +
+        `helper: routed at ${address} (live)\n`,
     );
     const lines = routeLines(routesPath('acme', w.root, w.home));
     expect(lines).toHaveLength(1);
@@ -254,7 +256,7 @@ describe('native acceptance: the record half', () => {
     const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '1234', BODY], leadIo, run);
 
     expect(code).toBe(0);
-    expect(leadIo.out).toBe('helper: recorded (native, 1234 ms)\n');
+    expect(leadIo.out).toBe('team acme, session "acme"\nhelper: recorded (native, 1234 ms)\n');
     expect(leadIo.err).toBe('');
     const entry = parseHistoryLine(readFileSync(historyPath('acme', w.root, w.home), 'utf8'));
     expect(entry).toMatchObject({

@@ -26,8 +26,10 @@ import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import type { Agent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { contextLine, hasJsonFlag, renderDryRunPlan, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { resolveTarget } from '../send/resolve.ts';
-import { appendRoute, readRouteAddress, type RouteAddress, type RouteRecord } from '../send/routes.ts';
+import { appendRoute, readRouteAddress, ROUTES_FILE, type RouteAddress, type RouteRecord } from '../send/routes.ts';
+import { storePath } from '../store/store.ts';
 import { admissionOf, logWho, realHost, type SendHost } from './send.ts';
 
 export const USAGE = `Usage: team route <seat> [--json] [--dry-run]
@@ -45,26 +47,33 @@ the registry holds no record for is refused: a route hands out a recorded addres
 The route is one record before it is one answer: a line is appended to the receiving project's
 routes.jsonl (beside its messages.jsonl) naming the pair, the rule and the address, and a
 record that cannot be written is a refusal — an address this CLI handed out is accountable.
---dry-run answers the same and writes nothing. --json prints one document instead of the
-lines: {seat, agent, session, cli, pane, socket, socket_state, native, rule, status, exit}.
+--dry-run answers the same, prints its one plan step and writes nothing. The answer opens
+on the team's context line and closes on the resolved address. --json prints one document
+instead of the lines: {seat, agent, recipient_session, cli, pane, address, socket_state,
+native, rule, action_summary}.
 
 This process never opens, dials or writes to another session's socket: the address is read
 from the registry, the pane's process list and the socket folders, and named. \`team send
 --record <seat> --channel native --ms <N>\` writes down the delivery the sender then makes
 itself. It appends one line to the team log.
+
+Exits 0 when the address is answered, 1 when the route is refused or cannot be recorded, 2 when
+the invocation or team file cannot be read.
 `;
 
-/** What the run reports besides its streams: the caller chose the document and the seat it
- *  names. */
-type Report = { json: boolean; seat: string | null };
+/** What the run reports besides its streams: the caller chose the document. */
+type Report = { json: boolean };
 
 export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<number> {
   const args = readArgs(argv, [], ['json', 'dry-run']);
-  const report: Report = { json: args.flags.has('json'), seat: args.rest[0] ?? null };
+  // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
+  // structured error document, and the parser errors before its flag set sees them.
+  const report: Report = { json: hasJsonFlag(argv) };
   if (args.error) return usage(io, args.error, report);
   const detached = detachedRefusal(callerOf(io));
   if (detached !== undefined) {
-    io.stderr(`team route: ${detached}\n`);
+    if (report.json) writeJsonError(io, 'route.detached', detached, 'run team route from a terminal outside herdr');
+    else io.stderr(`team route: ${detached}\n`);
     return 1; // exit: route.detached
   }
   const spec = args.rest[0];
@@ -77,6 +86,7 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
     return configuration(io, message || 'the team file cannot be read', report);
   }
   const { team, root } = loaded;
+  const context: TeamContext = { project: team.project, session: team.session };
   const dir = dirname(loaded.path);
   const fileTeamId = teamIdOf(root);
   const judged = judgeCallerIn(io, dir, team);
@@ -136,11 +146,15 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
     cli: recipient.cli,
     pane,
   };
-  if (args.flags.has('dry-run')) return routeDry(io, at, address, native, admission.rule, report);
+  if (args.flags.has('dry-run')) {
+    const target = join(storePath(resolved.team.project, resolved.team.root, host.home), ROUTES_FILE);
+    const plan: PlanStep[] = [{ step: 'record', seat: at.seat, detail: `append the route to ${target}`, prefix: '+' }];
+    return routeDry(io, context, at, address, native, admission.rule, plan, report);
+  }
   const written = appendRoute(resolved.team.project, resolved.team.root, host.home, record);
   if (!written.ok) return unrecorded(io, dir, who, written.reason, host, report);
   logLine(toDir, 'route', who, `${at.seat}: routed (${socketStateText(address)})`, host.now());
-  return routed(io, at, address, native, admission.rule, report);
+  return routed(io, context, at, address, native, admission.rule, report);
 }
 
 /** Where the recipient stands now, as herdr reads it: the one pane the session names its seat on,
@@ -174,42 +188,95 @@ function livePlacement(host: SendHost, agent: Agent): { pane: string } | { error
   return { pane: live.pane };
 }
 
+/** The team context every answer opens on: the caller's own file. */
+type TeamContext = { project: string; session: string };
+
 /** Who was routed where: the recipient as the registry named it and herdr placed it. */
 type Routed = { name: string; seat: string; id: string; session: string; cli: string; pane: string };
 
 /** The address was answered and recorded. Exit 0, always. */
-function routed(io: Io, at: Routed, address: RouteAddress, native: boolean, rule: string, report: Report): number {
-  answer(io, at, address, native, rule, report);
+function routed(
+  io: Io,
+  context: TeamContext,
+  at: Routed,
+  address: RouteAddress,
+  native: boolean,
+  rule: string,
+  report: Report,
+): number {
+  const summary = addressSummary(at, address);
+  if (report.json) {
+    writeJson(io, 'team.route', document(context, at, address, native, rule, false, 'routed', summary));
+  } else {
+    io.stdout(`${contextLine(context.project, context.session)}\n`);
+    answerLines(io, at, address, native, rule);
+    io.stdout(`${summary}\n`);
+  }
   return 0; // exit: route.routed
 }
 
-/** The answer --dry-run gives: the same lines, and nothing was recorded. Exit 0, always. */
-function routeDry(io: Io, at: Routed, address: RouteAddress, native: boolean, rule: string, report: Report): number {
-  answer(io, at, address, native, rule, report);
-  if (!report.json) io.stdout('(dry run; nothing was recorded)\n');
+/** The answer --dry-run gives: the same address, plus the one step a real run would take. */
+function routeDry(
+  io: Io,
+  context: TeamContext,
+  at: Routed,
+  address: RouteAddress,
+  native: boolean,
+  rule: string,
+  plan: readonly PlanStep[],
+  report: Report,
+): number {
+  if (report.json) {
+    writeJson(io, 'team.route', {
+      ...document(context, at, address, native, rule, true, 'dry-run', 'dry run: nothing was run'),
+      plan: [...plan],
+    });
+  } else {
+    io.stdout(`${contextLine(context.project, context.session)}\n`);
+    answerLines(io, at, address, native, rule);
+    io.stdout(renderDryRunPlan(null, plan).map((line) => `${line}\n`).join(''));
+  }
   return 0; // exit: route.dry-run
 }
 
-/** The one answer both endings print: the address, its state, and the rule that admitted it. */
-function answer(io: Io, at: Routed, address: RouteAddress, native: boolean, rule: string, report: Report): void {
-  if (report.json) {
-    io.stdout(
-      `${JSON.stringify({
-        seat: at.seat,
-        agent: at.id,
-        session: at.session,
-        cli: at.cli,
-        pane: at.pane,
-        socket: address.socket,
-        socket_state: address.state,
-        native,
-        rule,
-        status: 'routed',
-        exit: 0,
-      })}\n`,
-    );
-    return;
-  }
+/** The resolved address, said once: the closing summary line, and `action_summary` under --json. */
+function addressSummary(at: Routed, address: RouteAddress): string {
+  return `${at.seat}: routed at ${address.socket ?? 'no socket'} (${address.state})`;
+}
+
+/** The one document both endings write: the action surface, then the answer's own fields.
+ *  `session` is the envelope's — the caller's team session; the recipient's is `recipient_session`. */
+function document(
+  context: TeamContext,
+  at: Routed,
+  address: RouteAddress,
+  native: boolean,
+  rule: string,
+  dryRun: boolean,
+  status: string,
+  summary: string,
+): Record<string, unknown> {
+  return {
+    format: 1 as const,
+    dry_run: dryRun,
+    status,
+    action_summary: summary,
+    project: context.project,
+    session: context.session,
+    seat: at.seat,
+    agent: at.id,
+    recipient_session: at.session,
+    cli: at.cli,
+    pane: at.pane,
+    address: address.socket,
+    socket_state: address.state,
+    native,
+    rule,
+  };
+}
+
+/** The plain answer: the recipient, where it listens, and the rule that admitted the pair. */
+function answerLines(io: Io, at: Routed, address: RouteAddress, native: boolean, rule: string): void {
   io.stdout(`${at.seat}  ${at.id}  (${at.name})\n`);
   io.stdout(`session ${at.session}\n`);
   io.stdout(`cli ${at.cli}\n`);
@@ -236,11 +303,8 @@ function socketFolders(host: SendHost): string[] {
 /** A refusal: no address was answered, and the reason says why. Exit 1, always. */
 function refused(io: Io, dir: string, who: string, reason: string, host: SendHost, report: Report): number {
   logLine(dir, 'route', who, `refused: ${reason}`, host.now());
-  if (report.json) {
-    io.stdout(`${JSON.stringify({ seat: report.seat, status: 'refused', exit: 1, error: reason })}\n`);
-  } else {
-    io.stderr(`team route: refused: ${reason}\n`);
-  }
+  if (report.json) writeJsonError(io, 'route.refused', `refused: ${reason}`, null);
+  else io.stderr(`team route: refused: ${reason}\n`);
   return 1; // exit: route.refused
 }
 
@@ -249,29 +313,20 @@ function refused(io: Io, dir: string, who: string, reason: string, host: SendHos
 function unrecorded(io: Io, dir: string, who: string, reason: string, host: SendHost, report: Report): number {
   const why = `the route record could not be written: ${reason}`;
   logLine(dir, 'route', who, `refused: ${why}`, host.now());
-  if (report.json) {
-    io.stdout(`${JSON.stringify({ seat: report.seat, status: 'unrecorded', exit: 1, error: why })}\n`);
-  } else {
-    io.stderr(`team route: refused: ${why}\n`);
-  }
+  if (report.json) writeJsonError(io, 'route.unrecorded', `refused: ${why}`, null);
+  else io.stderr(`team route: refused: ${why}\n`);
   return 1; // exit: route.unrecorded
 }
 
 function usage(io: Io, message: string, report: Report): number {
-  if (report.json) {
-    io.stdout(`${JSON.stringify({ seat: report.seat, status: 'usage', exit: 2, error: message })}\n`);
-  } else {
-    io.stderr(`team route: ${message}\n${USAGE}`);
-  }
+  if (report.json) writeJsonError(io, 'route.usage', message, null);
+  else io.stderr(`team route: ${message}\n${USAGE}`);
   return 2; // exit: route.usage
 }
 
 function configuration(io: Io, message: string, report: Report): number {
-  if (report.json) {
-    io.stdout(`${JSON.stringify({ seat: report.seat, status: 'configuration', exit: 2, error: message })}\n`);
-  } else {
-    io.stderr(`team route: ${message}\n`);
-  }
+  if (report.json) writeJsonError(io, 'route.configuration', message, null);
+  else io.stderr(`team route: ${message}\n`);
   return 2; // exit: route.configuration
 }
 

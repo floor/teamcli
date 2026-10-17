@@ -9,7 +9,7 @@ into — and its sidebar is rewritten from the file either way.
 
 ## Synopsis
 
-    team up [--dry-run] [--serial] [--session <name>] [--file <path>]
+    team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
 
 ## Flags
 
@@ -19,6 +19,7 @@ into — and its sidebar is rewritten from the file either way.
 | `--serial` | — | launches and waits on one seat at a time instead of concurrently |
 | `--session` | `<name>` | the herdr session to start, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--json` | — | one `team.up` document instead of the working lines; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -57,6 +58,17 @@ shape, with one example: [team init](init.md).
 | a seat was left out, the server did not start, the watch did not start | the seats' records and the run's own lines | 1 |
 | the invocation can't be read | `team up: <problem>` and the usage | 2 |
 | the team file can't be read | `team up: line <n>: <message>` (`team up: <message>` when the problem names no line) | 2 |
+
+`--json` prints one `team.up` document instead: `project`, `session`, the seat names the file
+declares as `seats`, and `notes` — the run's other lines in order, its closing `<seat>: ready`
+record as `action_summary` — with `dry_run` `false` and `status` `ready`. A run that ends short of
+ready is the `team.error` document instead, named by what fell short: `up.pending` (the seats it
+names), `up.server` or `up.watch`. With `--dry-run` the document is `status` `dry-run`, `dry_run`
+`true`, `action_summary` `dry run: nothing was run`, and the plan as `plan` — the warning first
+when there is one, then one step per plan line, `prefix` `+`, `!` or `skip`. A refusal under
+`--json` is the `team.error` document on stdout — its `id` is the contract row for that refusal
+(`up.deny`, `up.invocation`, …), and a caller the run does not admit gets `message` `deny` — with
+nothing on stderr; a dry run that would be refused is answered so too, and prints no plan.
 
 ## Example
 
