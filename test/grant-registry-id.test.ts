@@ -18,7 +18,7 @@ import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { grantsDir, readEntityCreateGrants } from '../src/grant.ts';
 import type { Terminal } from '../src/launch/terminal.ts';
-import { registerAgent } from '../src/registry/agents.ts';
+import { registerAgent, type AgentLifecycle } from '../src/registry/agents.ts';
 import { LOG_FILE, readState } from '../src/state.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
@@ -84,6 +84,7 @@ function registerSeat(
   pane: string,
   session = 'dispatch',
   team = TEAM,
+  lifecycle: AgentLifecycle = 'running',
 ): string {
   return registerAgent(home, {
     name: seat,
@@ -95,7 +96,7 @@ function registerSeat(
     reach: { team, seat, session, pane, address: null },
     mcp: [],
     skills: [],
-    lifecycle: 'running',
+    lifecycle,
     by: 'owner',
   }).id;
 }
@@ -409,6 +410,24 @@ describe("a create-grant's registry id", () => {
       expect(await runUp([], otherUpIo, upSources(sb.home, launching(() => {}), terminal()))).toBe(1);
       expect(otherUpIo.err).toBe('deny\n');
       expect(otherUpIo.out).toBe('');
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('a record whose lifecycle is not running admits nobody', async () => {
+    const sb = makeSandbox();
+    try {
+      // The seat's own record, on the pane and in the session the caller stands in, but
+      // stopped: only a running seat acts as its own record, as send's identity rule holds.
+      const stopped = registerSeat(sb.home, 'orchestrator', 'lead-pane', 'dispatch', TEAM, 'stopped');
+      writeGrant(sb.home, 'beacon.yaml', agentRecord(stopped, FUTURE));
+      const v3 = join(sb.code, 'v3');
+      initGitRepo(v3);
+      const stoppedIo = testIo(v3, grantedSeat);
+      expect(await runInit([], stoppedIo, sb.home, undefined, noLogin)).toBe(1);
+      expect(stoppedIo.err).toContain('only the owner runs init');
+      expect(existsSync(join(v3, '.agents', 'team.yaml'))).toBe(false);
     } finally {
       rmSync(sb.base, { recursive: true, force: true });
     }

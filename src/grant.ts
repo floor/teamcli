@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { approvedFingerprints, notInForce } from './approve/approval.ts';
 import { compare, describe, fingerprints } from './approve/fingerprint.ts';
-import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf } from './caller.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf, type Caller } from './caller.ts';
 import { ORDINARY_SECTIONS } from './delegate.ts';
 import { declaredRoots } from './entities.ts';
 import { loadTeamFile } from './file/load.ts';
@@ -167,23 +167,31 @@ export function createGrantGrantee(
 }
 
 /**
- * The registry record of the seat this caller is placed as: the live agent whose reach names the
- * caller's pane and seat — and its session, when the caller carries one — most recently updated
- * when more than one does. A caller herdr does not place as a named seat (the owner, an agentless
- * pane, an unplaced process) has no registry record, and no grant admits it.
+ * The registry record of the seat this caller is placed as: the running agent whose reach names
+ * the session, pane and seat the walk placed it in, most recently updated when more than one
+ * does. The caller is placed in each record's session, as `delegate.ts`'s `findEntry` places
+ * it, because a pane id only means something inside the session that lists it — a caller of the
+ * same name and pane in another session is not that seat. A caller herdr does not place as a
+ * named seat (the owner, an agentless pane, an unplaced process) has no registry record, and no
+ * grant admits it.
  */
 function callerRegistryAgent(
   home: string,
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
 ): Agent | null {
-  const caller = callerOf(io);
-  if (caller.kind !== 'seat') return null;
+  const placed = new Map<string, Caller>();
   let found: Agent | null = null;
   for (const agent of readAgents(home)) {
-    if (agent.lifecycle === 'retired') continue;
-    if (agent.reach.pane !== caller.pane) continue;
-    if (agent.reach.seat !== caller.name) continue;
-    if (caller.session !== undefined && agent.reach.session !== caller.session) continue;
+    if (agent.lifecycle !== 'running') continue;
+    let caller = placed.get(agent.reach.session);
+    if (caller === undefined) {
+      caller = callerOf(io, agent.reach.session);
+      placed.set(agent.reach.session, caller);
+    }
+    if (caller.kind !== 'seat') continue;
+    if (caller.session !== agent.reach.session) continue;
+    if (caller.pane !== agent.reach.pane) continue;
+    if (caller.name !== agent.reach.seat) continue;
     if (!found || agent.provenance.updated_at >= found.provenance.updated_at) found = agent;
   }
   return found;

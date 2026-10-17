@@ -123,17 +123,16 @@ function teamAt(root: string, home: string, seats: Record<string, { pane: string
 }
 
 /** The walk of the seat the record names: herdr above it, the pane root among the ancestors,
- *  and only the session the seat stands in listing the pane under the seat's name. A walk with
- *  no session asked reads herdr's current session, which is the one the caller stands in; a
- *  walk asked about the team's own session (`acceptance-test`) finds no agent there, as a
- *  session that doesn't hold the pane answers. The team's file names `acceptance-test`; the
- *  seat stands in `floor`. */
+ *  and only the session the caller stands in listing the pane under the seat's name. A walk
+ *  asked about another session — the team's own `acceptance-test`, or a record's session the
+ *  caller does not stand in — finds no agent there, as a session that doesn't hold the pane
+ *  answers. The team's file names `acceptance-test`; the seat stands in `floor`. */
 function seatIo(cwd: string, name = 'iris', session = 'floor', pane = 'w1:p1') {
   const root = 4242;
   const io = testIo(cwd);
   io.callerSources = (asked?: string) => ({
     ancestors: () => [{ pid: root, name: 'zsh' }, { pid: 1, name: 'herdr' }],
-    agents: () => (asked === undefined || asked === session ? [{ pane, name, agent: null, workspace: '', status: '', cwd }] : []),
+    agents: () => (asked === session ? [{ pane, name, agent: null, workspace: '', status: '', cwd }] : []),
     paneRootPid: (askedPane: string) => (askedPane === pane ? root : null),
     env: io.env,
     stdinIsTTY: io.stdinIsTTY,
@@ -239,6 +238,25 @@ describe('every other seat, session and path still refuses', () => {
       writeGrant(sb.home, seatGrant(iris));
       teamAt(sb.covered, sb.home);
       const io = seatIo(sb.covered, 'co-worker');
+      const code = await runDown(['--dry-run'], io, drySources(sb.home));
+      expect(io.err).toBe('');
+      expect(io.out).toContain(REFUSAL);
+      expect(code).toBe(1);
+    } finally {
+      rmSync(sb.base, { recursive: true, force: true });
+    }
+  });
+
+  test('the named seat in a session the record does not name is refused', async () => {
+    const sb = makeSandbox();
+    try {
+      // The record stands in `floor`; the caller walks the same pane id in `dispatch`. A pane
+      // id means something only in the session that lists it, so the record's session does not
+      // place this caller, and its record is not the caller's.
+      const iris = registerSeat(sb.home);
+      writeGrant(sb.home, seatGrant(iris));
+      teamAt(sb.covered, sb.home);
+      const io = seatIo(sb.covered, 'iris', 'dispatch');
       const code = await runDown(['--dry-run'], io, drySources(sb.home));
       expect(io.err).toBe('');
       expect(io.out).toContain(REFUSAL);
