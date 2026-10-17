@@ -260,11 +260,15 @@ export function sessionOwnerRefusal(walked: Caller): string {
   return detachedRefusal(walked) ?? `--session is the owner's, from a terminal outside herdr; this call is ${describeCaller(walked)}`;
 }
 
-// The owner, or the orchestrator's or the operator's seat: who may change a running team.
-// Those are the names the file resolved (`coordinator:` or `leads: true`, and `operator:`),
-// not the seat's role, so a lead written `role: coordinator` is admitted when its name is
-// that lead. The no-pane and another-pane verdicts name the seat, so a command's refusal
-// can say which seat the state lost, or which pane it holds that the caller is not on.
+// The owner, or the orchestrator's or the operator's seat: who may change a running team —
+// by the name rule this walk grew on. The six commands that wire the map (`up`, `down`,
+// `restart`, `add`, `remove`, `register`) decide by the resolver instead
+// (src/permissions/who.ts's `gateVerdict`); `hold` and `worktree list / new / remove` still
+// ask this, and it stays the shape they and every `CallerVerdict` branch on. Those are the
+// names the file resolved (`coordinator:` or `leads: true`, and `operator:`), not the seat's
+// role, so a lead written `role: coordinator` is admitted when its name is that lead. The
+// no-pane and another-pane verdicts name the seat, so a command's refusal can say which seat
+// the state lost, or which pane it holds that the caller is not on.
 export function mayChangeTeamVerdict(caller: Caller, team: Pick<TeamFile, 'orchestrator' | 'operator'>, at?: SeatStanding): CallerVerdict {
   if (caller.kind === 'owner') return { kind: 'ok' };
   const asOrchestrator = callerVerdict(caller, team.orchestrator, at);
@@ -298,7 +302,7 @@ export function judgeCallerOf(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'ca
  * case this adds is a team the owner started under another session — `team up --session <name>`,
  * the file still naming its own — whose seats must stand in the commands that change the team.
  * The session then comes from the caller's own placement: the state session that records this
- * caller's pane for the orchestrator's or the operator's seat. The flag never comes back to a
+ * caller's pane for the seat the verdict admits it as. The flag never comes back to a
  * non-owner; only a placement the owner's own state records can move the judgement. A state
  * that holds no other session — every team that never overrode one — resolves to the file's
  * own session, unchanged. A seat placed in another session but not standing in it is judged
@@ -309,10 +313,14 @@ export function judgeCallerIn(
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
   dir: string,
   team: Pick<TeamFile, 'session' | 'orchestrator' | 'operator'>,
+  // What `stands in this session` means. The default is the name rule this search grew on
+  // (`hold`, `worktree list / new / remove`); the commands wiring the map pass their own
+  // resolver-based verdict, so a session the caller stands in is one the map admits it in.
+  verdictOf: (caller: Caller, at?: SeatStanding) => CallerVerdict = (caller, at) => mayChangeTeamVerdict(caller, team, at),
 ): { caller: Caller; shown: Caller; session: string } {
   const placedIn = (session: string): { caller: Caller; shown: Caller; session: string; verdict: CallerVerdict } => {
     const { caller, shown } = judgeCallerOf(io, session === 'default' ? undefined : session);
-    return { caller, shown, session, verdict: mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller)) };
+    return { caller, shown, session, verdict: verdictOf(caller, standingOf(dir, session, caller)) };
   };
   const named = placedIn(team.session);
   if (named.verdict.kind === 'ok') return named;

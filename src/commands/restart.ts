@@ -13,12 +13,14 @@ import {
   isOwner,
   judgeCallerIn,
   judgeCallerOf,
-  mayChangeTeamVerdict,
   noPaneRefusal,
   sessionOwnerRefusal,
   standingOf,
   walkCaller,
+  type Caller,
+  type SeatStanding,
 } from '../caller.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
@@ -171,9 +173,14 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const { team, root, path } = loaded;
   const dir = dirname(path);
 
+  // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
+  // speak: owner or `leads` for this team, decided from records.
+  const home = sources.home ?? homedir();
+  const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, home, 'restart', at, sources.now);
   const judged = args.values.session !== undefined
     ? { ...judgeCallerOf(io, args.values.session === 'default' ? undefined : args.values.session), session: args.values.session }
-    : judgeCallerIn(io, dir, team);
+    : judgeCallerIn(io, dir, team, verdictOf);
   const { caller, shown, session } = judged;
   if (session === 'default') {
     return callerRefused(out, 'session can\'t be "default", herdr\'s own session');
@@ -187,7 +194,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // file that changed since the last approval is not a refusal.
   const ceilings = ceilingsOf(team);
 
-  const mayChange = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
+  const mayChange = verdictOf(caller, standingOf(dir, session, caller));
   // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
   // `1`, dev mode says this gate once, as a warning, and the restart continues — exactly as
   // `up` does. Every other refusal stays a refusal: the target placement, the CLI, the
@@ -195,7 +202,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // says it beside the dry answer and decides nothing.
   const mayRun = mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
     : mayChange.kind === 'another-pane' ? anotherPaneRefusal(mayChange.name, mayChange.recordedPane)
-      : mayChange.kind === 'refused' ? `only the owner, the orchestrator or the operator restarts a seat; this call is ${plainLine(describeCaller(shown))}`
+      : mayChange.kind === 'refused' ? `only the owner or \`leads\` restarts a seat; this call is ${plainLine(describeCaller(shown))}`
         : null;
   if (mayRun !== null) {
     if (io.env.TEAMCLI_DEV_MODE === '1') {
@@ -860,7 +867,7 @@ function replacedRefused(out: Io, name: string): number {
 }
 
 function abandonWorkingRefused(out: Io, name: string): number {
-  out.stderr(`team restart: ${plainLine(name)} is working; a granted abandon leaves it (the owner's --abandon closes it)\n`);
+  out.stderr(`team restart: ${plainLine(name)} is working; a seat's --abandon leaves it (the owner's --abandon closes it)\n`);
   // exit: restart.abandon-working
   return 1;
 }

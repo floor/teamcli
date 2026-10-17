@@ -754,7 +754,7 @@ describe('team down', () => {
   test('a seat other than the coordinator or the operator stops nothing', async () => {
     const run = await down([], WORKER);
     expect(run.code).toBe(1);
-    expect(run.err).toContain('team down: only the owner, the orchestrator or the operator stops the team; this call is deepseek-acme\n');
+    expect(run.err).toContain('team down: only the owner or `leads` stops the team; this call is deepseek-acme\n');
     expect(run.out).toBe('');
   });
 
@@ -796,7 +796,7 @@ describe('team down', () => {
 
     const worker = await down(['--dry-run'], WORKER);
     expect(worker.out).toStartWith(
-      '! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is deepseek-acme\n',
+      '! down would refuse: only the owner or `leads` stops the team; this call is deepseek-acme\n',
     );
   });
 

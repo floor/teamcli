@@ -19,9 +19,10 @@
 // the grant store's active set, decides, and returns. The owner, a seat, or null — never a
 // pane: an agentless pane and an unplaced run are callers the walk placed, and the map's rows
 // admit no one through them.
-import type { Caller } from '../caller.ts';
+import { callerVerdict, type Caller, type CallerVerdict, type SeatStanding } from '../caller.ts';
 import { readTeams, teamIdOf, type RosterEntry } from '../registry/teams.ts';
 import { activeGrants } from './grants.ts';
+import { COMMAND_GATES } from './map.ts';
 import { resolvePermission, type CallerRecord, type PermissionDecision } from './resolve.ts';
 
 /** What the bridge reads of the team file: the lead's resolved name (its `leads` mark or the
@@ -103,4 +104,37 @@ export function resolveCaller(
 ): PermissionDecision {
   const record = callerRecordOf(caller, team, rosterOf(home, root));
   return resolvePermission(record, { id: team.id }, command, activeGrants(home, now));
+}
+
+/**
+ * The same decision, in the shape the commands that change a team already branch on
+ * (`CallerVerdict`): `ok` where the map admits the caller, `refused` where it does not, and —
+ * for a seat the map admits — the standing's own verdict, so a lead on a pane the state does
+ * not record for it is still refused with the repair (`no-pane`, `another-pane`). The map is
+ * the record's judge; the standing is the placement's proof, and an admitted seat passes both.
+ * A caller the map refuses is `refused` whatever pane it sits on: the refusal is the rule's,
+ * and the commands say the rule's sentence.
+ *
+ * `now` is read only where the row reads grants: a gate row (owner-only, owner-or-leads,
+ * owner-or-own-team, seat-record) decides from the record alone, so it opens no grant folder
+ * and takes no clock reading it never uses — a command's other readings stay where they were.
+ */
+export function gateVerdict(
+  caller: Caller,
+  team: { orchestrator: string; seats: readonly { name: string; role: string }[] },
+  root: string,
+  home: string,
+  command: string,
+  at?: SeatStanding,
+  now: () => Date = () => new Date(),
+): CallerVerdict {
+  const bridge: BridgeTeam = { id: teamIdOf(root), orchestrator: team.orchestrator, seats: team.seats };
+  const record = callerRecordOf(caller, bridge, rosterOf(home, root));
+  const grants = COMMAND_GATES[command]?.kind === 'capability' ? activeGrants(home, now()) : [];
+  const decision = resolvePermission(record, { id: bridge.id }, command, grants);
+  if (decision.effect === 'deny') return { kind: 'refused' };
+  if (record !== null && record.kind === 'owner') return { kind: 'ok' };
+  // A seat the map admits: the pane proof is the standing's, and the seat must be where the
+  // state records it — the same judgement every admitted seat met before the map.
+  return callerVerdict(caller, (record as { seat: string }).seat, at);
 }

@@ -572,7 +572,7 @@ describe("a create-grant's runner and the team's other commands", () => {
           body: WITH_RUNNER,
           cwd: v8,
           ancestors: UNDER_HERDR,
-          line: 'team down: only the owner, the orchestrator or the operator stops the team; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
+          line: 'team down: only the owner or `leads` stops the team; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
         },
       ];
       for (const one of cases) {

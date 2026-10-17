@@ -274,7 +274,7 @@ test('an approved file that has since changed refuses, and the same file mounts 
 });
 
 test('team down refuses an unplaced caller, and the same call stops the team when TEAMCLI_DEV_MODE=1', async () => {
-  const placement = 'only the owner, the orchestrator or the operator stops the team; this call is unplaced (it runs under herdr)';
+  const placement = 'only the owner or `leads` stops the team; this call is unplaced (it runs under herdr)';
   const refused = repo();
   approve(refused.home, refused.root);
   const refusedBefore = durableBytes(refused.home);

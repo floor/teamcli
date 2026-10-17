@@ -1128,7 +1128,7 @@ scene('down.dry-run', async (place) => {
 });
 scene('down.caller', async (place) => {
   write(place, TEAM);
-  return show(await down(place, [], other, downSources({ sessionRunning: () => true, agents: () => [] })), 'only the owner, the orchestrator or the operator');
+  return show(await down(place, [], other, downSources({ sessionRunning: () => true, agents: () => [] })), 'only the owner or `leads` stops the team');
 });
 scene('down.file-owner', async (place) => {
   write(place, TWO);
@@ -3596,7 +3596,7 @@ scene('restart.configuration', async (place) => show(await restarted(place, ['wo
 scene('restart.detached', async (place) => show(await restarted(place, ['worker'], detachedCaller), SENTENCE));
 scene('restart.caller', async (place) => {
   write(place, ACTIVE_TWO);
-  return show(await restarted(place, ['worker'], other), 'only the owner, the orchestrator or the operator');
+  return show(await restarted(place, ['worker'], other), 'only the owner or `leads` restarts a seat');
 });
 scene('restart.self', async (place) => {
   write(place, ACTIVE_TWO);
@@ -3616,13 +3616,11 @@ scene('restart.unknown', async (place) => {
   return show(await restarted(place, ['missing']), 'not a signed declared seat');
 });
 scene('restart.lead', async (place) => {
-  write(place, ACTIVE_TWO);
-  const opCaller = { kind: 'seat', name: 'worker', pane: 'pane-op', session: 'acme' } as const;
+  // The map admits the lead for `restart`; the seat caller is the lead, standing on its own
+  // recorded pane, and the target the file's operator. The abandon rule refuses it there.
   write(place, ACTIVE_TWO.replace('operator: lead', 'operator: worker'));
-  updateState(join(place.root, '.agents'), (state) => {
-    (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-op' };
-  });
-  return show(await restarted(place, ['lead', '--abandon'], opCaller), 'does not abandon the orchestrator');
+  recordLead(place, leadSeat.pane);
+  return show(await restarted(place, ['worker', '--abandon'], leadSeat), 'does not abandon the orchestrator');
 });
 scene('restart.signed-off', async (place) => {
   write(place, TWO);
@@ -3656,7 +3654,7 @@ scene('restart.abandon-working', async (place) => {
   return show(await restarted(place, ['worker', '--abandon'], leadSeat, {
     agents: () => [agent('worker', 'working')],
     screen: () => ({ kind: 'working' }),
-  }), 'a granted abandon leaves it');
+  }), "a seat's --abandon leaves it");
 });
 scene('restart.busy', async (place) => {
   write(place, ACTIVE_TWO);

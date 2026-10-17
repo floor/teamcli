@@ -3,7 +3,8 @@ import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { processNameMatches } from '../clis.ts';
-import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
@@ -553,18 +554,24 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // flag keeps aiming the run, for the owner alone. A delegated run stops the whole team, in the
   // session the file names: its caller is a pane outside that team, and no placement of it may
   // move the run onto another session — its own included.
+  // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
+  // speak: owner or `leads` for this team, decided from records — the registry roster's line
+  // where it stands, the file's own declaration where the registry holds no record of the team,
+  // and the standing's pane proof for a seat the map admits.
+  const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, sources.home ?? homedir(), 'down', at, sources.now);
   const judged = branching()
     ? { caller: callerOf(io), session: team.session }
     : sessionFlag !== undefined
       ? { caller: callerOf(io, sessionFlag === 'default' ? undefined : sessionFlag), session: sessionFlag }
-      : judgeCallerIn(io, dir, team);
+      : judgeCallerIn(io, dir, team, verdictOf);
   let caller = judged.caller;
   let session = judged.session;
 
   // The ordinary caller rule, for the session the caller's own placement named. It is what decides
   // whether the gate is asked at all: a caller the rule accepts never enters the delegate branch,
   // and a run it accepts keeps its own session, its own plan and today's bytes exactly.
-  const rule = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
+  const rule = verdictOf(caller, standingOf(dir, session, caller));
   // A gate answer can move a run onto another session: the delegate branch always stops the team
   // the file names, whatever session the caller's placement pointed at. The two differ only for a
   // caller placed in a session the state holds (`team up --session <other>`), and the owner is
@@ -682,7 +689,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         refusals.push(anotherPaneRefusal(rule.name, rule.recordedPane));
       } else {
         refusals.push(
-          `only the owner, the orchestrator or the operator stops the team; this call is ${describeCaller(caller)}`,
+          `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}`,
         );
       }
     } else if (said.kind === 'refused') {
@@ -701,7 +708,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // Dev mode says the caller-placement line once, as a warning, and the stop continues.
   // Every other refusal stays a refusal. Unset, the list is unchanged. Nothing here writes
   // an approval, a key, or a grant.
-  const placement = `only the owner, the orchestrator or the operator stops the team; this call is ${describeCaller(caller)}`;
+  const placement = `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}`;
   let warning = '';
   if (dev) {
     const kept: string[] = [];
