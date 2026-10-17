@@ -454,15 +454,7 @@ exit 0
 ```
 
 The live edit disables the check immediately. Nothing in this build records it separately: the file
-is the record, and the watch's `approval` check reports the difference on the owner's seat once, as
-`the file has changed since the last approval: <what changed>`, while the difference holds.
-
-```console machine=tight
-$ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
-exit 0
-```
+is the record, and a verified copy that differs is not reported.
 
 `up` leaves a watch running as a background process, so a second one refuses rather than reading the same
 session twice:
