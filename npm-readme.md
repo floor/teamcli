@@ -74,6 +74,7 @@ the file stays private to your clone (it goes in `.git/info/exclude`, never `.gi
 - The full README, and the command reference: [github.com/floor/teamcli](https://github.com/floor/teamcli#readme)
 - Changelog: [CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md)
 - Upgrading from an earlier release: [UPGRADE-0.3.md](https://github.com/floor/teamcli/blob/main/UPGRADE-0.3.md)
+- Upgrading to 0.5.0: [UPGRADE-0.5.md](https://github.com/floor/teamcli/blob/main/UPGRADE-0.5.md)
 - RFC 000, what the project stands on: [floor/teamcli discussion 147](https://github.com/floor/teamcli/discussions/147)
 
 ## License

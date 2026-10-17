@@ -1,0 +1,66 @@
+# Upgrading to 0.5.0
+
+For a team running under 0.3.5, or under one of the 0.4.x builds between them.
+
+1. `team doctor`. It checks this machine against the file and names whatever is missing.
+2. `team up`. The file in your clone is the record, so nothing is approved by hand any more.
+   Running seats keep working as they are; relaunch one with `team restart <seat>`, or the team —
+   `team down`, then `team up`, typed as two commands, the second only after the first has
+   returned — when you want it on this build.
+
+## `team approve` is gone
+
+The command is not in the CLI: `team approve` prints `team: unknown command "approve"` and exits
+2, and `team --help` carries no `approve` line. `team up` admits from the live file now: edit the
+file in your clone, then run `up` — or `add`, `remove`, `down`, `restart`; each reads the file
+itself. A script that guarded on `team approve` can drop that call.
+
+The approved copy is gone with it. Every command reads the live file, and
+[`team check`](https://github.com/floor/teamcli/blob/main/docs/commands/check.md) is integrity,
+not authority: it reads the file, the state,
+herdr, the registries and the agents' records, and reports the differences alone, each with its
+repair — a reading of whether the records agree, never a grant. No approval, no launch and no
+right follows from a clean answer, and the check writes nothing at all, for every caller, the
+owner included.
+
+## Caller gates are strict now
+
+The file decides who may do what, a grant cannot widen its own entry, and `--file` and `--session`
+stay the owner's, from a terminal outside herdr.
+
+- **`team add`** — the owner, a seat that leads (the orchestrator's or the operator's seat) for a
+  seat the file already declares, the file's approved delegate, or a caller a create-grant's
+  `runner` names. A non-copy add (a different seat stanza) is the owner's: an add that would write
+  the file — restoring a seat the file no longer holds, or clearing `stopped: true` — is refused
+  for everyone else.
+- **`team up` and `team down`** — the owner; the orchestrator's seat when the file's `grant` lists
+  the word, and the file's approved delegate whose entry carries it; the operator's seat runs
+  `down` for the team, never for the two lead seats.
+- **`team remove` and `team restart`** — the owner, or a seat that leads removing or restarting
+  another seat, never its own recorded pane.
+- **`team grant` and `team revoke`** — the owner alone, from a terminal outside herdr, at both
+  seat level and team level.
+
+## A send says how it ended, and takes the channel it names
+
+[`team send`](https://github.com/floor/teamcli/blob/main/docs/commands/send.md) writes the body
+whole to a mode-0600 drop file and types one
+short trigger line — for every seat, Claude Code's included; the body is never typed and never
+split. Every run ends in one word: `delivered`, `answered`, `held`, `not-submitted`, `timeout`,
+`unreachable` or `refused`. `--wait` to a Claude Code seat writes one frame on its cross-session
+socket and brings the reply back; `--wait` to any other seat is refused and nothing is written.
+
+Who may send to whom is a rule table: a seat to its own team's orchestrator, a team's leads to its
+own seats, another team's seats through that team's orchestrator, an owner-signed grant last — and
+a seat the file marks `assistant: true` is admitted to its entity's main coordinator.
+
+## What else is new
+
+The registry and `team register` (a seat that is already running is written in without a relaunch),
+projects, the live seat state in `team seats` and the sidebar labels beside each pane, and the work
+queue. The full list is in
+[CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md), and the grouped summary
+in the README's "What's new in 0.5.0".
+
+How to tell it is done: `team doctor` ends `nothing missing` (a warning count may follow), and
+`team check` answers `team check: nothing wrong` over the line naming what the check cannot see.
