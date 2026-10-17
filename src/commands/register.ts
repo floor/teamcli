@@ -598,7 +598,10 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // writes below: this path is that act too, and its early return must not skip them.
       if (delegated !== null) logDelegated(dir, delegated, 'up', refreshedAt, 'register');
       if (grantedSeat !== null) logGranted(dir, grantedSeat, 'up', refreshedAt, 'register');
-      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev, owner: walked.kind === 'owner' }, seat, pane, held.id);
+      // The record names the caller the run admitted, not the process the walk saw: a seat under
+      // a pane override walks as unplaced and is judged as the seat its pane proves it is, and
+      // `registered_by` must say the seat.
+      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: dev, owner: walked.kind === 'owner' }, seat, pane, held.id);
       if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
       else {
         refreshed = true;
@@ -715,7 +718,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // now. The seat's next prompt writes the file again.
   resetCliHookState(dir, session, [name]);
 
-  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev, owner: walked.kind === 'owner' }, seat, pane, id);
+  // The judged caller, as above: `registered_by` is the seat the admission found, never the
+  // unplaced process the walk saw under a pane override.
+  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: dev, owner: walked.kind === 'owner' }, seat, pane, id);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);
   else {
     // The address: the live session socket this seat answers at, recorded on the agent the way a

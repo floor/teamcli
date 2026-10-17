@@ -30,7 +30,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { AGENT_ID_PATTERN, findAgent, readAgents } from '../src/registry/agents.ts';
 import { readTeams, teamIdOf } from '../src/registry/teams.ts';
 import { defaultSocketsDir } from '../src/send/address.ts';
-import { emptySession, LOG_FILE, readState, SEAT_ID_PATTERN, STATE_FILE, updateState } from '../src/state.ts';
+import { emptySession, LOG_FILE, mintSeatId, readState, SEAT_ID_PATTERN, STATE_FILE, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T21:00:00Z');
@@ -217,6 +217,42 @@ describe('a running seat', () => {
     const panes = readdirSync(panesDir(w));
     expect(panes).toHaveLength(1);
     expect(readFileSync(join(panesDir(w), panes[0]!), 'utf8').trim()).toBe(join(w.root, '.agents', 'team.yaml'));
+  });
+
+  test('a seat registering under the caller override records itself as `by`, not the unplaceable walk', async () => {
+    // The acceptance shape: the session's state already records the seat on its pane, the registry
+    // holds no agent record of it yet, and the run is the seat's own — started inside herdr, where
+    // `walkCaller` stops at the server and places nobody. The admission is judged on the session
+    // placement; the registry's provenance must say the seat, not the walk's reading.
+    const w = world();
+    const id = mintSeatId();
+    updateState(w.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.lead = { id, stage: 'ready', pane: PANE, workspace: WORKSPACE, cli: 'claude-code' };
+    });
+    const io = testIo(w.root);
+    // Dev mode on, so the record carries the override's own mark too: both provenance fields are
+    // written from the same `by`, and the scene shows both name the seat.
+    io.env.TEAMCLI_DEV_MODE = '1';
+    io.callerSources = (asked?: string) => {
+      const placed = asked === undefined || asked === 'acme';
+      return {
+        ancestors: () => [{ pid: 700, name: 'node' }, { pid: 600, name: 'herdr' }],
+        agents: () => (placed ? [agent('lead')] : []),
+        paneRootPid: (pane: string) => (placed && pane === PANE ? 700 : null),
+        env: io.env,
+        stdinIsTTY: false,
+      };
+    };
+
+    const code = await runRegister(['lead'], io, sources(w));
+
+    expect(code, io.err).toBe(0);
+    expect(io.out).toContain('lead: already registered — pane w1:p1');
+    const record = findAgent(w.home, { team: teamIdOf(w.root), seat: 'lead' });
+    expect(record).toBeDefined();
+    expect(record?.provenance.registered_by).toBe('lead');
+    expect(record?.provenance.dev_mode_by).toBe('lead');
   });
 
   test('records the pane\'s live session socket, read again after the write', async () => {
