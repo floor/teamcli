@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProjects, type ProjectSources, type ProjectView } from '../src/commands/projects.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
-import { upsertProject } from '../src/registry/projects.ts';
+import { ProjectsError, upsertProject } from '../src/registry/projects.ts';
 import { upsertTeam } from '../src/registry/teams.ts';
 import { testIo } from './helpers.ts';
 
@@ -96,6 +96,18 @@ test('an argument a project view does not take is refused', async () => {
   expect(code).toBe(2);
   expect(io.err).toContain('team projects: unexpected "extra"');
   expect(io.err).toContain('Usage: team projects [--json]');
+});
+
+test('a registry that cannot be read is the command\'s own line, exit 1', async () => {
+  const io = testIo('/anywhere');
+  const path = '/home/someone/.config/team/projects.yaml';
+  const code = await runProjects([], io, {
+    ...sourcesOf([]),
+    list: () => { throw new ProjectsError(`${path}: line 2: "projects" must be a map`); },
+  });
+  expect(code).toBe(1);
+  expect(io.out).toBe('');
+  expect(io.err).toBe(`team projects: the project registry cannot be read: ${path}: line 2: "projects" must be a map\n`);
 });
 
 test('team status --project covers every team of the project, registered or not', async () => {

@@ -1892,6 +1892,13 @@
       "trigger": "team projects"
     },
     {
+      "code": 1,
+      "command": "projects",
+      "id": "projects.unreadable",
+      "meaning": "the project registry cannot be read",
+      "trigger": "team projects"
+    },
+    {
       "code": 2,
       "command": "projects",
       "id": "projects.invocation",

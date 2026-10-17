@@ -42,6 +42,14 @@ export type ProjectsJson = { format: 1; projects: ProjectView[] };
 export const projects: Command = (argv, io) => runProjects(argv, io, realSources);
 export default projects;
 
+/** The registry's own sentence, in this command's words: the top-level catch would say `team:`
+ *  and leave the reader without the command that failed. */
+function unreadable(io: Io, reason: string): number {
+  io.stderr(`team projects: the project registry cannot be read: ${reason}\n`);
+  // exit: projects.unreadable
+  return 1;
+}
+
 export async function runProjects(argv: string[], io: Io, sources: ProjectSources): Promise<number> {
   const out = cleanedIo(io);
   const args = readArgs(argv, [], ['json']);
@@ -50,7 +58,13 @@ export async function runProjects(argv: string[], io: Io, sources: ProjectSource
     // exit: projects.invocation
     return 2;
   }
-  const listed = sources.list();
+  let listed: ProjectView[];
+  try {
+    listed = sources.list();
+  } catch (error) {
+    if (!(error instanceof projectRegistry.ProjectsError)) throw error;
+    return unreadable(out, error.message);
+  }
   if (args.flags.has('json')) {
     const doc: ProjectsJson = { format: 1, projects: listed };
     io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
