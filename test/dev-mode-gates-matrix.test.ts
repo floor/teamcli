@@ -269,7 +269,7 @@ test('up: unset, the caller gate refuses; set, it is a warning and the mount con
 // --- down -------------------------------------------------------------------------------------
 
 test('down: unset, the caller gate refuses; set, it is a warning and the stop continues', async () => {
-  const placement = 'only the owner, the orchestrator or the operator stops the team; this call is unplaced (it runs under herdr)';
+  const placement = 'only the owner or `leads` stops the team; this call is unplaced (it runs under herdr)';
   const refused = repo();
   approve(refused.home, refused.root);
   const refusedStopped = { n: 0 };
@@ -402,7 +402,7 @@ test('remove --abandon: unset, the owner-only gate refuses; set, it is a warning
 // `true` is not it.
 
 const ADD_LINE = 'only the owner, the orchestrator or the operator runs it; this call is unplaced (it runs under herdr)';
-const RESTART_LINE = 'only the owner, the orchestrator or the operator restarts a seat; this call is unplaced (it runs under herdr)';
+const RESTART_LINE = 'only the owner or `leads` restarts a seat; this call is unplaced (it runs under herdr)';
 const INIT_LINE = 'only the owner runs init, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
 
 test('add: unset, the caller gate refuses; set, it warns, logs and the run reads on', async () => {

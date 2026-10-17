@@ -134,7 +134,7 @@ function restartSources(home: string): RestartSources {
 }
 
 const ADD_LINE = 'only the owner, the orchestrator or the operator runs it; this call is helper';
-const RESTART_LINE = 'only the owner, the orchestrator or the operator restarts a seat; this call is helper';
+const RESTART_LINE = 'only the owner or `leads` restarts a seat; this call is helper';
 const INIT_LINE = 'only the owner runs init, from a terminal outside herdr; this call is helper';
 
 test('add: unset and any value but 1 refuse the helper; 1 warns, logs and continues', async () => {

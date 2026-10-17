@@ -332,6 +332,11 @@ type Case = {
   // cause, and the repair. For `answer` only the coordinator is ever a caller, so the operator
   // meets the ordinary refusal there instead of this line.
   noPane: (name: string) => string;
+  // Whether this command's gate admits an operator seat caller: where it does, a state that
+  // records no pane for that seat gives it the no-pane line; where it does not — `answer` judges
+  // the coordinator alone, and the map's `down` row admits the owner and `leads` — the operator
+  // meets its refusal, not for the missing pane but for being the operator.
+  operatorAdmitted?: boolean;
   // The refusal for the seat's name in the seat's session, on any pane but the one the state
   // records for it: the recorded pane is named, and so is the repair.
   anotherPane: (name: string, pane: string) => string;
@@ -401,8 +406,9 @@ const COMMANDS: Case[] = [
   {
     name: 'down',
     run: (caller, argv = [], options) => call((io) => runDown([...argv], io, downSources()), caller, options),
-    refusal: (who) => `team down: only the owner, the orchestrator or the operator stops the team; this call is ${who}\n`,
+    refusal: (who) => `team down: only the owner or \`leads\` stops the team; this call is ${who}\n`,
     noPane: (name) => `team down: ${NO_PANE(name)}\n`,
+    operatorAdmitted: false,
     anotherPane: (name, pane) => `team down: ${ANOTHER_PANE(name, pane)}\n`,
     sessionOwner: (who) => `team down: ${OWNER_ONLY(who)}\n`,
     fileOwner: (who) => `team down: --file is the owner's, from a terminal outside herdr; this call is ${who}\n`,
@@ -413,6 +419,7 @@ const COMMANDS: Case[] = [
     run: (caller, argv = [], options) => call((io) => runAnswer([SEAT, 'trust', ...argv], io, answerHost()), caller, options),
     refusal: () => `${SEAT}: only the owner, or the orchestrator from its own seat, can answer\n`,
     noPane: (name) => `team answer: ${NO_PANE(name)}\n`,
+    operatorAdmitted: false,
     anotherPane: (name, pane) => `team answer: ${ANOTHER_PANE(name, pane)}\n`,
     sessionOwner: (who) => `team answer: ${OWNER_ONLY(who)}\n`,
     fileOwner: (who) => `team answer: --file is the owner's, from a terminal outside herdr; this call is ${who}\n`,
@@ -489,9 +496,9 @@ for (const command of COMMANDS) {
 
     test('a state that records no pane refuses the operator the same way', async () => {
       const run = await command.run(placed(SESSION, OPERATOR, 'w4:p1'), [], { state: null });
-      // `answer` judges the coordinator alone, so an operator is refused for being the operator,
-      // not for the missing pane: the line it meets is its ordinary refusal.
-      const err = command.name === 'answer' ? command.refusal(OPERATOR) : command.noPane(OPERATOR);
+      // Where the gate does not admit an operator seat caller, it is refused for being the
+      // operator, not for the missing pane: the line it meets is its ordinary refusal.
+      const err = command.operatorAdmitted === false ? command.refusal(OPERATOR) : command.noPane(OPERATOR);
       expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err });
       expect(readFileSync(file, 'utf8')).toBe(run.before);
     });

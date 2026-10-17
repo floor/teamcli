@@ -372,7 +372,7 @@ describe('the placement walk decides the granted seat', () => {
     );
     const code = await runDown([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toContain('team down: only the owner, the orchestrator or the operator stops the team; this call is ');
+    expect(io.err).toContain('team down: only the owner or `leads` stops the team; this call is ');
     expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
   });
 
@@ -386,7 +386,7 @@ describe('the placement walk decides the granted seat', () => {
     expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
   });
 
-  test('down of the operator\'s seat keeps today\'s rule and writes no grant line', async () => {
+  test('down of the operator\'s seat: the map refuses it, and nothing is stopped', async () => {
     record({
       lead: { pane: 'lead-pane', workspace: 'lead-ws' },
       pilot: { pane: 'pilot-pane', workspace: 'pilot-ws' },
@@ -395,10 +395,11 @@ describe('the placement walk decides the granted seat', () => {
     const { sources, trace } = downTrace(() => people());
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);
     const code = await runDown([], io, sources);
-    expect(code).toBe(0);
-    expect(trace.closed).toEqual(['worker-ws']);
-    expect(io.out).toContain("skip lead: left running; only the owner stops the orchestrator's or the operator's seat\n");
-    expect(io.out).toContain("skip pilot: left running; only the owner stops the orchestrator's or the operator's seat\n");
+    expect(code).toBe(1);
+    // The operator is no longer the rule's second leg: `down` admits the owner or `leads`, and
+    // the operator holds neither. Nothing is closed and no grant line is written.
+    expect(io.err).toContain('team down: only the owner or `leads` stops the team; this call is ');
+    expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
   });
 });

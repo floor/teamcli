@@ -273,7 +273,7 @@ describe('the project lead changes nothing outside its own team', () => {
     const io = leadIo(bravoRoot);
     const code = await runDown(['--dry-run'], io, downSources());
     expect(io.err).toBe('');
-    expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is lead\n');
+    expect(io.out).toContain('! down would refuse: only the owner or `leads` stops the team; this call is lead\n');
     expect(code).toBe(1);
   });
 

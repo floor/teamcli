@@ -40,11 +40,13 @@ nothing to stop.
 
 ## Who may run it
 
-The owner, the orchestrator's seat, the operator's seat, and the approved delegate (below). The
+The owner, the orchestrator's seat — and any seat the record marks a lead: the map's `leads` —
+and the
+approved delegate (below). The
 seat is that name's, in a session
 this project's state records — the file's session, or one the state records the caller's pane in —
 on the pane the state records for that name in that session: a seat of another session, or a pane
-merely renamed to the orchestrator's or the operator's name, is refused — and so is a seat the state
+merely renamed to the orchestrator's name, is refused — and so is a seat the state
 records no pane for, or records on another pane than this call is on; those two refusals name the
 seat and the repair. What that proves is placement, and no more: the state file is in the project,
 and a process of the same user that writes its own pane there under the orchestrator's name, and
@@ -155,7 +157,7 @@ stop at all.
 | `team down: line <n>: <message>` | 2 |
 | `team down: herdr doesn't answer; is it installed and running?` | 2 |
 | `team down: the agents of session <session> can't be read` | 2 |
-| `team down: only the owner, the orchestrator or the operator stops the team; this call is <caller>` | 1 |
+| `team down: only the owner or \`leads\` stops the team; this call is <caller>` | 1 |
 | `team down: only the owner abandons a team, from a terminal outside herdr` | 1 |
 | `team down: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team down: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
@@ -237,7 +239,7 @@ An implementer's seat is not the orchestrator's: it cannot stop the team.
 
 ```console caller=claude-beacon
 $ team down ; echo "exit $?"
-team down: only the owner, the orchestrator or the operator stops the team; this call is claude-beacon
+team down: only the owner or `leads` stops the team; this call is claude-beacon
 exit 1
 ```
 

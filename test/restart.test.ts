@@ -269,7 +269,7 @@ describe('team restart <seat>', () => {
     expect(log).toContain('restart [owner] restarted worker; pane pane-old -> pane-new\n');
   });
 
-  test('orchestrator and operator can restart another seat from their recorded pane, including from the lobby', async () => {
+  test('the lead can restart another seat from its recorded pane, including from the lobby', async () => {
     const fixture = makeFixture();
     const lobby = join(fixture.home, '.config', 'team', 'lobby');
     mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
@@ -308,7 +308,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(0);
   });
 
-  test('seat caller --abandon closes a blocked or unsent non-lead seat, but refuses a working seat or a lead seat', async () => {
+  test('a lead --abandon closes a blocked non-lead seat, but refuses a working seat or a lead seat; a plain seat is refused by the map', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
@@ -316,28 +316,37 @@ describe('team restart <seat>', () => {
       session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
       session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
     });
-    const opsCaller: Caller = { kind: 'seat', name: 'ops', pane: 'pane-ops', session: 'acme' };
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
 
-    // 1. Refuses --abandon on the orchestrator seat
+    // 1. Refuses --abandon on the operator's seat: the map admits the lead, and the abandon rule
+    //    keeps a seat caller off the orchestrator's and the operator's seat.
     const leadRun = makeHarness(fixture, { workerScreen: 'permission' });
-    const ioLead = testIo(fixture.root, opsCaller);
-    expect(await runRestart(['lead', '--abandon'], ioLead, leadRun.sources)).toBe(1);
+    const ioLead = testIo(fixture.root, leadCaller);
+    expect(await runRestart(['ops', '--abandon'], ioLead, leadRun.sources)).toBe(1);
     expect(ioLead.err).toContain("does not abandon the orchestrator's or the operator's seat");
 
-    // 2. Refuses --abandon on a working seat from a seat caller
+    // 2. Refuses --abandon on a working seat from a lead caller
     const workingRun = makeHarness(fixture, { workerScreen: 'working', workerStatus: 'working' });
-    const ioWorking = testIo(fixture.root, opsCaller);
+    const ioWorking = testIo(fixture.root, leadCaller);
     expect(await runRestart(['worker', '--abandon'], ioWorking, workingRun.sources)).toBe(1);
-    expect(ioWorking.err).toBe("team restart: worker is working; a granted abandon leaves it (the owner's --abandon closes it)\n");
+    expect(ioWorking.err).toBe("team restart: worker is working; a seat's --abandon leaves it (the owner's --abandon closes it)\n");
     expect(workingRun.did.closed).toEqual([]);
 
-    // 3. Succeeds with --abandon on a blocked seat from a seat caller without typing
+    // 3. Succeeds with --abandon on a blocked seat from a lead caller without typing
     const blockedRun = makeHarness(fixture, { workerScreen: 'permission', workerStatus: 'blocked' });
-    const ioBlocked = testIo(fixture.root, opsCaller);
+    const ioBlocked = testIo(fixture.root, leadCaller);
     expect(await runRestart(['worker', '--abandon'], ioBlocked, blockedRun.sources)).toBe(0);
     expect(blockedRun.did.typed).toEqual([]);
     expect(blockedRun.did.closed).toEqual(['ws-old']);
     expect(ioBlocked.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+
+    // 4. A plain seat of the team is refused by the map's `restart` row before any of that: it
+    //    admits the owner and the team's `leads`, and `ops` holds no `leads`.
+    const opsRun = makeHarness(fixture);
+    const ioOps = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-ops', session: 'acme' });
+    expect(await runRestart(['worker'], ioOps, opsRun.sources)).toBe(1);
+    expect(ioOps.err).toBe('team restart: only the owner or `leads` restarts a seat; this call is ops\n');
+    expect(opsRun.did.closed).toEqual([]);
   });
 
   test('refuses a busy seat without --abandon, and refuses when preflight fails before stopping the seat', async () => {

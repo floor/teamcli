@@ -24,8 +24,8 @@ const PANE = 'main/w1:p1';
 /** A delegate runs in another herdr session, outside the team's: the walk can place it only as an
  *  unplaced caller, which is exactly the caller the gate is for. */
 const CALLER: Caller = { kind: 'unplaced', reason: 'it runs under herdr' };
-/** Today's refusal for that caller, byte for byte. */
-const ORDINARY = `only the owner, the orchestrator or the operator stops the team; this call is unplaced (it runs under herdr)`;
+/** The ordinary refusal for that caller, byte for byte: the map admits the owner or `leads`. */
+const ORDINARY = `only the owner or \`leads\` stops the team; this call is unplaced (it runs under herdr)`;
 const GATE_DOWN = 'the gate refuses this caller (fixture)';
 const GATE_COMMAND = "the approved delegate may not run 'down' (fixture)";
 /** The gate's own wording for a prohibited flag. It is the gate's to write; what these tests
@@ -167,10 +167,8 @@ describe('a file with no delegate', () => {
     expect(r.io.out).toContain('claude-coordinator-acme:p1 /exit');
   });
 
-  // The coordinator and the operator carry a name the delegate branch knows too. Their ordinary
-  // rule is answered by the placement the state records, and when it accepts them the gate is
-  // never asked: a caller the ordinary rule lets through never enters the delegate branch, and a
-  // delegates section in the file cannot take the seat's own authority away from it.
+  // A lead seat keeps its own authority with a delegates section in the file: the ordinary rule
+  // lets it through, and a caller the ordinary rule accepts never enters the delegate branch.
   const COORDINATOR: Caller = { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: 'acme-web' };
 
   const recordStanding = (pane: string, session = 'acme-web', name = COORDINATOR.name): void => {
@@ -190,10 +188,11 @@ describe('a file with no delegate', () => {
     expect(r.io.out).toContain('left running');
   });
 
-  // The operator is the rule's second leg (`mayChangeTeamVerdict` asks the coordinator's name,
-  // then the operator's), and the fixture names one seat for both: this run gives it its own, so
-  // a valid operator call is proved to ask nothing on its own.
-  test('a standing operator asks nothing, and its plan keeps the team\'s own seats', async () => {
+  // The operator is no longer the rule's second leg: the map admits the owner or `leads` for
+  // this team, and the operator seat holds neither. Its own call meets the ordinary sentence,
+  // and the delegate branch — asked only when the ordinary rule refuses — answers it; with no
+  // entry its pane can pass, that answer is the run's.
+  test('the operator seat is refused by the map, and the delegate branch answers it', async () => {
     // A lead seat must be declared, single and running: the fixture's second seat is parked, so
     // this file names it as the operator and unpark it.
     writeFileSync(file, teamFile(delegate(['up', 'down']))
@@ -201,14 +200,13 @@ describe('a file with no delegate', () => {
       .replace(/^    parked: true\s*$/m, ''));
     const OPERATOR: Caller = { kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'acme-web' };
     recordStanding('w2:p1', 'acme-web', OPERATOR.name);
-    const r = rig({ gate: neverAsked }, OPERATOR);
-    expect(await r.run()).toBe(0);
-    expect(r.gateCalls).toEqual([]);
-    expect(r.io.err).toBe('');
-    expect(r.io.out).toContain('left running');
-    // A seat's own call is not a delegated run: no audit line, and the ordinary plan's exits.
+    const r = rig({}, OPERATOR);
+    expect(await r.run()).toBe(1);
+    expect(r.gateCalls.length).toBe(1);
+    expect(r.io.err).toBe(`team down: ${GATE_DOWN}\n`);
+    // A refused caller writes no audit line, whatever the gate said, and nothing is typed.
     expect(r.audits).toEqual([]);
-    expect(r.typed).toEqual(['/exit', '/exit']);
+    expect(r.typed).toEqual([]);
   });
 
   test('a pane named like the coordinator but standing elsewhere is a delegate, and keeps nobody', async () => {
