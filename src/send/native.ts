@@ -43,6 +43,12 @@ export type NativePane = {
   wait(ms: number): Promise<void>;
   /** The pane's visible text, or null when it cannot be read. Absent means the caller does not look. */
   paneText?(session: string, pane: string): string | null;
+  /** One key, spelled as herdr spells it (`escape`, `enter`, `down`, `up`, `ctrl+c`). Absent
+   *  means a screen walk that needs a key is refused, never silently skipped. */
+  sendKey?(session: string, pane: string, key: string): boolean;
+  /** The pane's foreground working directory, or null. Absent means the caller falls back to
+   *  the seat's recorded folder. */
+  foregroundCwd?(session: string, pane: string): string | null;
 };
 
 /**

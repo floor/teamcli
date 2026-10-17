@@ -507,6 +507,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       classify(current, pane, cli) {
         return readScreen(cli, launch.paneText(current, pane) ?? undefined).kind;
       },
+      foreground: (current, pane) => launch.foreground(current, pane),
       shellBack: (current, pane) => launch.shellBack?.(current, pane) ?? null,
       agentStatus: (current, pane) => launch.agentStatus?.(current, pane) ?? null,
       agentPanes: (current) => launch.agentPanes(current),

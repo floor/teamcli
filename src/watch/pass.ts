@@ -12,7 +12,7 @@ import { reportedLiveAgent } from '../launch/agent.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { usesLauncher } from '../launch/line.ts';
-import { profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
+import { herdrUnreliable, profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
 import { livenessOf, type LivenessThresholds, type SettingLevel, type StateThresholds } from '../settings/inherit.ts';
 import { stateThresholds, thresholdRefusals, type ThresholdRefusal } from '../settings/resolve.ts';
@@ -157,10 +157,14 @@ export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, approval, load, memory
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
 // permission prompt as idle, so the screen decides first. `team check` reads it too, over a pane
 // the state records for a seat of this team: one reading, two readers, and no second rule.
-export function attentionOf(screen: Screen, status: string, quiet: boolean): Attention {
+// `theirWord` is a profile herdr cannot report: the screen alone is the reading there, so an idle
+// table, a running turn or a limit the CLI draws itself is never "herdr's word is unknown", and
+// only a screen no profile reads is.
+export function attentionOf(screen: Screen, status: string, quiet: boolean, theirWord = false): Attention {
   if (screen.kind === 'permission' || screen.kind === 'trust') return 'permission';
   if (screen.kind === 'question' || screen.kind === 'exit question') return 'question';
   if (screen.kind === 'vendor notice') return 'vendor notice';
+  if (theirWord) return screen.kind === 'unknown' ? 'unknown' : null;
   if (status === 'blocked') return 'blocked';
   // A quiet seat on a screen no profile reads is not "nothing to report": it is the shape a
   // stalled seat leaves — herdr says idle or done, and nothing may ever free it. The report is
@@ -377,7 +381,13 @@ export function pass({
     known.add(agent.pane);
     const pane = live.screens[agent.pane];
     const screen = read(cli, pane);
-    const quiet = agent.status === 'idle' || agent.status === 'done';
+    // Herdr's word, unless the profile says herdr cannot report this CLI: its own screen is the
+    // reading there, and the two states `team` types into are an idle table and a composer
+    // holding text. A screen it cannot read is not quiet.
+    const theirWord = herdrUnreliable(cli);
+    const quiet = theirWord
+      ? screen.kind === 'idle' || screen.kind === 'unsent'
+      : agent.status === 'idle' || agent.status === 'done';
     // Working is herdr's word or the screen's: a seat mid-turn is never idle, whatever its
     // status says.
     const working = agent.status === 'working' || screen.kind === 'working';
@@ -421,7 +431,7 @@ export function pass({
       lead,
       parked,
       stopped,
-      attention: attentionOf(screen, agent.status, quiet),
+      attention: attentionOf(screen, agent.status, quiet, theirWord),
       model: seat ? seatModel(seat, live.screens[agent.pane]) : null,
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
       liveness,
@@ -539,7 +549,9 @@ export function pass({
       // or an agent, or found by a restarted watch, is someone's text — never typed over,
       // sent or cleared, and left to them or to the next stop.
       const mine = screen.kind === 'unsent' && ownUnsent(memory, agent.pane, NUDGE_TEXT, obs.cli, raw);
-      const free = (agent.status === 'idle' || agent.status === 'done') && (screen.kind === 'idle' || mine);
+      // The pass's own reading of a settled seat: herdr's idle or done, or — for a profile herdr
+      // cannot report — the seat's own idle screen. An unreadable one is not free.
+      const free = obs.quiet && (screen.kind === 'idle' || mine);
       if (!free) continue;
       choices.push({
         pane: agent.pane,

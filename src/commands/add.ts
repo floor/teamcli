@@ -1319,6 +1319,7 @@ function hostOf(input: {
     workspacePanes: launch.workspacePanes ? (session, workspace) => launch.workspacePanes!(session, workspace) : undefined,
     classify: (_name, pane, cli) => readScreen(cli, launch.paneText(session, pane) ?? undefined).kind,
     paneText: (_name, pane) => launch.paneText(session, pane),
+    foreground: (_name, pane) => launch.foreground(session, pane),
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,
     agentStatus: (_name, pane) => launch.agentStatus?.(session, pane) ?? null,
     processInfo: (_name, pane) => launch.processInfo?.(session, pane) ?? null,

@@ -42,7 +42,7 @@ export type SeatState = {
    */
   start_cwd?: string;
   cli_version?: string;
-  rules?: 'option' | 'message' | 'undelivered';
+  rules?: 'option' | 'message' | 'prepend' | 'undelivered';
   worked?: boolean;
   /**
    * The process `team` launched for this seat, read after its idle prompt appeared: the pane's

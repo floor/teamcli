@@ -2,6 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
+import { loadProfileModule } from './module-loader.ts';
+import type { ComposeProfile } from './compose.ts';
 import { shippedEfforts } from './efforts.ts';
 import { WINDOWS, type QuotaPattern, type WindowName } from './quota.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
@@ -21,14 +23,35 @@ export interface Profile {
   tested: { from: string; to: string };
   /** Options that make the CLI run without approvals, added to the launch. */
   unattended: readonly string[];
-  /** The option that carries the rules, or null when they go as a first message. */
+  /** The option that carries the rules, or null when they go as a first message or are
+   *  prepended to each brief. */
   rulesOption: string | null;
+  /** How the rules reach the seat: as a launch option, as its first message, or prepended to
+   *  every brief a send types into its pane. A seat with no standing session — a fresh one per
+   *  brief, like the Jules TUI's — has nowhere to keep a first-message line, so its profile
+   *  says `prepend`. */
+  rulesMode: 'option' | 'message' | 'prepend';
+  /** Rules the profile carries for every seat of this CLI, over the team file's: a safety line
+   *  the CLI itself makes necessary. They ride with the file's rules in every delivery. Empty
+   *  when the CLI needs none. */
+  standingRules: readonly string[];
+  /** Whether herdr reports this CLI's agent status faithfully. `unreliable` when it does not
+   *  (it reports the pane as no agent, or `unknown`, while the CLI runs): the profile's own
+   *  screen reading is the seat's state there, and a recognised idle screen counts as free
+   *  whatever herdr says. */
+  herdrStatus: 'reliable' | 'unreliable';
   /** Arguments that exit 0 only when the owner is logged in, or null when the CLI has none. */
   loginCheck: readonly string[] | null;
   /** The command the owner runs to log in. */
   loginHint: string;
-  /** What is typed into an idle prompt to make the CLI exit. */
-  exit: string;
+  /** What is typed into an idle prompt to make the CLI exit; null when the CLI exits by key. */
+  exit: string | null;
+  /** The keys that exit the CLI from its idle screen, in order, when it takes no exit text.
+   *  Empty when the profile exits by typing `exit`. */
+  exitKeys: readonly string[];
+  /** A module that drives a typed delivery the CLI's own screens require, or null when the
+   *  generic drop-file trigger reaches this CLI. See ComposeProfile. */
+  compose: ComposeProfile | null;
   /** The one key that empties the CLI's input box, sent to clear an exit text that did not
    *  read back as typed. Null when no key is established for this CLI: the text is left. */
   exitClear: string | null;
@@ -287,12 +310,14 @@ export type ModelRule = {
 
 type Shipped = { profile: Profile; status: ModelRule[]; quota: QuotaPattern[] };
 
-const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse'] as const;
+const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse', 'jules'] as const;
 // The keys every profile carries. `status_model` and `last_used_model` are optional: a profile
 // without the first belongs to a CLI whose screen doesn't show its model; the second says the
 // CLI starts on its last-used model when a launch names none, and no shipped profile sets it.
-const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'exit', 'timeouts', 'models'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads'] as const;
+// `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
+// `models` is optional for a CLI that names no model on its screen or its launch line.
+const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'timeouts'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -304,6 +329,25 @@ const CLEAR_KEYS = ['ctrl+c', 'ctrl+u', 'escape', 'backspace'] as const;
 // not above on purpose: the rule above keeps a stop from sending what an ordinary box holds;
 // this one answers a question the CLI asked on its way out, on a screen read as `exit question`.
 const CONFIRM_KEYS = ['enter'] as const;
+// The keys a profile may name as `exit_keys`: pressed in order to exit a CLI whose idle screen
+// takes no exit text. Closed like the sets above, and only a key a run established is in it:
+// `ctrl+c` quits the Jules TUI from its session table (0.1.42; the footer draws `ctrl+c: quit`).
+const EXIT_KEYS = ['ctrl+c'] as const;
+
+/** The value of `exit_keys`: a non-empty list of the keys above, spelled as herdr spells them. */
+function exitKeysOf(entry: YamlEntry): readonly string[] {
+  if (entry.value.kind !== 'seq' || entry.value.items.length === 0) {
+    fail(entry.line, '"exit_keys" must be a non-empty list of keys');
+  }
+  return entry.value.items.map((item) => {
+    const value = stringOf(item);
+    if (value === null) fail(item.line, '"exit_keys" entries must be strings');
+    if (!(EXIT_KEYS as readonly string[]).includes(value)) {
+      fail(item.line, `"exit_keys" must hold keys among: ${EXIT_KEYS.join(', ')}`);
+    }
+    return value;
+  });
+}
 
 /** The value of `exit_clear`: one of the keys above, spelled as herdr spells it. */
 function clearKeyOf(entry: YamlEntry): string {
@@ -329,6 +373,16 @@ function unreadModelOf(entry: YamlEntry): 'launch' {
   const value = text(entry, 'unread_model');
   if (value !== 'launch') fail(entry.line, '"unread_model" must be launch');
   return 'launch';
+}
+
+/** The value of `herdr_status`: `reliable` (the default when the key is absent) or
+ *  `unreliable`, for a CLI herdr cannot report faithfully. */
+function herdrStatusOf(entry: YamlEntry): 'reliable' | 'unreliable' {
+  const value = text(entry, 'herdr_status');
+  if (value !== 'reliable' && value !== 'unreliable') {
+    fail(entry.line, '"herdr_status" must be reliable or unreliable');
+  }
+  return value;
 }
 
 /**
@@ -411,6 +465,13 @@ const SHIPPED: Record<string, Shipped> = loadShipped();
 /** The profiles this version launches. A `cli` without one is reported and left out. */
 export function profileFor(cli: string): Profile | null {
   return Object.hasOwn(SHIPPED, cli) ? (SHIPPED[cli]?.profile ?? null) : null;
+}
+
+/** Whether herdr cannot report this CLI's agent status faithfully, so the profile's own screen
+ *  reading is the seat's state there. False for a CLI with no shipped profile, and for one whose
+ *  profile trusts herdr's word. */
+export function herdrUnreliable(cli: string | undefined): boolean {
+  return cli !== undefined && profileFor(cli)?.herdrStatus === 'unreliable';
 }
 
 /** The files the tool itself keeps in the lobby, beside the profiles' own: the reach projection
@@ -548,21 +609,39 @@ function launchOf(root: YamlNode): Shipped {
   const exitConfirmEntry = optional(entries, 'exit_confirm');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
   const startupReadsEntry = optional(entries, 'startup_reads');
+  const exitEntry = optional(entries, 'exit');
+  const exitKeysEntry = optional(entries, 'exit_keys');
+  const composeEntry = optional(entries, 'compose_module');
+  const standingRulesEntry = optional(entries, 'standing_rules');
+  const herdrStatusEntry = optional(entries, 'herdr_status');
+  const modelsEntry = optional(entries, 'models');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
+  if (exitEntry !== undefined && exitKeysEntry !== undefined) {
+    fail(exitKeysEntry.line, '"exit" and "exit_keys" are one or the other, not both');
+  }
+  if (exitEntry === undefined && exitKeysEntry === undefined) {
+    fail(root.line, 'missing "exit" or "exit_keys": a profile names how its CLI exits');
+  }
   const login = loginOf(required(entries, 'login', root.line).value);
   const timeouts = required(entries, 'timeouts', root.line).value;
-  const models = modelsOf(required(entries, 'models', root.line).value);
+  const models = modelsEntry ? modelsOf(modelsEntry.value) : { option: [] as string[], ids: [] as ModelRule[], absent: null };
+  const rules = rulesOf(required(entries, 'rules', root.line).value);
   return {
     profile: {
       cli,
       binary: text(required(entries, 'binary', root.line), 'binary'),
       processNames: strings(required(entries, 'process_names', root.line).value, 'process_names'),
       tested: testedOf(required(entries, 'tested', root.line).value),
-      unattended: strings(required(entries, 'unattended', root.line).value, 'unattended'),
-      rulesOption: rulesOf(required(entries, 'rules', root.line).value),
+      unattended: stringsOrEmpty(required(entries, 'unattended', root.line).value, 'unattended'),
+      rulesOption: rules.option,
+      rulesMode: rules.mode,
+      standingRules: standingRulesEntry ? strings(standingRulesEntry.value, 'standing_rules') : [],
+      herdrStatus: herdrStatusEntry ? herdrStatusOf(herdrStatusEntry) : 'reliable',
       loginCheck: login.check,
       loginHint: login.hint,
-      exit: text(required(entries, 'exit', root.line), 'exit'),
+      exit: exitEntry ? text(exitEntry, 'exit') : null,
+      exitKeys: exitKeysEntry ? exitKeysOf(exitKeysEntry) : [],
+      compose: composeEntry ? composeOf(composeEntry) : null,
       exitClear: exitClearEntry ? clearKeyOf(exitClearEntry) : null,
       exitConfirm: exitConfirmEntry ? confirmKeyOf(exitConfirmEntry) : null,
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
@@ -766,11 +845,27 @@ function template(text: string, line: number): void {
   if (rest.includes('{') || rest.includes('}')) fail(line, 'a template is "{n}" or "{n:title}"');
 }
 
-function rulesOf(node: YamlNode): string | null {
-  if (node.kind === 'scalar' && node.value === 'first-message') return null;
+function rulesOf(node: YamlNode): { mode: 'option' | 'message' | 'prepend'; option: string | null } {
+  if (node.kind === 'scalar' && node.value === 'first-message') return { mode: 'message', option: null };
+  if (node.kind === 'scalar' && node.value === 'prepend') return { mode: 'prepend', option: null };
   const entries = mapping(node, 'rules');
   only(entries, ['option']);
-  return text(required(entries, 'option', node.line), 'option');
+  return { mode: 'option', option: text(required(entries, 'option', node.line), 'option') };
+}
+
+/** The value of `compose_module`: a module shipped beside the profiles whose `compose` export
+ *  drives a typed delivery, loaded by the same path rules as `screen_module`. */
+function composeOf(entry: YamlEntry): ComposeProfile {
+  const specifier = text(entry, 'compose_module');
+  const mod = loadProfileModule(specifier, undefined, entry.line, null, 'compose_module');
+  if (typeof mod.compose !== 'function') {
+    fail(entry.line, `profile: "compose_module" module "${specifier}" exports no "compose" function`);
+  }
+  const repos = mod.reposArgs;
+  if (repos !== undefined && (!Array.isArray(repos) || repos.some((arg: unknown) => typeof arg !== 'string'))) {
+    fail(entry.line, `profile: "compose_module" module "${specifier}" exports "reposArgs" that is not a list of strings`);
+  }
+  return { module: specifier, compose: mod.compose as ComposeProfile['compose'], repos: (repos as string[] | undefined) ?? [] };
 }
 
 function loginOf(node: YamlNode): { check: string[] | null; hint: string } {
@@ -809,6 +904,13 @@ function pattern(source: string, ignoreCase: boolean, line: number): RegExp {
 
 function strings(node: YamlNode, key: string): string[] {
   if (node.kind !== 'seq' || node.items.length === 0) fail(node.line, `"${key}" must be a non-empty list`);
+  return stringsOrEmpty(node, key);
+}
+
+// A list a profile may carry empty: `unattended: []` is how a CLI whose own screens gate
+// nothing is spelled. Every other list a profile declares names at least one value.
+function stringsOrEmpty(node: YamlNode, key: string): string[] {
+  if (node.kind !== 'seq') fail(node.line, `"${key}" must be a list`);
   return node.items.map((item) => {
     const value = stringOf(item);
     if (!value) fail(item.line, `"${key}" entries must be non-empty strings`);

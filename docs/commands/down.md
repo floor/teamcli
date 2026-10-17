@@ -7,8 +7,10 @@ the state records that pane and that workspace for one seat, and left running wh
 accounts for it: the name is not what decides. A pane with no name is closed on that same record.
 When the record also holds the process `up` launched, the pane is closed only while that process
 is still in the pane. Any other such pane is left as it is and named. A seat is only asked when it
-is free, so a working, blocked or half-typed seat is left running and named. `--dry-run` prints the
-plan and runs nothing.
+is free, so a working, blocked or half-typed seat is left running and named. A seat whose profile
+says herdr cannot report it (`herdr_status: unreliable`) is free when the profile's own screen
+reads idle, whatever herdr's status says, and it is stopped on its own exit key at that screen.
+`--dry-run` prints the plan and runs nothing.
 
 ## Synopsis
 

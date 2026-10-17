@@ -8,9 +8,10 @@ import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } fro
 import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
 import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
+import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { watchLabel } from '../watch/pane.ts';
-import { readScreen, type Screen } from '../watch/screen.ts';
+import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
@@ -241,9 +242,14 @@ export function compare(
       }
       const screenText = live.screens[agent.pane];
       const screen = readScreen(seat.cli, screenText);
+      // A profile herdr cannot report is read from its own screen: the row's word is the
+      // screen's, and herdr's `unknown` is not a state to show or a note to print. A screen no
+      // profile reads leaves herdr's word standing, and the note with it.
+      const theirWord = herdrUnreliable(seat.cli);
+      const word = theirWord ? screenWord(screen) : agent.status;
       // `done` is as free as `idle`: delivery types into either one (`deliver.ts`), and the
       // watch's unsent check covers both (`pass.ts`). The report reads them the same way.
-      const quiet = agent.status === 'idle' || agent.status === 'done';
+      const quiet = word === 'idle' || word === 'done';
       const isUnsent = quiet && screen.kind === 'unsent';
       const isPermission = screen.kind === 'permission' || screen.kind === 'trust';
       // A quiet seat on a screen no profile reads: herdr's word alone would show a bare done (the
@@ -252,7 +258,7 @@ export function compare(
       const unread = quiet && screen.kind === 'unknown';
       const limit = quiet ? limitMark(seat, screen) : null;
       const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : limit ?? '';
-      const stateText = `${agent.status}${mark}${seat.parked ? ', parked' : ''}`;
+      const stateText = `${word}${mark}${seat.parked ? ', parked' : ''}`;
       rows.push({
         name: seat.name,
         ...idField,
@@ -262,6 +268,7 @@ export function compare(
         ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
       });
       if (
+        !(theirWord && screen.kind !== 'unknown') &&
         agent.status !== '' &&
         agent.status !== 'idle' &&
         agent.status !== 'done' &&
@@ -452,15 +459,16 @@ export function compare(
       // either. The cli comes from the like-seat, as the model string does; a like-seat gone reads
       // nothing, and the suffix is true then too.
       const likeCli = likeSeat?.cli ?? '';
-      const quiet = agent.status === 'idle' || agent.status === 'done';
       const tempScreen = readScreen(likeCli, live.screens[agent.pane]);
+      const tempWord = herdrUnreliable(likeCli) ? screenWord(tempScreen) : agent.status;
+      const quiet = tempWord === 'idle' || tempWord === 'done';
       const unread = quiet && tempScreen.kind === 'unknown';
       // The pool a temporary seat spends is the like-seat's, as its cli and model string are.
       const limit = quiet ? limitMark(likeSeat, tempScreen) : null;
       rows.push({
         name,
         ...idField,
-        state: `${agent.status}${unread ? ' (screen not recognised)' : limit ?? ''}, temporary`,
+        state: `${tempWord}${unread ? ' (screen not recognised)' : limit ?? ''}, temporary`,
         model: tempModel,
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),

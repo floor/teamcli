@@ -508,6 +508,65 @@ describe('team up, live', () => {
     expect(seats['deepseek-acme-2']?.cli).toBe('claude-code');
   });
 
+  test('a pane herdr lists only after the rename is named by its process, not waited out', async () => {
+    // herdr 0.7.1 lists a jules pane as an agent only after `agent rename`; the agent list alone
+    // would leave the seat unnamed until the 90 s idle deadline. The pane's foreground process
+    // is the CLI the profile names, so the rename goes by pane id at once.
+    const julesIdle = readFileSync(join(import.meta.dir, '../fixtures/jules/0.1.42/idle.txt'), 'utf8');
+    const file = makeExample(
+      base,
+      root,
+      EXAMPLE.replace('parked: true', 'stopped: true')
+        + '\n  - role: implementer\n'
+        + '    name: jules-acme\n'
+        + '    cli: jules\n'
+        + '    vendor: google\n'
+        + '    model: Jules\n'
+        + '    version: "0.1.42"\n'
+        + '    launch: jules\n',
+    );
+    writeFileSync(join(root, '.agents/team.yaml'), file);
+    await approve();
+    const made = world((_pane, label) => (label === 'jules-acme · implementer' ? julesIdle : IDLE));
+    let julesPane: string | null = null;
+    const renamed = new Set<string>();
+    const create = made.launch.createWorkspace.bind(made.launch);
+    made.launch.createWorkspace = (session, cwd, label) => {
+      const space = create(session, cwd, label);
+      if (space && label === 'jules-acme · implementer') julesPane = space.pane;
+      return space;
+    };
+    // Herdr's agent list: every launched pane but the jules one, which appears only once named.
+    const listed = made.launch.agentPanes.bind(made.launch);
+    made.launch.agentPanes = (session) => (listed(session) ?? []).filter((pane) => pane !== julesPane || renamed.has(pane));
+    const rename = made.launch.renameAgent.bind(made.launch);
+    made.launch.renameAgent = (session, pane, name) => {
+      renamed.add(pane);
+      return rename(session, pane, name);
+    };
+    const foreground = made.launch.foreground.bind(made.launch);
+    made.launch.foreground = (session, pane) => (pane === julesPane ? ['jules'] : foreground(session, pane));
+    const typed: string[] = [];
+    made.launch.typeText = (_session, pane, text) => { typed.push(`${pane}:${text}`); return true; };
+    made.launch.pressEnter = (_session, pane) => { typed.push(`${pane}:Enter`); return true; };
+
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(FILE, io, sources({}, made));
+
+    expect(code).toBe(0);
+    expect(julesPane).not.toBeNull();
+    expect(renamed.has(julesPane!)).toBe(true);
+    expect(made.renames).toContain('jules-acme');
+    expect(io.out).toContain('jules-acme: ready\n');
+    // Named at once, not after a poll: the old wait would have slept 90 s and left it out.
+    expect(made.launch.now().getTime() - NOW.getTime()).toBeLessThan(2000);
+    // Rules are prepended on this profile: nothing was typed into the pane.
+    expect(typed).toEqual([]);
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+    expect(seats['jules-acme']?.stage).toBe('ready');
+    expect(seats['jules-acme']?.rules).toBe('prepend');
+  });
+
   test('a permission prompt without a terminal closes that workspace and leaves the others', async () => {
     await approve();
     const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? PERMISSION : IDLE));
@@ -2881,7 +2940,7 @@ describe('team up, a session that was restored', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: was not in the agent list in time; left at launched\n');
+    expect(io.out).toContain('claude-coordinator-acme: left out: was not named in time; left at launched\n');
     expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'])
       .toMatchObject({ stage: 'launched', launched: { shell: 400, cli: [401] } });
   });
@@ -5377,6 +5436,48 @@ describe('team down, live', () => {
     expect(io.out).toContain('deepseek-acme: stopped\n');
     // The close op is `down`'s own purpose, announced by its plan; the line and the log name the seat and the fact.
     expect(readFileSync(join(root, '.agents/team.log'), 'utf8')).toContain('deepseek-acme: stopped');
+  });
+
+  test('a jules seat herdr reports unknown is free at its idle table, and stops on ctrl+c', async () => {
+    // herdr 0.7.1 reports a jules pane as no agent, and `unknown` after the rename. The profile
+    // says its herdr status is unreliable, so the screen module's idle table is the reading: the
+    // seat is free, one ctrl+c is pressed at that table, and the pane's own process says it left.
+    const julesIdle = readFileSync(join(import.meta.dir, '../fixtures/jules/0.1.42/idle.txt'), 'utf8');
+    writeFileSync(
+      join(root, '.agents/team.yaml'),
+      makeExample(
+        base,
+        root,
+        EXAMPLE
+          + '\n  - role: implementer\n'
+          + '    name: jules-acme\n'
+          + '    cli: jules\n'
+          + '    vendor: google\n'
+          + '    model: Jules\n'
+          + '    version: "0.1.42"\n'
+          + '    launch: jules\n',
+      ),
+    );
+    await approve();
+    liveSeat = 'jules-acme';
+    const run = harness(readScreen('jules', julesIdle), 'unknown');
+    run.setBox(julesIdle);
+    let sent = false;
+    run.launch.sendKey = (_session, _pane, key) => {
+      run.keys.push(key);
+      sent = true;
+      return true;
+    };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runDown(FILE, io, run.sourcesOf({
+      status: () => 'unknown',
+      foreground: () => (sent ? ['zsh'] : ['jules']),
+    }));
+    expect(code).toBe(0);
+    expect(run.keys).toEqual(['ctrl+c']);
+    expect(run.closed).toEqual(['w3']);
+    expect(run.stopped).toEqual(['acme-web']);
+    expect(io.out).toContain('jules-acme: stopped\n');
   });
 
   test('clears the session it stopped, in the same run, and says so in one line', async () => {

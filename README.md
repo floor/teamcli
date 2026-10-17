@@ -239,6 +239,21 @@ empty again. Nothing writes a lab's config or an `AGENTS.md`. `/exit` is sent on
 seat. Workspace-trust screens are reported and closed without input; the owner trusts the folder
 before relaunching. Other unrecognised layouts stay unknown.
 
+The Jules profile is tested with CLI 0.1.42 to 0.1.42 (`jules`). Its ready screen is the session
+table, whose input line reads ` > Search sessions or type / to use`; its task box asks
+`What do you want Jules to work on?`. The TUI has no standing session, so rules are prepended to
+every brief, and a brief is typed through the CLI's own screens — `/`, the repo chooser, the task
+box, the create confirmation — with the CLI's `Session created:` line as the delivery proof. A send
+names only the repo of the seat's own folder: the module proves the chooser collapsed on it before
+it types, and refuses when the account's list does not hold it. One `ctrl+c` at the table quits,
+and the profile sends no other exit key; it never sends the table's `ctrl+d` delete, and the rules
+every jules seat receives carry `Never delete a Jules session.` herdr reports a jules pane as no
+agent, and its status unknown, so the profile says `herdr_status: unreliable`: readiness is read
+from the screen, a pane herdr has not listed is named by its own process, and `down`, `restart`
+and `remove` treat the idle table as free where they would otherwise wait on a word herdr cannot
+give. Status, check and the watch read the seat's state from the same screen: its idle table is
+idle, a running turn is working, and only a screen the profile cannot read is unknown.
+
 Launching a Cursor seat, like launching cursor-agent by hand, creates Cursor's own project record
 under ~/.cursor/projects for that folder; team writes no trust (.workspace-trusted) and no Cursor
 config.

@@ -1,4 +1,5 @@
 import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
+import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, versionVerdict } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, seatModel, type Running } from '../status/statusline.ts';
@@ -31,6 +32,11 @@ export type ScreenKind = 'idle' | 'working' | 'permission' | 'trust' | 'question
  *  says what is in the box now. */
 export type ExitTyping = boolean | 'no-agent' | 'cleared' | { left: string };
 
+/** What one live key exit ended in. `true`: every key was pressed at the seat's idle screen.
+ *  `false`: the screen was not the CLI's idle one and nothing was pressed — the step's own
+ *  line. `'no-agent'`: the CLI was not the pane's foreground process when a key was due. */
+export type ExitKeys = boolean | 'no-agent';
+
 export type Host = {
   startServer(session: string): boolean;
   sessionUp(session: string): boolean | null;
@@ -50,6 +56,9 @@ export type Host = {
   /** The live exit typing; see `ExitTyping`. May wait: the pane draws typed text late, and the
    *  reading that decides the Enter or the clearing key waits for it. */
   typeLine(session: string, pane: string, text: string): ExitTyping | Promise<ExitTyping>;
+  /** The live key exit, for a CLI whose TUI takes no exit text: the profile's keys, pressed at
+   *  the seat's idle screen only; see `ExitKeys`. Present where a seat can be stopped. */
+  pressKeys?(session: string, pane: string, cli: string, keys: readonly string[]): ExitKeys | Promise<ExitKeys>;
   /** `false` is a delivery that stopped without a reading worth reporting (no host, or no live
    *  pane); a `Refusal` is one that stopped on a screen the report can name. `file` is the
    *  seat's rules delivery: the text the file holds, the file's path, the one line typed, and
@@ -85,6 +94,10 @@ export type Host = {
   classify(session: string, pane: string, cli: string): ScreenKind;
   /** The pane's visible text, ANSI styling and all, or null when the pane can't be read. */
   paneText?(session: string, pane: string): string | null;
+  /** The pane's foreground argv0 names, or null when the pane can't be read. The rename step
+   *  reads it for a CLI herdr lists as an agent only after the rename: the pane's own process
+   *  names the CLI there, and the pane is named by its id. */
+  foreground?(session: string, pane: string): string[] | null;
   /** Whether the pane's foreground program is back to its shell; null when herdr can't tell. */
   shellBack?(session: string, pane: string): boolean | null;
   /** The status herdr reports for the pane's agent; null when herdr can't tell. Read when the
@@ -103,7 +116,7 @@ export type Host = {
       stage: 'launched' | 'named' | 'ready';
       pane?: string;
       workspace?: string;
-      rules?: 'option' | 'message';
+      rules?: 'option' | 'message' | 'prepend';
       createdWorkspace?: boolean;
       launched?: LaunchedIdentity;
       /** The agent session read with the process, stored beside `launched`. */
@@ -689,6 +702,29 @@ export async function executePlan(
     }
     if (!op) return;
 
+    // A seat this run asked, whose exit could not be typed or confirmed, cannot be asked.
+    // `--abandon` closes its workspace in this same run, the close a not-free seat gets at
+    // planning. Without it the seat stays, and the line names that close.
+    const unasked = (
+      asked: { seat: string; closeUnasked?: boolean; workspace?: string; unasked?: string },
+      heldLine: string,
+      closedLine: string,
+    ) => {
+      if (asked.closeUnasked && asked.workspace) {
+        if (!host.closeWorkspace(session, asked.workspace)) {
+          held = true;
+          finish(asked.seat, `${closedLine}; its workspace did not close`);
+        } else {
+          host.drop(asked.seat);
+          finish(asked.seat, closedLine);
+        }
+      } else {
+        held = true;
+        finish(asked.seat, asked.unasked ? `${heldLine} (${asked.unasked})` : heldLine);
+      }
+      dropped.add(asked.seat);
+    };
+
     switch (op.do) {
       case 'server': {
         if (!host.startServer(op.session)) {
@@ -1049,18 +1085,32 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'has no pane to name; left at launched' });
           break;
         }
+        // Herdr lists a pane as an agent once it recognises the CLI in it; some CLIs (the jules
+        // TUI) are recognised only after the rename, so waiting for the list alone never ends.
+        // The pane's own foreground process names the CLI in that case: the pane is named by
+        // its id, which is what `renameAgent` takes either way. The agent list stays the first
+        // reading, and an unreadable pane is neither.
+        const processNames = op.cli ? profileFor(op.cli)?.processNames ?? [] : [];
+        const listed = (): boolean => host.agentPanes(session)?.includes(here.pane) === true;
+        const runsCli = (): boolean =>
+          reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames);
         const seen = await until(
           op.seconds,
           2000,
           host,
-          () => host.agentPanes(session)?.includes(here.pane) === true,
+          () => listed() || runsCli(),
           sharedSleep,
           () => stopped,
         );
         if (stopped) break;
-        if (!seen || !host.renameAgent(session, here.pane, op.seat)) {
+        if (!seen) {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'was not in the agent list in time; left at launched' });
+          break;
+        }
+        if (!host.renameAgent(session, here.pane, op.seat)) {
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'was not named in time; left at launched' });
           break;
         }
         host.record(op.seat, {
@@ -1069,10 +1119,12 @@ export async function executePlan(
           ...(here.workspace ? { workspace: here.workspace } : {}),
           ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
         });
-        if (op.rules === 'option') {
+        // Rules carried on the launch line, or prepended to each brief: there is nothing left
+        // to deliver, so the seat is ready at its name.
+        if (op.rules !== 'message') {
           host.record(op.seat, {
             stage: 'ready',
-            rules: 'option',
+            rules: op.rules,
             pane: here.pane,
             ...(here.workspace ? { workspace: here.workspace } : {}),
             ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
@@ -1149,51 +1201,69 @@ export async function executePlan(
         break;
       }
       case 'type': {
-        // A seat this run asked, whose exit could not be typed or confirmed, cannot be asked.
-        // `--abandon` closes its workspace in this same run, the close a not-free seat gets at
-        // planning. Without it the seat stays, and the line names that close.
-        const unasked = (heldLine: string, closedLine: string) => {
-          if (op.closeUnasked && op.workspace) {
-            if (!host.closeWorkspace(session, op.workspace)) {
-              held = true;
-              finish(op.seat, `${closedLine}; its workspace did not close`);
-            } else {
-              host.drop(op.seat);
-              finish(op.seat, closedLine);
-            }
-          } else {
-            held = true;
-            finish(op.seat, op.unasked ? `${heldLine} (${op.unasked})` : heldLine);
-          }
-          dropped.add(op.seat);
-        };
         const typed = await host.typeLine(session, op.pane, op.text);
         if (typed === 'no-agent') {
-          unasked('no live agent in its pane; its exit was not typed', 'no live agent in its pane; its workspace was closed');
+          unasked(op, 'no live agent in its pane; its exit was not typed', 'no live agent in its pane; its workspace was closed');
           break;
         }
         if (typed === 'cleared') {
           unasked(
+            op,
             'its exit was not confirmed; the text was cleared; left running',
             'its exit was not confirmed; its workspace was closed',
           );
           break;
         }
         if (typeof typed === 'object') {
-          unasked(typed.left, 'its exit was not confirmed; its workspace was closed');
+          unasked(op, typed.left, 'its exit was not confirmed; its workspace was closed');
           break;
         }
         if (!typed) {
-          unasked('its exit was not typed; left as it is', 'its exit was not typed; its workspace was closed');
+          unasked(op, 'its exit was not typed; left as it is', 'its exit was not typed; its workspace was closed');
+        }
+        break;
+      }
+      case 'keys': {
+        // A key-exit profile: the seat leaves on its own keys at its idle screen. A run with no
+        // way to press one — a command that only closes panes — reports the seat as it does a
+        // failed typing, naming the key it could not press.
+        if (!host.pressKeys) {
+          unasked(
+            op,
+            `its CLI leaves on a key (${op.keys.join(' then ')}); this run cannot press one; left as it is`,
+            `its CLI leaves on a key (${op.keys.join(' then ')}); its workspace was closed`,
+          );
+          break;
+        }
+        const pressed = await host.pressKeys(session, op.pane, op.cli, op.keys);
+        if (pressed === 'no-agent') {
+          unasked(op, 'no live agent in its pane; its exit key was not pressed', 'no live agent in its pane; its workspace was closed');
+          break;
+        }
+        if (!pressed) {
+          unasked(op, 'its exit key was not pressed; left as it is', 'its exit key was not pressed; its workspace was closed');
         }
         break;
       }
       case 'gone': {
+        // A profile herdr cannot report is never in the agent list, so the list would answer
+        // "gone" before the key was pressed. The pane's own foreground process is the reading
+        // there: no process of the CLI's names is the seat left. An unreadable pane is not a
+        // departure, exactly as the launch's shell wait treats it.
+        const profile = op.cli ? profileFor(op.cli) : null;
+        const processNames = profile?.processNames ?? [];
         const gone = await until(
           op.seconds,
           2000,
           host,
-          () => host.agentPanes(session)?.includes(op.pane) === false,
+          () => {
+            if (profile?.herdrStatus !== 'unreliable') {
+              return host.agentPanes(session)?.includes(op.pane) === false;
+            }
+            const foreground = host.foreground?.(session, op.pane) ?? null;
+            if (foreground === null) return false;
+            return !reportedLiveAgent(foreground, processNames);
+          },
           sharedSleep,
           () => stopped,
         );

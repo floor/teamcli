@@ -625,7 +625,7 @@ export function doctorFindings(
   // runs only once a record exists, so a folder no launch has delivered to grows no warning.
   if (standing.kind === 'verified') {
     for (const seat of approved.seats) {
-      if (seat.stopped || profileFor(seat.cli)?.rulesOption != null) continue;
+      if (seat.stopped || (profileFor(seat.cli)?.rulesMode ?? 'message') !== 'message') continue;
       const path = rulesFilePath(approved.project, root, sources.home, seat.name);
       if (path === null) continue;
       const check = checkRulesFile(path, rulesOf(approved, seat, root));

@@ -14,15 +14,16 @@ Reads `herdr session list --json`, and for each session it keeps, that session's
 (`<session_dir>/session.json`, for each workspace's `identity_cwd`) and, when the registry does not
 name a team file, this machine's record stores. A team file is `.agents/team.yaml` whose `session`
 is the herdr session (an omitted `session` is the project name). A link standing in for the file is
-not opened. For a running session it also reads `herdr agent list` — the roster, not a pane. A
-stopped session is not asked for a roster.
+not opened. For a running session it also reads `herdr agent list` — the roster — and the pane of
+a seat whose profile says herdr cannot report it, for that seat's state. A stopped session is not
+asked for a roster.
 
 It writes nothing.
 
 A session with no team file is an orphan. A file that names the session but does not validate, a
-roster that cannot be read, and a seat whose status herdr gives as `unknown` or not at all, show
-`?`. None of those fail the list. When herdr cannot be asked, the command prints one sentence and
-exits 0; `--json` prints `[]`.
+roster that cannot be read, and a seat whose status herdr gives as `unknown` or not at all — and
+whose own screen reads nothing either — show `?`. None of those fail the list. When herdr cannot
+be asked, the command prints one sentence and exits 0; `--json` prints `[]`.
 
 ## Who may run it
 
@@ -76,7 +77,11 @@ row prints its roster under it, indented two spaces, one `seat`, `agent`, `role`
 seat, with no header of its own: `name`, `id`, `status`, `cli`, `model`, `pane`. A value herdr and
 the team file do not give is `-`, a status that cannot be read is `?`, and `status` is herdr's own
 word with two changes: a blocked seat is `waiting`, and a seat the file declares that herdr does not
-have is `stopped` — so every declared seat has a row. A stopped session has no roster and no rows.
+have is `stopped` — so every declared seat has a row. For a seat whose profile says herdr cannot
+report it (`herdr_status: unreliable`), the word is the seat's own screen instead: its idle table
+or a box holding text is `idle` (or `ready` once the seat is up), a running turn is `working`,
+every other screen the profile reads is `waiting`, and `?` is left for a screen it cannot read.
+A stopped session has no roster and no rows.
 
 With `--seats`, `ACTIVITY` is that roster counted by readiness, an `idle` or `ready` seat counting
 as ready — `2 ready / 0 working / 0 waiting / 0 stopped` — and `--json` adds `roster` and

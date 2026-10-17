@@ -342,17 +342,23 @@ describe('ScreenProfile escape hatch', () => {
     }
   });
 
-  test('no shipped profile uses the hatch', () => {
+  test('the hatch ships for jules alone, and every other profile stays data', () => {
     const profilesDir = fileURLToPath(new URL('../src/profiles', import.meta.url));
     const yamlFiles = readdirSync(profilesDir).filter((file) => file.endsWith('.yaml'));
     expect(yamlFiles.length).toBeGreaterThanOrEqual(4);
 
+    const hatched: string[] = [];
     for (const file of yamlFiles) {
       const content = readFileSync(resolve(profilesDir, file), 'utf8');
-      expect(content).not.toContain('screen_module');
       const data = loadScreen(content);
-      expect(data.profile).toBeUndefined();
+      if (data.profile === undefined) {
+        expect(content).not.toContain('screen_module');
+        continue;
+      }
+      hatched.push(file);
+      expect(content).toContain('screen_module');
     }
+    expect(hatched).toEqual(['jules.yaml']);
   });
 
   test("no shipped profile's reading changes: all fixtures in conformance manifest match expected kinds", () => {
@@ -732,6 +738,9 @@ screen:
         const content = readFileSync(absPath, 'utf8');
         const lines = content.split('\n');
         const base = screenData(cli)!;
+        // A module CLI's reading is its profile: replacing it with a hatch of false predicates
+        // removes the reader rather than adding one, so there is no reading to hold steady.
+        if (base.profile !== undefined) continue;
         const dataWithHatch: ScreenData = {
           ...base,
           profile: hatch,

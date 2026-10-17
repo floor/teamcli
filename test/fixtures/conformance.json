@@ -1749,6 +1749,27 @@
       "classify": "working",
       "composer": "idle",
       "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/done.txt",
+      "cli": "jules",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/idle.txt",
+      "cli": "jules",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/working.txt",
+      "cli": "jules",
+      "classify": "working",
+      "composer": "unknown",
+      "provenance": "capture"
     }
   ],
   "yaml": [

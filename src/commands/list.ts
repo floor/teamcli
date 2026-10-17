@@ -3,13 +3,15 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { validateTeamFile } from '../file/validate.ts';
-import { agentList, sessionList, type HerdrSession } from '../herdr.ts';
+import { agentList, paneRead, sessionList, type HerdrSession } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { findTeamFile, type FoundTeam } from '../list/find.ts';
 import { hasJsonFlag, jsonEnvelope, ttyStyle, writeJsonError, type TtyStyle } from '../output/index.ts';
+import { herdrUnreliable } from '../profiles/index.ts';
 import { readTeams, teamsFile } from '../registry/teams.ts';
 import { isSeatId, readState } from '../state.ts';
+import { readScreen, screenWord } from '../watch/screen.ts';
 import { waitOrStop } from '../wait.ts';
 
 const PLAIN_STYLE = ttyStyle();
@@ -142,6 +144,30 @@ type Draft = {
   root: string | null;
   bits: string[];
 };
+
+/** What a seat's row says it is doing. Herdr's word, with two changes — a blocked seat is
+ *  `waiting`, and herdr's `unknown` (or no word) is unread. For a profile herdr cannot report
+ *  (`herdr_status: unreliable`) the seat's own screen is the word, as it is in status, check and
+ *  the watch: idle or ready, working, every screen the profile reads but a running turn
+ *  `waiting`, and herdr's word only when the screen cannot be read either. */
+export function rosterStatus(
+  live: { status: string } | undefined,
+  cli: string | undefined,
+  stage: string | undefined,
+  screenText: string | null | undefined,
+): string | null {
+  if (!live) return 'stopped';
+  if (herdrUnreliable(cli)) {
+    const word = screenWord(readScreen(cli ?? '', screenText ?? ''));
+    if (word === 'working') return 'working';
+    if (word === 'idle') return stage === 'ready' ? 'ready' : 'idle';
+    if (word === 'blocked') return 'waiting';
+  }
+  if (live.status === 'blocked') return 'waiting';
+  if (live.status === 'idle' && stage === 'ready') return 'ready';
+  if (live.status && live.status !== 'unknown') return live.status;
+  return null;
+}
 
 export function activeSeatsOf(
   roster: RosterSeat[] | null,
@@ -590,6 +616,10 @@ export function realListSources(home: string = homedir()): ListSources {
         }));
       }
       const state = ask(() => readState(join(resolved.found.root!, '.agents')).sessions[session], undefined);
+      // Only a seat whose profile herdr cannot report is read from its pane: every other row is
+      // the agent list's word alone, as it has always been.
+      const screenOf = (live: { pane: string } | undefined, cli: string | undefined): string | null =>
+        live !== undefined && herdrUnreliable(cli) ? ask(() => paneRead(live.pane, 200, session), null) ?? null : null;
       const matchedPanes = new Set<string>();
       const out: RosterSeat[] = [];
       for (const declared of resolved.team.seats) {
@@ -598,13 +628,10 @@ export function realListSources(home: string = homedir()): ListSources {
         const live = agents.find((agent) => agent.name === declared.name)
           ?? (recorded?.pane ? agents.find((agent) => agent.pane === recorded.pane) : undefined);
         if (live) matchedPanes.add(live.pane);
-        let status: string | null;
-        if (recorded?.waiting) status = 'waiting';
-        else if (!live) status = 'stopped';
-        else if (live.status === 'blocked') status = 'waiting';
-        else if (live.status === 'idle' && recorded?.stage === 'ready') status = 'ready';
-        else if (live.status && live.status !== 'unknown') status = live.status;
-        else status = null;
+        const cli = recorded?.cli ?? declared.cli;
+        const status: string | null = recorded?.waiting
+          ? 'waiting'
+          : rosterStatus(live, cli, recorded?.stage, screenOf(live, cli));
         const modelName = recorded?.model ?? declared.model;
         const modelVersion = recorded?.version ?? declared.version;
         const model = modelVersion ? `${modelName} ${modelVersion}` : modelName;
@@ -626,16 +653,13 @@ export function realListSources(home: string = homedir()): ListSources {
         const live = agents.find((agent) => agent.name === name)
           ?? (recorded.pane ? agents.find((agent) => agent.pane === recorded.pane) : undefined);
         if (live) matchedPanes.add(live.pane);
-        let status: string | null;
-        if (recorded.waiting) status = 'waiting';
-        else if (!live) status = 'stopped';
-        else if (live.status === 'blocked') status = 'waiting';
-        else if (live.status === 'idle' && recorded.stage === 'ready') status = 'ready';
-        else if (live.status && live.status !== 'unknown') status = live.status;
-        else status = null;
         const likeSeat = recorded.temporary
           ? resolved.team.seats.find((seat) => seat.name === recorded.temporary?.like)
           : undefined;
+        const cli = recorded.cli ?? likeSeat?.cli;
+        const status: string | null = recorded.waiting
+          ? 'waiting'
+          : rosterStatus(live, cli, recorded.stage, screenOf(live, cli));
         const modelName = recorded.model ?? likeSeat?.model ?? '-';
         const modelVersion = recorded.version ?? likeSeat?.version;
         const model = modelVersion ? `${modelName} ${modelVersion}` : modelName;

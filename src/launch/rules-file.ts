@@ -360,7 +360,9 @@ export function rulesDeliveryOf(
 ): { text: string; path: string; line: string } | { refusal: string } {
   void standing;
   void live;
-  if (profileFor(seat.cli)?.rulesOption != null) return { refusal: 'its rules travel as a launch option' };
+  const mode = profileFor(seat.cli)?.rulesMode ?? 'message';
+  if (mode === 'option') return { refusal: 'its rules travel as a launch option' };
+  if (mode === 'prepend') return { refusal: 'its rules are prepended to each brief: there is no rules file' };
   const path = rulesFilePath(team.project, root, home, seat.name);
   if (path === null || !typeablePath(path)) {
     return { refusal: "its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -" };
@@ -372,7 +374,7 @@ export function rulesDeliveryOf(
 /** A message seat's delivery in the plan: the file its rules go to and the line that points at
  *  it, or the refusal that stops the seat before anything is typed. An option seat has neither. */
 export function seatDeliveryOf(standing: Standing, team: TeamFile, seat: Seat, root: string, home: string, live = false): { rulesFile?: { path: string; line: string }; rulesRefusal?: string } {
-  if (profileFor(seat.cli)?.rulesOption != null) return {};
+  if ((profileFor(seat.cli)?.rulesMode ?? 'message') !== 'message') return {};
   const delivery = rulesDeliveryOf(standing, team, seat, root, home, live);
   if ('refusal' in delivery) return { rulesRefusal: delivery.refusal };
   return { rulesFile: { path: delivery.path, line: delivery.line } };

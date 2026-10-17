@@ -23,6 +23,7 @@
     "rules": {
       "oneOf": [
         { "const": "first-message" },
+        { "const": "prepend" },
         {
           "type": "object",
           "additionalProperties": false,
@@ -30,6 +31,16 @@
           "properties": { "option": { "type": "string", "minLength": 1 } }
         }
       ]
+    },
+    "standing_rules": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "description": "optional: rules the profile carries for every seat of this CLI, over the team file's; they ride with the file's rules in every delivery"
+    },
+    "herdr_status": {
+      "enum": ["reliable", "unreliable"],
+      "description": "optional: whether herdr reports this CLI's agent status faithfully; with unreliable, a screen the profile reads idle counts as free whatever herdr says"
     },
     "login": {
       "type": "object",
@@ -40,7 +51,14 @@
         "hint": { "type": "string", "minLength": 1 }
       }
     },
-    "exit": { "type": "string", "minLength": 1 },
+    "exit": { "type": "string", "minLength": 1, "description": "what is typed into an idle prompt to make the CLI exit; a profile carries this or exit_keys, never both" },
+    "exit_keys": {
+      "type": "array",
+      "items": { "enum": ["ctrl+c"] },
+      "minItems": 1,
+      "description": "the keys that exit the CLI from its idle screen, in order, for a CLI that takes no exit text; a profile carries this or exit, never both"
+    },
+    "compose_module": { "$ref": "#/$defs/screenModule" },
     "exit_clear": {
       "type": "string",
       "enum": ["ctrl+c", "ctrl+u", "escape", "backspace"],
@@ -91,6 +109,9 @@
         }
       }
     }
+  ],
+  "allOf": [
+    { "oneOf": [{ "required": ["exit"] }, { "required": ["exit_keys"] }] }
   ],
   "$defs": {
     "trustAnswer": {

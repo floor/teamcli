@@ -157,4 +157,7 @@ export type ScreenData = {
   working?: Stage;
   composer: Composer;
   profile?: ScreenProfile;
+  /** Set by the loader when the reading comes from a `screen_module`: the module reads the
+   *  whole visible screen, where the data patterns read the pane's last 20 lines. */
+  whole_screen?: true;
 };
