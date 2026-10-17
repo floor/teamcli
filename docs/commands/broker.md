@@ -14,8 +14,9 @@ starts it for you, and nothing restarts it.
 | --- | --- | --- |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
-An unknown argument is refused with the usage and exit 2. Ctrl-C, or SIGTERM, ends the serve loop,
-removes the socket file, and exits 0.
+An unknown argument is refused with the usage and exit 2; `--json` is one of them, because no
+`--json` runs on the daemon loop. Ctrl-C, or SIGTERM, ends the serve loop, removes the socket
+file, and exits 0.
 
 ## Who may run it
 
