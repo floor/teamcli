@@ -42,10 +42,11 @@ export type DelegateSources = {
   callerSources?: (session: string | undefined) => CallerSources;
 };
 
-/** The refusal `add` gives a delegate whose add would edit the file or the approval. */
+/** The refusal `add` gives a delegate whose add is not a same-copy seat: one that would edit the
+ *  file or the approval, or a seat whose stanza the last approval does not hold, hash for hash. */
 export const ADD_DELEGATE_EDIT: { id: 'add.delegate-edit'; text: string } = {
   id: 'add.delegate-edit',
-  text: 'the approved delegate cannot change the file or the approval; the owner adds a missing or stopped seat',
+  text: 'the approved delegate adds only a same-copy seat: the approved file\'s own stanza, hash for hash; a missing, stopped or changed seat is the owner\'s',
 };
 
 const PREFLIGHT = ['delegate-approval', 'delegate-evidence', 'delegate-placement'] as const;
@@ -216,7 +217,7 @@ export function delegateReadGate(input: {
 const NON_DELEGATE: Record<ActingCommand, (caller: string) => string> = {
   up: (caller) => `only the owner or the approved delegate runs \`up\`; this call is ${caller}`,
   down: (caller) => `only the owner, \`leads\` or the approved delegate stops the team; this call is ${caller}`,
-  add: (caller) => `only the owner, the orchestrator, the operator or the approved delegate runs it; this call is ${caller}`,
+  add: (caller) => `only the owner or a standing grant (delegate) runs it; this call is ${caller}`,
   remove: (caller) => `only the owner, \`leads\` or the approved delegate removes a seat; this call is ${caller}`,
   approve: (caller) => `only the owner or the approved delegate approves a team file; this call is ${caller}`,
 };

@@ -10,7 +10,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.ready` | `add` | 0 | the seat is ready | `team add worker` |
 | `add.agents` | `add` | 1 | the agents can't be read | `team add worker` |
 | `add.already-running` | `add` | 1 | the seat is already running | `team add worker` |
-| `add.another-pane` | `add` | 1 | the state records another pane for the caller's seat | `team add worker` |
 | `add.branch-missing` | `add` | 1 | the merged branch doesn't exist | `team add --temporary --like lead --until merged:missing` |
 | `add.budget` | `add` | 1 | the budget refuses the seat | `team add worker` |
 | `add.caller` | `add` | 1 | the caller may not change the team | `team add worker` |
@@ -21,7 +20,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.delegate` | `add` | 1 | the caller is not the approved delegate | `team add worker` |
 | `add.delegate-approval` | `add` | 1 | delegation needs a verified approval | `team add worker` |
 | `add.delegate-command` | `add` | 1 | the approved delegate may not run add | `team add worker` |
-| `add.delegate-edit` | `add` | 1 | the delegate's add would edit the file or the approval | `team add worker` |
+| `add.delegate-edit` | `add` | 1 | the delegate's add is not a same-copy seat: it would edit the file, or names a stanza the approval does not hold | `team add worker` |
 | `add.delegate-evidence` | `add` | 1 | the delegate's placement or seats can't be verified | `team add worker` |
 | `add.delegate-flag` | `add` | 1 | the delegate may not use this flag | `team add worker --temporary` |
 | `add.delegate-placement` | `add` | 1 | the approved delegate must be an external non-seat pane | `team add worker` |
@@ -35,7 +34,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.merged-base` | `add` | 1 | workspace.base is required to read a merged end | `team add --temporary --like lead --until merged:topic` |
 | `add.never-approved` | `add` | 1 | the file was never approved | `team add worker` |
 | `add.no-like` | `add` | 1 | the file has no seat to copy | `team add --temporary --like missing --until result:out.md` |
-| `add.no-pane` | `add` | 1 | the state records no pane for the caller's seat | `team add worker` |
 | `add.no-profile` | `add` | 1 | the seat has no launch profile | `team add worker` |
 | `add.no-seat` | `add` | 1 | the file has no such seat | `team add missing` |
 | `add.not-ready` | `add` | 1 | the launch finished without a ready seat | `team add worker` |

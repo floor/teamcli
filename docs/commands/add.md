@@ -34,37 +34,37 @@ through herdr: the workspace, the launch, and the name.
 
 ## Who may run it
 
-The owner, the orchestrator's seat and the operator's seat, and a caller outside herdr whose
-ancestry names a create-grant's `runner` — the record [`team init`](init.md) describes — on a file
-whose root and this call's folder both sit under the paths that record covers, before it expires. A
-run with no terminal is refused before the file is read, unless that record names the caller:
-`team add: only the owner runs this, from a terminal outside herdr`. A seat that leads is not
-granted: the second half of a swap, `add <lead>`, stays the owner's. The seat is that name's, in a session
-this project's state records — the file's session, or one the state records the caller's pane in —
-on the pane the state records for that name in that session: a seat of another session, or a pane
-merely renamed to the orchestrator's or the operator's name, is refused — and so is a seat the state
-records no pane for, or records on another pane than this call is on; those two refusals name the
-seat and the repair. What that proves is placement, and no more: the state file is in the project,
-and a process of the same user that writes its own pane there under the orchestrator's name, and
-renames its pane, passes. The check guards a mistaken agent, not a hostile process running as the
-same user. `--file` and `--session` are the owner's alone, from a terminal outside herdr: a
-non-owner aiming either is refused before the flagged file or session is read at all. Everything `up`
-refuses on — a `MISS` finding from [team doctor](doctor.md), the machine past its limits, the
-ceilings — refuses here too, for the one seat being started. A file that differs from a stored
-copy is not a refusal: the live file is the record.
+The owner. A seat of the team is refused before anything else is read: adding a seat is the
+owner's in 0.5.0, where no `agree` or `grant` holders stand, so every seat meets the map's own
+line — `team add: only the owner or a standing grant (delegate) runs it; this call is <caller>` —
+whatever pane it sits on and whatever the state records. The one standing that opens a seat's run
+is the file's own `delegates` section, below. A run with no terminal is refused before the file is
+read, unless the record below names the caller: `team add: only the owner runs this, from a
+terminal outside herdr`. What still admits a caller outside herdr is the create-grant record: one
+whose ancestry names its `runner` — the record [`team init`](init.md) describes — on a file whose
+root and this call's folder both sit under the paths that record covers, before it expires. A seat
+that leads is not granted: the second half of a swap, `add <lead>`, stays the owner's. `--file`
+and `--session` are the owner's alone, from a terminal outside herdr: a non-owner aiming either is
+refused before the flagged file or session is read at all. Everything `up` refuses on — a `MISS`
+finding from [team doctor](doctor.md), the machine past its limits, the ceilings — refuses here
+too, for the one seat being started. A file that differs from a stored copy is not a refusal: the
+live file is the record.
 
 A file with a `delegates` section also admits one more caller: the approved delegate, a pane the
-owner named in that section as `<session>/<pane id>`, outside the team. When the ordinary rule
-above refuses and the file names a delegate, the delegate gate decides — it re-reads the live file
-and the approval in force, never a remembered copy — and a caller it passes runs this command as
-that delegate. The delegated `add` is the ordinary one for a declared seat: `--temporary`, `--like`,
-`--until`, `--worktree`, `--session` and `--file` stay the owner's, and so does any add that would
-edit the file or the approval — restoring a seat the file no longer holds, or clearing
-`stopped: true`, both of which write the file and re-sign the approval. A `--file` or `--session`
+owner named in that section as `<session>/<pane id>`, outside the team. When the map refuses — for
+every seat it does — and the file names a delegate, the delegate gate decides — it re-reads the
+live file and the approval in force, never a remembered copy, and proves the caller stands on the
+delegate pane, and only that pane — and a caller it passes runs this command as that delegate. The
+delegated `add` is a same-copy seat and nothing else: the one seat it may start is a seat the last
+approval already holds, its stanza hash for hash as the approved copy wrote it, so the add writes
+neither the file nor the approval. `--temporary`, `--like`, `--until`, `--worktree`, `--session`
+and `--file` stay the owner's, and so does any add that would edit the file or the approval —
+restoring a seat the file no longer holds, clearing `stopped: true`, or naming a stanza the
+approval does not hold, which would extend or change the file. A `--file` or `--session`
 a non-owner aims is the gate's too, once the file names a delegate: the gate refuses it before the
 flagged file or the flag's session is read, on the eligibility of the default live file alone —
-the flagged file is never opened. With no `delegates` section nothing changes: the same refusals,
-the same words, the same exit codes, those two flags' included. A delegated run
+the flagged file is never opened. With no `delegates` section the run is refused by the rule
+alone: the same words, the same exit codes, those two flags' included. A delegated run
 that proceeds is attributed in the log before its effects, as
 `<time> delegate [delegate] <session>/<pane id> add`.
 
@@ -153,19 +153,16 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | `team add: unknown option --x` / `team add: a seat name is required` / `team add: --like needs a value` (each with the usage) | 2 |
 | `team add: --like, --until and --worktree are for --temporary` | 2 |
 | `team add: line <n>: <message>` / `team add: <message>` | 2 |
-| `team add: only the owner, the orchestrator or the operator runs it; this call is <caller>` | 1 |
-| `team add: only the owner, the orchestrator, the operator or the approved delegate runs it; this call is <caller>` — the file names a delegate, and this call is not it | 1 |
+| `team add: only the owner or a standing grant (delegate) runs it; this call is <caller>` | 1 |
 | ``team add: delegation needs a verified approval: <reason>`` — the delegate gate. A fingerprint difference is not a refusal; the live file names the delegate | 1 |
 | ``team add: delegation cannot verify its placement or seats: <reason>`` | 1 |
 | `team add: the approved delegate must be an external non-seat pane` | 1 |
 | ``team add: the approved delegate <session>/<pane id> may not run `add`; its approved commands are <list>`` | 1 |
 | `team add: --<flag> is the owner's; the approved delegate cannot use it` — `--temporary`, `--like`, `--until`, `--worktree`, `--session` or `--file` | 1 |
-| `team add: the approved delegate cannot change the file or the approval; the owner adds a missing or stopped seat` — an add that would restore a missing seat or clear `stopped`, also on `--dry-run` | 1 |
+| `team add: the approved delegate adds only a same-copy seat: the approved file's own stanza, hash for hash; a missing, stopped or changed seat is the owner's` — any add that would edit the file or the approval, also on `--dry-run` | 1 |
 | `team add: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat` — any caller but the owner; a temporary seat takes them from any caller | 1 |
-| ``team add: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
-| ``team add: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team add: <name>: its pane holds a process this record cannot tie to the launch` — the record holds the pane's own shell pid and the CLI's pids, read when the seat was launched; the pane is running neither, and the agent session herdr shows there is not the stored one. Nothing is closed and no second CLI is started in it | 1 |
 | ``team add: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify. A missing record is not a refusal, and neither is a file that differs from a stored copy | 1 |
 | `team add: the file has no seat "<name>"` | 1 |
@@ -243,14 +240,13 @@ seats:
 agents: [claude-beacon]
 ```
 
-Only the implementer is up. A pane made by hand and renamed `claude-keeper` is not the orchestrator:
-the state records no pane for the seat, so nothing tells that shell apart from the seat, and every
-command that changes the team refuses it, naming the seat and the repair only the owner can make —
-the hand-started pane is closed, and `team up` starts the seat with a pane of its own:
+Only the implementer is up. Adding a seat is the owner's: the orchestrator's own seat is refused
+like every other, whatever pane it is placed on and whatever the state records, and the file's
+`delegates` section is the one standing that opens a seat's run:
 
 ```console caller=claude-keeper
 $ team add claude-beacon ; echo "exit $?"
-team add: no pane is recorded for seat claude-keeper in this session: the owner stops that seat and runs `team up`
+team add: only the owner or a standing grant (delegate) runs it; this call is claude-keeper
 exit 1
 ```
 
@@ -276,12 +272,11 @@ The owner is told `team remove <name> --abandon closes its workspace without typ
 is told `the owner runs team remove <name> --abandon, which closes its workspace without typing`.
 A screen the profile recognises keeps the sentence above.
 
-An implementer's seat is neither the orchestrator's nor the operator's, so it adds nothing — not even
-itself:
+An implementer's seat adds nothing either — not even itself:
 
 ```console caller=claude-beacon
 $ team add claude-keeper ; echo "exit $?"
-team add: only the owner, the orchestrator or the operator runs it; this call is claude-beacon
+team add: only the owner or a standing grant (delegate) runs it; this call is claude-beacon
 exit 1
 ```
 

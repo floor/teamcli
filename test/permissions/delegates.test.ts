@@ -331,7 +331,7 @@ describe('the delegated add: the file it may not write', () => {
     });
     const ran = await added(place, ['worker'], pilot, sources);
     expect(ran.code).toBe(1);
-    expect(ran.err).toBe('team add: only the owner, the orchestrator or the operator runs it; this call is pilot\n');
+    expect(ran.err).toBe('team add: only the owner or a standing grant (delegate) runs it; this call is pilot\n');
   });
 
   test.todo('a delegate may add a same-copy seat: a stanza the file already holds, copied hash for hash', () => {

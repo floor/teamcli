@@ -159,15 +159,21 @@ const operator = { kind: 'seat' as const, name: 'operator', pane: 'operator-pane
 const worker = { kind: 'seat' as const, name: 'worker', pane: 'worker-pane', session: 'acme' };
 
 describe('a lead written role: coordinator', () => {
-  test('the coordinator seat may add another seat', async () => {
+  test('the coordinator seat may not add another seat: the map\'s row is the owner\'s alone', async () => {
     const { base, root, home } = place();
     approve(teamYaml(true), root, home);
     record(root, { coordinator: coordinator.pane, operator: operator.pane });
-    const io = testIo(root, coordinator);
-    const code = await runAdd(['worker', '--dry-run'], io, addSources(home));
-    expect(code, `${io.out}${io.err}`).toBe(0);
-    expect(io.out).toContain('worker');
-    expect(io.err).toBe('');
+    // `role: coordinator` is a role, not a standing grant: the map's `add` row refuses the
+    // coordinator's seat like every other, and a dry run says the refusal and the way out.
+    const dry = testIo(root, coordinator);
+    const code = await runAdd(['worker', '--dry-run'], dry, addSources(home));
+    expect(code, `${dry.out}${dry.err}`).toBe(1);
+    expect(dry.out).toContain('! add would refuse: only the owner or a standing grant (delegate) runs it; this call is coordinator');
+    expect(dry.out).toContain('! to unblock: the owner runs `team add worker`');
+    expect(dry.err).toBe('');
+    const real = testIo(root, coordinator);
+    expect(await runAdd(['worker'], real, addSources(home))).toBe(1);
+    expect(real.err).toBe('team add: only the owner or a standing grant (delegate) runs it; this call is coordinator\n');
     rmSync(base, { recursive: true, force: true });
   });
 
@@ -193,7 +199,7 @@ describe('a lead written role: coordinator', () => {
     // A dry run explains the refusal on stdout instead of refusing bare; it still exits 1.
     expect(await runAdd(['worker', '--dry-run'], add, addSources(home))).toBe(1);
     expect(add.out).toContain('! add would refuse:');
-    expect(add.out).toContain('only the owner, the orchestrator or the operator');
+    expect(add.out).toContain('only the owner or a standing grant (delegate)');
     const remove = testIo(root, worker);
     expect(await runRemove(['worker'], remove, removeSources(home, []))).toBe(1);
     expect(remove.err).toContain('only the owner or `leads` removes a seat');
