@@ -53,9 +53,11 @@ instead of the lines: {seat, agent, recipient_session, cli, pane, address, socke
 native, rule, action_summary}.
 
 This process never opens, dials or writes to another session's socket: the address is read
-from the registry, the pane's process list and the socket folders, and named. \`team send
---record <seat> --channel native --ms <N>\` writes down the delivery the sender then makes
-itself. It appends one line to the team log.
+from the registry, the pane's process list and the socket folders, and named. The session line
+is the herdr session the seat runs in, never a cross-session SendMessage target: \`team send
+<seat> <message>\` prints the exact to: line a native handoff makes, and \`team send --record
+<seat> --channel native --ms <N>\` writes down a delivery made without one. It appends one line
+to the team log.
 
 Exits 0 when the address is answered, 1 when the route is refused or cannot be recorded, 2 when
 the invocation or team file cannot be read.

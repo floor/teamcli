@@ -193,10 +193,10 @@ describe('the send daemon\'s boundaries', () => {
         outcome: 'unreachable',
         ms: expect.any(Number),
         // The walk reached the typed leg through the native and mcp-inbox legs, and the history
-        // line carries what each of them said: this build makes no socket write, and carries no
-        // mcp-inbox leg.
+        // line carries what each of them said: the native leg is the sending session's own
+        // SendMessage, and this build carries no mcp-inbox leg.
         failed: [
-          'native: unavailable; the frame path is a socket write this build does not make',
+          "native: unavailable; the native leg is the sending session's own SendMessage",
           'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
         ],
       },
