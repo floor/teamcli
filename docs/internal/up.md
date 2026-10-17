@@ -17,16 +17,18 @@ started from the beginning. A stopped session the state does not record is refus
 (`session <name> is stopped`); that line names no herdr command. A recorded session that does
 not clear is refused too (`session <name> is stopped and did not clear`).
 
-Every seat, shared and worktree-mode alike, starts in `~/.config/team/lobby`, with one exception: a
+Every seat, shared and worktree-mode alike, starts in the team's lobby, with one exception: a
 lead, the seat the file names orchestrator or operator, starts in the project folder itself. The
-lobby is shared by all projects on the machine. Before creating anything, `team` verifies the
+team's lobby is the file's `lobby:`, else the lobby the registry recorded for this session, else
+`<home>/.config/team/lobbies/<entity>` for a team that names `entity:`, else the machine-global
+`~/.config/team/lobby`. Before creating anything, `team` verifies the
 lobby gate:
 ownership by the invoking user, no symbolic links anywhere in the chain, directory mode exactly
 `0700`, nothing but the files the profiles the tool ships declare (claude-code declares
 `.claude/scheduled_tasks.lock`), and not inside a git repository or worktree. The set is the
-same for every team on the machine: the lobby is one folder shared by all of them, so what it
-may hold cannot depend on this team's seats — a lock another team's claude-code seat wrote
-must not block a team with no claude-code seat. The launch uses
+same for every team on the machine: what a lobby may hold cannot depend on this team's seats — a
+lock another team's claude-code seat wrote must not block a team with no claude-code seat. Two
+teams share a lobby only where they resolve to the same folder. The launch uses
 that verified path. The lobby is checked again — the gate's checks, plus that it is still the
 folder the gate read: the same canonical path, device and inode — directly before every
 workspace this run creates in it, with nothing between that confirmation and herdr's create
@@ -60,12 +62,12 @@ Reads the team file (or the one `--file` names), this machine's approval store, 
 workspaces), the doctor's findings, and the machine's load, free memory, free disk and free swap.
 Writes `.agents/team.state.json` (each seat's stage, pane, workspace and the CLI it was launched
 with; a waiting seat's classification, process identity and `manual` flag; the watch's pane, pid and
-heartbeat), `.agents/team.log`, the machine lobby folder
-(`~/.config/team/lobby`) every seat starts in, and, through herdr: the server, one workspace per seat
-and one for the watch's pane, each seat's launch, and the watch. A real run holds the session mutator
-lock (`<state dir>/seat-locks/<session>/.run`), the one lock `up`, `add`, `down` and `remove`
-share, from before its first effect to its end — its first effect being the make of an absent
-lobby, itself under the lock, so two fresh runs cannot race their components. One session-mutating
+heartbeat), `.agents/team.log`, the team's lobby folder (made if absent; every seat but a lead
+starts in it), and, through herdr: the server, one workspace per seat at each seat's launch, and one
+workspace and pane for the watch. A real run holds the session mutator lock
+(`<state dir>/seat-locks/<session>/.run`), the one lock `up`, `add`, `down` and `remove` share, from
+before its first effect to its end — its first effect being the make of an absent lobby, itself
+under the lock, so two fresh runs cannot race their components. One session-mutating
 run per session at a time, under a name no seat can have (a leading dot; `seat-locks` otherwise
 holds one lock per seat, the launch's and `answer`'s). A second real run, delegated or not, stops
 on it before the first step, with the refusals below; `--dry-run` takes no lock, makes nothing and
@@ -133,7 +135,7 @@ A seat already ready is left as it is, and the words it was left with are the de
 record. Before that skip, when the seat has a pane and a workspace, the plan renames the workspace
 to the file's title and reports the file's display line. A dry run prints both; a real run does
 them and still does not type into the pane or launch the seat again. A ready seat the state records without its process identity, or with a start outside the
-machine lobby, is left as it is too — only a relaunch repairs either — and its detail says so:
+team's lobby, is left as it is too — only a relaunch repairs either — and its detail says so:
 `  already ready; left as it is; a relaunch records its process: team remove <seat> --keep, then
 team add <seat> (or team down, then team up, for the whole team)`, or the same words saying `a
 relaunch moves it into the lobby`. For a seat the file names as orchestrator or operator, the detail

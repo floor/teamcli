@@ -60,8 +60,9 @@ the address, the sender (a Claude Code seat, with its own cross-session tool) de
 line, `via native`, the body not passing through this CLI.
 
 Who may send to whom is a rule table: a seat to its own team's orchestrator, a team's leads to its
-own seats, another team's seats through that team's orchestrator, an owner-signed grant last — and
-a seat the file marks `assistant: true` is admitted to its entity's main coordinator.
+own seats, a lead to another team's lead inside the same entity — cross-entity refused — an
+owner-signed grant last — and a seat the file marks `assistant: true` is admitted to its entity's
+main coordinator.
 
 ## What else is new
 
