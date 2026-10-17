@@ -1043,7 +1043,7 @@ export function logWho(caller: Caller, team: TeamFile): string {
  * in the session judged, on the pane the state records for it, exactly as `answer` judges, and
  * the two refusals it can name carry the repair.
  */
-function placementProblemOf(caller: Caller, at?: SeatStanding): string | null {
+function placementProblemOf(caller: Caller, at: SeatStanding): string | null {
   if (caller.kind === 'unplaced') return caller.reason;
   if (caller.kind !== 'seat') return null;
   const verdict = callerVerdict(caller, caller.name, at);

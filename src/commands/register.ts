@@ -363,7 +363,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // the orchestrator's own authority and, where the map has admitted it, its constraint: a
   // verified grant outside its scope refuses the orchestrator's run. A file no approval covers
   // grants nothing, not even a constraint, so its refusal does not stop the map's admission.
-  const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, sources.home, 'register', at, sources.now);
   const judged = mayLaunchSeats(walked) || detached !== undefined ? null : judgeCallerIn(io, dir, team, verdictOf);
   const rule = judged !== null ? verdictOf(judged.caller, standingOf(dir, judged.session, judged.caller)) : null;
@@ -507,7 +507,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // started before this version kept registry records is repaired the same way, and the
     // bridge and `team check` read the same team for it as for any other.
     const roster = rosterOf(sources.home, root);
-    const unlisted = roster === null || !roster.some((line) => line.seat === name);
+    const unlisted = roster.kind !== 'listed' || !roster.roster.some((line) => line.seat === name);
     let refreshed = false;
     let wroteRoster = false;
     if (!dry) {

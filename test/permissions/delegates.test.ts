@@ -382,14 +382,14 @@ const leadA: Caller = { kind: 'seat', name: 'lead-a', pane: 'w1:p1', session: 'a
 const owner: Caller = { kind: 'owner' };
 
 /** The file, trusted the way `addFile` writes trust, with `lead-a` where its launch recorded
- *  it: the gate's pane proof, not a door this scene tests. */
+ *  it: the gate's placement proof — its pane, and live and ready — not a door this scene tests. */
 function protectedFile(place: Place): string {
   const text = PROTECTED.replace(
     'workspace:\n',
     `trust:\n  - ~/.config/team/lobby\n  - ${place.root}\nworkspace:\n`,
   );
   updateState(join(place.root, '.agents'), (state) => {
-    (state.sessions.acme ??= emptySession()).seats['lead-a'] = { stage: 'launched', pane: 'w1:p1' };
+    (state.sessions.acme ??= emptySession()).seats['lead-a'] = { stage: 'ready', pane: 'w1:p1' };
   });
   return text;
 }

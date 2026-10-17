@@ -263,7 +263,7 @@ function logWho(caller: Caller, team?: TeamFile): string {
   return team !== undefined && caller.name === team.orchestrator ? 'orchestrator' : 'seat';
 }
 
-function callerProblemOf(caller: Caller, team: TeamFile, seat: string, at?: SeatStanding): Refusal | null {
+function callerProblemOf(caller: Caller, team: TeamFile, seat: string, at: SeatStanding): Refusal | null {
   if (caller.kind === 'owner') return null;
   // The orchestrator's seat, in the session judged and on its recorded pane; a seat of another
   // session, or one merely renamed, falls through to the refusal below, unchanged.

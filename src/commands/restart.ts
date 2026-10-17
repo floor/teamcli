@@ -176,7 +176,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
   // speak: owner or `leads` for this team, decided from records.
   const home = sources.home ?? homedir();
-  const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, home, 'restart', at, sources.now);
   const judged = args.values.session !== undefined
     ? { ...judgeCallerOf(io, args.values.session === 'default' ? undefined : args.values.session), session: args.values.session }

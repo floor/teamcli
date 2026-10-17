@@ -369,8 +369,11 @@ function rosterDifferences(
 ): Difference[] {
   if (home === undefined) return [];
   const roster = rosterOf(home, root);
-  if (roster === null) return [];
-  const listed = new Set(roster.map((line) => line.seat));
+  // Only a listed roster can name a missing line: a team the registry holds no record of reads
+  // the file's declaration, and a registry that cannot be read names nothing here either — the
+  // permission bridge refuses those callers closed, which this report does not soften.
+  if (roster.kind !== 'listed') return [];
+  const listed = new Set(roster.roster.map((line) => line.seat));
   const out: Difference[] = [];
   for (const seat of team.seats) {
     if (listed.has(seat.name)) continue;

@@ -39,6 +39,7 @@ const AGENT = 'agt_0123456789ab';
 const OTHER_AGENT = 'agt_ffffffffffff';
 const NOW = new Date('2026-10-17T12:00:00.000Z');
 const ROOTS = ['/Users/x/Code/acme'];
+const TARGET = { root: ROOTS[0] as string };
 
 type Seat = Extract<CallerRecord, { kind: 'seat' }>;
 
@@ -96,34 +97,34 @@ describe('the resolver is deterministic — the same inputs give the same answer
       envelope(['merge']),
       record({ name: 'other-agent', grantee: OTHER_AGENT, capabilities: ['gate'] }),
     ];
-    const expected = resolvePermission(seat(), { id: TEAM }, 'merge', grants);
+    const expected = resolvePermission(seat(), { id: TEAM }, 'merge', grants, TARGET);
     expect(expected).toMatchObject({ effect: 'allow', rule: 'seat-grant' });
-    expect(resolvePermission(seat(), { id: TEAM }, 'merge', grants)).toEqual(expected);
-    expect(resolvePermission(seat(), { id: TEAM }, 'merge', [...grants].reverse())).toEqual(expected);
-    expect(resolvePermission(seat(), { id: TEAM }, 'merge', [...grants.slice(1), grants[0]!])).toEqual(expected);
+    expect(resolvePermission(seat(), { id: TEAM }, 'merge', grants, TARGET)).toEqual(expected);
+    expect(resolvePermission(seat(), { id: TEAM }, 'merge', [...grants].reverse(), TARGET)).toEqual(expected);
+    expect(resolvePermission(seat(), { id: TEAM }, 'merge', [...grants.slice(1), grants[0]!], TARGET)).toEqual(expected);
   });
 
   test('two fresh reads of one store answer the same, and an unrelated record changes nothing', () => {
     const home = makeHome();
     granted(home, { name: 'flag-gate', kind: 'seat', grantee: AGENT, capabilities: ['merge'] });
     granted(home, { name: 'team-envelope', kind: 'team', grantee: TEAM, capabilities: ['merge'] });
-    const first = resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW);
+    const first = resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET);
     expect(first).toMatchObject({ effect: 'allow', rule: 'seat-grant' });
-    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW)).toEqual(first);
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET)).toEqual(first);
     // A record that names neither this agent nor this team is not an input to this answer.
     granted(home, { name: 'elsewhere', kind: 'team', grantee: OTHER_TEAM, capabilities: ['deploy'] });
-    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW)).toEqual(first);
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET)).toEqual(first);
   });
 
   test('deny beats allow: a revoked record is history, and history never admits again', () => {
     const home = makeHome();
     const grant = granted(home, { name: 'flag-gate', kind: 'seat', grantee: AGENT, capabilities: ['merge'] });
     granted(home, { name: 'team-envelope', kind: 'team', grantee: TEAM, capabilities: ['merge'] });
-    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW)).toMatchObject({ effect: 'allow' });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET)).toMatchObject({ effect: 'allow' });
 
     const revoked = writeRevocation(home, { name: 'revoke-flag-gate', grant: grant.name, generation: grant.generation }, { now: NOW });
     expect(revoked.ok).toBe(true);
-    const after = resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW);
+    const after = resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET);
     expect(after).toMatchObject({ effect: 'deny', rule: 'absent' });
     // The envelope still carries `merge`; only the seat's own grant ended, and it gave the
     // empty-bundle seat nothing beyond its role to begin with.
@@ -140,13 +141,13 @@ describe('the resolver is deterministic — the same inputs give the same answer
       expires: '2026-10-17T13:00:00.000Z',
     });
     granted(home, { name: 'team-envelope', kind: 'team', grantee: TEAM, capabilities: ['merge'] });
-    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', new Date('2026-10-17T12:59:59.000Z'))).toMatchObject({ effect: 'allow' });
-    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', new Date('2026-10-17T13:00:00.000Z'))).toMatchObject({ effect: 'deny' });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', new Date('2026-10-17T12:59:59.000Z'), TARGET)).toMatchObject({ effect: 'allow' });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', new Date('2026-10-17T13:00:00.000Z'), TARGET)).toMatchObject({ effect: 'deny' });
   });
 
   test('absent is deny: with no records at all, every capability word is refused and said so', () => {
     for (const capability of GRANT_CAPABILITIES) {
-      const decision = resolvePermission(seat(), { id: TEAM }, capability, []);
+      const decision = resolvePermission(seat(), { id: TEAM }, capability, [], TARGET);
       expect(decision).toMatchObject({ effect: 'deny', rule: 'absent' });
       expect(decision.why).toContain('absent is deny');
     }
@@ -156,7 +157,7 @@ describe('the resolver is deterministic — the same inputs give the same answer
 describe('a caller with no registry record is refused, and the refusal names the rule', () => {
   test('every row of the map refuses a record-less caller under `no-record`', () => {
     for (const command of Object.keys(COMMAND_GATES)) {
-      const decision = resolvePermission(null, { id: TEAM }, command, []);
+      const decision = resolvePermission(null, { id: TEAM }, command, [], TARGET);
       expect(decision).toMatchObject({ effect: 'deny', rule: 'no-record' });
       expect(decision.why).toContain('no registry record stands for this caller');
       expect(decision.why).toContain('and a caller with no record is refused');
@@ -174,7 +175,7 @@ describe('a caller with no registry record is refused, and the refusal names the
       answer: "a pane key is the pane's lead's, a seat above's, or the owner's word",
     };
     for (const [command, phrase] of Object.entries(said)) {
-      expect(resolvePermission(null, { id: TEAM }, command, []).why).toContain(phrase);
+      expect(resolvePermission(null, { id: TEAM }, command, [], TARGET).why).toContain(phrase);
     }
   });
 
@@ -183,7 +184,7 @@ describe('a caller with no registry record is refused, and the refusal names the
     granted(home, { name: 'flag-gate', kind: 'seat', grantee: AGENT, capabilities: ['merge'] });
     granted(home, { name: 'other-agent', kind: 'seat', grantee: OTHER_AGENT, capabilities: ['gate'] });
     for (const command of ['merge', 'up']) {
-      expect(resolveFromHome(home, null, { id: TEAM }, command, NOW)).toMatchObject({ effect: 'deny', rule: 'no-record' });
+      expect(resolveFromHome(home, null, { id: TEAM }, command, NOW, TARGET)).toMatchObject({ effect: 'deny', rule: 'no-record' });
     }
   });
 });
@@ -199,7 +200,7 @@ describe('an unknown capability name is refused, never judged', () => {
       expect(COMMAND_GATES[word]).toBeUndefined();
       // The refusal comes before any caller is read, and it is the same for all of them.
       for (const caller of [OWNER, seat(), null] as const) {
-        const decision = resolvePermission(caller, { id: TEAM }, word, []);
+        const decision = resolvePermission(caller, { id: TEAM }, word, [], TARGET);
         expect(decision).toMatchObject({ effect: 'deny', rule: 'not-in-map' });
         expect(decision.why).toContain("gates no command the Kernel's table does not name");
       }
@@ -220,7 +221,7 @@ describe('an unknown capability name is refused, never judged', () => {
 
 describe('a team grant gives a seat nothing its role does not name', () => {
   test('the envelope carries the word and the seat holds none of it: refused, the reason said', () => {
-    const decision = resolvePermission(seat(), { id: TEAM }, 'merge', [envelope(['merge'])]);
+    const decision = resolvePermission(seat(), { id: TEAM }, 'merge', [envelope(['merge'])], TARGET);
     expect(decision).toMatchObject({ effect: 'deny', rule: 'absent' });
     expect(decision.why).toContain('a team grant gives no seat a capability its role does not hold');
   });
@@ -228,17 +229,17 @@ describe('a team grant gives a seat nothing its role does not name', () => {
   test('all eight words enveloped: only the word the role names admits, the other seven stand refused', () => {
     const all = envelope([...GRANT_CAPABILITIES]);
     for (const capability of GRANT_CAPABILITIES) {
-      expect(resolvePermission(seat(), { id: TEAM }, capability, [all])).toMatchObject({ effect: 'deny', rule: 'absent' });
+      expect(resolvePermission(seat(), { id: TEAM }, capability, [all], TARGET)).toMatchObject({ effect: 'deny', rule: 'absent' });
     }
-    expect(resolvePermission(seat({ bundle: ['merge'] }), { id: TEAM }, 'merge', [all])).toMatchObject({ effect: 'allow', rule: 'role-bundle' });
-    expect(resolvePermission(seat({ bundle: ['merge'] }), { id: TEAM }, 'gate', [all])).toMatchObject({ effect: 'deny', rule: 'absent' });
+    expect(resolvePermission(seat({ bundle: ['merge'] }), { id: TEAM }, 'merge', [all], TARGET)).toMatchObject({ effect: 'allow', rule: 'role-bundle' });
+    expect(resolvePermission(seat({ bundle: ['merge'] }), { id: TEAM }, 'gate', [all], TARGET)).toMatchObject({ effect: 'deny', rule: 'absent' });
   });
 
   test('through the real store: the envelope admits the role that names the word, and no other seat', () => {
     const home = makeHome();
     granted(home, { name: 'team-envelope', kind: 'team', grantee: TEAM, capabilities: ['merge'] });
-    expect(resolveFromHome(home, seat({ bundle: ['merge'] }), { id: TEAM }, 'merge', NOW)).toMatchObject({ effect: 'allow', rule: 'role-bundle' });
-    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW)).toMatchObject({ effect: 'deny', rule: 'absent' });
+    expect(resolveFromHome(home, seat({ bundle: ['merge'] }), { id: TEAM }, 'merge', NOW, TARGET)).toMatchObject({ effect: 'allow', rule: 'role-bundle' });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET)).toMatchObject({ effect: 'deny', rule: 'absent' });
   });
 });
 
@@ -247,28 +248,28 @@ describe('a seat grant cannot widen the team envelope', () => {
     const decision = resolvePermission(seat(), { id: TEAM }, 'merge', [
       record({ capabilities: ['merge'] }),
       envelope(['gate']),
-    ]);
+    ], TARGET);
     expect(decision).toMatchObject({ effect: 'deny', rule: 'outside-envelope' });
     expect(decision.why).toContain('`flag-gate`');
     expect(decision.why).toContain('never a union');
   });
 
   test("with no envelope at all, the role's own bundle is outside it too", () => {
-    const decision = resolvePermission(seat({ bundle: ['merge'] }), { id: TEAM }, 'merge', []);
+    const decision = resolvePermission(seat({ bundle: ['merge'] }), { id: TEAM }, 'merge', [], TARGET);
     expect(decision).toMatchObject({ effect: 'deny', rule: 'outside-envelope' });
   });
 
   test('inside the envelope the grant stands: widening is refused, standing is not', () => {
     const grants = [record({ capabilities: ['merge'] }), envelope(['merge', 'gate'])];
-    expect(resolvePermission(seat(), { id: TEAM }, 'merge', grants)).toMatchObject({ effect: 'allow', rule: 'seat-grant' });
+    expect(resolvePermission(seat(), { id: TEAM }, 'merge', grants, TARGET)).toMatchObject({ effect: 'allow', rule: 'seat-grant' });
     // The envelope's second word is not thereby the seat's: only the grant's own word is.
-    expect(resolvePermission(seat(), { id: TEAM }, 'gate', grants)).toMatchObject({ effect: 'deny', rule: 'absent' });
+    expect(resolvePermission(seat(), { id: TEAM }, 'gate', grants, TARGET)).toMatchObject({ effect: 'deny', rule: 'absent' });
   });
 
   test('through the real store: without an envelope the written seat grant still admits nothing', () => {
     const home = makeHome();
     granted(home, { name: 'flag-gate', kind: 'seat', grantee: AGENT, capabilities: ['merge'] });
-    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW)).toMatchObject({ effect: 'deny', rule: 'outside-envelope' });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET)).toMatchObject({ effect: 'deny', rule: 'outside-envelope' });
   });
 });
 
