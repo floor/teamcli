@@ -288,7 +288,7 @@ test('down: unset, the caller gate refuses; set, it is a warning and the stop co
   expect(stoppedCode).toBe(0);
   expect(stoppedIo.err).toContain('team down: warning:');
   expect(stoppedIo.err).toContain(placement);
-  expect(stoppedIo.err).not.toContain('team down: only the owner, the orchestrator or the operator stops the team');
+  expect(stoppedIo.err).not.toContain(`team down: ${placement}`);
   expect(didStop.n).toBe(1);
 });
 

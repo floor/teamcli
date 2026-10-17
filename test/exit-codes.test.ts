@@ -1164,7 +1164,7 @@ const delegated = (id: string, text: string) => downSources({ sessionRunning: ()
 
 scene('down.delegate', async (place) => {
   write(place, DELEGATED);
-  const text = 'only the owner, the orchestrator, the operator or the approved delegate stops the team; this call is other';
+  const text = 'only the owner, `leads` or the approved delegate stops the team; this call is other';
   const ran = await down(place, [], other, delegated('down.delegate', text));
   if (compareDry) expect(ran.out).toContain(`! down would refuse: ${text}\n`);
   else expect(ran.err).toBe(`team down: ${text}\n`);
