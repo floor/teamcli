@@ -581,7 +581,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // The seat's own hook reading goes with its record: a `working` left by a turn the stop
     // interrupted must not answer for a seat this run stopped or removed — a `--keep` entry is
     // stopped too, so it is no longer mid-turn.
-    resetCliHookState(dir, [name]);
+    resetCliHookState(dir, session, [name]);
     // The swap's record: the gap is a replacement in progress, not a lost lead. Written after the
     // stop, so a refused or failed stop leaves no record; `add` clears it once the seat runs.
     if (swap) {

@@ -32,8 +32,12 @@ export type SeatTraceSources = {
   root: string;
   home?: string;
   /** The project state folder (the team file's own): where the CLI's hook state files live.
-   *  Absent leaves the hook unread, which is the reading before the launch installed one. */
+   *  Absent, with `session`, leaves the hook unread — the reading before the launch installed
+   *  one. */
   stateDir?: string;
+  /** The session the rows are read for: its own folder under the state folder holds the seats'
+   *  hook files, so a seat of the same name in another session is never read here. */
+  session?: string;
 };
 
 export const realSeatsSources: SeatsSources = {
@@ -161,8 +165,9 @@ export function seatRegistryRows(
     // The seat's own hook reading, when its CLI is one whose launch this team can give a settings
     // file: the state file the CLI writes at turn start and turn end. Only read from the project
     // state folder — never from any CLI home.
-    const hook = !untrusted && traceSources?.stateDir !== undefined && supportsCliHook(cli)
-      ? readCliHook(traceSources.stateDir, row.name)
+    const hook = !untrusted && traceSources?.stateDir !== undefined && traceSources.session !== undefined
+      && supportsCliHook(cli)
+      ? readCliHook(traceSources.stateDir, traceSources.session, row.name)
       : null;
     // The seat-state reading: the CLI's own hook when its launch keeps one, the CLI's own
     // screen, then herdr, then the traces (a fresh one even over an idle word) — and the
@@ -358,6 +363,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       root,
       home: sources.home,
       stateDir: dir,
+      session,
     });
 
     if (json) {

@@ -317,7 +317,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
-      cliHooks: plannedCliHooks(dir, [planSeat]),
+      cliHooks: plannedCliHooks(dir, session, [planSeat]),
       watchLabel: watchLabel(team.project),
     });
     return dryRunExit(out, `${stopStep}${plainText(formatPlan(preview))}`);
@@ -396,8 +396,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const records = progressWriter({ stdout: io.stdout, stderr: io.stderr, isTTY: io.stdoutIsTTY ?? false });
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
-    const plannedHooks = plannedCliHooks(dir, [planSeat]);
-    const installed = installCliHooks(dir, [planSeat]);
+    const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
+    const installed = installCliHooks(dir, session, [planSeat]);
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'restart', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
@@ -412,7 +412,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     });
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
     // plan starts.
-    resetCliHookState(dir, [planSeat.name]);
+    resetCliHookState(dir, session, [planSeat.name]);
     const host = hostOf({
       dir,
       session,

@@ -619,7 +619,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
             ...(launchProblemDetail ? { launchProblemDetail } : {}),
           }],
           watchAlive: true,
-          cliHooks: plannedCliHooks(dir, [planned]),
+          cliHooks: plannedCliHooks(dir, session, [planned]),
           watchLabel: watchLabel(prepared.team.project),
         });
         out.stdout(plainText(formatPlan(preview)));
@@ -719,7 +719,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       sessionRunning: live === 'running',
       seats: [seatForPlan],
       watchAlive: true,
-      cliHooks: plannedCliHooks(dir, [seatForPlan]),
+      cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
       watchLabel: watchLabel(prepared.team.project),
     });
     out.stdout(plainText(formatPlan(preview)));
@@ -790,15 +790,15 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and launches with the file's own line.
-    const plannedHooks = plannedCliHooks(dir, [planSeat]);
-    const installed = installCliHooks(dir, [planSeat]);
+    const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
+    const installed = installCliHooks(dir, session, [planSeat]);
     const who = describeCaller(caller);
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
     const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
-    resetCliHookState(dir, [planSeat.name]);
+    resetCliHookState(dir, session, [planSeat.name]);
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
       caller: who, owner: caller.kind === 'owner', devMode: devMode(io), now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,

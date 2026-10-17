@@ -222,8 +222,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     };
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
-    const plannedHooks = plannedCliHooks(dir, [planned]);
-    const installed = installCliHooks(dir, [planned]);
+    const plannedHooks = plannedCliHooks(dir, session, [planned]);
+    const installed = installCliHooks(dir, session, [planned]);
     if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
       logLine(dir, 'reload', describeCaller(caller), `${planned.name}: no state hook written; its launch line is the file's own`,
         sources.now ? sources.now() : new Date());
@@ -239,7 +239,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     });
     // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
     // run starts.
-    resetCliHookState(dir, [planned.name]);
+    resetCliHookState(dir, session, [planned.name]);
     const launch = sources.launch;
     const now = sources.now ?? (() => new Date());
     let closed = false;

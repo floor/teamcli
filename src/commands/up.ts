@@ -1145,7 +1145,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // A dry run plans the map it would write; the real run writes the files below, before the
   // plan is built, and a seat whose file did not land launches exactly as the file declares.
   const hookSeats = () => seats.map(({ name, cli, launch }) => ({ name, cli, launch }));
-  let cliHooks = plannedCliHooks(dir, hookSeats());
+  let cliHooks = plannedCliHooks(dir, session, hookSeats());
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
   const buildPlan = () => upPlan({
@@ -1296,7 +1296,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     stampGrantedTrust();
     // The settings files land before the plan types a line, so every launch carries its flag. A
     // seat whose file did not land is said once, in the log, and its launch is the plain line.
-    const installed = installCliHooks(dir, hookSeats());
+    const installed = installCliHooks(dir, session, hookSeats());
     for (const name of Object.keys(cliHooks)) {
       if (installed[name] === undefined) {
         logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());
@@ -1306,7 +1306,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const plan = buildPlan();
     // A relaunch starts from no reading at all: the `working` a killed turn left behind says
     // nothing about the seat this run starts.
-    resetCliHookState(dir, plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : [])));
+    resetCliHookState(dir, session, plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : [])));
 
     // Every launch uses the limits declared in the live file, with or without a stored approval.
     const ceilings = ceilingsOf(team);

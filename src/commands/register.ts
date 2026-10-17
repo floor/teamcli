@@ -602,7 +602,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // The reading a launch's own hooks left belongs to the record this run completes, and is
   // retired with it: a `working` written before the registration must not answer for the seat
   // now. The seat's next prompt writes the file again.
-  resetCliHookState(dir, [name]);
+  resetCliHookState(dir, session, [name]);
 
   const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev, owner: walked.kind === 'owner' }, seat, pane, id);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);

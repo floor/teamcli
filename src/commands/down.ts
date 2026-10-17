@@ -1042,7 +1042,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         });
         // The seat's own hook reading goes with its record: a `working` left by a turn the stop
         // interrupted must not answer for a seat that is no longer running.
-        resetCliHookState(dir, [name]);
+        resetCliHookState(dir, session, [name]);
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
         // The registry: the seat's agent ends with its pane. A temporary seat is gone for good.
         if (sources.home !== undefined) {

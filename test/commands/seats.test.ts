@@ -200,10 +200,11 @@ describe('team seats', () => {
   test('a seat’s own hook file is read from the state folder beside the team file', async () => {
     // deepseek-acme-2's screen and herdr both read idle/no-screen, so without the state folder
     // the row says idle from herdr, as the table test pins. The hook the seat's own launch
-    // installed wrote `working` five seconds ago: `team seats` passes `<dir>` and reads it.
-    mkdirSync(join(dir, '.agents', 'seat-state'), { recursive: true });
+    // installed wrote `working` five seconds ago: `team seats` passes `<dir>` and the session,
+    // and reads the file under the session's own folder.
+    mkdirSync(join(dir, '.agents', 'seat-state', 'acme-web'), { recursive: true });
     writeFileSync(
-      join(dir, '.agents', 'seat-state', 'deepseek-acme-2.json'),
+      join(dir, '.agents', 'seat-state', 'acme-web', 'deepseek-acme-2.json'),
       `{"state":"working","since":"${new Date(NOW.getTime() - 5000).toISOString()}"}\n`,
     );
     const io = testIo(dir, { kind: 'owner' });
