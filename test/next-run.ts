@@ -185,7 +185,9 @@ try {
   const claimed = await claim('lead', lead.pane, worktree);
   console.log('--- claim ---');
   console.log(JSON.stringify(claimed));
-  if (claimed.code !== 0 || claimed.out !== 'm1  the task title\n') throw new Error(`claim: ${claimed.out}`);
+  // The claim's answer: the context line, the record's block, and the closing summary line.
+  const claimedOut = 'team acme, session "acme"\nm1  the task title\nteam next: claimed m1\n';
+  if (claimed.code !== 0 || claimed.out !== claimedOut) throw new Error(`claim: ${claimed.out}`);
   const leasePath = join(checkout, '.agents', 'leases', 'm1.json');
   const written = JSON.parse(readFileSync(leasePath, 'utf8')) as { seat: string; pane: string; until: string; acquiredAt: string };
   console.log('--- lease ---');
@@ -211,21 +213,21 @@ try {
   const second = await claim('worker', other.pane, checkout);
   console.log('--- second ---');
   console.log(JSON.stringify(second));
-  if (second.out !== 'team next: nothing is takeable\n' || second.code !== 0) throw new Error(`second: ${second.out}`);
+  if (second.out !== 'team acme, session "acme"\nteam next: nothing is takeable\n' || second.code !== 0) throw new Error(`second: ${second.out}`);
 
   clock += 1000;
   const again = await claim('lead', lead.pane, checkout);
   console.log('--- renew ---');
   console.log(JSON.stringify(again));
   const renewed = JSON.parse(readFileSync(leasePath, 'utf8')) as { until: string; acquiredAt: string };
-  if (again.out !== 'm1  the task title\n') throw new Error(`renew: ${again.out}`);
+  if (again.out !== 'team acme, session "acme"\nm1  the task title\nteam next: claimed m1\n') throw new Error(`renew: ${again.out}`);
   if (renewed.acquiredAt !== written.acquiredAt) throw new Error('acquiredAt moved');
   if (Date.parse(renewed.until) !== Date.parse(written.until) + 1000) throw new Error('until did not move forward');
 
   const released = await claim('lead', lead.pane, checkout, ['--release']);
   console.log('--- release ---');
   console.log(JSON.stringify(released));
-  if (released.out !== 'team next: released m1\n' || existsSync(leasePath)) throw new Error(`release: ${released.out}`);
+  if (released.out !== 'team acme, session "acme"\nteam next: released m1\n' || existsSync(leasePath)) throw new Error(`release: ${released.out}`);
   console.log('--- evidence ok ---');
 } finally {
   try { execFileSync('herdr', ['session', 'stop', SESSION], { stdio: 'ignore' }); } catch { /* already stopped */ }

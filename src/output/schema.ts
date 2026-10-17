@@ -714,6 +714,35 @@ export const PLAN_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team next` (`schema/next.schema.json`). */
+export const NEXT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.next',
+  fileName: 'next.schema.json',
+  title: 'team next --json output',
+  statuses: ['claimed', 'released', 'none'],
+  required: ['project', 'session', 'action', 'task'],
+  properties: {
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    action: { type: 'string', enum: ['claim', 'release', 'none'] },
+    // The claimed record's id and title, null for a release or an empty answer.
+    task: {
+      oneOf: [
+        { type: 'null' },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['id', 'title'],
+          properties: {
+            id: { type: 'string', minLength: 1 },
+            title: { type: 'string', minLength: 1 },
+          },
+        },
+      ],
+    },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -731,6 +760,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   UNLOCK_OUTPUT_SCHEMA,
   ISSUES_OUTPUT_SCHEMA,
   PLAN_OUTPUT_SCHEMA,
+  NEXT_OUTPUT_SCHEMA,
 ];
 
 

@@ -202,7 +202,7 @@ describe('team plan', () => {
     ready(WITH, '- id: past\n  title: the past title\n  deadline: 2026-01-01T00:00:00Z\n');
     const io = testIo(root, lead);
     expect(await runNext([], io, { home, now: () => now })).toBe(0);
-    expect(io.out).toBe('past  the past title\n  deadline: 2026-01-01T00:00:00Z\n');
+    expect(io.out).toBe('team acme, session "acme"\npast  the past title\n  deadline: 2026-01-01T00:00:00Z\nteam next: claimed past\n');
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(0);
     expect(listed.out).toBe(

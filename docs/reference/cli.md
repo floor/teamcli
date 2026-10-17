@@ -549,13 +549,14 @@ Hidden: no
 
 Usage:
 
-    team next [--mine | --release] [--wait]
+    team next [--mine | --release] [--wait] [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--mine` | no | no | no |
 | `--release` | no | no | no |
 | `--wait` | no | no | no |
