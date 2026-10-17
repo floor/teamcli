@@ -26,9 +26,11 @@ commands read them.
   address it. It types nothing into the pane, and a pane change re-records the same agent rather
   than a second one: a record's identity is the file's seat under its team, never the pane.
   Records are appended, never deleted — a removed seat is marked ended and its history stays
-  readable — and a record confers no right. The record also carries the seat's pane, so a send
-  addresses the seat without re-reading herdr, the live read being the fallback for a record that
-  carries none; a claude-code seat's cross-session socket address is recorded for `team route`.
+  readable — and a record confers no right. The record also carries the seat's pane, which binds
+  the sender: only a caller standing on the pane its own record names acts as that seat. A send
+  reads its delivery pane live, by the seat's name, so a pane that closed or was reused since the
+  record was written is never typed into; a claude-code seat's cross-session socket address is
+  recorded for `team route`.
 
 - **`team send`, and the channels a seat is reached on.** One message to one seat, ending in one
   confirmed outcome: `delivered`, `answered`, `held`, `not-submitted`, `timeout`, `unreachable`
@@ -155,10 +157,11 @@ commands read them.
 ### Changed
 
 - The file in the clone is the record: the commands read it, and `add`, `remove` and `down` keep
-  going when no approval record exists. `team up` admits the owner, a seat the file's `grant`
-  names for `up`, or a `delegates` entry whose commands include `up`; anyone else is told `deny`
-  and exits 1, and a dry run says what the real one would (`! up would refuse:` with the reason,
-  `! to unblock:` with the owner's run of this folder, then the plan).
+  going when no approval record exists. `team up` admits the owner or the team's lead seat; where
+  that refuses, a `delegates` entry whose commands include `up` or a seat the file's verified
+  `grant` names for `up`. Anyone else is told `deny` and exits 1, and a dry run says what the
+  real one would (`! up would refuse:` with the reason, `! to unblock:` with the owner's run of
+  this folder, then the plan).
 - `team up` gains `--serial`, launching and waiting on one seat at a time, and a fresh
   orchestrator or operator seat starts in the project folder and every other seat in the team's
   lobby.
