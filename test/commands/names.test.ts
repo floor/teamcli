@@ -156,11 +156,12 @@ describe('the old spelling is the new run, one notice line first', () => {
       // A machine that never approved the file carries no row and marks no repair: the report is
       // the file's state alone.
       expect(ran.stdout).toBe(
-        'difference: lead is in the file and is not running\n' +
+        'team acme-web, session "acme-web"\n' +
+          'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from .agents/team.yaml\n' +
+          'difference: lead is in the file and is not running\n' +
           '  repair: the owner runs team up\n' +
-          'team check: 1 difference(s), 1 for the owner\n' +
-          'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n' +
-          NOT_PRETENDED_BLOCK,
+          '  who: the owner\n' +
+          '1 difference(s), 1 for the owner\n',
       );
       expect(ran.stderr).toBe('');
       // A standing that still says something keeps its row first, and the row marks the repairs
@@ -174,13 +175,15 @@ describe('the old spelling is the new run, one notice line first', () => {
       });
       expect(refused.code).toBe(1);
       expect(refused.stdout).toBe(
-        `difference: ${REFUSED_WHY}\n` +
+        'team acme-web, session "acme-web"\n' +
+          'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from .agents/team.yaml\n' +
+          `difference: ${REFUSED_WHY}\n` +
           '  repair: the live file is what the commands read\n' +
+          '  who: the owner\n' +
           'difference: lead is in the file and is not running\n' +
           '  repair: the owner runs team up (after: the live file is what the commands read)\n' +
-          'team check: 2 difference(s), 2 for the owner\n' +
-          'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n' +
-          NOT_PRETENDED_BLOCK,
+          '  who: the owner\n' +
+          '2 difference(s), 2 for the owner\n',
       );
       expect(refused.stderr).toBe('');
     } finally {

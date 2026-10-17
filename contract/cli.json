@@ -220,6 +220,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--pr",
           "repeatable": false,
           "takesValue": true
@@ -260,7 +266,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team check [--session <name>] [--file <path>] [--repair]",
+        "team check [--session <name>] [--file <path>] [--repair] [--json]",
         "team check <ref> [--pr <file>] [--since <ref>] [--file <path>]"
       ]
     },

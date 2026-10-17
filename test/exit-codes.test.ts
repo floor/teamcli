@@ -874,7 +874,7 @@ scene('check.ok', async (place) => {
     // difference the check reports, so a healthy team's pane says what it is.
     screens: { 'w1:p1': IDLE },
   };
-  return show(await checked(place, [], owner, checkSources(matched, approvalStanding(place.root, place.home))), 'team check: nothing wrong');
+  return show(await checked(place, [], owner, checkSources(matched, approvalStanding(place.root, place.home))), '0 difference(s)');
 });
 scene('check.findings', async (place) => {
   write(place, TEAM);

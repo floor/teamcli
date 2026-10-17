@@ -53,6 +53,7 @@ export {
 export {
   buildActionSchemaSpec,
   buildCommandOutputSchema,
+  CHECK_OUTPUT_SCHEMA,
   COMMAND_OUTPUT_SCHEMAS,
   DIFFERENCE_SCHEMA_FRAGMENT,
   DOCTOR_OUTPUT_SCHEMA,

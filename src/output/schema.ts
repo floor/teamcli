@@ -414,6 +414,36 @@ export const DOCTOR_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team check` (`schema/check.schema.json`). */
+export const CHECK_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.check',
+  fileName: 'check.schema.json',
+  title: 'team check --json output',
+  required: ['format', 'project', 'session', 'warnings', 'repaired', 'notes', 'differences', 'summary'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    warnings: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    repaired: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    notes: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    differences: {
+      type: 'array',
+      items: DIFFERENCE_SCHEMA_FRAGMENT,
+    },
+    summary: SUMMARY_SCHEMA_FRAGMENT,
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -421,4 +451,5 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   SEATS_OUTPUT_SCHEMA,
   PROJECTS_OUTPUT_SCHEMA,
   DOCTOR_OUTPUT_SCHEMA,
+  CHECK_OUTPUT_SCHEMA,
 ];

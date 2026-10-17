@@ -18,7 +18,7 @@ import { approvalCaseRow, emptyOverrides, overrideDrift, protectedCheckouts, rea
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
-import { loadTeamFile, TEAM_FILE } from '../file/load.ts';
+import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
@@ -26,13 +26,27 @@ import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, worksp
 import type { Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
-import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
+import {
+  collapseNotes,
+  contextLine,
+  renderDeprecationWarnings,
+  renderDifferences,
+  renderNotes,
+  renderSummary,
+  summaryCounts,
+  toJsonDifference,
+  ttyStyle,
+  writeJson,
+  writeJsonError,
+  type DeprecationWarning,
+} from '../output/index.ts';
 import { rosterOf } from '../permissions/who.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
 import { byName, ofTeam, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
+import { DELIVERY_ORDER, orderDeclarationsOf, resolveOrderSetting, type DeliveryLeg } from '../settings/inherit.ts';
 import { emptySession, liveHold, readState, seatOfFile, updateState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
@@ -42,8 +56,8 @@ import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen } from '../watch/screen.ts';
 
-/** The team check's own arguments: all three flags are the owner's, and all are optional. */
-export type TeamCheckArgs = { session?: string; file?: string; repair?: boolean };
+/** The team check's own arguments: the owner's aimed/repair flags and optional `--json`. */
+export type TeamCheckArgs = { session?: string; file?: string; repair?: boolean; json?: boolean };
 
 // What the check reads from outside the file and the state, so tests and the docs harness can
 // stand in for it: the same reads `status` makes, except that the live read is narrowed to the
@@ -121,7 +135,16 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const current = currentTeam(io.cwd, owner ? args.file : undefined, sources.now(), sources.home, false, owner ? args.session : undefined);
   if (owner) {
     if (!current.ok) {
-      printProblems(io, current.errors);
+      if (args.json) {
+        const id = current.errors.some((e) => e.message.startsWith('not inside a git repository'))
+          ? 'check.not-a-repo'
+          : current.errors.some(isParseError)
+            ? 'check.file-invalid'
+            : 'check.file';
+        writeJsonError(io, id, current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${p.message}`).join('; '));
+      } else {
+        printProblems(io, current.errors);
+      }
       // exit: check.not-a-repo
       // exit: check.file
       // exit: check.file-invalid
@@ -129,24 +152,39 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     }
   } else {
     if (!current.ok || !mayReadTeam(current, io, sources)) {
-      return notYours(io);
+      return notYours(io, args.json);
     }
     // The caller passes and is not the owner: the flags aim nothing, and one aimed meets the
     // refusal every other command gives it — after the gate, never before it.
     if (args.file !== undefined) {
-      io.stderr(`team check: ${fileOwnerRefusal(io, args.file)}\n`);
+      const msg = fileOwnerRefusal(io, args.file) ?? "--file is the owner's";
+      if (args.json) {
+        writeJsonError(io, 'check.file-owner', msg);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
       // exit: check.file-owner
       return 1;
     }
     if (args.session !== undefined) {
-      io.stderr(`team check: ${sessionOwnerRefusal(walked)}\n`);
+      const msg = sessionOwnerRefusal(walked);
+      if (args.json) {
+        writeJsonError(io, 'check.session-owner', msg);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
       // exit: check.session-owner
       return 1;
     }
     // `--repair` writes the state: the one act the check has, and the owner's alone, as the two
     // aimed flags are.
     if (args.repair === true) {
-      io.stderr("team check: --repair is the owner's\n");
+      const msg = "--repair is the owner's";
+      if (args.json) {
+        writeJsonError(io, 'check.repair-owner', msg);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
       // exit: check.repair-owner
       return 1;
     }
@@ -160,7 +198,12 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   try {
     whole = readState(dir);
   } catch (error) {
-    io.stderr(`team check: ${error instanceof Error ? error.message : String(error)}\n`);
+    const msg = error instanceof Error ? error.message : String(error);
+    if (args.json) {
+      writeJsonError(io, 'check.state', msg);
+    } else {
+      io.stderr(`team check: ${msg}\n`);
+    }
     // exit: check.state
     return 2;
   }
@@ -171,7 +214,12 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const recorded = whole.sessions[session] ?? emptySession();
   const live = sources.live(session, team, recorded);
   if (!live) {
-    io.stderr('team check: herdr doesn\'t answer; is it installed and running?\n');
+    const msg = "herdr doesn't answer; is it installed and running?";
+    if (args.json) {
+      writeJsonError(io, 'check.herdr', msg);
+    } else {
+      io.stderr(`team check: ${msg}\n`);
+    }
     // exit: check.herdr
     return 2;
   }
@@ -187,7 +235,6 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // `team.command-threw`'s, not a second reading of the state.
     repaired.push(...dropStale(dir, session, stale));
     for (const line of repaired) {
-      io.stdout(`repaired: ${line}\n`);
       logLine(dir, 'check', callerLabel(walked), `repaired: ${line}`, sources.now());
     }
     whole = readState(dir);
@@ -203,6 +250,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...labelDifferences(team, state, live),
     ...rosterDifferences(team, state, live, root, sources.home),
     ...registryDifferences(team, root, sources.home),
+    ...deliveryOrderDifferences(team, root, sources.home),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same row `status` prints: a legacy record or one the verification refused still says what
     // it is; a machine that never approved the file is the ordinary file now, and nothing to repair.
@@ -215,26 +263,40 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
   ]);
   const differences = comparison.differences;
+  const deprecationWarnings: DeprecationWarning[] = current.warnings.map((w) => ({
+    line: w.line || undefined,
+    message: w.message,
+    repair: w.message.includes('`coordinator:`')
+      ? "set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml"
+      : undefined,
+  }));
+  const warnings = renderDeprecationWarnings(deprecationWarnings);
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
-  for (const note of delegateNotes(team)) io.stdout(`note: ${note}\n`);
-  for (const note of lobbyNotes(team, root, sources.home, session)) io.stdout(`note: ${note}\n`);
-  for (const difference of differences) {
-    io.stdout(`difference: ${difference.what}\n  repair: ${difference.repair}\n`);
-  }
-  const ownerCount = differences.filter((difference) => difference.owner === true).length;
-  if (differences.length === 0) {
-    io.stdout('team check: nothing wrong\n');
+  const notes = collapseNotes([
+    ...delegateNotes(team),
+    ...lobbyNotes(team, root, sources.home, session),
+  ]);
+  if (args.json) {
+    writeJson(io, 'team.check', {
+      format: 1,
+      project: team.project,
+      session,
+      warnings,
+      repaired,
+      notes,
+      differences: differences.map(toJsonDifference),
+      summary: summaryCounts(differences),
+    });
   } else {
-    io.stdout(`team check: ${differences.length} difference(s)${ownerCount > 0 ? `, ${ownerCount} for the owner` : ''}\n`);
+    const style = ttyStyle(io);
+    io.stdout(`${contextLine(team.project, session)}\n`);
+    for (const warning of warnings) io.stdout(`${warning}\n`);
+    for (const line of repaired) io.stdout(`repaired: ${line}\n`);
+    for (const line of renderNotes(notes)) io.stdout(`${line}\n`);
+    for (const line of renderDifferences(differences, style)) io.stdout(`${line}\n`);
+    io.stdout(`${renderSummary(differences)}\n`);
   }
-  // What the check cannot see is not silently implied to be fine (§3.4, decision 2): the one line
-  // that names it stands under both answers.
-  io.stdout('not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n');
-  // Under both answers too, the decision record's own limits, in its words: the gaps this release
-  // does not close are named here, never left to be discovered
-  // (decided-grants-minimum-2026-10-17, "What 0.5.0 must not pretend").
-  for (const line of NOT_PRETENDED) io.stdout(`${line}\n`);
   if (differences.length > 0) {
     // exit: check.findings
     return 1;
@@ -251,8 +313,13 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
 
 // The one sentence a caller that does not pass gets, whatever failed underneath it: it names no
 // seat, no session and no path, and it is the only output such a caller can get (§3.4, §4).
-function notYours(io: Io): number {
-  io.stderr('team check: this team is not yours to check\n');
+function notYours(io: Io, json?: boolean): number {
+  const msg = 'this team is not yours to check';
+  if (json) {
+    writeJsonError(io, 'check.not-yours', msg);
+  } else {
+    io.stderr(`team check: ${msg}\n`);
+  }
   // exit: check.not-yours
   return 2;
 }
@@ -652,6 +719,58 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
     }
     if (!loaded.ok) continue;
     if (loaded.team.projectLead && loaded.team.inProject === team.inProject) out.push(loaded.team.project);
+  }
+  return out;
+}
+
+/**
+ * A `delivery_order` declaration in `.agents/team.yaml` (at the team or seat level) that
+ * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have, leaving
+ * the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
+ */
+function deliveryOrderDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
+  let projectOrder: readonly DeliveryLeg[] | undefined;
+  if (home !== undefined) {
+    try {
+      projectOrder = ofTeam(home, teamIdOf(root))?.deliveryOrder;
+    } catch {
+      projectOrder = undefined;
+    }
+  }
+  const out: Difference[] = [];
+  if (team.deliveryOrder !== null) {
+    const res = resolveOrderSetting(
+      DELIVERY_ORDER,
+      orderDeclarationsOf<DeliveryLeg>({
+        ...(projectOrder !== undefined ? { project: projectOrder } : {}),
+        team: team.deliveryOrder,
+      }),
+    );
+    if (res.refused.some((r) => r.level === 'team')) {
+      out.push({
+        what: `delivery_order [${team.deliveryOrder.join(', ')}] in .agents/team.yaml is set aside; [${res.value.join(', ')}] stands`,
+        repair: 'drop the leg(s) not in the inherited delivery_order in .agents/team.yaml',
+        owner: true,
+      });
+    }
+  }
+  for (const seat of team.seats) {
+    if (seat.deliveryOrder === undefined) continue;
+    const res = resolveOrderSetting(
+      DELIVERY_ORDER,
+      orderDeclarationsOf<DeliveryLeg>({
+        ...(projectOrder !== undefined ? { project: projectOrder } : {}),
+        ...(team.deliveryOrder ? { team: team.deliveryOrder } : {}),
+        seat: seat.deliveryOrder,
+      }),
+    );
+    if (res.refused.some((r) => r.level === 'seat')) {
+      out.push({
+        what: `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in .agents/team.yaml is set aside; [${res.value.join(', ')}] stands`,
+        repair: `drop the leg(s) not in the inherited delivery_order for ${seat.name} in .agents/team.yaml`,
+        owner: true,
+      });
+    }
   }
   return out;
 }

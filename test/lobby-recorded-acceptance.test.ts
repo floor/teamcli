@@ -229,7 +229,7 @@ describe('team check names the drift as a notice', () => {
     // Nothing else is wrong in this scene, so the drift is the only thing the check has to say —
     // and what it says is a notice: outside the finding total and off the exit code.
     expect(code).toBe(0);
-    expect(out).toContain('team check: nothing wrong');
+    expect(out).toContain('0 difference(s)');
     expect(out).not.toContain('difference:');
 
     // One note, naming both lobbies: the one the registry holds and the one the file now derives.

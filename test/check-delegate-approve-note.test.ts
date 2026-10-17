@@ -126,7 +126,7 @@ describe('a delegate entry naming approve', () => {
     expect(out).toContain(NOTE);
     // A note is not a difference: nothing to count, nothing to fail, no repair line of its own.
     expect(out).not.toContain('difference:');
-    expect(out).toContain('team check: nothing wrong');
+    expect(out).toContain('0 difference(s)');
     expect(code).toBe(0);
   });
 
@@ -134,7 +134,7 @@ describe('a delegate entry naming approve', () => {
     const root = place(CLEAN);
     const { code, out } = check(root);
     expect(out).not.toContain('note:');
-    expect(out).toContain('team check: nothing wrong');
+    expect(out).toContain('0 difference(s)');
     expect(code).toBe(0);
   });
 
@@ -146,7 +146,53 @@ describe('a delegate entry naming approve', () => {
     expect(out.indexOf('note: ')).toBeLessThan(out.indexOf('difference: '));
     // The drift is the one difference; the note is in neither the total nor the exit code.
     expect(out).toContain(`difference: lead: its herdr workspace label reads "stale title", the file says "${TITLE}"`);
-    expect(out).toContain('team check: 1 difference(s)');
+    expect(out).toContain('1 difference(s)');
     expect(code).toBe(1);
+  });
+
+  test('a set-aside delivery_order in .agents/team.yaml is reported as a difference for the owner (D4) and validates under --json', () => {
+    const withSetAside = [
+      ...HEAD.trimEnd().split('\n'),
+      '    delivery_order: [native, typed]',
+      'delivery_order: [typed]',
+      '',
+    ].join('\n');
+    const root = place(withSetAside);
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({}, io, {
+      live: () => live(TITLE),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' }),
+      now: () => NOW,
+    });
+    expect(code).toBe(1);
+    expect(io.out).toContain('difference: lead: delivery_order [native, typed] in .agents/team.yaml is set aside; [typed] stands\n');
+    expect(io.out).toContain('  repair: drop the leg(s) not in the inherited delivery_order for lead in .agents/team.yaml\n');
+    expect(io.out).toContain('  who: the owner\n');
+    expect(io.out).toContain('1 difference(s), 1 for the owner\n');
+
+    const jsonIo = testIo(root, { kind: 'owner' });
+    const jsonCode = runTeamCheck({ json: true }, jsonIo, {
+      live: () => live(TITLE),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' }),
+      now: () => NOW,
+    });
+    expect(jsonCode).toBe(1);
+    const doc = JSON.parse(jsonIo.out) as {
+      schema: { name: string; version: number };
+      format: number;
+      project: string;
+      session: string;
+      differences: Array<{ what: string; repair: string; who: string; owner: boolean }>;
+      summary: { differences: number; owner_differences: number };
+    };
+    expect(doc.schema).toEqual({ name: 'team.check', version: 1 });
+    expect(doc.format).toBe(1);
+    expect(doc.project).toBe('acme');
+    expect(doc.session).toBe('acme');
+    expect(doc.differences).toHaveLength(1);
+    expect(doc.differences[0]?.who).toBe('the owner');
+    expect(doc.summary).toEqual({ differences: 1, owner_differences: 1 });
   });
 });

@@ -155,7 +155,7 @@ describe('the dev-mode mark on a record', () => {
     const { code, out } = check(root, home);
     expect(out).not.toContain('registered under dev mode');
     expect(code).toBe(0);
-    expect(out).toContain('team check: nothing wrong');
+    expect(out).toContain('0 difference(s)');
   });
 
   test('a record written again in force takes the mark off, and the finding with it', () => {

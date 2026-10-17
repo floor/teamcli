@@ -138,33 +138,38 @@ async function status(live: Live, ...argv: string[]) {
   return { code, out: io.out, err: io.err };
 }
 
-describe('team check says what 0.5.0 must not pretend', () => {
+describe('team check omits the footer on every run; team doctor and team --about print NOT_PRETENDED', () => {
   test('the module holds the record\'s lines, and the status footer is the first of them', () => {
     expect([...NOT_PRETENDED]).toEqual(LIST);
     // The record's "every record and view says so": the view prints the check's own first line.
     expect(INTEGRITY_NOT_AUTHORITY).toBe(LIST[1]!.slice(2));
   });
 
-  test('nothing wrong: the block stands under the answer, nothing else moved', async () => {
+  test('nothing wrong: ends with 0 difference(s) and omits NOT_PRETENDED and not known', async () => {
     const ran = await runCheck(running());
     expect(ran.code).toBe(0);
     expect(ran.err).toBe('');
-    expect(ran.out).toBe(`team check: nothing wrong\n${NOT_KNOWN}${BLOCK}`);
+    expect(ran.out).toBe('team beacon, session "beacon"\n0 difference(s)\n');
+    expect(ran.out).not.toContain(NOT_KNOWN);
+    expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 
-  test('a difference: the same block, under the findings and the count', async () => {
+  test('a difference: ends with the summary count and omits NOT_PRETENDED and not known', async () => {
     const ran = await runCheck(down);
     expect(ran.code).toBe(1);
     expect(ran.err).toBe('');
     expect(ran.out).toBe(
-      'difference: claude-keeper is in the file and is not running\n' +
+      'team beacon, session "beacon"\n' +
+        'difference: claude-keeper is in the file and is not running\n' +
         '  repair: the owner runs team up\n' +
+        '  who: the owner\n' +
         'difference: claude-beacon is in the file and is not running\n' +
         '  repair: the owner runs team up\n' +
-        'team check: 2 difference(s), 2 for the owner\n' +
-        NOT_KNOWN +
-        BLOCK,
+        '  who: the owner\n' +
+        '2 difference(s), 2 for the owner\n',
     );
+    expect(ran.out).not.toContain(NOT_KNOWN);
+    expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 });
 

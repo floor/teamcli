@@ -9,17 +9,19 @@
 import { loadConfig, type LoadConfig } from '../check/load.ts';
 import { realCheckSources, runTeamCheck, type CheckSources } from '../check/team.ts';
 import type { Io } from '../io.ts';
+import { writeJsonError } from '../output/index.ts';
 import { runCommits, type CommitsRun } from './commits.ts';
 
 export { loadConfig };
 export type { LoadConfig };
 
-export const USAGE = `Usage: team check [--session <name>] [--file <path>] [--repair]
+export const USAGE = `Usage: team check [--session <name>] [--file <path>] [--repair] [--json]
 
   --session <name>  the session to read; the file's own when absent
   --file <path>     the team file, instead of .agents/team.yaml
   --repair          drop the state's leftovers: a record for a seat the file no longer
                     declares, and a session with no seat of the team in it
+  --json            the report as one JSON document on stdout
 
 Exits 0 when nothing needs acting on, 1 when something does, 2 when the check
 can't run.
@@ -61,7 +63,7 @@ can't run.
 const VALUE_OPTIONS = ['pr', 'since', 'session', 'file'] as const;
 // The team check's own switches: taken with no value, and only by the team check — the old
 // spelling meets `--repair` with its unknown-option refusal.
-const FLAG_OPTIONS = ['repair'] as const;
+const FLAG_OPTIONS = ['repair', 'json'] as const;
 type Option = (typeof VALUE_OPTIONS)[number];
 type FlagOption = (typeof FLAG_OPTIONS)[number];
 const OLD_OPTIONS: readonly Option[] = ['pr', 'since', 'file'];
@@ -107,15 +109,15 @@ function spelledForTheTeam(argv: string[]): boolean {
     if (!argument.startsWith('--')) return false;
     const name = argument.slice(2).split('=', 1)[0] as string;
     const valued = name === 'session' || name === 'file';
-    if (!valued && name !== 'repair') return false;
-    // Only a valued option takes the next word; `--repair` stands alone.
+    if (!valued && name !== 'repair' && name !== 'json') return false;
+    // Only a valued option takes the next word; `--repair` and `--json` stand alone.
     if (valued && !argument.includes('=')) index += 1;
   }
   return true;
 }
 
 type Dispatched =
-  | { kind: 'team'; args: { session?: string; file?: string; repair?: boolean } }
+  | { kind: 'team'; args: { session?: string; file?: string; repair?: boolean; json?: boolean } }
   | { kind: 'commits'; args: CommitsRun }
   | { kind: 'refused'; text: string; usage: string };
 
@@ -130,6 +132,7 @@ function dispatch(argv: string[]): Dispatched {
         ...(parsed.values.session !== undefined ? { session: parsed.values.session } : {}),
         ...(parsed.values.file !== undefined ? { file: parsed.values.file } : {}),
         ...(parsed.flags.has('repair') ? { repair: true } : {}),
+        ...(parsed.flags.has('json') ? { json: true } : {}),
       },
     };
   }
@@ -150,8 +153,12 @@ function dispatch(argv: string[]): Dispatched {
 export async function check(argv: string[], io: Io, load: LoadConfig = loadConfig, sources: CheckSources = realCheckSources): Promise<number> {
   const parsed = dispatch(argv);
   if (parsed.kind === 'refused') {
-    // The bytes an old spelling's refusal always had; a team check refusal names its own usage.
-    io.stderr(`team check: ${parsed.text}\n\n${parsed.usage}`);
+    if (argv.includes('--json') && parsed.usage === USAGE) {
+      writeJsonError(io, 'check.invocation', parsed.text, null);
+    } else {
+      // The bytes an old spelling's refusal always had; a team check refusal names its own usage.
+      io.stderr(`team check: ${parsed.text}\n\n${parsed.usage}`);
+    }
     // exit: check.invocation
     return 2;
   }
