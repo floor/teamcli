@@ -18,7 +18,7 @@ import {
 import { realQuotaObservations, type QuotaLive } from '../information/quota-observe.ts';
 import { agentList, sessionRunning } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { writeJson, writeJsonError } from '../output/index.ts';
+import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 
 export const USAGE = `Usage: team usage [--json] [--all] [--tree]
 
@@ -108,7 +108,10 @@ export default usage;
  */
 export async function runUsage(argv: string[], io: Io, sources: UsageSources): Promise<number> {
   const args = readArgs(argv, [], ['json', 'all', 'tree']);
-  const json = args.flags.has('json');
+  // Read from the raw tokens, before the parser runs (the rule every converted command
+  // follows): an argument that stops the parse — a stray word, an unknown option — must still
+  // answer in the `team.error` envelope when `--json` follows it.
+  const json = hasJsonFlag(argv);
   // The second view: the quota tree. The table is the default report; the tree prints under
   // `--tree` (owner, 2026-10-17), and the flag changes the text face only.
   const tree = args.flags.has('tree');

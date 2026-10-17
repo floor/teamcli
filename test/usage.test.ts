@@ -1716,6 +1716,21 @@ describe('team usage', () => {
     const extra = testIo(root);
     expect(await runUsage(['now'], extra, { home, now: () => NOW })).toBe(2);
     expect(extra.err).toBe(`team usage: unexpected "now"\n${USAGE}`);
+    // `--json` is read from the raw tokens before the parser runs, so a bad argument does not
+    // hide it: the refusal writes the `team.error` envelope on stdout, stderr empty, exit 2 —
+    // whichever side of the bad token the flag stands on.
+    for (const [argv, message] of [
+      [['now', '--json'], 'unexpected "now"'],
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json', 'now'], 'unexpected "now"'],
+    ] as const) {
+      const marked = await usageAt(root, SEAT, ...argv);
+      expect({ argv, code: marked.code, err: marked.err }).toEqual({ argv, code: 2, err: '' });
+      expect(JSON.parse(marked.out)).toEqual({
+        schema: { name: 'team.error', version: 1 },
+        error: { id: 'usage.invocation', message, repair: null },
+      });
+    }
   });
 
   test('the store folder itself unreadable is the other refusal: the owner reads the reason, a seat does not', async () => {
