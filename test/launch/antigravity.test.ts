@@ -30,7 +30,8 @@ describe('Antigravity launch and captured screens', () => {
     expect(versionVerdict('1.2.16', antigravity.tested)).toBe('tested');
     expect(versionVerdict('1.2.18', antigravity.tested)).toBe('tested');
     expect(versionVerdict('1.3.5', antigravity.tested)).toBe('tested');
-    expect(versionVerdict('1.3.6', antigravity.tested)).toBe('newer');
+    expect(versionVerdict('1.4.0', antigravity.tested)).toBe('tested');
+    expect(versionVerdict('1.4.1', antigravity.tested)).toBe('newer');
     expect(versionVerdict('1.2.10', antigravity.tested)).toBe('older');
   });
 
