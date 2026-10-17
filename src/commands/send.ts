@@ -992,9 +992,16 @@ async function deliverComposeSeat(
 /** The brief was typed into a compose seat's own box and the CLI never confirmed it. The
  *  message is on disk, and the one team.log line is the orchestrator's notice. Exit 1. */
 function typedBriefNotSubmitted(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
-  logLine(dir, 'send', who, `${seat}: not-submitted: ${reason}`, host.now());
-  if (report.json) writeJsonError(io, 'send.not-submitted', `${seat}: not-submitted: ${reason}`);
-  else io.stderr(`team send: ${seat}: not-submitted: ${reason}\n`);
+  return notSubmittedAt(io, dir, who, seat, reason, host, report);
+}
+
+/** A send that typed its line and was never taken: the trigger line of a drop-file send, or a
+ *  compose seat's brief. One site, one exit id: both are the same outcome to a caller. */
+function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
+  const message = `${seat}: not-submitted: ${reason}`;
+  logLine(dir, 'send', who, message, host.now());
+  if (report.json) writeJsonError(io, 'send.not-submitted', message);
+  else io.stderr(`team send: ${message}\n`);
   return 1; // exit: send.not-submitted
 }
 
@@ -1509,11 +1516,7 @@ function evidenceOf(result: DeliverResult): string {
 function notSubmitted(io: Io, dir: string, who: string, seat: string, result: DeliverResult, where: string, host: SendHost, report: Report): number {
   const box = result.box === undefined ? 'the box could not be read' : result.box === '' ? 'the box is empty' : `the box holds ${JSON.stringify(result.box)}`;
   const reason = `the seat did not take the trigger after ${String(result.tries)} Enter${result.tries === 1 ? '' : 's'}; ${box}; ${where}`;
-  const message = `${seat}: not-submitted: ${reason}`;
-  logLine(dir, 'send', who, message, host.now());
-  if (report.json) writeJsonError(io, 'send.not-submitted', message);
-  else io.stderr(`team send: ${message}\n`);
-  return 1; // exit: send.not-submitted
+  return notSubmittedAt(io, dir, who, seat, reason, host, report);
 }
 
 /** A refusal: the message was not written, and the reason says why. Exit 1, always. */
