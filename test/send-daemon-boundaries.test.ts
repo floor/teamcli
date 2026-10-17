@@ -29,6 +29,7 @@ import {
 } from '../src/send/daemon.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
+import { readPending } from '../src/send/pending.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { filed } from './send-native-fixtures.ts';
 import { testIo } from './helpers.ts';
@@ -220,8 +221,17 @@ describe('the send daemon\'s boundaries', () => {
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'blocked by a dialog mid-delivery'], io, host)).toBe(1);
     expect(io.err).toContain('held: the screen reads question');
+    expect(io.err).toContain('a running watch retries it when the seat is idle');
     expect(host.typed.length).toBe(1);
     expect(host.enters).toEqual([]);
+
+    // Held by the dialog: the drop is on disk and the record beside it is what a later
+    // retry reads.
+    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'lead');
+    const records = readPending(drops);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ from: 'owner', to: 'lead', tries: 0 });
+    expect(readFileSync(join(drops, records[0]!.id), 'utf8')).toBe(filed('blocked by a dialog mid-delivery'));
 
     const history = readHistory('acme', world.root, world.home);
     expect(history.ok && history.entries.map((entry) => entry.outcome)).toEqual(['held']);

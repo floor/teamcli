@@ -666,7 +666,7 @@ function finishDaemonSend(
   if (res.outcome === 'unreachable') return unreachable(io, dir, who, seatName, res.detail, host, report);
   if (res.outcome === 'not-submitted') {
     const result: DeliverResult = { outcome: 'not-submitted', tries: res.tries, ...(res.box === null ? {} : { box: res.box }) };
-    return notSubmitted(io, dir, who, seatName, result, `the drop file is at ${res.drop_path}`, host, report);
+    return notSubmitted(io, dir, who, seatName, result, `the drop file is at ${res.drop_path}; a running watch retries it when the seat is idle`, host, report);
   }
   return refuse(io, dir, who, res.detail, host, report);
 }
@@ -870,6 +870,12 @@ async function deliverNative(
     }
     if (result.outcome === 'unreachable') {
       appendHistory(project, root, host.home, { ...entry, outcome: 'unreachable', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
+      // A dialog is not a missing channel: the drop is on disk and the seat will be free once the
+      // prompt is answered, so the watch gets the same record a held send leaves.
+      if (result.dialog !== undefined) {
+        markPending(dropDir, entry);
+        return unreachable(io, dir, who, seatName, `${retry}; ${where}`, host, report, result.dialog);
+      }
       return unreachable(io, dir, who, seatName, `${result.reason ?? 'the seat was not reached'}; ${where}`, host, report);
     }
     if (result.outcome === 'not-submitted') {
@@ -1411,9 +1417,21 @@ function refuse(io: Io, dir: string, who: string, reason: string, host: SendHost
   return 1; // exit: send.refused
 }
 
-/** The seat's channel was not open, and nothing was sent. Exit 1, always. */
-function unreachable(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
-  const message = `${seat}: unreachable: ${reason}`;
+/** The seat's channel was not open, and nothing was sent. A dialog is the one unreachable the
+ *  watch can still deliver: the drop's record says so, and the line says when. Exit 1, always. */
+function unreachable(
+  io: Io,
+  dir: string,
+  who: string,
+  seat: string,
+  reason: string,
+  host: SendHost,
+  report: Report,
+  /** The dialog in the way, when the send was stopped by one rather than by a missing channel. */
+  dialog?: string,
+): number {
+  const words = dialog === undefined ? `unreachable: ${reason}` : `unreachable now (the screen reads ${dialog}); ${reason}`;
+  const message = `${seat}: ${words}`;
   logLine(dir, 'send', who, message, host.now());
   if (report.json) writeJsonError(io, 'send.unreachable', message);
   else io.stderr(`team send: ${message}\n`);

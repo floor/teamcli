@@ -9,6 +9,7 @@
 // Every retry is bounded (`PENDING_MAX_TRIES` typed tries, `PENDING_MAX_AGE_MS` from the held
 // send) and reported when it stops: the word is the drop's path, so the message is never lost
 // silently even though the sender's own command has already exited.
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
@@ -57,13 +58,11 @@ function heldWords(drop: PendingDrop): string {
 }
 
 /** The drop is out of retries: forget the marker and say where the message is, so it can be
- *  delivered by hand or sent again. */
-function giveUp(scene: RetryScene, dropDir: string, drop: PendingDrop, why: string): void {
+ *  delivered by hand or sent again. A drop whose file is gone has nothing left to name. */
+function giveUp(scene: RetryScene, dropDir: string, drop: PendingDrop, why: string, dropGone = false): void {
   clearPending(dropDir, drop.id);
-  scene.say(
-    `${drop.to}: ${heldWords(drop)} was not delivered (${why}); the drop file is at ${join(dropDir, drop.id)}; send it again`,
-    true,
-  );
+  const tail = dropGone ? 'send it again' : `the drop file is at ${join(dropDir, drop.id)}; send it again`;
+  scene.say(`${drop.to}: ${heldWords(drop)} was not delivered (${why}); ${tail}`, true);
 }
 
 /** The watch's sources as the delivery sees one pane. */
@@ -84,6 +83,12 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
  * at once, then the box is read again by the delivery itself, which is the final guard.
  */
 async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: string, drop: PendingDrop): Promise<void> {
+  // The marker is only a convenience; the drop file is the message. A record left behind a drop
+  // that was moved or removed has nothing to tell the seat, so it is given up on, not typed.
+  if (!existsSync(join(dropDir, drop.id))) {
+    giveUp(scene, dropDir, drop, `its drop file is gone from ${dropDir}`, true);
+    return;
+  }
   const line = triggerLine(join(dropDir, drop.id));
   if (line === null) {
     giveUp(scene, dropDir, drop, 'its trigger line would not fit in a pane');
@@ -142,12 +147,11 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
  */
 export async function retryHeldDrops(scene: RetryScene): Promise<void> {
   for (const seat of scene.team.seats) {
-    const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
-    const pane = agents.length === 1 ? agents[0]?.pane : undefined;
-    if (pane === undefined || pane === scene.ownPane) continue;
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const drops = readPending(dropDir);
     if (drops.length === 0) continue;
+    // The age bound is applied before the pane is looked for: a seat that vanished leaves no
+    // pane to retry, and its marker must not sit in the store forever.
     const now = scene.now.getTime();
     const live: PendingDrop[] = [];
     for (const drop of drops) {
@@ -157,6 +161,9 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
       }
       giveUp(scene, dropDir, drop, 'the retry window passed');
     }
+    const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
+    const pane = agents.length === 1 ? agents[0]?.pane : undefined;
+    if (pane === undefined || pane === scene.ownPane) continue;
     const drop = live[0];
     if (drop !== undefined) await retryOne(scene, seat.cli, pane, dropDir, drop);
   }

@@ -31,6 +31,15 @@ import { claudeBox, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
 const raw = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
+// A question the agent asked: the classifier's last-line footer makes it a dialog, never a box
+// the send may type into or press Enter on.
+const QUESTION_SCREEN = [
+  '☐ Scope',
+  'Which file should we edit?',
+  '❯ 1. src/index.ts',
+  '  2. src/cli.ts',
+  'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n');
 
 let base = '';
 
@@ -266,6 +275,51 @@ describe('retryHeldDrops', () => {
       `lead: a held send from owner was not delivered (the retry window passed); the drop file is at ${join(dropDir, 'drop-4')}; send it again`,
     ]);
   });
+
+  test('a seat that vanished still ages out its record, with no pane to read', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const old = new Date(NOW.getTime() - PENDING_MAX_AGE_MS - 60_000);
+    const dropDir = seedHeld(made.dir, 'acme', 'lead', 'drop-gone-seat', 'from the owner\n\nvanished', old);
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: { running: true, agents: [], workspaces: [], screens: {} },
+      ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toEqual([]);
+    expect(said).toEqual([
+      `lead: a held send from owner was not delivered (the retry window passed); the drop file is at ${join(dropDir, 'drop-gone-seat')}; send it again`,
+    ]);
+  });
+
+  test('a record whose drop file is gone is given up on, not typed', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedHeld(made.dir, 'acme', 'lead', 'drop-missing', 'from the owner\n\nlost');
+    rmSync(join(dropDir, 'drop-missing'));
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toEqual([]);
+    expect(said).toEqual([
+      `lead: a held send from owner was not delivered (its drop file is gone from ${dropDir}); send it again`,
+    ]);
+  });
 });
 
 describe('team send leaves the record the retry reads', () => {
@@ -320,6 +374,62 @@ describe('team send leaves the record the retry reads', () => {
     if (!history.ok) return;
     expect(history.entries.map((entry) => entry.outcome)).toEqual(['held', 'delivered']);
     expect(history.entries[1]?.id).toBe(drop.id);
+  });
+
+  test('a send stopped by a dialog writes the record, and the watch delivers it once the seat is idle', async () => {
+    const made = world();
+    const one = pane(claudeBox(''));
+    // The composer is empty when the line is typed; the question is up by the read-back.
+    const native: NativePane = {
+      typeText: (_session, _pane, text) => { one.typed.push(text); one.screen = QUESTION_SCREEN; return true; },
+      pressEnter: () => { one.enters += 1; return true; },
+      status: () => one.status,
+      wait: async () => {},
+      paneText: () => one.screen,
+    };
+    const host: SendHost = {
+      agents: () => [{ name: 'lead', pane: 'w1:p1' }],
+      processInfo: () => ({ shell: 111, foreground: [222] }),
+      socketsDir: made.sockets,
+      deliver: async () => ({ ok: true }),
+      native,
+      now: () => NOW,
+      home: made.home,
+    };
+    const io = testIo(made.root, { kind: 'owner' });
+
+    const code = await runSend(['lead', 'hello'], io, host);
+    expect(code).toBe(1);
+    expect(io.err).toContain('unreachable now (the screen reads question); a running watch retries it when the seat is idle');
+    expect(io.err).toContain('the drop file is at');
+    // A dialog is nobody's to submit: the Enter stays unspent.
+    expect(one.enters).toBe(0);
+
+    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const drops = readPending(dropDir);
+    expect(drops).toHaveLength(1);
+    const drop = drops[0] as PendingDrop;
+    expect(drop).toMatchObject({ from: 'owner', to: 'lead', tries: 0 });
+    expect(readFileSync(join(dropDir, drop.id), 'utf8')).toBe(drop.body);
+
+    // Once the prompt is answered the seat is free, and the watch delivers the drop.
+    one.screen = claudeBox('');
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(readPending(dropDir)).toEqual([]);
+    expect(one.typed).toEqual([triggerLine(join(dropDir, drop.id)) as string, triggerLine(join(dropDir, drop.id)) as string]);
+    expect(one.enters).toBe(1);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries.map((entry) => entry.outcome)).toEqual(['unreachable', 'delivered']);
+    expect(said).toEqual(['lead: a held send from owner was delivered on retry']);
   });
 });
 

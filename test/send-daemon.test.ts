@@ -32,6 +32,7 @@ import {
 } from '../src/send/daemon.ts';
 import { readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
+import { readPending } from '../src/send/pending.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { filed } from './send-native-fixtures.ts';
@@ -596,8 +597,15 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const io = ownerIo(w.root);
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     expect(io.err).toContain('held: the screen reads question');
+    expect(io.err).toContain('a running watch retries it when the seat is idle');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
+
+    // The record beside the daemon's drop is what a watch's retry reads.
+    const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'lead');
+    const records = readPending(drops);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ from: 'owner', to: 'lead', tries: 0 });
   });
 
   test('single-Enter discipline: does not press a second Enter when screen is unknown and trigger is not in box', async () => {

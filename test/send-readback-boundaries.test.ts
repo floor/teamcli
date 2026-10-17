@@ -10,8 +10,9 @@ import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
+import { startSendDaemon, daemonDropDir, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { readHistory } from '../src/send/history.ts';
+import { readPending } from '../src/send/pending.ts';
 import { filed } from './send-native-fixtures.ts';
 import { testIo } from './helpers.ts';
 
@@ -228,6 +229,13 @@ describe('the composer read-back at its boundaries', () => {
     expect(io.err).toContain('not-submitted: the seat did not take the trigger after 1 Enter; the box holds "a draft that is not the trigger"');
     expect(host.enters.length).toBe(1);
     expect(outcomes(world)).toEqual(['not-submitted']);
+
+    // The daemon typed the trigger and the seat did not take it: its own drop folder holds the
+    // message and the record a watch's retry reads.
+    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'lead');
+    const records = readPending(drops);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ from: 'owner', to: 'lead', tries: 0 });
   });
 
   test('a dialog between typing and the first Enter is never a read-back mismatch', async () => {
@@ -242,7 +250,7 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'into a dialog'], io, host)).toBe(1);
-    expect(io.err).toContain('unreachable: not reached; the screen reads question');
+    expect(io.err).toContain('unreachable now (the screen reads question); a running watch retries it when the seat is idle; the drop file is at');
     // The pane is a dialog by the time the line has settled: no Enter goes to it.
     expect(host.enters.length).toBe(0);
     expect(outcomes(world)).toEqual(['unreachable']);

@@ -1125,10 +1125,12 @@ describe('team send: native drop', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toContain('not reached');
-    expect(io.err).toContain('the screen reads question');
+    expect(io.err).toContain('unreachable now (the screen reads question); a running watch retries it when the seat is idle');
     const leadDrops = join(dir, 'send-drops', 'acme', 'lead');
-    expect(io.err).toContain(join(leadDrops, readdirSync(leadDrops)[0] as string));
+    const leadFiles = readdirSync(leadDrops);
+    // The drop and the record beside it: the watch reads the record, the seat reads the drop.
+    expect(leadFiles.filter((name) => name.endsWith('.pending'))).toHaveLength(1);
+    expect(io.err).toContain(join(leadDrops, leadFiles.filter((name) => !name.endsWith('.pending'))[0] as string));
     expect(asked.enters).toBe(0);
     expect(asked.typed).toEqual([]);
     expect(lead.frames).toEqual([]);
@@ -1141,8 +1143,7 @@ describe('team send: native drop', () => {
     });
     const again = owner(root);
     expect(await runSend(['native', 'hello'], again, host)).toBe(1);
-    expect(again.err).toContain('not reached');
-    expect(again.err).toContain('the screen reads permission');
+    expect(again.err).toContain('unreachable now (the screen reads permission); a running watch retries it when the seat is idle');
     expect(held.enters).toBe(0);
     expect(held.typed).toEqual([]);
   });
