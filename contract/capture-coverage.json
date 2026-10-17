@@ -133,7 +133,7 @@
         "undocumented": 0
       },
       "unknown": {
-        "real": 3,
+        "real": 4,
         "constructed": 11,
         "undocumented": 0
       }
@@ -926,6 +926,12 @@
     },
     {
       "file": "claude-code/2.1.302/exit.txt",
+      "cli": "claude-code",
+      "kind": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.302/held.txt",
       "cli": "claude-code",
       "kind": "unknown",
       "provenance": "capture"
