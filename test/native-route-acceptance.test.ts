@@ -206,13 +206,15 @@ describe('native acceptance: the route half', () => {
     expect(code).toBe(0);
     expect(leadIo.err).toBe('');
     expect(leadIo.out).toBe(
-      `helper  ${helper.id}  (helper)\n` +
+      'team acme, session "acme"\n' +
+        `helper  ${helper.id}  (helper)\n` +
         `session acme\n` +
         `cli claude-code\n` +
         `pane w1:p2\n` +
         `socket ${address} (live)\n` +
         `native yes\n` +
-        `admitted by: an orchestrator or operator to a seat of its own team\n`,
+        `admitted by: an orchestrator or operator to a seat of its own team\n` +
+        `helper: routed at ${address} (live)\n`,
     );
     const lines = routeLines(routesPath('acme', w.root, w.home));
     expect(lines).toHaveLength(1);

@@ -21,9 +21,11 @@ import { PROJECT_RULE_SUMMARY, RULE_SUMMARY } from '../src/send/admit.ts';
 import { historyPath, parseHistoryLine } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { NATIVE_BODY_MARKER, routesPath } from '../src/send/routes.ts';
+import { ROUTE_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { updateState } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { liveAgentsOf, testIo, type TestIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const OWNER = { kind: 'owner' as const };
 const BODY = 'the native delivery, written down after the fact';
@@ -222,18 +224,20 @@ describe('route: the address the native channel answers', () => {
 
     expect(code).toBe(0);
     expect(io.out).toBe(
-      `lead  ${lead.id}  (lead)\n` +
+      'team acme, session "acme"\n' +
+        `lead  ${lead.id}  (lead)\n` +
         'session acme\n' +
         'cli claude-code\n' +
         'pane w1:p1\n' +
         `socket ${address} (live)\n` +
         'native yes\n' +
-        'admitted by: the owner\n',
+        'admitted by: the owner\n' +
+        `lead: routed at ${address} (live)\n`,
     );
     expect(io.err).toBe('');
   });
 
-  test('--json prints the one document send uses, plus route fields', async () => {
+  test('--json prints the route answer as the team.route envelope', async () => {
     const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
     const id = teamIdOf(w.root);
     const address = socketAt(w.sockets, 4242);
@@ -244,18 +248,25 @@ describe('route: the address the native channel answers', () => {
     const code = await runRoute(['lead', '--json'], io, host(w, { processInfo: () => ({ shell: 111, foreground: [4242] }) }));
 
     expect(code).toBe(0);
-    expect(JSON.parse(io.out)).toEqual({
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, ROUTE_OUTPUT_SCHEMA);
+    expect(doc).toEqual({
+      schema: { name: 'team.route', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'routed',
+      action_summary: `lead: routed at ${address} (live)`,
+      project: 'acme',
+      session: 'acme',
       seat: 'lead',
       agent: lead.id,
-      session: 'acme',
+      recipient_session: 'acme',
       cli: 'claude-code',
       pane: 'w1:p1',
-      socket: address,
+      address,
       socket_state: 'live',
       native: true,
       rule: 'the owner',
-      status: 'routed',
-      exit: 0,
     });
   });
 
@@ -416,7 +427,7 @@ describe('route: the address the native channel answers', () => {
     const code = await runRoute(['helper', '--json'], io, run);
 
     expect(code).toBe(0);
-    expect(JSON.parse(io.out)).toMatchObject({ seat: 'helper', socket: null, socket_state: 'none', native: false });
+    expect(JSON.parse(io.out)).toMatchObject({ seat: 'helper', address: null, socket_state: 'none', native: false });
     expect(routeLines(routesPath('acme', w.root, w.home))[0]?.socket).toBeNull();
   });
 
@@ -443,11 +454,31 @@ describe('route: the address the native channel answers', () => {
     team(w.home, id, 'acme', 'acme', w.root, [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }]);
     const io = testIo(w.root, OWNER);
 
-    const code = await runRoute(['lead', '--dry-run'], io, host(w, { processInfo: () => ({ shell: 111, foreground: [4242] }) }));
+    const run = host(w, { processInfo: () => ({ shell: 111, foreground: [4242] }) });
+
+    const code = await runRoute(['lead', '--dry-run'], io, run);
 
     expect(code).toBe(0);
-    expect(io.out).toContain('(dry run; nothing was recorded)');
+    const target = join(storePath('acme', w.root, w.home), 'routes.jsonl');
+    expect(io.out).toBe(
+      'team acme, session "acme"\n' +
+        `lead  ${lead.id}  (lead)\n` +
+        'session acme\n' +
+        'cli claude-code\n' +
+        'pane w1:p1\n' +
+        `socket ${address} (live)\n` +
+        'native yes\n' +
+        'admitted by: the owner\n' +
+        `+ record: lead: append the route to ${target}\n` +
+        'dry run: nothing was run\n',
+    );
     expect(existsSync(routesPath('acme', w.root, w.home))).toBe(false);
+
+    const jsonIo = testIo(w.root, OWNER);
+    expect(await runRoute(['lead', '--dry-run', '--json'], jsonIo, run)).toBe(0);
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(jsonIo.out, ROUTE_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({ dry_run: true, status: 'dry-run', action_summary: 'dry run: nothing was run' });
+    expect(doc.plan).toEqual([{ step: 'record', seat: 'lead', detail: `append the route to ${target}`, prefix: '+' }]);
   });
 
   test('a pair no rule admits answers nothing and writes nothing', async () => {
@@ -510,6 +541,36 @@ describe('route: the address the native channel answers', () => {
     expect(code).toBe(1);
     expect(io.err).toBe('team route: refused: the route record could not be written: the state folder path is not a directory\n');
     expect(io.out).toBe('');
+  });
+
+  test('--json refusals are the structured error envelope, with stderr empty', async () => {
+    const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
+    const id = teamIdOf(w.root);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: id, seat: 'lead', session: 'acme', pane: 'w1:p1' });
+    team(w.home, id, 'acme', 'acme', w.root, [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }]);
+
+    const usageIo = testIo(w.root, OWNER);
+    expect(await runRoute(['--json'], usageIo, host(w))).toBe(2);
+    expect(usageIo.err).toBe('');
+    assertJsonErrorShape(usageIo.out, { id: 'route.usage', messageContains: 'a seat, a seat@team or an agent id is required' });
+
+    const detachedIo = testIo(w.root, { kind: 'owner-no-tty' });
+    expect(await runRoute(['lead', '--json'], detachedIo, host(w))).toBe(1);
+    expect(detachedIo.err).toBe('');
+    assertJsonErrorShape(detachedIo.out, { id: 'route.detached', repair: 'run team route from a terminal outside herdr' });
+
+    const refusedIo = testIo(w.root, OWNER);
+    expect(await runRoute(['ghost', '--json'], refusedIo, host(w))).toBe(1);
+    expect(refusedIo.err).toBe('');
+    assertJsonErrorShape(refusedIo.out, { id: 'route.refused', messageContains: 'no registered agent holds the seat "ghost"' });
+
+    const at = storePath('acme', w.root, w.home);
+    mkdirSync(join(w.home, '.config', 'team'), { recursive: true });
+    writeFileSync(at, '');
+    const unrecordedIo = testIo(w.root, OWNER);
+    expect(await runRoute(['lead', '--json'], unrecordedIo, host(w))).toBe(1);
+    expect(unrecordedIo.err).toBe('');
+    assertJsonErrorShape(unrecordedIo.out, { id: 'route.unrecorded', messageContains: 'the route record could not be written' });
   });
 });
 

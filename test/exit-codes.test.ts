@@ -3330,7 +3330,7 @@ scene('route.routed', async (place) => {
 scene('route.dry-run', async (place) => {
   write(place, TEAM);
   registeredLead(place);
-  return show(await routed(place, ['lead', '--dry-run'], owner, sendHost(place)), '(dry run; nothing was recorded)');
+  return show(await routed(place, ['lead', '--dry-run'], owner, sendHost(place)), 'append the route to');
 });
 scene('route.detached', async (place) => show(await routed(place, ['lead'], detachedCaller, sendHost(place)), SENTENCE));
 scene('route.refused', async (place) => {

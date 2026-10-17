@@ -67,6 +67,7 @@ export {
   PROJECTS_OUTPUT_SCHEMA,
   publishCommandOutputSchema,
   renderCommandOutputSchema,
+  ROUTE_OUTPUT_SCHEMA,
   schemaTagFragment,
   SEATS_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,

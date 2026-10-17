@@ -598,6 +598,28 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team route` (`schema/route.schema.json`): the action
+ *  surface, then the answered address. `session` is the caller's team session; the recipient's
+ *  session travels as `recipient_session`. */
+export const ROUTE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.route',
+  fileName: 'route.schema.json',
+  title: 'team route --json output',
+  statuses: ['routed', 'dry-run'],
+  required: ['project', 'session', 'seat', 'address'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    agent: { type: 'string', minLength: 1 },
+    recipient_session: { type: 'string', minLength: 1 },
+    cli: { type: 'string', minLength: 1 },
+    pane: { type: 'string', minLength: 1 },
+    address: { type: ['string', 'null'] },
+    socket_state: { type: 'string', enum: ['live', 'stale', 'pane', 'none', 'unread'] },
+    native: { type: 'boolean' },
+    rule: { type: 'string', minLength: 1 },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -610,5 +632,6 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   USAGE_OUTPUT_SCHEMA,
   ASK_SHOW_OUTPUT_SCHEMA,
   MESSAGES_OUTPUT_SCHEMA,
+  ROUTE_OUTPUT_SCHEMA,
 ];
 
