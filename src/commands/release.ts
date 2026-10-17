@@ -1,6 +1,6 @@
 import { readArgs } from '../args.ts';
 import { loadTeamFile } from '../file/load.ts';
-import { formatTable, writeJson, writeJsonError } from '../output/index.ts';
+import { formatTable, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import { SEMVER_PATTERN, packageProblem } from '../release/grammar.ts';
 import { runChecks, type Outcome, type ReleaseResult } from '../release/checks.ts';
 import { realFetch, type Fetch } from '../release/http.ts';
@@ -31,24 +31,14 @@ const ORDER = ['npm', 'tag', 'github', 'changelog', 'linear', 'activity'] as con
 const release: Command = (argv, io) => runRelease(argv, io, realFetch);
 export default release;
 
-/** Whether `--json` appears among the arguments somewhere other than as the value of `--file`.
- *  An option's value is taken as given, whatever it looks like — the one reading under which
- *  `--file --json` names a file and never switches the output shape. */
-function jsonRequested(argv: string[]): boolean {
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index] as string;
-    if (argument === '--file') index += 1;
-    else if (argument === '--json') return true;
-  }
-  return false;
-}
-
+/** Whether `--json` appears anywhere on the line, including as an option's value: the shared
+ *  reading in `hasJsonFlag` that output.md §5.3 gives every command, so even a refusal after an
+ *  unknown option, or a malformed `--json=<value>`, writes the `team.error` envelope. */
 export async function runRelease(argv: string[], io: Io, fetcher: Fetch, keyReader?: KeyReader): Promise<number> {
   // All arguments are read before deciding how to report: `--json` decides the shape of even an
   // argument error, wherever it appears — including after an unknown option, which readArgs
-  // reports before ever reaching the flag. `--json` as the value of `--file` is a path, not the
-  // flag, so it does not select the JSON output.
-  const json = jsonRequested(argv);
+  // reports before ever reaching the flag.
+  const json = hasJsonFlag(argv);
   const args = readArgs(argv, ['file'], ['json']);
   const sub = args.rest[0];
   const fail = (code: 'usage' | 'configuration', message: string): number => {

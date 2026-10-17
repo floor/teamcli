@@ -686,22 +686,17 @@ describe('the --file option', () => {
     expect(first.requested).toEqual([]);
   });
 
-  test('--json as the value of --file is a path: only a --json that is not a value selects JSON', async () => {
-    const consumed = await run(['check', 'material@3.0.2', '--file', '--json'], happy());
-    expect(consumed.code).toBe(2);
-    expect(consumed.io.out).toBe('');
-    expect(consumed.io.err).toBe(`team release: ${join(project, '--json')}: no team file at --json\n`);
-    expect(consumed.requested).toEqual([]);
-
+  test('--json anywhere on the line selects JSON, even as the value of --file', async () => {
     const marked = errorDoc('release.configuration', `${join(project, '--json')}: no team file at --json`);
     for (const argv of [
+      ['check', 'material@3.0.2', '--file', '--json'],
       ['check', 'material@3.0.2', '--json', '--file', '--json'],
       ['check', 'material@3.0.2', '--file', '--json', '--json'],
     ]) {
       const { code, io, requested } = await run(argv, happy());
       expect({ argv, code }).toEqual({ argv, code: 2 });
-      expect(io.err).toBe('');
-      expect(JSON.parse(io.out)).toEqual(marked);
+      expect({ argv, err: io.err }).toEqual({ argv, err: '' });
+      expect({ argv, out: JSON.parse(io.out) }).toEqual({ argv, out: marked });
       expect(requested).toEqual([]);
     }
   });
@@ -789,25 +784,23 @@ describe('the --file option', () => {
   });
 
   test('the --json scan and the parse agree: --, an unknown option, and the forms without a package', async () => {
-    /** The page's rule, written out independently: a `--json` that is the value of `--file` is a
-     *  path; any other `--json` selects the JSON output. */
+    /** The family's rule from output.md §5.3, written out independently: any `--json` or
+     *  `--json=<value>` on the line selects the JSON output, even one an option takes as its
+     *  value. */
     function jsonByTheRule(argv: string[]): boolean {
-      for (let index = 0; index < argv.length; index += 1) {
-        if (argv[index] === '--file') index += 1;
-        else if (argv[index] === '--json') return true;
-      }
-      return false;
+      return argv.some((arg) => arg === '--json' || arg.startsWith('--json='));
     }
 
     const rows: { label: string; argv: string[]; json: boolean; code: 'configuration' | 'usage'; message: string }[] = [
       // The `--` beside --file stays a value when it is the option's turn, and is refused when it
-      // is not; a free `--json` selects JSON, a consumed one cannot.
+      // is not; every `--json` on the line selects JSON, wherever it stands.
       { label: '--file -- --json', argv: ['check', 'material@3.0.2', '--file', '--', '--json'], json: true, code: 'configuration', message: `${join(project, '--')}: no team file at --` },
-      { label: '--file --json --', argv: ['check', 'material@3.0.2', '--file', '--json', '--'], json: false, code: 'usage', message: 'unknown option --' },
-      { label: '--bogus --file --json', argv: ['check', 'material@3.0.2', '--bogus', '--file', '--json'], json: false, code: 'usage', message: 'unknown option --bogus' },
-      { label: 'no package: --file --json', argv: ['check', '--file', '--json'], json: false, code: 'usage', message: 'a <package@version> is required' },
+      { label: '--file --json --', argv: ['check', 'material@3.0.2', '--file', '--json', '--'], json: true, code: 'usage', message: 'unknown option --' },
+      { label: '--bogus --file --json', argv: ['check', 'material@3.0.2', '--bogus', '--file', '--json'], json: true, code: 'usage', message: 'unknown option --bogus' },
+      { label: 'no package: --file --json', argv: ['check', '--file', '--json'], json: true, code: 'usage', message: 'a <package@version> is required' },
       { label: 'no package: --file -- --json', argv: ['check', '--file', '--', '--json'], json: true, code: 'usage', message: 'a <package@version> is required' },
-      { label: 'no package: --bogus --file --json', argv: ['check', '--bogus', '--file', '--json'], json: false, code: 'usage', message: 'unknown option --bogus' },
+      { label: 'no package: --bogus --file --json', argv: ['check', '--bogus', '--file', '--json'], json: true, code: 'usage', message: 'unknown option --bogus' },
+      { label: 'malformed --json=1', argv: ['check', 'material@3.0.2', '--json=1'], json: true, code: 'usage', message: 'unknown option --json' },
     ];
     for (const row of rows) {
       const { code, io, requested } = await run(row.argv, happy());
@@ -879,7 +872,14 @@ describe('the --file option is classified the same through both commands', () =>
               throw new Error('the transport was called');
             };
         await runRelease(['check', 'material@3.0.2', ...row.tail], releaseIo, transport);
-        released[row.label] = classify(releaseIo.err, 'team release: ');
+        // The row whose value looks like an option carries a real `--json`, so release answers it
+        // with the envelope on stdout; the classification reads the message from either channel.
+        const reported = releaseIo.err !== ''
+          ? releaseIo.err
+          : releaseIo.out.startsWith('{')
+            ? `team release: ${(JSON.parse(releaseIo.out) as { error: { message: string } }).error.message}\n`
+            : releaseIo.out;
+        released[row.label] = classify(reported, 'team release: ');
 
         const checkIo = testIo(project);
         await commits(['check', 'HEAD', ...row.tail], checkIo, (cwd, file) => loadConfig(cwd, file, home));

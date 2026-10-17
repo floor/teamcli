@@ -26,7 +26,9 @@ splits at the final `@`: `@scope/name@1.2.3`.
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 `--file` takes its value even when the value looks like another option: `--file --json` names a
-file called `--json`, and only a `--json` that is not some option's value selects the JSON output.
+file called `--json`. A `--json` anywhere on the line selects the JSON output — the shared reading
+every command uses, even when the word is also taken as an option's value — so that same line also
+asks for JSON, and a missing file is then the `team.error` document.
 `--help` and `-h` are not part of that rule: they are answered before the arguments are parsed,
 wherever they appear, so `--file --help` prints the usage and exits 0.
 
