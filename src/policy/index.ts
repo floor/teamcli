@@ -33,6 +33,7 @@ export {
 
 export {
   loadAndResolvePolicyChain,
+  logExpiredPoliciesOnce,
   planPolicySet,
   planPolicyUnset,
   policySignaturePayload,

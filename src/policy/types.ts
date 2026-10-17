@@ -33,8 +33,8 @@ export type PolicyValue = 'on' | 'off' | boolean | number | string | readonly st
  * - `name`: canonical policy name (e.g. `dev-mode`, `seats-cross-teams`, `delivery-order`)
  * - `value`: the declared value at this level
  * - `level`: `entity | project | team | seat`
- * - `setter`: who set it (`'owner'` in 0.5.0)
- * - `date`: ISO-8601 timestamp when set
+ * - `setter`: who set it (`'owner'` in 0.5.0, or `null` for unsigned legacy `delivery_order:` declarations)
+ * - `date`: ISO-8601 timestamp when set (or `null` for unsigned legacy declarations)
  * - `expiry`: optional ISO-8601 timestamp when the declaration expires (expired = unset at its level)
  * - `kind`: `'enforced' | 'advised'`
  */
@@ -42,8 +42,8 @@ export type Policy<V extends PolicyValue = PolicyValue> = {
   name: string;
   value: V;
   level: PolicyLevel;
-  setter: string;
-  date: string;
+  setter: string | null;
+  date: string | null;
   expiry?: string | null;
   kind: PolicyKind;
   /** Optional target identifier (entity name, project id, team id, or agent id) covered by the signature. */

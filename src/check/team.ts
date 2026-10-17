@@ -931,6 +931,7 @@ function policyCheck(
     projectId = null;
   }
 
+  const legacyDeliveryDiffs = deliveryOrderDifferences(team, root, home);
   const differences: Difference[] = [];
   const teamChain = loadAndResolvePolicyChain(
     {
@@ -945,6 +946,14 @@ function policyCheck(
 
   if (!teamChain.ok) {
     for (const refusal of teamChain.refusals) {
+      if (
+        refusal.kind === 'loosening' &&
+        refusal.policy === 'delivery-order' &&
+        refusal.lowerLevel === 'team' &&
+        legacyDeliveryDiffs.some((d) => d.what.startsWith('delivery_order '))
+      ) {
+        continue;
+      }
       differences.push({
         what: refusal.message,
         repair: policyRefusalRepair(refusal),
@@ -980,6 +989,13 @@ function policyCheck(
           (refusal.kind === 'loosening' && refusal.lowerLevel === 'seat') ||
           ((refusal.kind === 'unreadable-source' || refusal.kind === 'invalid-policy') && refusal.level === 'seat');
         if (!isSeatRefusal) continue;
+        if (
+          refusal.kind === 'loosening' &&
+          refusal.policy === 'delivery-order' &&
+          legacyDeliveryDiffs.some((d) => d.what.startsWith(`${seat.name}: delivery_order `))
+        ) {
+          continue;
+        }
         differences.push({
           what: `${seat.name}: ${refusal.message}`,
           repair: policyRefusalRepair(refusal, seat.name),
@@ -990,6 +1006,10 @@ function policyCheck(
   }
 
   const notes: string[] = [];
+  const expiredDevMode = teamChain.expired.filter((exp) => exp.name === 'dev-mode').at(-1);
+  if (expiredDevMode && (!teamChain.ok || teamChain.policies['dev-mode']?.value === 'off')) {
+    notes.push(`dev-mode expired at ${expiredDevMode.expiry ?? 'now'} for ${expiredDevMode.level}; off since`);
+  }
   if (env.TEAMCLI_DEV_MODE === '1') {
     if (!teamChain.devModeGoverned) {
       notes.push(

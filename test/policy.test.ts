@@ -12,9 +12,11 @@ import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Io } from '../src/io.ts';
 import { NOT_PRETENDED } from '../src/permissions/must-not-pretend.ts';
+import { buildCommandOutputSchema, POLICY_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import {
   DEV_MODE_OPERATIONS,
   loadAndResolvePolicyChain,
+  planPolicySet,
   POLICY_CATALOGUE,
   POLICY_LEVELS,
   readEntityPolicySource,
@@ -35,6 +37,7 @@ import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { assertMatchesOutputSchema, validateAgainstJsonSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
@@ -870,6 +873,317 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(io.out).toContain('  who: the owner');
     } finally {
       fx.cleanup();
+    }
+  });
+
+  test('schema: team policy --json view and action payloads validate against POLICY_OUTPUT_SCHEMA with validateAgainstJsonSchema', async () => {
+    const fx = makeFixture();
+    try {
+      const schema = buildCommandOutputSchema(POLICY_OUTPUT_SCHEMA);
+
+      // Action payload (set --json)
+      const setIo = testIo(fx.root, { kind: 'owner' });
+      const setCode = await runPolicy(
+        ['set', 'project', 'dev-mode', 'on', '--until', '2026-10-18T12:00:00Z', '--file', '.agents/team.yaml', '--json'],
+        setIo,
+        { home: fx.home, now: () => NOW },
+      );
+      expect(setCode).toBe(0);
+      const setParsed: unknown = JSON.parse(setIo.out);
+      expect(validateAgainstJsonSchema(setParsed, schema)).toEqual([]);
+      assertMatchesOutputSchema(setIo.out, POLICY_OUTPUT_SCHEMA);
+
+      // View payload (team policy --json)
+      const viewIo = testIo(fx.root, { kind: 'owner' });
+      const viewCode = await runPolicy(['--file', '.agents/team.yaml', '--json'], viewIo, { home: fx.home, now: () => NOW });
+      expect(viewCode).toBe(0);
+      const viewParsed: unknown = JSON.parse(viewIo.out);
+      expect(validateAgainstJsonSchema(viewParsed, schema)).toEqual([]);
+      const viewDoc = assertMatchesOutputSchema<{ status: string }>(viewIo.out, POLICY_OUTPUT_SCHEMA);
+      expect(viewDoc.status).toBe('ok');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test('gap-3: readTeamPolicySource and readSeatPolicySource read legacy team delivery_order: and seat delivery_order as unsigned declarations at their level', async () => {
+    const legacyTeamYaml = `${TEAM_YAML}delivery_order: [mcp-inbox, typed]\n`.replace(
+      '    launch: claude --model claude-opus-5-5\n    leads: true',
+      '    launch: claude --model claude-opus-5-5\n    leads: true\n    delivery_order: [typed]',
+    );
+    const fx = makeFixture(legacyTeamYaml);
+    try {
+      // 1. readTeamPolicySource reads legacy team delivery_order: as unsigned declaration at level team.
+      const teamRead = readTeamPolicySource(fx.home, fx.root);
+      expect(teamRead.ok).toBe(true);
+      if (teamRead.ok) {
+        expect(teamRead.policies).toEqual([
+          {
+            name: 'delivery-order',
+            value: ['mcp-inbox', 'typed'],
+            level: 'team',
+            setter: null,
+            date: null,
+            expiry: null,
+            kind: 'enforced',
+            target: fx.teamId,
+          },
+        ]);
+      }
+
+      // 2. readSeatPolicySource reads legacy seat deliveryOrder as unsigned declaration at level seat.
+      const validated = validateTeamFile(legacyTeamYaml);
+      if (!validated.ok) throw new Error(JSON.stringify(validated.errors));
+      const leadSeat = validated.team.seats.find((s) => s.name === 'lead')!;
+      const seatRead = readSeatPolicySource(fx.home, null, leadSeat);
+      expect(seatRead.ok).toBe(true);
+      if (seatRead.ok) {
+        expect(seatRead.policies).toEqual([
+          {
+            name: 'delivery-order',
+            value: ['typed'],
+            level: 'seat',
+            setter: null,
+            date: null,
+            expiry: null,
+            kind: 'enforced',
+            target: 'lead',
+          },
+        ]);
+      }
+
+      // 3. CLI view shows team level for legacy delivery_order:, and --seat lead shows seat level.
+      const teamViewIo = testIo(fx.root, { kind: 'owner' });
+      const teamViewCode = await runPolicy(['--file', '.agents/team.yaml'], teamViewIo, { home: fx.home, now: () => NOW });
+      expect(teamViewCode).toBe(0);
+      expect(teamViewIo.out).toMatch(/delivery-order\s+mcp-inbox, typed\s+team\s+-\s+-\s+enforced/);
+
+      const seatViewIo = testIo(fx.root, { kind: 'owner' });
+      const seatViewCode = await runPolicy(['--seat', 'lead', '--file', '.agents/team.yaml'], seatViewIo, {
+        home: fx.home,
+        now: () => NOW,
+      });
+      expect(seatViewCode).toBe(0);
+      expect(seatViewIo.out).toMatch(/delivery-order\s+typed\s+seat\s+-\s+-\s+enforced/);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test('set-time socket-accepted refusal names the level ("team policy: team: socket-accepted is not available in this release")', async () => {
+    const fx = makeFixture();
+    try {
+      const plan = planPolicySet(
+        fx.home,
+        {
+          level: 'team',
+          target: fx.teamId,
+          teamRoot: fx.root,
+          name: 'delivery-order',
+          value: 'socket-accepted,typed',
+        },
+        { now: NOW },
+      );
+      expect(plan).toEqual({
+        ok: false,
+        why: 'team: socket-accepted is not available in this release',
+      });
+
+      const io = testIo(fx.root, { kind: 'owner' });
+      const code = await runPolicy(
+        ['set', 'team', 'delivery-order', 'socket-accepted,typed', '--file', '.agents/team.yaml'],
+        io,
+        { home: fx.home, now: () => NOW },
+      );
+      expect(code).toBe(2);
+      expect(io.err).toContain('team policy: team: socket-accepted is not available in this release\n');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test('expiry reading is worded "<name> at <level> expired at <t>; read as unset", logged at most once per expired entry, and leaves the signed file untouched', async () => {
+    const fx = makeFixture();
+    try {
+      const expiryIso = '2026-10-17T12:00:05Z';
+      const setIo = testIo(fx.root, { kind: 'owner' });
+      const setCode = await runPolicy(
+        ['set', 'team', 'dev-mode', 'on', '--until', expiryIso, '--file', '.agents/team.yaml'],
+        setIo,
+        { home: fx.home, now: () => NOW },
+      );
+      expect(setCode).toBe(0);
+
+      const teamYamlPath = join(fx.root, '.agents', 'team.yaml');
+      const signedTeamYamlBefore = readFileSync(teamYamlPath, 'utf8');
+
+      // Read twice after expiry:
+      const t1 = new Date('2026-10-17T12:00:10Z');
+      const t2 = new Date('2026-10-17T12:00:18Z');
+      const view1 = testIo(fx.root, { kind: 'owner' });
+      expect(await runPolicy(['--file', '.agents/team.yaml'], view1, { home: fx.home, now: () => t1 })).toBe(0);
+
+      const view2 = testIo(fx.root, { kind: 'owner' });
+      expect(await runPolicy(['--file', '.agents/team.yaml'], view2, { home: fx.home, now: () => t2 })).toBe(0);
+
+      // Signed file is untouched on disk.
+      expect(readFileSync(teamYamlPath, 'utf8')).toBe(signedTeamYamlBefore);
+
+      // Log line is worded as a reading and written only once across the two reads.
+      const logLines = readFileSync(join(fx.root, '.agents', 'team.log'), 'utf8')
+        .trim()
+        .split('\n')
+        .filter((line) => line.includes('expired at'));
+      expect(logLines).toHaveLength(1);
+      expect(logLines[0]).toContain(`policy [owner] dev-mode at team expired at ${expiryIso}; read as unset`);
+
+      // Once the expiry has passed, team check shows ONE notice ("dev-mode expired at <t> for <level>; off since") as a note, not a difference.
+      const checkIo = testIo(fx.root, { kind: 'owner' });
+      const checkCode = runTeamCheck({ file: '.agents/team.yaml' }, checkIo, {
+        live: () => QUIET_LIVE,
+        branch: () => 'main',
+        standing: (at) => approvalStanding(at, fx.home),
+        now: () => t2,
+        home: fx.home,
+      });
+      expect(checkCode).toBe(0);
+      expect(checkIo.out).toContain(`note: dev-mode expired at ${expiryIso} for team; off since\n`);
+      expect(checkIo.out).toContain('0 difference(s)\n');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test('probes: seats-cross-teams tighten/refuse naming both levels; threshold equal/smaller/larger; delivery-order drop/reorder ok and add/duplicate/empty refused; unknown enforced vs advised; development-mode lowerLevelChooses; expired dev-mode still governed', () => {
+    // 1. seats-cross-teams: on -> off tightens; off -> on refused naming both levels.
+    const sctTight = resolvePolicy('seats-cross-teams', [
+      { name: 'seats-cross-teams', value: 'on', level: 'entity', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+      { name: 'seats-cross-teams', value: 'off', level: 'project', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(sctTight.ok).toBe(true);
+    if (sctTight.ok) {
+      expect(sctTight.effective.value).toBe('off');
+      expect(sctTight.effective.level).toBe('project');
+    }
+    const sctLoose = resolvePolicy('seats-cross-teams', [
+      { name: 'seats-cross-teams', value: 'off', level: 'project', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+      { name: 'seats-cross-teams', value: 'on', level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(sctLoose.ok).toBe(false);
+    if (!sctLoose.ok) {
+      expect(sctLoose.refusals[0]?.message).toContain('project');
+      expect(sctLoose.refusals[0]?.message).toContain('team');
+    }
+
+    // 2. Threshold equal, smaller, larger.
+    const thrEqual = resolvePolicy('state-blind-after-seconds', [
+      { name: 'state-blind-after-seconds', value: 240, level: 'entity', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+      { name: 'state-blind-after-seconds', value: 240, level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(thrEqual.ok).toBe(true);
+    const thrSmaller = resolvePolicy('state-blind-after-seconds', [
+      { name: 'state-blind-after-seconds', value: 240, level: 'entity', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+      { name: 'state-blind-after-seconds', value: 120, level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(thrSmaller.ok).toBe(true);
+    if (thrSmaller.ok) expect(thrSmaller.effective.value).toBe(120);
+    const thrLarger = resolvePolicy('state-blind-after-seconds', [
+      { name: 'state-blind-after-seconds', value: 120, level: 'entity', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+      { name: 'state-blind-after-seconds', value: 240, level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(thrLarger.ok).toBe(false);
+    if (!thrLarger.ok) {
+      expect(thrLarger.refusals[0]?.message).toContain('entity');
+      expect(thrLarger.refusals[0]?.message).toContain('team');
+    }
+
+    // 3. delivery-order: drop & reorder accepted; add, duplicate, empty refused.
+    const delivDropReorder = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['native', 'mcp-inbox', 'typed'], level: 'entity', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['typed', 'native'], level: 'project', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['native', 'typed'], level: 'team', setter: 'owner', date: '2026-10-17T11:30:00Z', kind: 'enforced' },
+    ]);
+    expect(delivDropReorder.ok).toBe(true);
+    if (delivDropReorder.ok) expect(delivDropReorder.effective.value).toEqual(['native', 'typed']);
+
+    const delivAdd = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['native', 'typed'], level: 'project', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['native', 'mcp-inbox', 'typed'], level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(delivAdd.ok).toBe(false);
+    if (!delivAdd.ok) {
+      expect(delivAdd.refusals[0]?.message).toContain('project');
+      expect(delivAdd.refusals[0]?.message).toContain('team');
+    }
+
+    const delivDup = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['typed', 'typed'], level: 'team', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+    ]);
+    expect(delivDup.ok).toBe(false);
+
+    const delivEmpty = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: [], level: 'team', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+    ]);
+    expect(delivEmpty.ok).toBe(false);
+
+    // 4. development-mode lowerLevelChooses; custom advised lower-level change refused; unknown enforced refused, unknown advised accepted.
+    const devChoice = resolvePolicy('development-mode', [
+      { name: 'development-mode', value: 'local-fast', level: 'entity', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'advised' },
+      { name: 'development-mode', value: 'pr-per-change', level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'advised' },
+    ]);
+    expect(devChoice.ok).toBe(true);
+    if (devChoice.ok) expect(devChoice.effective.value).toBe('pr-per-change');
+
+    const unknownEnforced = resolvePolicy('made-up-policy', [
+      { name: 'made-up-policy', value: 'on', level: 'team', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+    ]);
+    expect(unknownEnforced.ok).toBe(false);
+
+    const unknownAdvised = resolvePolicy('custom-house-rule', [
+      { name: 'custom-house-rule', value: 'keep PRs small', level: 'project', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'advised' },
+    ]);
+    expect(unknownAdvised.ok).toBe(true);
+    if (unknownAdvised.ok) {
+      expect(unknownAdvised.effective.value).toBe('keep PRs small');
+      expect(unknownAdvised.effective.kind).toBe('advised');
+    }
+
+    const customAdvisedLoosened = resolvePolicy('custom-house-rule', [
+      { name: 'custom-house-rule', value: 'keep PRs small', level: 'project', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'advised' },
+      { name: 'custom-house-rule', value: 'anything goes', level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'advised' },
+    ]);
+    expect(customAdvisedLoosened.ok).toBe(false);
+
+    // 5. Expired dev-mode still counts as governed (devModeGoverned: true, value: 'off').
+    const expiredDevChain = resolvePolicyChain(
+      {
+        entity: { ok: true, level: 'entity', target: 'floor', policies: [] },
+        project: { ok: true, level: 'project', target: 'beacon', policies: [] },
+        team: {
+          ok: true,
+          level: 'team',
+          target: 'tm_1',
+          policies: [
+            {
+              name: 'dev-mode',
+              value: 'on',
+              level: 'team',
+              setter: 'owner',
+              date: '2026-10-17T08:00:00Z',
+              expiry: '2026-10-17T10:00:00Z',
+              kind: 'enforced',
+            },
+          ],
+        },
+        seat: { ok: true, level: 'seat', target: null, policies: [] },
+      },
+      { now: NOW },
+    );
+    expect(expiredDevChain.ok).toBe(true);
+    expect(expiredDevChain.devModeGoverned).toBe(true);
+    if (expiredDevChain.ok) {
+      expect(expiredDevChain.policies['dev-mode']?.value).toBe('off');
+      expect(expiredDevChain.policies['dev-mode']?.level).toBe('default');
     }
   });
 });
