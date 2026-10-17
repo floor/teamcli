@@ -551,6 +551,19 @@ export const LIST_OUTPUT_SCHEMA: CommandSchemaSpec = {
     },
   },
 };
+/** Published `--json` output schema for `team init` (`schema/init.schema.json`). */
+export const INIT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.init',
+  fileName: 'init.schema.json',
+  title: 'team init --json output',
+  statuses: ['wrote', 'restored'],
+  required: ['file', 'restored'],
+  properties: {
+    file: { type: 'string', minLength: 1 },
+    restored: { type: 'boolean' },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
 
 /** Published `--json` output schema for `team grant` (`schema/grant.schema.json`). */
 export const GRANT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
@@ -677,6 +690,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
   RELOAD_OUTPUT_SCHEMA,
+  INIT_OUTPUT_SCHEMA,
 ];
 
 

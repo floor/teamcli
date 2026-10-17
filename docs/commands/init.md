@@ -8,13 +8,14 @@ well. A file that already exists is never overwritten.
 
 ## Synopsis
 
-    team init [--restore]
+    team init [--restore] [--json]
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--restore` | — | write the copy of the team file this machine last approved, instead of a skeleton |
+| `--json` | — | the same outcome as one JSON document (`team.init`) instead of the line |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -24,7 +25,7 @@ well. A file that already exists is never overwritten.
 | the owner, from a terminal outside herdr | run it |
 | a caller outside herdr whose ancestry names a create-grant's `runner` | run it, on the paths that record covers and before it expires; `--restore` is not granted |
 | a run with no terminal | nothing, unless a create-grant's `runner` names the caller: `team init: only the owner runs this, from a terminal outside herdr` |
-| a seat, or an agent-run CLI a runner record does not name | nothing: `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` |
+| a seat, or an agent-run CLI a runner record does not name | nothing: `team init: only the owner runs this, from a terminal outside herdr; this call is <caller>` |
 
 ## A create-grant's runner
 
@@ -68,13 +69,19 @@ one does.
 | refused: not the owner, the file is tracked or already there, or there is nothing to restore | `team init: <reason>` | 1 |
 | it can't run: not inside a git repository, or a bad option | `team init: <problem>`, with the usage for a bad option | 2 |
 
+`--json` prints one `team.init` document instead: `file` (`.agents/team.yaml`), `restored`
+(`false` for a skeleton, `true` for the approved copy), the outcome as `status` (`wrote` or
+`restored`), any collapsed notes, and the closing line as `action_summary`. A refusal under
+`--json` prints the `team.error` document on stdout — its `id` is the contract row for that
+refusal (`init.not-owner`, `init.exists`, …) — and nothing on stderr.
+
 ## Example
 
 A seat can't run it:
 
 ```console caller=agent
 $ team init ; echo "exit $?"
-team init: only the owner runs init, from a terminal outside herdr; this call is unplaced (it is run by an agent (claude) outside herdr)
+team init: only the owner runs this, from a terminal outside herdr; this call is unplaced (it is run by an agent (claude) outside herdr)
 exit 1
 ```
 

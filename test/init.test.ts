@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { firstLoggedInCli, init, runInit, skeleton } from '../src/commands/init.ts';
+import { firstLoggedInCli, init, runInit, skeleton, USAGE } from '../src/commands/init.ts';
 import { approvalDifferences, approvalOf } from '../src/approve/approval.ts';
 import { fingerprints } from '../src/approve/fingerprint.ts';
 import { version } from '../src/cli.ts';
@@ -12,6 +12,8 @@ import type { Profile } from '../src/profiles/profile.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { INIT_OUTPUT_SCHEMA } from '../src/output/schema.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 let base: string;
@@ -301,7 +303,7 @@ describe('team init', () => {
     for (const caller of [{ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' }, { kind: 'unplaced', reason: 'it runs in a herdr pane without an agent' }] as const) {
       const io = testIo(project, caller);
       expect(await init([], io)).toBe(1);
-      expect(io.err).toContain('only the owner runs init');
+      expect(io.err).toContain('only the owner runs this');
     }
     const noTty = testIo(project, { kind: 'owner-no-tty' });
     expect(await init([], noTty)).toBe(1);
@@ -334,6 +336,58 @@ describe('team init', () => {
     const io = testIo(project, owner);
     expect(await init(['--force'], io)).toBe(2);
     expect(io.err).toContain('unknown option --force');
+  });
+
+  test('--json writes the team.init envelope under the registered schema', async () => {
+    const io = testIo(project, owner);
+    expect(await runInit(['--json'], io, undefined, undefined, noLogin)).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, INIT_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      schema: { name: 'team.init', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'wrote',
+      action_summary: 'Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.',
+      file: '.agents/team.yaml',
+      restored: false,
+      notes: [],
+    });
+    expect(doc.session).toBeUndefined();
+    expect(USAGE).toContain('Exits 0 when the team file is written or restored');
+  });
+
+  test('--json: --restore is status restored', async () => {
+    const home = join(base, 'home');
+    const text = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
+    const result = validateTeamFile(text);
+    if (!result.ok) throw new Error('the example does not validate');
+    writeApproval(storePath(result.team.project, project, home), { approval: approvalOf(result.team, project), file: text }, [], home);
+    const io = testIo(project, owner);
+    expect(await runInit(['--restore', '--json'], io, home)).toBe(0);
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, INIT_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      status: 'restored',
+      file: '.agents/team.yaml',
+      restored: true,
+      action_summary: 'Restored .agents/team.yaml from the copy you last approved on this machine.',
+    });
+  });
+
+  test('--json: a caller refusal is the error envelope with the owner-only rule, stderr empty', async () => {
+    const io = testIo(project, { kind: 'seat', name: 'codex-acme', pane: 'w2:p1' });
+    expect(await runInit(['--json'], io, undefined, undefined, noLogin)).toBe(1);
+    expect(io.err).toBe('');
+    const doc = assertJsonErrorShape(io.out, { id: 'init.not-owner', messageContains: 'only the owner runs this' });
+    expect((doc.error as { rule?: string }).rule).toBe('owner-only');
+  });
+
+  test('--json: a bad option is the invocation row, with no usage in the document', async () => {
+    const io = testIo(project, owner);
+    expect(await runInit(['--force', '--json'], io, undefined, undefined, noLogin)).toBe(2);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, { id: 'init.invocation', messageContains: 'unknown option --force' });
+    expect(io.out).not.toContain('Usage:');
   });
 });
 
