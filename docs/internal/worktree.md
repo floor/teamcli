@@ -91,6 +91,25 @@ same user.
 either is refused before the flagged file or session is read at all. `list`, `new` and `remove` refuse
 the same way.
 
+## What it prints
+
+`list` prints the team's context line, its `TASK  BRANCH  PATH` table — a folder that is gone reads
+`<path> (gone)` — the note line `note: limit <n> (workspace.limit)` and the count
+`<n> worktree(s)`; it writes nothing. `new` prints the context line and
+`worktree <task>: created at <path>`, and `remove` the context line and
+`removed <task>; the branch <branch> is kept` — or, for a record whose folder was already gone,
+`removed the record of <task>; its folder was already gone. No branch was deleted.`
+
+Under `--json` each is one `team.worktree` v1 document on stdout, its `schema` tag first. `list`'s
+carries `format`, `project`, `session`, `notice` (null), `worktrees` — one
+`{ task, branch, path, session, seat, exists }` per record, `seat` null when none is recorded —
+`notes` (the `limit` line) and `summary` (`{ worktrees }`). `new` and `remove` carry `format`,
+`dry_run` (always false — neither has one), `status` (`created`, `removed`, or `record-gone` for a
+folder that was already gone), `action_summary` (the line above), `project`, `session`, `action`
+(`new` or `remove`), `task`, `branch` and `path`. A refusal under `--json` writes a `team.error`
+v1 document on stdout instead — the refusal's own `id`, its `message` and `repair`, and no usage
+text — and stderr stays empty. The exit code is the same as without `--json`.
+
 ## Refusals
 
 | Message | Exit |
