@@ -47,6 +47,29 @@ A route is one record before it is one answer: one JSON line is appended to the 
 address and its state and when. A record that cannot be written is a refusal — an address this CLI
 handed out is accountable, or it is not handed out. `--dry-run` answers the same and writes nothing.
 
+## Telling a seat to use it
+
+A team's `rules:` carries one item that wires a seat to both halves — the route first, the seat's
+own delivery to the session this answer prints, then the record:
+
+> - Deliver to another seat natively when `team route <seat>` admits the pair and answers
+>   `native yes` — route first, then your own cross-session SendMessage to the session the answer
+>   prints, then write the delivery down with `team send --record <seat> --channel native --ms <n>`
+>   — and fall back to plain `team send <seat> <message>` only on a definite failure, the route
+>   refused, the seat not Claude's, or your SendMessage call itself failed or reported no such
+>   session; a call that returned delivered the message, so record it native and never send it
+>   again however long an answer takes, and a delivery is recorded exactly once, by the path that
+>   delivered it.
+
+The item is quoted for the owner to paste — no team file ships with it, and this repository never
+writes one. A seat whose CLI is not Claude's never sees `native yes`, so the line reads to it as
+it always behaved, plain `team send`. Only a definite failure falls back: a missing, slow or
+absent answer is not a delivery signal, and the plain send that does fall back builds admission
+from the same records this command judges with, so it cannot deliver what a refusal refused. A
+Claude sender addresses the session by the name printed above, never the socket path: the `socket`
+column and its state are the audit's and a non-Claude dialer's, and `stale`, `unread` or `none` is
+a warning about the pane, never a reason to hand-dial.
+
 ## Output and exit codes
 
 | Outcome | Output | Exit |

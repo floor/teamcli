@@ -47,10 +47,25 @@ with `--json`. `--list` sends nothing: it prints the file's addressable seats. B
 in this build. Any seat's shell can run it — agy, grok, codex or claude — and it is the only path
 by which one agent types into another seat's pane: agents do not send keys through herdr.
 
+`team send --record <seat> --channel native --ms <n>` is the native channel's other half: the
+sender delivered with its own cross-session tool, and this writes that delivery down. Nothing is
+delivered here — no drop file, no frame, no pane — and no socket is opened or dialed; the one
+effect is one history line, `outcome: delivered` with `via: native`, carrying the span the sender
+measured itself in `--ms`. The recipient's record and admission are judged exactly as a plain
+send's, so a recorded delivery is never a way around the rules — only around the transport;
+`--channel` takes `native` only, `--wait` and `--timeout` are refused beside it, and the body is
+optional: given, it is recorded verbatim, and without it the line says the text did not pass
+through this CLI. Exit 0 prints `<seat>: recorded (native, <n> ms)` (`status: recorded`), and a
+record that cannot be written is a refusal, because nothing is claimed to have been delivered.
+[team route](route.md) answers the address such a delivery uses, and the rules item that wires a
+seat to it is under [The native channel](#the-native-channel) below.
+
 ## Synopsis
 
     team send <target> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send <target> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send --record <seat> --channel native --ms <N> [<message>] [--json] [--dry-run]
+    team send --record <seat> --channel native --ms <N> --file <path> [--json] [--dry-run]
     team send --list [--json]
 
 `<target>` names whom to reach: a seat of the caller's own team, or one of the registry forms
@@ -154,6 +169,27 @@ The record is read only once the rules above have refused, and it admits the sen
 caller — its `to` names the receiver, and `expires` is still ahead. A record that fails any of
 those, or a symbolic link, is not a grant: the send is refused as if the folder were empty.
 
+## The native channel
+
+When the recipient's CLI carries the cross-session channel, a sender can deliver with its own tool
+rather than this command's typed trigger or socket frame: [team route](route.md) admits the pair
+and answers the session to address, the sender calls its own SendMessage, and `--record` writes
+the delivery down. A team's `rules:` carries this as one item, quoted here for the owner to paste —
+no team file ships with it, and this repository never writes one:
+
+> - Deliver to another seat natively when `team route <seat>` admits the pair and answers
+>   `native yes` — route first, then your own cross-session SendMessage to the session the answer
+>   prints, then write the delivery down with `team send --record <seat> --channel native --ms <n>`
+>   — and fall back to plain `team send <seat> <message>` only on a definite failure, the route
+>   refused, the seat not Claude's, or your SendMessage call itself failed or reported no such
+>   session; a call that returned delivered the message, so record it native and never send it
+>   again however long an answer takes, and a delivery is recorded exactly once, by the path that
+>   delivered it.
+
+Only a definite failure falls back: a missing, slow or absent answer is not a delivery signal, and
+the plain send that does fall back builds admission from the same records `route` judges with, so
+it cannot deliver what a refusal refused.
+
 ## The sender header
 
 Every drop file opens with a header, written before the body: the sender's agent id, and the reach
@@ -174,6 +210,7 @@ was let through; the drop record carries the sender's id from day one.
 | held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
 | listed | 0 | one `<name>  <cli>  <role>` line per seat on stdout |
+| recorded | 0 | `<seat>: recorded (native, <n> ms)` on stdout, for a `--record` run |
 | timeout | 1 | `team send: <seat>: timeout: sent, no reply within <s>s; a seat which does not accept messages from other sessions holds the frame until a person lets it through` on stderr |
 | unreachable | 1 | `team send: <seat>: unreachable: <reason>` on stderr |
 | refused | 1 | `team send: refused: <reason>` on stderr |
