@@ -1834,6 +1834,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -1851,7 +1857,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team tempo <word>"
+        "team tempo <word> [--json]"
       ]
     },
     {
