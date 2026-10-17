@@ -46,6 +46,10 @@ capture that is not kept here.
   limit screen could be provoked. The binary's strings name `model failed: usage limit reached`.
 - `unknown`: not produced, the screen after `/exit` was not captured, so the profile declares no
   shell-return screen. No exit-typed capture exists either.
+- `question`: not produced, the spike's providers (the built-in echo provider and a local mock
+  server) never asked the person a question, and the installed binary is 1.4.10, newer than this
+  folder's 1.4.9. The capture waits for a refresh to the installed version with a provider that
+  asks one.
 
 Not captured, and so not declared in the profile: the files muse reads from the working folder at
 start (`startup_reads`), a question screen from the model asking the person something, and a

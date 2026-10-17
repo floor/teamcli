@@ -1,0 +1,17 @@
+cursor-agent --force --sandbox disabled --trust
+❯ cursor-agent --force --sandbox disabled --trust
+
+
+  Cursor Agent
+  v2026.10.14-0f9edde
+  Tip: Use /plan to iterate on an implementation 
+  plan before code changes.
+
+
+
+                                                    
+  → Fix the failing test                            
+                                                    
+
+  Grok 4.7 256K High                 Run Everything
+  <workspace>                      · main

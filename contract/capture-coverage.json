@@ -144,17 +144,17 @@
         "undocumented": 0
       },
       "working": {
-        "real": 1,
+        "real": 2,
         "constructed": 0,
         "undocumented": 0
       },
       "unsent": {
-        "real": 14,
+        "real": 15,
         "constructed": 0,
         "undocumented": 0
       },
       "permission": {
-        "real": 1,
+        "real": 2,
         "constructed": 1,
         "undocumented": 0
       },
@@ -169,7 +169,7 @@
         "undocumented": 0
       },
       "trust": {
-        "real": 3,
+        "real": 4,
         "constructed": 0,
         "undocumented": 0
       },
@@ -189,7 +189,7 @@
         "undocumented": 0
       },
       "unknown": {
-        "real": 9,
+        "real": 10,
         "constructed": 2,
         "undocumented": 0
       }
@@ -206,7 +206,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 23,
+        "real": 24,
         "constructed": 0,
         "undocumented": 0
       },
@@ -423,14 +423,823 @@
       }
     }
   },
+  "versions": {
+    "antigravity": {
+      "tested": {
+        "from": "1.2.16",
+        "to": "1.3.5"
+      },
+      "byVersion": {
+        "1.2.16": {
+          "idle": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 3,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 3,
+            "constructed": 2,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 1,
+            "constructed": 1,
+            "undocumented": 0
+          }
+        },
+        "1.3.5": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        }
+      }
+    },
+    "claude-code": {
+      "tested": {
+        "from": "2.1.288",
+        "to": "2.1.299"
+      },
+      "byVersion": {
+        "2.1.289": {
+          "idle": {
+            "real": 2,
+            "constructed": 1,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 3,
+            "constructed": 2,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 8,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 4,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 4,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        },
+        "2.1.299": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        }
+      }
+    },
+    "codex": {
+      "tested": {
+        "from": "0.157.0",
+        "to": "0.161.0"
+      },
+      "byVersion": {
+        "0.157.0": {
+          "idle": {
+            "real": 2,
+            "constructed": 2,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 8,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 1,
+            "constructed": 1,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 3,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 2,
+            "constructed": 2,
+            "undocumented": 0
+          }
+        },
+        "0.160.0": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 5,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 7,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        },
+        "0.161.0": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        }
+      }
+    },
+    "cursor": {
+      "tested": {
+        "from": "2026.10.01",
+        "to": "2026.10.14"
+      },
+      "byVersion": {
+        "2026.10.01": {
+          "idle": {
+            "real": 10,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 4,
+            "constructed": 5,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 22,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 3,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        },
+        "2026.10.14": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        }
+      }
+    },
+    "gemini": {
+      "tested": {
+        "from": "0.64.0",
+        "to": "0.64.0"
+      },
+      "byVersion": {
+        "0.64.0": {
+          "idle": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 3,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        }
+      }
+    },
+    "grok": {
+      "tested": {
+        "from": "1.0.50",
+        "to": "1.0.52"
+      },
+      "byVersion": {
+        "1.0.50": {
+          "idle": {
+            "real": 3,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 5,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        },
+        "1.0.52": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        }
+      }
+    },
+    "muse": {
+      "tested": {
+        "from": "1.4.9",
+        "to": "1.4.9"
+      },
+      "byVersion": {
+        "1.4.9": {
+          "idle": {
+            "real": 4,
+            "constructed": 2,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        }
+      }
+    }
+  },
   "notProduced": {
-    "antigravity": {},
-    "claude-code": {},
-    "codex": {},
+    "antigravity": {
+      "unsent": "the installed binary 1.4.0 is newer than this folder's 1.3.5"
+    },
+    "claude-code": {
+      "unsent": "the installed binary 2.1.302 is newer than this folder's 2.1.299"
+    },
+    "codex": {
+      "question": "Codex has no interactive question widget in unattended or   default mode"
+    },
     "cursor": {},
     "gemini": {},
-    "grok": {},
+    "grok": {
+      "unsent": "the installed binary 1.0.60 is newer than this folder's 1.0.52",
+      "trust": "a fresh directory showed no trust dialog on this CLI"
+    },
     "muse": {
+      "question": "the spike's providers (the built-in echo provider and a local mock   server) never asked the person a question",
       "rate limit": "the Power plan stood at `0% used` on both windows throughout",
       "unknown": "the screen after `/exit` was not captured"
     }
@@ -1079,9 +1888,39 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/exit.txt",
+      "cli": "codex",
+      "kind": "unknown",
+      "provenance": "capture"
+    },
+    {
       "file": "codex/0.161.0/idle.txt",
       "cli": "codex",
       "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/permission.txt",
+      "cli": "codex",
+      "kind": "permission",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/trust.txt",
+      "cli": "codex",
+      "kind": "trust",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/unsent.txt",
+      "cli": "codex",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/working.txt",
+      "cli": "codex",
+      "kind": "working",
       "provenance": "capture"
     },
     {
@@ -1400,6 +2239,12 @@
       "file": "cursor/2026.10.14/trust.txt",
       "cli": "cursor",
       "kind": "trust",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.14/unsent.txt",
+      "cli": "cursor",
+      "kind": "unsent",
       "provenance": "capture"
     },
     {
