@@ -12,7 +12,7 @@ It reads the team file, the approval, the state and herdr, and changes nothing �
 needed, so it answers as well in a plain folder as in a repository. It is not
 [`team status`](status.md) with fewer lines: status answers *what the team is* — the rows, the
 budgets, every difference and note — and the check answers *what to act on*: the differences
-alone, each with its repair.
+alone, each with its repair, and the one note a file can earn.
 
 `team check` is also the old name of the two commands that took its halves —
 [`team commits check`](commits.md) and [`team pr check`](pr.md). A line that spells one of
@@ -118,12 +118,19 @@ keeps beside the file it read — for every caller, the owner included.
 
 ## Output
 
-One line per finding, its repair under it, then the closing count; the check prints no seat
-table, no budget block and no notes:
+One line per finding, its repair under it, then the closing count; a note, where the file earns
+one, prints above the findings. The check prints no seat table and no budget block:
 
+    note: main/w9:p3's delegate entry names approve, which no command acts on since team approve was removed; drop it from the file
     difference: claude-beacon is in the file and is not running
       repair: the owner runs team up
     team check: 1 difference(s), 1 for the owner
+
+The note is earned by a `delegates` entry still naming `approve`: `team approve` was removed,
+and the word stays accepted only so a file that already names it loads unchanged. It is a note
+and not a finding — in neither the closing count nor the exit code, so a file whose only note is
+this one still answers `team check: nothing wrong`, and the repair it asks for is the file:
+one word shorter.
 
 The closing line counts the differences and, after a comma, how many of their repairs are the
 owner's. With nothing to act on it is `team check: nothing wrong`.
@@ -143,8 +150,8 @@ this release does not close, said where the check runs rather than left to be di
       No policy object yet (amendment 02)
 
 The readers are agents too, so this text is the contract: one `difference:` line per finding,
-its `  repair:` line under it, the closing count line, the `not known:` line, and the block
-under both answers. A finding never quotes a seat's screen text beyond the profile's fixed
+its `  repair:` line under it, the closing count line, the `note:` line for each note the file
+earns (above the findings), the `not known:` line, and the block under both answers. A finding never quotes a seat's screen text beyond the profile's fixed
 words for the kind of screen it is.
 
 ## Examples, moved here whole

@@ -180,6 +180,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home }),
   ]);
   const differences = comparison.differences;
+  // The notes print above the differences, as `team status` prints them: a note names something
+  // worth acting on without counting it wrong — it is not in the total and does not change the exit.
+  for (const note of delegateNotes(team)) io.stdout(`note: ${note}\n`);
   for (const difference of differences) {
     io.stdout(`difference: ${difference.what}\n  repair: ${difference.repair}\n`);
   }
@@ -231,6 +234,21 @@ function devModeDifferences(team: TeamFile, root: string, home: string | undefin
     });
   }
   return out;
+}
+
+/**
+ * The check's notes: what it names without counting it wrong. A `delegates` entry naming `approve`
+ * is one — `team approve` was removed, and the word is still accepted only so a file that already
+ * names it loads unchanged, so the file carries a stale word to drop. A note prints above the
+ * differences, is counted in neither their total nor the exit code, and names the entry's pane.
+ */
+function delegateNotes(team: TeamFile): string[] {
+  const notes: string[] = [];
+  for (const delegate of team.delegates ?? []) {
+    if (!delegate.commands.includes('approve')) continue;
+    notes.push(`${delegate.pane}'s delegate entry names approve, which no command acts on since team approve was removed; drop it from the file`);
+  }
+  return notes;
 }
 
 /**
