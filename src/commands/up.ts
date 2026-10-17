@@ -1591,6 +1591,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       workspacePanes: launch.workspacePanes ? (session, workspace) => launch.workspacePanes!(session, workspace) : undefined,
       classify: (name, pane, cli) => readScreen(cli, launch.paneText(name, pane) ?? undefined).kind,
       paneText: (session, pane) => launch.paneText(session, pane),
+      foreground: (session, pane) => launch.foreground(session, pane),
       shellBack: (session, pane) => launch.shellBack?.(session, pane) ?? null,
       agentStatus: (session, pane) => launch.agentStatus?.(session, pane) ?? null,
       processInfo: (session, pane) => launch.processInfo?.(session, pane) ?? null,

@@ -66,6 +66,8 @@ export type Op =
       do: 'rename';
       seat: string;
       label: string;
+      /** The seat's CLI: its profile's process names tell a pane herdr has not listed yet. */
+      cli?: string;
       seconds: number;
       rules: 'option' | 'message' | 'prepend';
       pane?: string;
@@ -617,6 +619,7 @@ export function upPlan(input: UpInput): Step[] {
           do: 'rename',
           seat: seat.name,
           label: seat.label,
+          cli: seat.cli,
           seconds: profile.idleTimeout,
           rules,
           pane: seat.pane,

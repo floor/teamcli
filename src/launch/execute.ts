@@ -1,4 +1,5 @@
 import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
+import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, versionVerdict } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, seatModel, type Running } from '../status/statusline.ts';
@@ -93,6 +94,10 @@ export type Host = {
   classify(session: string, pane: string, cli: string): ScreenKind;
   /** The pane's visible text, ANSI styling and all, or null when the pane can't be read. */
   paneText?(session: string, pane: string): string | null;
+  /** The pane's foreground argv0 names, or null when the pane can't be read. The rename step
+   *  reads it for a CLI herdr lists as an agent only after the rename: the pane's own process
+   *  names the CLI there, and the pane is named by its id. */
+  foreground?(session: string, pane: string): string[] | null;
   /** Whether the pane's foreground program is back to its shell; null when herdr can't tell. */
   shellBack?(session: string, pane: string): boolean | null;
   /** The status herdr reports for the pane's agent; null when herdr can't tell. Read when the
@@ -1080,18 +1085,32 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'has no pane to name; left at launched' });
           break;
         }
+        // Herdr lists a pane as an agent once it recognises the CLI in it; some CLIs (the jules
+        // TUI) are recognised only after the rename, so waiting for the list alone never ends.
+        // The pane's own foreground process names the CLI in that case: the pane is named by
+        // its id, which is what `renameAgent` takes either way. The agent list stays the first
+        // reading, and an unreadable pane is neither.
+        const processNames = op.cli ? profileFor(op.cli)?.processNames ?? [] : [];
+        const listed = (): boolean => host.agentPanes(session)?.includes(here.pane) === true;
+        const runsCli = (): boolean =>
+          reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames);
         const seen = await until(
           op.seconds,
           2000,
           host,
-          () => host.agentPanes(session)?.includes(here.pane) === true,
+          () => listed() || runsCli(),
           sharedSleep,
           () => stopped,
         );
         if (stopped) break;
-        if (!seen || !host.renameAgent(session, here.pane, op.seat)) {
+        if (!seen) {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'was not in the agent list in time; left at launched' });
+          break;
+        }
+        if (!host.renameAgent(session, here.pane, op.seat)) {
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'was not named in time; left at launched' });
           break;
         }
         host.record(op.seat, {
