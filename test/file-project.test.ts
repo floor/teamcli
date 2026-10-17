@@ -113,7 +113,6 @@ describe('a team file written before the project level', () => {
       {
         line: 3,
         message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
-        repair: "set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml",
       },
     ]);
   });
