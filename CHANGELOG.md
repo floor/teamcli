@@ -230,6 +230,36 @@ commands read them.
   check whose herdr cannot answer drops nothing; a temporary seat is never a leftover, and neither
   is the file's own session or the one the run checks.
 
+<!-- rc.4 draft: `team rename` — no command on any branch yet; verify the caller, the flags and the id/grant/lease carry when it lands, then remove this line -->
+- **`team rename <old> <new>`.** A seat is renamed in place rather than removed and added: the
+  command re-points the seat's agent record at the new name, so the seat keeps its id and the
+  grants written against that id still stand, and moves the seat's leases with it. The registry
+  roster and the running line follow the new name, so a rename no longer leaves a stale
+  `running` entry behind; the old name stops resolving as an address, and a new name another
+  seat's nickname already holds is refused under the same uniqueness rules a nickname keeps.
+
+<!-- rc.4 draft: seat addresses and nicknames — built on b3-rename (08884035, 62d7c006, 1155bb24, 25690b9d); verify on the integrated tip, then remove this line -->
+- **Seat addresses, and the nickname a seat carries.** A seat may write a `nickname:` — its
+  human name in the team — which takes the seat name's characters, is unique in its team, may
+  not be another seat's name, and is refused when the file loads; a counted entry may not carry
+  one, and the field is part of the seat's digest, omitted from a seat that writes none, so an
+  existing approval stays the one it sealed. `team seats` and `team status --all` show it as a
+  NICKNAME column, `team send --list` shows it after the project, and the launch projects it
+  into the team's registry roster, so another team of the entity reads it without loading this
+  team's file. A send spec is a seat or a nickname of that team before the `@`, an empty target
+  is the team's own address — its lead, the seat its file marks `leads: true` — or an agent
+  id; a bare seat or nickname resolves in the caller's team. A role is never an address, and a
+  spec two entries answer is refused naming both, before anything is typed. Every form resolves
+  to one seat's registry id before admission, which still judges that seat; the history keeps
+  the address as written beside the seat it resolved to, and `team feed --json` carries both.
+  `team send --list` lists the entity's other teams' seats as `<seat>@<team>` — spelled as they
+  are addressed, with the record's CLI, the roster's role, the project and a stopped marker.
+
+<!-- rc.4 draft: the `jules` profile (Jules cut 1) — not built yet (b5-jules empty); verify the screen reading, flags, login check and tested range when it lands, then remove this line -->
+- **The `jules` launch profile.** The Jules TUI joins the launch profiles as a pane seat: a
+  seat whose `cli:` is `jules` launches it in its pane like the others, with its own screen
+  reading, unattended flags, a login check where the CLI offers one, and a tested range.
+
 ### Changed
 
 - The file in the clone is the record: the commands read it, and `add`, `remove` and `down` keep
@@ -267,6 +297,31 @@ commands read them.
 - `team worktree` gains `list` and `remove --branch <name>`, and reads the live file's workspace
   values. `team release check` warns when npm's `next` dist-tag points below `latest` and prints
   the exact `npm dist-tag add` command, without running it.
+
+<!-- rc.4 draft: held-send retry — built on fix/held-send-retry (cda62995, 3912d6ee); verify on the integrated tip, then remove this line -->
+- A held send is retried, not abandoned. When a send leaves its drop because the seat's composer
+  held text, the seat did not take the trigger, or a dialog was up, send writes a pending record
+  beside the drop, and a running watch delivers it on a later pass — only when the pane reads
+  `idle` or `done` and the box is free, under the seat's lock, so it cannot interleave with a
+  new send. A trigger the failed send left unsent is submitted with the Enter and never typed
+  over. The retry is bounded to three attempts within thirty minutes, and its delivery goes
+  into the history; when it gives up, the watch names the seat, the drop path and that the
+  sender should send it again. A record whose drop file was moved or removed is given up on
+  rather than typed, and the age bound is applied before the pane is looked for, so a vanished
+  seat's record still ages out with the give-up line. The sender's held, not-submitted and
+  dialog lines name the drop path and the retry, and a dialog's line reads `unreachable now
+  (the screen reads <kind>); a running watch retries it when the seat is idle`.
+
+<!-- rc.4 draft: check --repair redirect — built at 58fbcbc0, merged to rc4-families as abc92eb4; verify on the integrated tip, then remove this line -->
+- `team check --repair` settles every finding the file alone can settle, in one owner-signed
+  run: besides the state's leftovers, it re-records each seat an agent registered under dev
+  mode, clearing the mark the way an owner's `team register <seat>` does, and sets herdr's
+  drifted workspace label and display line back from the file through the same two writes
+  `team register` makes. Each written line is printed as `repaired:` and logged as its phase
+  finishes, and a sidebar write the session refuses prints the line it could not report. A
+  model drift keeps its relaunch advice: the repair never starts, stops or relaunches a seat,
+  and it stays owner-only. Under a governing dev-mode policy the check's rows still collapse to
+  one quiet count, and `--repair` clears the marks behind it.
 
 ### Removed
 
