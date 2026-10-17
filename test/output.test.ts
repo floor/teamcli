@@ -803,6 +803,40 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           notes: [],
         }),
       ],
+      'team.usage': [
+        jsonEnvelope('team.usage', {
+          format: 1 as const,
+          at: '2026-10-17T12:00:00.000Z',
+          view: 'restricted' as const,
+          mine: 'beacon',
+          counts: { teams: 1, labs: 2, accounts: 2 },
+          labs: [
+            {
+              lab: 'anthropic',
+              accounts: [{
+                account: 'anthropic',
+                kind: 'subscription' as const,
+                readable: true,
+                teams: [],
+                machine: { window: 'session' as const, left: 80, used: 20, resetsIn: '2h', source: 'status_line' },
+              }],
+            },
+            { lab: 'deepseek', accounts: [], seats: 11 },
+          ],
+          quota: {
+            format: 1,
+            accountsFile: '~/.config/team/accounts.yaml',
+            labs: [],
+            advice: 'no readings yet: no seat status line and no CLI usage command has answered',
+          },
+          unknown: [],
+          notes: [{ scope: 'team', why: 'its file could not be read' }],
+          teams: [{
+            team: 'beacon',
+            seats: [{ seat: 'claude-keeper', cli: 'claude-code', account: 'anthropic' }],
+          }],
+        }),
+      ],
       'team.worktree': [
         jsonEnvelope('team.worktree', {
           format: 1 as const,

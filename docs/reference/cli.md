@@ -1243,7 +1243,7 @@ Hidden: no
 
 Usage:
 
-    team usage [--json] [--all]
+    team usage [--json] [--all] [--tree]
 
 ### Flags
 
@@ -1252,6 +1252,7 @@ Usage:
 | `--all` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--tree` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

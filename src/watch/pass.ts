@@ -457,13 +457,17 @@ export function pass({
     const declared = team.seats.find((one) => one.name === seat.name)
       ?? team.seats.find((one) => one.name === state.seats[seat.name]?.temporary?.like);
     for (const figure of seat.quota) {
-      if (declared && seat.identity !== 'gone' && seat.identity !== 'replaced') {
-        const pool = payingPoolOf(declared);
-        machineReadings.push({ ...figure, account: payingAccountOf(declared), ...(pool ? { pool } : {}) });
-      }
       const payer = declared === undefined ? seat.account : payingAccountOf(declared);
       const backing = declared === undefined ? seat.vendor : payingAccountOf({ ...declared, account: undefined });
       const account = figure.account === backing ? payer : figure.account === seat.vendor ? seat.account : figure.account;
+      if (declared && seat.identity !== 'gone' && seat.identity !== 'replaced') {
+        const pool = payingPoolOf(declared);
+        // The figure is stored under the account it MEASURES, never under the account that pays
+        // the seat: a DeepSeek seat on Claude Code shows the Claude subscription's own L:/W:
+        // bar, and that bar is Anthropic's reading. Storing it under the paying account is what
+        // made the report read another subscription's figure as DeepSeek's (owner, 2026-10-17).
+        machineReadings.push({ ...figure, account, ...(pool ? { pool } : {}) });
+      }
       const entry = budgets.accounts[account];
       if (entry !== undefined ? entry.sources.includes('status_line') : machineAccounts.includes(account) && (figure.account === backing || figure.account === payer)) {
         readings = observe(readings, { ...figure, account }, seat.name, now);

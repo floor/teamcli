@@ -1592,6 +1592,38 @@ export const PR_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team usage` (`schema/usage.schema.json`): the machine's
+ *  report, envelope-first. Its machine rows and quota block are the report's own DTO, whose inner
+ *  objects are rendered by the same two faces that read them, so the schema pins the document's
+ *  frame and the counts it closes on, the way `team status`'s schema pins its frame. */
+export const USAGE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.usage',
+  fileName: 'usage.schema.json',
+  title: 'team usage --json output',
+  required: ['format', 'at', 'view', 'mine', 'counts', 'labs', 'quota', 'unknown', 'notes', 'teams'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    at: { type: 'string', minLength: 1 },
+    view: { type: 'string', enum: ['full', 'restricted'] },
+    mine: { type: ['string', 'null'] },
+    counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['teams', 'labs', 'accounts'],
+      properties: {
+        teams: { type: 'integer', minimum: 0 },
+        labs: { type: 'integer', minimum: 0 },
+        accounts: { type: 'integer', minimum: 0 },
+      },
+    },
+    labs: { type: 'array', items: { type: 'object' } },
+    quota: { type: 'object' },
+    unknown: { type: 'array', items: { type: 'object' } },
+    notes: { type: 'array', items: { type: 'object' } },
+    teams: { type: 'array', items: { type: 'object' } },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -1632,6 +1664,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   WORKTREE_OUTPUT_SCHEMA,
   COMMITS_OUTPUT_SCHEMA,
   PR_OUTPUT_SCHEMA,
+  USAGE_OUTPUT_SCHEMA,
 ];
 
 

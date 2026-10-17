@@ -20,12 +20,13 @@ import { mayLaunchSeats, walkCaller, type Caller } from '../src/caller.ts';
 import { runStatus } from '../src/commands/status.ts';
 import { NO_PROJECT, runUsage, USAGE } from '../src/commands/usage.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { machineAccountsPath } from '../src/information/machine-accounts.ts';
 import {
   machineUsage,
-  NOTHING_COUNTED,
   NOT_VERIFIED,
   reportOf,
   reportText,
+  tildify,
   UNBOUND_ACCOUNT,
   UNBOUND_SHAPE,
   viewFor,
@@ -60,31 +61,73 @@ const READINGS = {
   'openai/weekly/lead': { account: 'openai', window: 'weekly', left: 5, used: 95, changedAt: '2026-10-04T08:58:00Z', resetsAt: '2026-10-04T09:44:00Z', seat: 'lead', source: 'status_line', confirmed: true, was: { left: 10.3, at: '2026-10-04T07:58:00Z' } },
 };
 
-// The report the fixture reads, byte for byte: the machine's counts, one line per account+window
-// with the newest figure any team's reading holds, the caller's own row under each line, the
-// why-lines for the accounts that read unknown everywhere, and the watch clause on every line
-// whose newest team has no watch recording. The pace word rides the machine line after its state
-// clause and every row after its figure: a real pace where the reading carries a point, and the
-// tool's own `pace not known` where there is none — the check line's reading has none, and the
-// daily line's point was dropped with its window. A restricted line whose newest reading is
-// another team's drops the element outright — the pace is that team's, withheld, and nothing
-// stands in its place. A caller who is not the owner reads the same bytes here as the owner does
-// — this fixture has one team.
-const REPORT = [
-  'usage on this machine, 1 team, 2 labs, 2 accounts',
-  '',
-  'anthropic  unknown',
-  '  acme    unknown  pace not known',
-  'openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known  (no watch is recording for acme)',
-  '  acme    session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known',
-  'openai  daily  left 70%  used 30%  resets unknown  lead  last seen 40m ago  status line (fallback)  stale  pace not known  (no watch is recording for acme)',
-  '  acme    daily  left 70%  used 30%  resets unknown  lead  last seen 40m ago  status line (fallback)  stale  pace not known',
-  'openai  weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h  (no watch is recording for acme)',
-  '  acme    weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h',
+// The report the fixture reads by default, byte for byte: the machine's counts, one line per
+// account+window with the newest figure any team's reading holds, the caller's own row under each
+// line, and the why-lines for the accounts that read unknown everywhere, the watch clause on every
+// line whose newest team has no watch recording, the caller's own team block and the machine's
+// count line. The pace word rides the machine line after its state clause and every row after its
+// figure: a real pace where the reading carries a point, and the tool's own `pace not known` where
+// there is none — the check line's reading has none, and the daily line's point was dropped with
+// its window. A restricted line whose newest reading is another team's drops the element outright
+// — the pace is that team's, withheld, and nothing stands in its place. A caller who is not the
+// owner reads the same bytes here as the owner does — this fixture has one team. The quota tree is
+// the second face (`--tree`, `REPORT` below): the default report is this table alone (owner,
+// 2026-10-17).
+const TABLE = [
+  'ACCOUNT    WINDOW   LEFT  USED  RESETS   RESERVE             READ                     SOURCE                  STATE',
+  'anthropic  -        -     -     -        -                   -                        -                       unknown',
+  'openai     session  40%   60%   in 44m   -                   -  read 2m ago           check                   ok  pace not known  (no watch is recording for acme)',
+  'openai     daily    70%   30%   unknown  -                   lead  last seen 40m ago  status line (fallback)  unknown  pace not known  stale  (no watch is recording for acme)',
+  'openai     weekly   5%    95%   in 44m   inside reserve 20%  lead  changed 2m ago     status line (fallback)  near cap  pace 5.3%/h  (no watch is recording for acme)',
+  '  anthropic  acme  unknown  pace not known',
+  '  openai  acme  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known',
+  '  openai  acme  daily  left 70%  used 30%  resets unknown  lead  last seen 40m ago  status line (fallback)  stale  pace not known',
+  '  openai  acme  weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h',
+  'advice: no readings yet: no seat status line and no CLI usage command has answered',
   '',
   'acme',
+  '  SEAT  CLI          ACCOUNT',
   '  lead  claude-code  anthropic',
+  '',
+  'usage on this machine, 1 team, 2 labs, 2 accounts',
 ].join('\n');
+
+// The quota block: this machine's watch store holds no reading and no live source answers a
+// test's own run (`observe` is absent from its sources), so both declared accounts read unknown
+// and the advice says so. The seats are the file's own: the lead pays `anthropic` by its vendor.
+const QUOTA = [
+  'quota',
+  '  anthropic  unknown',
+  '    anthropic  unknown  seats: lead',
+  '      not known: no reading yet',
+  '  openai  unknown',
+  '    openai  unknown',
+  '      not known: no reading yet',
+  'advice: no readings yet: no seat status line and no CLI usage command has answered',
+].join('\n');
+
+/** The same report under `--tree`: the table, one blank line, the quota tree, one blank line, and
+ *  the project block the table already ends with. The default view's one advice line is the quota
+ *  block's own when the tree prints it, so it stands in the block, never twice. */
+const ADVICE = 'advice: no readings yet: no seat status line and no CLI usage command has answered';
+const REPORT = TABLE.replace(`${ADVICE}\n`, '').replace('\n\nacme\n', `\n\n${QUOTA}\n\nacme\n`);
+
+/** The zero-config account a lab its seats draw on prints before any reading: one account named
+ *  after the lab, `unknown` with no window, and readable by the same rule a declared account's
+ *  line is — the accounts a CLI screen on this machine can expose a figure for. */
+function synthesized(lab: string, readable: boolean): Record<string, unknown> {
+  return {
+    account: lab,
+    kind: 'subscription',
+    readable,
+    teams: [],
+    machine: {
+      window: null, left: null, used: null, resetsIn: null, changedAt: null, age: null,
+      source: null, fallback: false, state: 'unknown', inside: false, reserve: null,
+      pace: null, other: false, seat: null,
+    },
+  };
+}
 
 let base: string;
 let root: string;
@@ -209,6 +252,12 @@ function expectNoDerivedPath(faces: readonly string[], why?: string, allowed: re
   }
 }
 
+/** The report's per-team rows: the two-space list lines under the machine table, whose second
+ *  field is the team's name (the table's own rows start at column 0 and lead with the account). */
+function teamRowsOf(text: string, team: string): string[] {
+  return text.split('\n').filter((line) => line.startsWith('  ') && line.split('  ')[2] === team);
+}
+
 /** The rows under a heading: the two-space lines that follow the line `after`. */
 function rowsUnder(text: string, after: string): string[] {
   const lines = text.split('\n');
@@ -328,7 +377,7 @@ describe('team usage', () => {
         expect(report.teams).toHaveLength(all ? 2 : 1);
 
         const text = (await usageAt(cwd, OWNER, ...args)).out;
-        const teamRows = text.split('\n').filter((line) => line.startsWith('  acme  '));
+        const teamRows = teamRowsOf(text, 'acme');
         expect(teamRows.some((line) => line.includes('left 75%'))).toBe(true);
         expect(teamRows.some((line) => line.includes('75.00 USD'))).toBe(true);
         expect(teamRows.some((line) => line.includes('left 25%'))).toBe(all);
@@ -362,7 +411,13 @@ describe('team usage', () => {
     withState();
     const mine = await usageAt(root);
     expect(mine.err).toBe('');
-    expect(mine.out).toBe(`${REPORT}\n`);
+    // The default report is the table alone: no quota tree behind it. The tree is the second
+    // face, asked for by name (owner, 2026-10-17).
+    expect(mine.out).toBe(`${TABLE}\n`);
+    expect(mine.out).not.toContain('quota\n');
+    const tree = await usageAt(root, undefined, '--tree');
+    expect(tree.err).toBe('');
+    expect(tree.out).toBe(`${REPORT}\n`);
     expect(mine.code).toBe(0);
 
     // The caller's own rows are `status`'s own, over the same state: the fresh, unknown and
@@ -377,7 +432,7 @@ describe('team usage', () => {
       home,
     });
     const statusRows = rowsUnder(io.out, 'budgets:');
-    const ownRows = mine.out.split('\n').filter((line) => line.startsWith('  acme  '));
+    const ownRows = teamRowsOf(mine.out, 'acme');
     expect(statusRows.length).toBeGreaterThan(0);
     expect(ownRows.length).toBe(statusRows.length);
     // The pace word rides after the figure text (`pace 5.3%/h`, `pace not known`, § 3-S3): with
@@ -396,6 +451,7 @@ describe('team usage', () => {
     const doc = JSON.parse(out) as Record<string, unknown>;
     expect(code).toBe(0);
     expect(doc).toEqual({
+      schema: { name: 'team.usage', version: 1 },
       format: 1,
       at: '2026-10-04T09:00:00.000Z',
       view: 'restricted',
@@ -443,6 +499,26 @@ describe('team usage', () => {
       ],
       unknown: [],
       notes: [],
+      // The quota view: no machine reading and no live source in a test's own run, so both
+      // declared accounts are unknown, the lead is the one seat on its vendor's account, and the
+      // advice says what is missing rather than inventing a figure.
+      quota: {
+        format: 1,
+        accountsFile: '~/.config/team/accounts.yaml',
+        labs: [
+          {
+            lab: 'anthropic',
+            state: 'unknown',
+            accounts: [{ account: 'anthropic', state: 'unknown', windows: [], seats: ['lead'], wallResets: null }],
+          },
+          {
+            lab: 'openai',
+            state: 'unknown',
+            accounts: [{ account: 'openai', state: 'unknown', windows: [], seats: [], wallResets: null }],
+          },
+        ],
+        advice: 'no readings yet: no seat status line and no CLI usage command has answered',
+      },
       teams: [{ team: 'acme', seats: [{ seat: 'lead', cli: 'claude-code', account: 'anthropic' }] }],
     });
   });
@@ -504,7 +580,7 @@ describe('team usage', () => {
     // team row and a spend reading — so a key that does cross fails here by name, not only by
     // plant. A machine's optional tail (`watch`, `team`, `seat`) varies with the line, so its
     // fixed head is pinned in order and the whole object by the `--json` document test above.
-    expect(Object.keys(report)).toEqual(['format', 'at', 'view', 'mine', 'counts', 'labs', 'unknown', 'notes', 'teams']);
+    expect(Object.keys(report)).toEqual(['format', 'at', 'view', 'mine', 'counts', 'labs', 'quota', 'unknown', 'notes', 'teams']);
     for (const block of report.teams) {
       expect(Object.keys(block)).toEqual(['team', 'seats']);
       for (const seat of block.seats) expect(Object.keys(seat)).toEqual(['seat', 'cli', 'account']);
@@ -542,17 +618,19 @@ describe('team usage', () => {
     });
     const mine = await usageAt(root, SEAT);
     expect(mine.code).toBe(0);
-    expect(mine.out).toContain('openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known  (no watch is recording for acme)');
-    expect(mine.out).toContain('openai  daily  left 70%  used 30%  resets unknown  lead  last seen 40m ago  status line (fallback)  stale  pace not known  (no watch is recording for acme)');
+    expect(mine.out).toContain('openai     session  40%   60%   in 44m   -                   -  read 2m ago           check                   ok  pace not known  (no watch is recording for acme)');
+    expect(mine.out).toContain('openai     daily    70%   30%   unknown  -                   lead  last seen 40m ago  status line (fallback)  unknown  pace not known  stale  (no watch is recording for acme)');
     // The one record whose point stands reads its figure — the positive control the refusals
     // above need: not the stale record's real 14.0%/h, and not a 0.0 the zero-distance pair could
     // fake if the rule were only "a point is present".
-    expect(mine.out).toContain('openai  weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h  (no watch is recording for acme)');
+    expect(mine.out).toContain('openai     weekly   5%    95%   in 44m   inside reserve 20%  lead  changed 2m ago     status line (fallback)  near cap  pace 5.3%/h  (no watch is recording for acme)');
     expect(mine.out).not.toContain('14.0%/h');
     expect(mine.out).not.toContain('0.0%/h');
-    // A machine line with no figure carries no word either: `anthropic` reads `unknown`, where
-    // the caller's row under it reads `pace not known` like every row of a subscription account.
-    expect(mine.out).toContain('anthropic  unknown\n  acme    unknown  pace not known\n');
+    // A machine row with no figure carries no word either: `anthropic` reads `unknown`, where
+    // the caller's row under the table reads `pace not known` like every row of a subscription
+    // account.
+    expect(mine.out).toContain('anthropic  -        -     -     -        -                   -                        -                       unknown\n');
+    expect(mine.out).toContain('  anthropic  acme  unknown  pace not known\n');
 
     // The window-change face, through the real fold: a figure that moved while a different window
     // stands ahead of it is written with no point at all (§ 2's kept-rule), so the record a later
@@ -562,7 +640,7 @@ describe('team usage', () => {
     const stored = (JSON.parse(readFileSync(join(root, '.agents', 'team.state.json'), 'utf8')) as { budgets: Record<string, Record<string, unknown>> }).budgets['openai/weekly/lead'] as Record<string, unknown>;
     expect('was' in stored).toBe(false);
     const after = await usageAt(root, SEAT);
-    expect(after.out).toContain('openai  weekly  left 3%  used 97%  resets in 1h44m  lead  changed 0m ago  status line (fallback)  fresh, inside reserve 20%  pace not known  (no watch is recording for acme)');
+    expect(after.out).toContain('openai     weekly   3%    97%   in 1h44m  inside reserve 20%  lead  changed 0m ago     status line (fallback)  near cap  pace not known  (no watch is recording for acme)');
   });
 
   test("the machine line takes the newest team's pace, and each row its own", async () => {
@@ -588,15 +666,15 @@ describe('team usage', () => {
 
     const seat = await usageAt(root, SEAT);
     expect(seat.code).toBe(0);
-    expect(seat.out).toContain('openai  weekly  left 30%  used 70%  resets in 44m  read by another team, 1m ago  status line  fresh  (no watch is recording for it)');
-    const seatLine = seat.out.split('\n').find((text) => text.startsWith('openai  weekly'));
+    expect(seat.out).toContain('openai     weekly   30%   70%   in 44m   read by another team, 1m ago  status line             ok    (no watch is recording for it)');
+    const seatLine = seat.out.split('\n').find((text) => /^openai\s+weekly/.test(text));
     expect(seatLine).not.toContain('pace');
-    expect(seat.out).toContain('  acme    weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h');
+    expect(seat.out).toContain('  openai  acme  weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h');
 
     const owner = await usageAt(root, OWNER, '--all');
     expect(owner.code).toBe(0);
-    expect(owner.out).toContain('openai  weekly  left 30%  used 70%  resets in 44m  read by zeta-4WX, 1m ago  status line  fresh  pace 60.0%/h  (no watch is recording for zeta-4WX)');
-    expect(owner.out).toContain(`  ${project}    weekly  left 30%  used 70%  resets in 44m  scout  changed 1m ago  status line  fresh  pace 60.0%/h`);
+    expect(owner.out).toContain('openai     weekly   30%   70%   in 44m   read by zeta-4WX, 1m ago  status line             ok  pace 60.0%/h  (no watch is recording for zeta-4WX)');
+    expect(owner.out).toContain(`  openai  ${project}  weekly  left 30%  used 70%  resets in 44m  scout  changed 1m ago  status line  fresh  pace 60.0%/h`);
 
     // The same split in the allow-list: the machine's `pace` is the newest reading's in the full
     // view — with the newest reading's team beside it — and null on the restricted line that
@@ -656,16 +734,16 @@ describe('team usage', () => {
 
   test('a watch whose heartbeat is fresh prints no clause; a stale or odd one says which', async () => {
     withState({ pid: 1, heartbeat: '2026-10-04T08:59:30Z' });
-    const recording = await usageAt(root, SEAT);
+    const recording = await usageAt(root, SEAT, '--tree');
     expect(recording.out).not.toContain('watch');
     expect(recording.out).toBe(`${REPORT.replaceAll('  (no watch is recording for acme)', '')}\n`);
 
     withState({ pid: 1, heartbeat: '2026-10-04T08:55:00Z' });
-    const stale = await usageAt(root, SEAT);
+    const stale = await usageAt(root, SEAT, '--tree');
     expect(stale.out).toBe(`${REPORT}\n`);
 
     withState({ pid: 1, heartbeat: 'not a time' });
-    const odd = await usageAt(root, SEAT);
+    const odd = await usageAt(root, SEAT, '--tree');
     expect(odd.out).toBe(`${REPORT.replaceAll('(no watch is recording for acme)', '(not known whether a watch is recording)')}\n`);
   });
 
@@ -679,25 +757,37 @@ describe('team usage', () => {
     const owner = await usageAt(root, OWNER);
     expect(owner.code).toBe(0);
     expect(owner.out).toContain(`note: acme: ${state} ${why}\n`);
-    expect(owner.out).toContain('openai  unknown\n  acme    unknown  pace not known\n  (acme: no pattern can read this account)\n');
+    expect(owner.out).toContain('openai     -       -     -     -       -     -       unknown\n');
+    expect(owner.out).toContain('  openai  acme  unknown  pace not known\n  openai  (acme: no pattern can read this account)\n');
 
     // A caller who is not the owner reads the project's own path relative to the project root —
     // and no absolute path at all, the fixture's base included — in the text and in `--json`.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 2 labs, 2 accounts',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE',
+      'anthropic  -       -     -     -       -     -       unknown',
+      'openai     -       -     -     -       -     -       unknown',
+      '  anthropic  acme  unknown  pace not known',
+      '  openai  acme  unknown  pace not known',
+      '  openai  (acme: no pattern can read this account)',
       '',
-      'anthropic  unknown',
-      '  acme    unknown  pace not known',
-      'openai  unknown',
-      '  acme    unknown  pace not known',
-      '  (acme: no pattern can read this account)',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      '  openai  unknown',
+      '    openai  unknown',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
       'note: acme: .agents/team.state.json is not valid JSON; move it aside and run the command again',
+      '',
+      'usage on this machine, 1 team, 2 labs, 2 accounts',
     ].join('\n') + '\n');
     expect((JSON.parse(raw) as { notes: unknown[] }).notes).toEqual([
       { scope: 'acme', why: '.agents/team.state.json is not valid JSON; move it aside and run the command again' },
@@ -705,67 +795,131 @@ describe('team usage', () => {
     expectNoDerivedPath([mine.out, raw]);
   });
 
-  test('a file that names no account prints why nothing is counted, and a seat reads no leftover rows', async () => {
-    // The file the owner approved names no account, so the budgets in force name none either, and
-    // no machine account covers it: the sentence says why nothing is counted.
+  test('a file that names no account still reads its seats lab account, and a seat reads no leftover rows', async () => {
+    // The file the owner approved names no account, so the budgets in force name none either: the
+    // zero-config rule makes the lab its seat's vendor keeps in use one account named after the
+    // lab, unknown until its first reading. No "declare it in accounts.yaml" narration prints.
     const text = withoutBudgets();
     writeFileSync(file, text);
     approve(text);
 
-    // No readings at all: the lab the seat's vendor keeps in use, the sentence, and the team's
+    // No readings at all: the lab's own account, unknown, with its seat behind it, and the team's
     // own seat breakdown.
     withoutReadings();
-    const bare = await usageAt(root);
+    const bare = await usageAt(root, undefined, '--tree');
     expect(bare.code).toBe(0);
     expect(bare.out).toBe([
-      'usage on this machine, 1 team, 1 lab, 0 accounts',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE',
+      'anthropic  -       -     -     -       -     -       unknown',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
-      `note: acme: ${NOTHING_COUNTED}`,
+      '',
+      'usage on this machine, 1 team, 1 lab, 1 account',
     ].join('\n') + '\n');
 
     // A state that still holds readings: a caller who is not the owner reads none of them — the
     // state's account is not one the file names, so no line and no row is rendered, and one fixed
-    // line says so, under the same sentence, which keys on the file either way.
+    // line says so, under the same zero-config account.
     withState();
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 1 lab, 0 accounts',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE',
+      'anthropic  -       -     -     -       -     -       unknown',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
-      `note: acme: ${NOTHING_COUNTED}`,
       `note: acme: ${UNBOUND_ACCOUNT}`,
+      '',
+      'usage on this machine, 1 team, 1 lab, 1 account',
     ].join('\n') + '\n');
-    expect(doc.counts).toEqual({ teams: 1, labs: 1, accounts: 0 });
-    expect(doc.labs).toEqual([{ lab: 'anthropic', accounts: [] }]);
-    expect(doc.notes).toEqual([{ scope: 'acme', why: NOTHING_COUNTED }, { scope: 'acme', why: UNBOUND_ACCOUNT }]);
+    expect(doc.counts).toEqual({ teams: 1, labs: 1, accounts: 1 });
+    expect(doc.labs).toEqual([{ lab: 'anthropic', accounts: [synthesized('anthropic', true)] }]);
+    expect(doc.notes).toEqual([{ scope: 'acme', why: UNBOUND_ACCOUNT }]);
 
-    // The owner reads the account the state holds — the report is keyed by declarations, so it
-    // gets no line and no lab, and it is counted all the same — and no "not shown" line.
-    const owner = await usageAt(root, OWNER);
+    // The owner reads the zero-config lab account, and the state's account is counted beside it
+    // — the report is keyed by declarations, so the state's name gets no line and no lab — and no
+    // "not shown" line prints.
+    const owner = await usageAt(root, OWNER, '--tree');
     const ownerRaw = (await usageAt(root, OWNER, '--json')).out;
     const held = JSON.parse(ownerRaw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(owner.out).toBe([
-      'usage on this machine, 1 team, 1 lab, 1 account',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE',
+      'anthropic  -       -     -     -       -     -       unknown',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
-      `note: acme: ${NOTHING_COUNTED}`,
+      '',
+      'usage on this machine, 1 team, 1 lab, 2 accounts',
     ].join('\n') + '\n');
-    expect(held.counts).toEqual({ teams: 1, labs: 1, accounts: 1 });
-    expect(held.labs).toEqual([{ lab: 'anthropic', accounts: [] }]);
-    expect(held.notes).toEqual([{ scope: 'acme', why: NOTHING_COUNTED }]);
+    expect(held.counts).toEqual({ teams: 1, labs: 1, accounts: 2 });
+    expect(held.labs).toEqual([{ lab: 'anthropic', accounts: [synthesized('anthropic', true)] }]);
+    expect(held.notes).toEqual([]);
+  });
+
+  test('a dead session leaves no seat behind and no account, and a stopped seat none either', async () => {
+    // The zero-config account is made of the seats a lab's rows carry, so the one answer that
+    // calls a seat history is the session's own: a team whose session herdr says is gone keeps
+    // its declarations and drops every seat row, vendor and the lab they made.
+    const text = withoutBudgets();
+    writeFileSync(file, text);
+    approve(text);
+    withoutReadings();
+    const gone = testIo(root, { kind: 'owner' });
+    expect(await runUsage(['--tree'], gone, { home, now: () => NOW, sessions: () => false })).toBe(0);
+    expect(gone.out).toContain('usage on this machine, 1 team, 0 labs, 0 accounts\n');
+    expect(gone.out).not.toContain('anthropic');
+    // No evidence either way (`null`) is no removal: the same machine reads its lab again.
+    const unasked = testIo(root, { kind: 'owner' });
+    expect(await runUsage(['--tree'], unasked, { home, now: () => NOW, sessions: () => null })).toBe(0);
+    expect(unasked.out).toContain('usage on this machine, 1 team, 1 lab, 1 account\n');
+    expect(unasked.out).toContain('  anthropic  unknown\n');
+
+    // A seat the file marks stopped is a record of one that ran: its vendor makes no lab and no
+    // zero-config account, while the running seat's lab still reads.
+    const retired = '  - role: member\n    name: retired\n    cli: claude-code\n    vendor: zai\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n    stopped: true\n';
+    const stopped = text.replace('    launch: claude --model claude-opus-5-5\n', `    launch: claude --model claude-opus-5-5\n${retired}`);
+    writeFileSync(file, stopped);
+    approve(stopped);
+    const idle = await usageAt(root, undefined, '--tree');
+    expect(idle.code).toBe(0);
+    expect(idle.out).toContain('usage on this machine, 1 team, 1 lab, 1 account\n');
+    expect(idle.out).toContain('  anthropic  unknown\n');
+    expect(idle.out).not.toContain('zai');
+  });
+
+  test('an owner note under the home reads with a tilde, never as an absolute path', () => {
+    expect(tildify(join(home, '.config', 'team', 'usage', 'readings.json'), home)).toBe('~/.config/team/usage/readings.json');
+    expect(tildify(`${home}/one and ${home}/two`, home)).toBe('~/one and ~/two');
+    expect(tildify(home, home)).toBe('~');
+    expect(tildify('/elsewhere/state.json', home)).toBe('/elsewhere/state.json');
+    // An empty or root home is no home to shorten.
+    expect(tildify('/anywhere', '')).toBe('/anywhere');
+    expect(tildify('/anywhere', '/')).toBe('/anywhere');
   });
 
   test('an unverified file explains missing budgets and verified files use live accounts', async () => {
@@ -773,48 +927,73 @@ describe('team usage', () => {
     // it declares — are not in force, and the tool's own why-line for that standing prints.
     rmSync(storePath('acme', root, home), { recursive: true, force: true });
     withoutReadings();
-    const bare = await usageAt(root);
+    const bare = await usageAt(root, undefined, '--tree');
     expect(bare.out).toBe([
-      'usage on this machine, 1 team, 1 lab, 0 accounts',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE',
+      'anthropic  -       -     -     -       -     -       unknown',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
       'note: acme: the file was never approved on this machine',
+      '',
+      'usage on this machine, 1 team, 1 lab, 1 account',
     ].join('\n') + '\n');
 
     // The readings the state holds are not bound to the accounts the file declares: a caller who
     // is not the owner reads no line for them and the one fixed line for the dropped readings.
     withState();
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 1 lab, 0 accounts',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE',
+      'anthropic  -       -     -     -       -     -       unknown',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
       'note: acme: the file was never approved on this machine',
       `note: acme: ${UNBOUND_ACCOUNT}`,
+      '',
+      'usage on this machine, 1 team, 1 lab, 1 account',
     ].join('\n') + '\n');
     expect(doc.notes).toEqual([
       { scope: 'acme', why: 'the file was never approved on this machine' },
       { scope: 'acme', why: UNBOUND_ACCOUNT },
     ]);
 
-    // The owner reads the readings' own account under the same sentence, and no "not shown" line.
-    const owner = await usageAt(root, OWNER);
+    // The owner reads the zero-config lab account and the state's own account beside it under
+    // the machine's count, and no "not shown" line.
+    const owner = await usageAt(root, OWNER, '--tree');
     expect(owner.out).toBe([
-      'usage on this machine, 1 team, 1 lab, 1 account',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE',
+      'anthropic  -       -     -     -       -     -       unknown',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
       'note: acme: the file was never approved on this machine',
+      '',
+      'usage on this machine, 1 team, 1 lab, 2 accounts',
     ].join('\n') + '\n');
 
     // A verified standing allows the accounts added to the live file immediately.
@@ -823,7 +1002,7 @@ describe('team usage', () => {
     approve(text);
     writeFileSync(file, teamText());
     for (const caller of [SEAT, OWNER]) {
-      const moved = await usageAt(root, caller);
+      const moved = await usageAt(root, caller, '--tree');
       expect(moved.code).toBe(0);
       expect(moved.out).toBe(`${REPORT}\n`);
     }
@@ -911,12 +1090,22 @@ describe('team usage', () => {
   test('outside any project it is a note and exit 0, in text and in JSON', async () => {
     const elsewhere = join(base, 'elsewhere');
     mkdirSync(elsewhere);
-    const text = await usageAt(elsewhere);
+    const text = await usageAt(elsewhere, undefined, '--tree');
     expect(text.code).toBe(0);
     expect(text.err).toBe('');
-    expect(text.out).toBe(`usage on this machine, 1 team, 2 labs, 2 accounts\n\nnote: ${NO_PROJECT}\n`);
+    expect(text.out).toBe([
+      'ACCOUNT  WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE',
+      '',
+      'quota',
+      '  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      'advice: no lab is declared on this machine: declare an account first',
+      `note: ${NO_PROJECT}`,
+      '',
+      'usage on this machine, 1 team, 2 labs, 2 accounts',
+    ].join('\n') + '\n');
     const json = await usageAt(elsewhere, undefined, '--json');
     expect(JSON.parse(json.out)).toEqual({
+      schema: { name: 'team.usage', version: 1 },
       format: 1,
       at: '2026-10-04T09:00:00.000Z',
       view: 'restricted',
@@ -925,6 +1114,12 @@ describe('team usage', () => {
       labs: [],
       unknown: [],
       notes: [{ scope: 'mine', why: NO_PROJECT }],
+      quota: {
+        format: 1,
+        accountsFile: '~/.config/team/accounts.yaml',
+        labs: [],
+        advice: 'no lab is declared on this machine: declare an account first',
+      },
       teams: [],
     });
   });
@@ -946,7 +1141,9 @@ describe('team usage', () => {
     expect(owner.code).toBe(0);
     expect(owner.out).toContain(`note: ${file} line 1: seats is required`);
     expect(owner.out).toContain(`note: ${file} line 1: the file has no seat that leads`);
-    expect(owner.out).toContain('no figures (the file could not be read)');
+    // The team the machine still records prints by name: its folder in the store is the record
+    // of which team this is (owner, 2026-10-17), never a path.
+    expect(owner.out).toContain(`note: the team "acme" (${root}): its file could not be read.`);
     expect(owner.out).not.toContain('anthropic');
 
     // A caller who is not the owner reads one fixed sentence per line instead — this project's
@@ -954,19 +1151,24 @@ describe('team usage', () => {
     // paths outside this project (`trust: must list the lobby <home>/…`). The three problems here
     // all name line 1, so the one sentence prints once; the machine's own counts stand in the
     // header, and no lab or line of this project's is rendered, because none of it can be read.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 0 labs, 0 accounts',
+      'ACCOUNT  WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE',
       '',
+      'quota',
+      '  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      'advice: no lab is declared on this machine: declare an account first',
       'note: .agents/team.yaml does not load (line 1): the owner reads the reason',
-      'note: 1 team has no figures (its file could not be read)',
+      'note: acme: its file could not be read',
+      '',
+      'usage on this machine, 1 team, 0 labs, 0 accounts',
     ].join('\n') + '\n');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { mine: string | null; labs: unknown[]; notes: unknown[] };
     expect(doc.mine).toBeNull();
     expect(doc.labs).toEqual([]);
-    expect(doc.notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml does not load (line 1): the owner reads the reason' }, { scope: 'another', why: 'its file could not be read' }]);
+    expect(doc.notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml does not load (line 1): the owner reads the reason' }, { scope: 'acme', why: 'its file could not be read' }]);
     expectNoDerivedPath([mine.out, raw]);
   });
 
@@ -985,16 +1187,21 @@ describe('team usage', () => {
     const owner = await usageAt(root, OWNER);
     expect(owner.code).toBe(0);
     expect(owner.out).toContain(`note: ${note}\n`);
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 0 labs, 0 accounts',
+      'ACCOUNT  WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE',
       '',
+      'quota',
+      '  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
+      'advice: no lab is declared on this machine: declare an account first',
       'note: .agents/team.yaml cannot be read: the owner reads the reason',
-      'note: 1 team has no figures (its file could not be read)',
+      'note: acme: its file could not be read',
+      '',
+      'usage on this machine, 1 team, 0 labs, 0 accounts',
     ].join('\n') + '\n');
     const raw = (await usageAt(root, SEAT, '--json')).out;
-    expect((JSON.parse(raw) as { notes: unknown[] }).notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml cannot be read: the owner reads the reason' }, { scope: 'another', why: 'its file could not be read' }]);
+    expect((JSON.parse(raw) as { notes: unknown[] }).notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml cannot be read: the owner reads the reason' }, { scope: 'acme', why: 'its file could not be read' }]);
     expectNoDerivedPath([mine.out, raw]);
   });
 
@@ -1073,14 +1280,16 @@ describe('team usage', () => {
     approve(text);
     withState();
 
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     expect(mine.code).toBe(0);
-    expect(mine.out).toContain(`\n${name}  not readable from a CLI screen\n  acme    unknown  pace not known\n`);
+    expect(mine.out).toContain(`\n${name}  -        -     -     -        -                   -                        -                       unknown  not readable from a CLI screen\n`);
+    expect(mine.out).toContain(`  ${name}  acme  unknown  pace not known\n`);
     // The name is the only absolute-looking string in either face, however often it repeats in
-    // the document — once in the text, at each place the document names the account — and no
-    // string the tool derived stands anywhere near it.
-    expect(absoluteTokens(mine.out)).toEqual([name]);
+    // the document — in the text, at each place the document names the account: its table row,
+    // the caller's team row, and the quota block's lab and account lines — and no string the
+    // tool derived stands anywhere near it.
+    expect(absoluteTokens(mine.out)).toEqual([name, name, name, name]);
     expect(absoluteTokens(raw).length).toBeGreaterThan(0);
     expect(absoluteTokens(raw).filter((token) => token !== name)).toEqual([]);
     expectNoDerivedPath([mine.out, raw], undefined, [name]);
@@ -1093,7 +1302,8 @@ describe('team usage', () => {
     // who wrote the string, never about who is reading it.
     const owner = await usageAt(root, OWNER);
     expect(owner.code).toBe(0);
-    expect(owner.out).toContain(`${name}  not readable from a CLI screen\n  acme    unknown  pace not known\n`);
+    expect(owner.out).toContain(`${name}  -        -     -     -        -                   -                        -                       unknown  not readable from a CLI screen\n`);
+    expect(owner.out).toContain(`  ${name}  acme  unknown  pace not known\n`);
   });
 
   test("a stored reading's own names are the state's: a seat reads only what the file binds", async () => {
@@ -1122,41 +1332,49 @@ describe('team usage', () => {
       state.sessions['acme-web'] = { ...emptySession() } as never;
     });
 
-    // A caller who is not the owner reads no line and no name: the sentence for a file that
-    // counts nothing, and one fixed line for the reading that was dropped — `nothing in rows`, as
-    // the ruling has it, because the file names no account to bind it to.
-    const mine = await usageAt(root, SEAT);
+    // A caller who is not the owner reads no line and no name from the state: the zero-config
+    // account of the lab the seat draws on, and one fixed line for the reading that was dropped —
+    // `nothing in rows`, as the ruling has it, because the file names no account to bind it to.
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
-    const doc = JSON.parse(raw) as { labs: unknown[]; notes: unknown[] };
+    const doc = JSON.parse(raw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 1 lab, 0 accounts',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE',
+      'anthropic  -       -     -     -       -     -       unknown',
       '',
-      'anthropic  not known (no team declares an account for it yet)',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
-      `note: acme: ${NOTHING_COUNTED}`,
       `note: acme: ${UNBOUND_ACCOUNT}`,
+      '',
+      'usage on this machine, 1 team, 1 lab, 1 account',
     ].join('\n') + '\n');
-    expect(doc.labs).toEqual([{ lab: 'anthropic', accounts: [] }]);
-    expect(doc.notes).toEqual([{ scope: 'acme', why: NOTHING_COUNTED }, { scope: 'acme', why: UNBOUND_ACCOUNT }]);
+    expect(doc.counts).toEqual({ teams: 1, labs: 1, accounts: 1 });
+    expect(doc.labs).toEqual([{ lab: 'anthropic', accounts: [synthesized('anthropic', true)] }]);
+    expect(doc.notes).toEqual([{ scope: 'acme', why: UNBOUND_ACCOUNT }]);
     for (const face of [mine.out, raw]) {
       expect(face).not.toContain('STATE-ACCOUNT-LEAK');
       expect(face).not.toContain('STATE-SEAT-LEAK');
     }
 
     // The owner reads no such name either: a face is keyed by the file's own declarations, and
-    // none declares this reading, so neither view prints what the state wrote. What the owner
-    // reads and the caller does not is the machine's own count — the reading is there, so one
-    // account is counted — and neither reads a "not shown" line for it.
+    // none declares this reading, so neither view prints what the state wrote. The owner reads
+    // the zero-config lab account and the machine's own count — the state's reading is there, so
+    // its account is counted beside the lab's — and neither view prints a "not shown" line.
     const owner = await usageAt(root, OWNER);
     const ownerRaw = (await usageAt(root, OWNER, '--json')).out;
     const ownerDoc = JSON.parse(ownerRaw) as { counts: Record<string, number>; notes: unknown[] };
     expect(owner.code).toBe(0);
-    expect(owner.out).toContain('usage on this machine, 1 team, 1 lab, 1 account\n');
-    expect(ownerDoc.counts).toEqual({ teams: 1, labs: 1, accounts: 1 });
-    expect(ownerDoc.notes).toEqual([{ scope: 'acme', why: NOTHING_COUNTED }]);
+    expect(owner.out).toContain('usage on this machine, 1 team, 1 lab, 2 accounts\n');
+    expect(ownerDoc.counts).toEqual({ teams: 1, labs: 1, accounts: 2 });
+    expect(ownerDoc.notes).toEqual([]);
     for (const face of [owner.out, ownerRaw]) {
       expect(face).not.toContain('STATE-ACCOUNT-LEAK');
       expect(face).not.toContain('STATE-SEAT-LEAK');
@@ -1179,34 +1397,49 @@ describe('team usage', () => {
     });
 
     // The live seat account binds this name for either view.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 3 labs, 3 accounts',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE',
+      'anthropic  -       -     -     -       -     -       unknown',
+      'openai     -       -     -     -       -     -       unknown',
+      `${LIVE_VENDOR}  not readable from a screen  (1 seat)`,
+      '  anthropic  acme  unknown  pace not known',
+      '  openai  acme  unknown  pace not known',
+      '  openai  (acme: no pattern can read this account)',
       '',
-      `${LIVE_VENDOR}  not known (no team declares an account for it yet)`,
-      'anthropic  unknown',
-      '  acme    unknown  pace not known',
-      'openai  unknown',
-      '  acme    unknown  pace not known',
-      '  (acme: no pattern can read this account)',
+      'quota',
+      `  ${LIVE_VENDOR}  unknown`,
+      `    ${LIVE_VENDOR}  unknown  seats: lead`,
+      '      not known: no reading yet',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      '  openai  unknown',
+      '    openai  unknown',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      '',
+      'usage on this machine, 1 team, 3 labs, 3 accounts',
     ].join('\n') + '\n');
     expect(doc.counts).toEqual({ teams: 1, labs: 3, accounts: 3 });
     expect(doc.notes).toEqual([]);
     for (const face of [mine.out, raw]) expect(face).toContain('LIVE-VENDOR-LEAK');
 
-    // The owner reads it as today: the live vendor's own lab and the reading by its own name, and
-    // no "not shown" line.
-    const owner = await usageAt(root, OWNER);
+    // The owner reads it the same way: the live vendor's own lab, which no screen reads, stands
+    // for its seat in one line — the seat count is the fact, and no "not shown" line prints.
+    const owner = await usageAt(root, OWNER, '--tree');
     const ownerRaw = (await usageAt(root, OWNER, '--json')).out;
     expect(owner.code).toBe(0);
-    expect(owner.out).toContain(`${LIVE_VENDOR}  not known (no team declares an account for it yet)\n`);
-    expect(owner.out).toContain(`${LIVE_VENDOR}  not known`);
+    expect(owner.out).toContain(`${LIVE_VENDOR}  not readable from a screen  (1 seat)\n`);
+    expect(owner.out).toContain(`  ${LIVE_VENDOR}  unknown\n`);
+    expect(owner.out).toContain(`    ${LIVE_VENDOR}  unknown  seats: lead\n`);
     expect(ownerRaw).toContain(LIVE_VENDOR);
     for (const face of [owner.out, ownerRaw]) expect(face).not.toContain('not shown');
   });
@@ -1231,21 +1464,32 @@ describe('team usage', () => {
       } as never;
     });
 
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { labs: { accounts: { machine: { seat?: unknown } }[] }[] };
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 2 labs, 2 accounts',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  RESERVE             READ                   SOURCE                  STATE',
+      'anthropic  -       -     -     -       -                   -                      -                       unknown',
+      'openai     weekly  5%    95%   in 44m  inside reserve 20%  ghost  changed 2m ago  status line (fallback)  near cap  pace not known  (no watch is recording for acme)',
+      '  anthropic  acme  unknown  pace not known',
+      '  openai  acme  weekly  left 5%  used 95%  resets in 44m  ghost  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known',
       '',
-      'anthropic  unknown',
-      '  acme    unknown  pace not known',
-      'openai  weekly  left 5%  used 95%  resets in 44m  ghost  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known  (no watch is recording for acme)',
-      '  acme    weekly  left 5%  used 95%  resets in 44m  ghost  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead, ghost',
+      '      not known: no reading yet',
+      '  openai  unknown',
+      '    openai  unknown',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
-      '  lead  claude-code  anthropic',
+      '  SEAT   CLI          ACCOUNT',
+      '  lead   claude-code  anthropic',
       '  ghost  claude-code  anthropic',
+      '',
+      'usage on this machine, 1 team, 2 labs, 2 accounts',
     ].join('\n') + '\n');
     expect(doc.labs.flatMap((lab) => lab.accounts).map((entry) => entry.machine.seat)).toEqual([undefined, 'ghost']);
     for (const face of [mine.out, raw]) expect(face).toContain('ghost');
@@ -1268,7 +1512,7 @@ describe('team usage', () => {
     withState();
 
     // Both views use the live project identity.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     expect(mine.code).toBe(0);
     expect(mine.out).toBe(`${REPORT.replaceAll('acme', LIVE_PROJECT)}\n`);
@@ -1277,7 +1521,7 @@ describe('team usage', () => {
 
     // The owner reads the live name as today: the view this command had before the restricted
     // path, and the name the file has now.
-    const owner = await usageAt(root, OWNER);
+    const owner = await usageAt(root, OWNER, '--tree');
     const ownerRaw = (await usageAt(root, OWNER, '--json')).out;
     expect(owner.code).toBe(0);
     expect(owner.out).toBe(`${REPORT.replaceAll('acme', LIVE_PROJECT)}\n`);
@@ -1329,7 +1573,7 @@ describe('team usage', () => {
     const ownerRaw = (await usageAt(root, OWNER, '--json')).out;
     expect(owner.code).toBe(0);
     expect(owner.out).toContain(`${name}  session`);
-    expect(owner.out).toContain(`${LIVE_PROJECT}    session`);
+    expect(owner.out).toContain(`${LIVE_PROJECT}  session  left 70%`);
     expect(ownerRaw).toContain(name);
     expect((JSON.parse(ownerRaw) as { mine: string }).mine).toBe(LIVE_PROJECT);
     for (const face of [owner.out, ownerRaw]) expect(face).not.toContain('not shown');
@@ -1392,21 +1636,32 @@ describe('team usage', () => {
     // A caller who is not the owner reads none of those strings. The bound reading prints its
     // figures with no seat — a seat's name is narrower than an account's, it does not hide the
     // figures behind it — and the other two are not rendered at all, one fixed line for both.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { labs: { lab: string; accounts: { machine: { window: string | null; seat?: unknown } }[] }[]; notes: unknown[] };
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'usage on this machine, 1 team, 2 labs, 2 accounts',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  RESERVE             READ               SOURCE                  STATE',
+      'anthropic  -       -     -     -       -                   -                  -                       unknown',
+      'openai     weekly  5%    95%   in 44m  inside reserve 20%  -  changed 2m ago  status line (fallback)  near cap  pace not known  (no watch is recording for acme)',
+      '  anthropic  acme  unknown  pace not known',
+      '  openai  acme  weekly  left 5%  used 95%  resets in 44m  -  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known',
       '',
-      'anthropic  unknown',
-      '  acme    unknown  pace not known',
-      'openai  weekly  left 5%  used 95%  resets in 44m  -  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known  (no watch is recording for acme)',
-      '  acme    weekly  left 5%  used 95%  resets in 44m  -  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known',
+      'quota',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead',
+      '      not known: no reading yet',
+      '  openai  unknown',
+      '    openai  unknown',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
       `note: acme: ${UNBOUND_SHAPE}`,
+      '',
+      'usage on this machine, 1 team, 2 labs, 2 accounts',
     ].join('\n') + '\n');
     // The labs run in name order; the anthropic line has no figure at all, so its machine entry
     // carries no `seat` key (a machine entry with a figure carries the seat when it knows one),
@@ -1443,13 +1698,13 @@ describe('team usage', () => {
   test('any caller may run it, and a subfolder of a checkout reads the same project', async () => {
     withState();
     const unplaced: Caller = { kind: 'unplaced', reason: 'it is run by an agent (claude) outside herdr' };
-    expect((await usageAt(root, SEAT)).out).toBe(`${REPORT}\n`);
-    expect((await usageAt(root, unplaced)).out).toBe(`${REPORT}\n`);
+    expect((await usageAt(root, SEAT, '--tree')).out).toBe(`${REPORT}\n`);
+    expect((await usageAt(root, unplaced, '--tree')).out).toBe(`${REPORT}\n`);
 
     execFileSync('git', ['init', root], { env: gitEnv(), stdio: 'ignore' });
     const sub = join(root, 'src', 'deep');
     mkdirSync(sub, { recursive: true });
-    const nested = await usageAt(sub, SEAT);
+    const nested = await usageAt(sub, SEAT, '--tree');
     expect(nested.out).toBe(`${REPORT}\n`);
   });
 
@@ -1461,6 +1716,21 @@ describe('team usage', () => {
     const extra = testIo(root);
     expect(await runUsage(['now'], extra, { home, now: () => NOW })).toBe(2);
     expect(extra.err).toBe(`team usage: unexpected "now"\n${USAGE}`);
+    // `--json` is read from the raw tokens before the parser runs, so a bad argument does not
+    // hide it: the refusal writes the `team.error` envelope on stdout, stderr empty, exit 2 —
+    // whichever side of the bad token the flag stands on.
+    for (const [argv, message] of [
+      [['now', '--json'], 'unexpected "now"'],
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json', 'now'], 'unexpected "now"'],
+    ] as const) {
+      const marked = await usageAt(root, SEAT, ...argv);
+      expect({ argv, code: marked.code, err: marked.err }).toEqual({ argv, code: 2, err: '' });
+      expect(JSON.parse(marked.out)).toEqual({
+        schema: { name: 'team.error', version: 1 },
+        error: { id: 'usage.invocation', message, repair: null },
+      });
+    }
   });
 
   test('the store folder itself unreadable is the other refusal: the owner reads the reason, a seat does not', async () => {
@@ -1540,7 +1810,7 @@ describe('team usage', () => {
 
     const theirs = [theirProject, theirRoot, join(theirRoot, '.agents'), 'zeta-only-3HMV', 'claude-extra', 'scout', 'extra-seat-6RT', `${theirProject}-web`, join(base, 'omega-9PL'), join(base, 'kappa-2VN'), 'omega-9PL', 'kappa-2VN'];
 
-    const seat = await usageAt(mineRoot, SEAT);
+    const seat = await usageAt(mineRoot, SEAT, '--tree');
     const raw = (await usageAt(mineRoot, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; notes: unknown[] };
     expect(seat.code).toBe(0);
@@ -1548,20 +1818,36 @@ describe('team usage', () => {
     // carries, the account lines of the labs it does not (their figures are the machine's — an
     // account the caller's own file names is the caller's business, its team's name is not), the
     // caller's own rows, and the two notes. The `anthropic` lab is the caller's own by its
-    // seat's vendor, and its one account is the other team's, so the block is the count alone.
+    // seat's vendor: its zero-config account prints, and the other teams' accounts in it are the
+    // count beside the lab, never a name.
     expect(seat.out).toBe([
-      'usage on this machine, 4 teams, 4 labs, 4 accounts',
-      '',
-      'acme-only-8ZKQ  weekly  left 9%  used 91%  resets unknown  -  changed 2m ago  status line  fresh, inside reserve 10%  pace not known  (no watch is recording for acme-7QK)',
-      '  acme-7QK    weekly  left 9%  used 91%  resets unknown  -  changed 2m ago  status line  fresh, inside reserve 10%  pace not known',
+      'ACCOUNT         WINDOW  LEFT  USED  RESETS   RESERVE             READ                          SOURCE       STATE',
+      'acme-only-8ZKQ  weekly  9%    91%   unknown  inside reserve 10%  -  changed 2m ago             status line  near cap  pace not known  (no watch is recording for acme-7QK)',
+      'anthropic       -       -     -     -        -                   -                             -            unknown',
+      'openai          weekly  88%   12%   in 44m   -                   read by another team, 1m ago  status line  ok    (no watch is recording for it)',
+      '  acme-only-8ZKQ  acme-7QK  weekly  left 9%  used 91%  resets unknown  -  changed 2m ago  status line  fresh, inside reserve 10%  pace not known',
       'anthropic: 1 other account',
-      'openai  weekly  left 88%  used 12%  resets in 44m  read by another team, 1m ago  status line  fresh  (no watch is recording for it)',
-      '  acme-7QK    weekly  left 5%  used 95%  resets in 44m  lead  changed 10m ago  status line  fresh, inside reserve 20%  pace not known',
+      '  openai  acme-7QK  weekly  left 5%  used 95%  resets in 44m  lead  changed 10m ago  status line  fresh, inside reserve 20%  pace not known',
+      '',
+      'quota',
+      '  acme-only-8ZKQ  unknown',
+      '    acme-only-8ZKQ  unknown',
+      '      not known: no reading yet',
+      '  anthropic  unknown',
+      '    anthropic  unknown  seats: lead, +4 on another team',
+      '      not known: no reading yet',
+      '  openai  unknown',
+      '    openai  unknown',
+      '      not known: no reading yet',
+      'advice: no readings yet: no seat status line and no CLI usage command has answered',
       '',
       'acme-7QK',
+      '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
       "note: acme-7QK: a stored reading names an account this team's file does not: not shown",
       "note: 2 teams' states cannot be read (not valid JSON; move it aside and run the command again)",
+      '',
+      'usage on this machine, 4 teams, 4 labs, 4 accounts',
     ].join('\n') + '\n');
     expect(doc.counts).toEqual({ teams: 4, labs: 4, accounts: 4 });
     expect(doc.notes).toEqual([
@@ -1575,17 +1861,19 @@ describe('team usage', () => {
     // The positive control: the owner reads every one of those strings — the names, the roots,
     // the seats, the labs — so the sweep above is never vacuous.
     const defaultOwner = await usageAt(mineRoot, OWNER);
-    expect(defaultOwner.out).not.toContain('  zeta-4WX    weekly');
+    expect(defaultOwner.out).not.toContain('  zeta-only-3HMV  zeta-4WX');
     const owner = await usageAt(mineRoot, OWNER, '--all');
     const ownerRaw = (await usageAt(mineRoot, OWNER, '--json', '--all')).out;
     expect(owner.out).toContain('read by zeta-4WX, 1m ago');
-    expect(owner.out).toContain('claude-extra  weekly');
-    expect(owner.out).toContain('  zeta-4WX    weekly  left 88%');
+    expect(owner.out).toContain('claude-extra    weekly');
+    expect(owner.out).toContain('  openai  zeta-4WX  weekly  left 88%');
     expect(owner.out).toContain('scout');
     expect(ownerRaw).toContain(theirRoot);
     expect(ownerRaw).toContain('extra-seat-6RT');
-    // The broken teams' own paths reach the owner too, one note per team, named per team.
-    expect(owner.out).toContain(join(base, 'omega-9PL', '.agents', 'team.state.json'));
+    // The broken teams' own state paths do not reach the owner either: another team's problem is
+    // one counted sentence per kind in both views, never one note per team and never a path.
+    expect(owner.out).toContain("note: 2 teams' states cannot be read (not valid JSON; move it aside and run the command again)\n");
+    expect(owner.out).not.toContain(join(base, 'omega-9PL', '.agents', 'team.state.json'));
 
     // And the other side of the property: their seat reads their own material and none of mine.
     const theirSeat = await usageAt(theirRoot, { kind: 'seat', name: 'scout', pane: 'w1:p1', session: `${theirProject}-web` });
@@ -1654,15 +1942,17 @@ describe('team usage', () => {
     // reads the count and the fixed sentence, never the store's name or path.
     const mine = await usageAt(root, SEAT);
     const raw = (await usageAt(root, SEAT, '--json')).out;
-    expect(mine.out.split('\n')[0]).toBe('usage on this machine, 2 teams, 2 labs, 2 accounts');
+    expect(mine.out.split('\n').find((line) => line.startsWith('usage on this machine'))).toBe('usage on this machine, 2 teams, 2 labs, 2 accounts');
     expect(mine.out).toContain('note: a store on this machine cannot be read: the owner reads the reason\n');
     for (const face of [mine.out, raw]) {
       expect(face).not.toContain(theirProject);
       expect(face).not.toContain(theirRoot);
     }
-    // The owner reads the store's own message, its path and all.
+    // The owner reads the store's own message, its path written under `~` and not absolute.
     const owner = await usageAt(root, OWNER);
-    expect(owner.out).toContain(join(storePath(theirProject, theirRoot, home), 'approval.json'));
+    const storeMessage = join(storePath(theirProject, theirRoot, home), 'approval.json');
+    expect(owner.out).toContain(storeMessage.replace(home, '~'));
+    expect(owner.out).not.toContain(storeMessage);
   });
 
   test('the droppable entries, 2 of 5: a machine line says whose reading it carries, never whose name', async () => {
@@ -1685,8 +1975,8 @@ describe('team usage', () => {
 
     const mine = await usageAt(root, SEAT);
     const raw = (await usageAt(root, SEAT, '--json')).out;
-    const line = mine.out.split('\n').find((text) => text.startsWith('openai  weekly'));
-    expect(line).toBe('openai  weekly  left 88%  used 12%  resets in 44m  read by another team, 1m ago  status line  fresh  (no watch is recording for it)');
+    const line = mine.out.split('\n').find((text) => /^openai\s+weekly/.test(text));
+    expect(line).toBe('openai     weekly  88%   12%   in 44m  read by another team, 1m ago  status line  ok    (no watch is recording for it)');
     const entries = (JSON.parse(raw) as { labs: { accounts: { account: string; machine: Record<string, unknown> }[] }[] }).labs.flatMap((lab) => lab.accounts);
     const openai = entries.find((entry) => entry.account === 'openai');
     expect(openai?.machine.other).toBe(true);
@@ -1704,10 +1994,10 @@ describe('team usage', () => {
     // The third entry: whose watch is not recording is the line's business, and it prints only
     // where a figure is — a team with nothing counted has no line to carry it.
     withState({ pid: 1, heartbeat: '2026-10-04T08:55:00Z' });
-    const stale = await usageAt(root, SEAT);
+    const stale = await usageAt(root, SEAT, '--tree');
     expect(stale.out).toBe(`${REPORT}\n`);
     expect(stale.out.split('\n').filter((line) => line.includes('watch')).length).toBe(3);
-    const recording = await usageAt(root, OWNER);
+    const recording = await usageAt(root, OWNER, '--tree');
     expect(recording.out).toBe(`${REPORT}\n`);
 
     // With no readings at all there is no line, and so no clause: the report has nothing to say
@@ -1742,13 +2032,16 @@ describe('team usage', () => {
     }
 
     // One team with that reason is the singular sentence, with no count in the document beyond
-    // the sentence's own `1`; the owner reads each team's own message instead, named per team.
+    // the sentence's own `1`; the owner reads the same counted sentence, because another team's
+    // problem is one summary line in both views, never one note per team.
     rmSync(join(base, 'kappa-2VN'), { recursive: true, force: true });
     const one = await usageAt(root, SEAT);
     expect(one.out).toContain("note: 1 team's state cannot be read (not valid JSON; move it aside and run the command again)\n");
     const owner = await usageAt(root, OWNER);
-    expect(owner.out).toContain('note: omega-9PL: ');
-    expect(owner.out).toContain('kappa-2VN');
+    expect(owner.out).toContain("note: 1 team's state cannot be read (not valid JSON; move it aside and run the command again)\n");
+    // The note lines never name the team; the full view may name its seats elsewhere.
+    expect(owner.out).not.toContain('note: omega-9PL');
+    expect(owner.out).not.toContain('note: kappa-2VN');
   });
 
   test('the droppable entries, 5 of 5: an age is as fine as the report always printed it', async () => {
@@ -1794,7 +2087,7 @@ describe('team usage', () => {
       state.spend = { deepseek: { account: 'deepseek', amount: 12.4, currency: 'USD', at: '2026-10-04T08:56:00Z' } } as never;
     });
     const mine = await usageAt(root, SEAT);
-    expect(mine.out).toContain('deepseek  spend  12.40 USD left  read 4m ago  check  fresh\n');
+    expect(mine.out).toContain('deepseek   spend   12.40 USD  -     -       read 4m ago  check   fresh\n');
     expect(mine.out).toContain('  acme  spend  12.40 USD left  read 4m ago  check  fresh\n');
     // The pace word never rides a spend line (§ 3.4): money has no window and no stored point, so
     // both of the account's lines are whole — the two `contains` above would fail on any word.
@@ -1862,5 +2155,147 @@ describe('team usage', () => {
     await untouched(watched, () => usageAt(root));
     writeFileSync(file, 'format: 1\nproject: acme\n');
     await untouched(watched, () => usageAt(root));
+  });
+
+  test('a borrowed account’s row names the entity it comes from, in both views and both faces', async () => {
+    withState();
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  globex: [anthropic]\n');
+    // The team names no entity of its own, so the account its seat pays with — `anthropic` — is
+    // `globex`'s. The row that counts it says so, in the parenthesised tail the pool suffix and
+    // the watch clause already sit in, so the account keeps its one line; every other row of the
+    // report is byte for byte what it was.
+    const mine = await usageAt(root, OWNER);
+    expect(mine.out).toContain('anthropic  -        -     -     -        -                   -                        -                       unknown\n');
+    expect(mine.out).toContain('  anthropic  acme  unknown  pace not known  (borrowed from globex)\n');
+    expect(mine.out).toContain('  openai  acme  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known\n');
+    // One fact, one place: the restricted reader reads the same clause, and the document carries
+    // it as its own key — absent, never null, for an account no entity claims.
+    expect((await usageAt(root, SEAT)).out).toContain('  anthropic  acme  unknown  pace not known  (borrowed from globex)');
+    const doc = JSON.parse((await usageAt(root, SEAT, '--json')).out) as {
+      labs: { accounts: { account: string; teams: { borrowedFrom?: string }[] }[] }[];
+    };
+    const accounts = doc.labs.flatMap((lab) => lab.accounts);
+    const entry = accounts.find((one) => one.account === 'anthropic');
+    expect(entry?.teams.map((row) => row.borrowedFrom)).toEqual(['globex']);
+    const openai = accounts.find((one) => one.account === 'openai');
+    expect(openai?.teams.every((row) => !('borrowedFrom' in row))).toBe(true);
+  });
+
+  test('a team spending its own entity’s account borrows nothing, and --all marks each team on its own row', async () => {
+    const otherRoot = join(base, 'solar');
+    mkdirSync(join(otherRoot, '.agents'), { recursive: true });
+    // The second team names the entity the account belongs to, declares the account in its own
+    // file and pins its lobby the way such a file does, so the same account is its own there.
+    const solar = teamTextFor('solar', ['anthropic'], '')
+      .replace(root, otherRoot)
+      .replace('workspace:', 'entity: globex\nlobby: ~/.config/team/lobby\nworkspace:');
+    writeFileSync(join(otherRoot, '.agents', 'team.yaml'), solar);
+    approve(solar, { root: otherRoot });
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  globex: [anthropic]\n');
+    withState();
+
+    const all = await usageAt(root, OWNER, '--all');
+    const borrowed = teamRowsOf(all.out, 'acme').filter((row) => row.includes('(borrowed from globex)'));
+    expect(borrowed).toHaveLength(1);
+    expect(borrowed[0]).toStartWith('  anthropic  acme');
+    // The team the entity is its own reads the same row without the clause.
+    const own = teamRowsOf(all.out, 'solar').find((row) => row.startsWith('  anthropic  solar'));
+    expect(own).not.toBeUndefined();
+    expect(own ?? '').not.toContain('borrowed');
+  });
+
+  test('with no entity key the machine list reads as one unnamed entity and the report is byte for byte what it was', async () => {
+    withState();
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  - anthropic\n');
+    const mine = await usageAt(root, OWNER, '--tree');
+    expect(mine.out).toBe(`${REPORT}\n`);
+  });
+
+  test('a window far ahead of its clock reads near cap in the DEFAULT table, and the advice prints without --tree', async () => {
+    // The live case (Atlas, 2026-10-17): google (claude-gpt) at weekly 89% with a -68.6% margin
+    // read only `fresh` in STATE, and the advice line sat behind `--tree`. The state is the
+    // quota's, printed in the default table, and the advice stands beside it.
+    withoutReadings();
+    withState();
+    const io = testIo(root, SEAT);
+    const code = await runUsage([], io, {
+      home,
+      now: () => NOW,
+      observe: () => ({
+        observations: [{
+          account: 'openai', window: 'session', left: 40, used: 60, resetsAt: null, resetText: null,
+          observedAt: NOW.getTime() - 60_000, source: 'status line' as const, seat: 'lead', margin: -68.6, wall: false,
+        }],
+        notes: [],
+      }),
+    });
+    expect(code).toBe(0);
+    const line = io.out.split('\n').find((text) => /^openai\s+session/.test(text)) ?? '';
+    expect(line).toContain('near cap  margin -68.6%');
+    expect(line).not.toContain('fresh');
+    expect(io.out).toContain('advice: near cap on openai (session used 60%, margin -68.6%)');
+    expect(io.out).not.toContain('\nquota\n');
+  });
+
+  test('a lab its seats draw on and no screen reads is one line with its seat count, never an `unknown` row', async () => {
+    const builders = Array.from({ length: 11 }, (_, at) => `  - role: member
+    name: builder-${at + 1}
+    label: builder-${at + 1}
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek V4.1 Flash
+    version: "4.1"
+    launch: claude --model deepseek-v4-1-flash
+`).join('');
+    const glm = `  - role: member
+    name: zhander
+    label: zhander
+    cli: claude-code
+    vendor: zai
+    model: GLM
+    version: "5.3"
+    launch: claude-glm.sh
+`;
+    const text = `${teamText()}${builders}${glm}`;
+    writeFileSync(file, text);
+    approve(text);
+    withoutReadings();
+    const out = await usageAt(root, OWNER);
+    expect(out.out).toContain('deepseek  not readable from a screen  (11 seats)\n');
+    expect(out.out).toContain('zai  not readable from a screen  (1 seat)\n');
+    // The seat count replaces the account row: no `deepseek  -  …  unknown` line reads as a
+    // figure not yet seen.
+    const rows = out.out.split('\n').filter((line) => /^(deepseek|zai)\s+-\s/.test(line));
+    expect(rows).toEqual([]);
+  });
+
+  test('a named team whose file cannot be read reads as one sentence in every view: its name and its ~ root', async () => {
+    // The sentence (Atlas, 2026-10-17): `the team "team" (~/Code/floor/team): its file could
+    // not be read.` The store's folder is the record of the name; the root prints under the
+    // home it lives in, never as an absolute path. A `~/…` root prints in every view — the
+    // owner's and the restricted view alike — so a seat sees the same sentence the owner does.
+    const otherRoot = join(home, 'Code', 'floor', 'team');
+    mkdirSync(join(otherRoot, '.agents'), { recursive: true });
+    const other = teamText().replace('project: acme', 'project: team').replace('session: acme-web', 'session: team-web').replace(root, otherRoot);
+    writeFileSync(join(otherRoot, '.agents', 'team.yaml'), other);
+    approve(other, { root: otherRoot });
+    writeFileSync(join(otherRoot, '.agents', 'team.yaml'), 'format: 1\nproject: team\ntrust: [\n');
+    const out = await usageAt(root, OWNER);
+    expect(out.code).toBe(0);
+    expect(out.out).toContain('note: the team "team" (~/Code/floor/team): its file could not be read.\n');
+    // The restricted view reads the same sentence, root and all — the store's own folder is the
+    // record the note is built from, and the team is named by the file that cannot be read.
+    const seat = await usageAt(root, SEAT);
+    expect(seat.out).toContain('note: the team "team" (~/Code/floor/team): its file could not be read.\n');
+  });
+
+  test('the RESERVE column prints only when a row has something in it, headers and cells together', async () => {
+    withoutReadings();
+    const bare = await usageAt(root, OWNER);
+    expect(bare.out.split('\n')[0]).not.toContain('RESERVE');
+    withState();
+    const full = await usageAt(root, OWNER);
+    expect(full.out.split('\n')[0]).toContain('RESERVE');
+    expect(full.out).toContain('inside reserve 20%');
   });
 });

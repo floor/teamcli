@@ -2331,6 +2331,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--tree",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -2342,7 +2348,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team usage [--json] [--all]"
+        "team usage [--json] [--all] [--tree]"
       ]
     },
     {
