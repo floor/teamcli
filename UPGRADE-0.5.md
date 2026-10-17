@@ -33,11 +33,13 @@ stay the owner's, from a terminal outside herdr.
   `runner` names. A non-copy add (a different seat stanza) is the owner's: an add that would write
   the file — restoring a seat the file no longer holds, or clearing `stopped: true` — is refused
   for everyone else.
-- **`team up` and `team down`** — the owner; the orchestrator's seat when the file's `grant` lists
-  the word, and the file's approved delegate whose entry carries it; the operator's seat runs
-  `down` for the team, never for the two lead seats.
-- **`team remove` and `team restart`** — the owner, or a seat that leads removing or restarting
-  another seat, never its own recorded pane.
+- **`team up`** — the owner; the orchestrator's seat when the file's `grant` lists `up`, and the
+  file's approved delegate whose entry carries `up`.
+- **`team down`, `team restart` and `team remove`** — the owner, or the orchestrator's seat — and
+  any seat the record marks a lead (the map's `leads`) — acting on another seat, never its own.
+  `down` and `remove` also admit the file's approved delegate whose entry carries them; `restart`
+  is not delegable. An operator the record does not mark a lead loses these unless a delegate
+  entry carries `down` or `remove`.
 - **`team grant` and `team revoke`** — the owner alone, from a terminal outside herdr, at both
   seat level and team level.
 
