@@ -55,9 +55,13 @@ transcript or input box is not a reading. The supported screen grammars are:
   are subscription percentages used for the session and weekly windows. This is a constructed,
   tested formatter contract, not a claim about the CLI's default status-line configuration.
 
-Antigravity's screen fixtures do not provide a quota percentage. Accounts without a supported
-screen grammar or a recorded figure print `not readable from a CLI screen`. Readable accounts
-without an observation print `unknown`. The command emits no account-declaration notes.
+Antigravity's screen fixtures do not provide a quota percentage. A status line counts only for the
+account that seat spends (`payingAccountOf(seat)`, or `seat.account ?? seat.vendor` in the team's
+budgets); a seat of another lab running on the same CLI contributes no reading to the host lab's
+account, and its own lab reads `unknown` until a check or a pattern for that account exists.
+Accounts without a supported screen grammar or a recorded figure print `not readable from a CLI
+screen`. Readable accounts without an observation print `unknown`. The command emits no
+account-declaration notes.
 
 The watch merges observations into `~/.config/team/usage/readings.json` under a machine lock and
 replaces the file atomically. Each record contains account, optional pool, window, left/used

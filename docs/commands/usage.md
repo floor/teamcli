@@ -2,9 +2,10 @@
 
 Shows what this machine holds: every team with an approval store here, read as one report — each
 team's accounts and windows, with what is left and used, when each figure was last read and from
-which source. The caller's own project is one of those teams, whether or not it holds a store.
-Anyone may run it, from anywhere, and it only reads: no check runs, no CLI is launched, no pane is
-read, and nothing is written anywhere.
+which source. A status line counts only for the account its seat spends; another lab on the same CLI
+reads `unknown` until a check or a pattern for that account exists. The caller's own project is one of
+those teams, whether or not it holds a store. Anyone may run it, from anywhere, and it only reads: no
+check runs, no CLI is launched, no pane is read, and nothing is written anywhere.
 
 ## Synopsis
 

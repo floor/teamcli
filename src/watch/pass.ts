@@ -382,10 +382,11 @@ export function pass({
   // The figures this pass saw, folded into the readings the project keeps (§ 4.3, § 4.4). Only an
   // account whose `sources` name `status_line` takes a screen reading: a check-only account never
   // records one here, and neither does an account the budgets in force don't name (#50). A figure
-  // names the account its pattern measures (§ 3b): one that measures this seat's vendor is this
-  // seat's account — its own `account:` when the file names one, so two accounts of one vendor
-  // keep two buckets — while a figure on another account (a launcher showing the vendor it really
-  // runs on) stays that account's, whichever seat's screen showed it.
+  // names the account its pattern measures (§ 3b), and counts only when that account is this
+  // seat's vendor (recorded under the seat's resolved account, so two accounts of one vendor keep
+  // two buckets) or is already this seat's resolved account. A figure for any other account — such
+  // as a host CLI's status row on a seat that spends another lab — is not recorded under either
+  // (docs/commands/usage.md).
   //
   // The live file is the record: a seat's figures fold under the account the file names now,
   // and a change since the last approval holds no seat's figures back. A running seat's figure
@@ -396,16 +397,21 @@ export function pass({
     if (!seat.running) continue;
     const declared = team.seats.find((one) => one.name === seat.name)
       ?? team.seats.find((one) => one.name === state.seats[seat.name]?.temporary?.like);
+    const payer = declared === undefined ? seat.account : payingAccountOf(declared);
+    const backing = declared === undefined ? seat.vendor : payingAccountOf({ ...declared, account: undefined });
+    const hasTeamBudget = budgets.accounts[seat.account] !== undefined;
     for (const figure of seat.quota) {
+      const matchesSeat = hasTeamBudget
+        ? figure.account === seat.vendor || figure.account === seat.account || (seat.account === payer && figure.account === backing)
+        : figure.account === backing || figure.account === payer;
+      if (!matchesSeat) continue;
       if (declared && seat.identity !== 'gone' && seat.identity !== 'replaced') {
         const pool = payingPoolOf(declared);
         machineReadings.push({ ...figure, account: payingAccountOf(declared), ...(pool ? { pool } : {}) });
       }
-      const payer = declared === undefined ? seat.account : payingAccountOf(declared);
-      const backing = declared === undefined ? seat.vendor : payingAccountOf({ ...declared, account: undefined });
-      const account = figure.account === backing ? payer : figure.account === seat.vendor ? seat.account : figure.account;
+      const account = hasTeamBudget ? seat.account : payer;
       const entry = budgets.accounts[account];
-      if (entry !== undefined ? entry.sources.includes('status_line') : machineAccounts.includes(account) && (figure.account === backing || figure.account === payer)) {
+      if (entry !== undefined ? entry.sources.includes('status_line') : machineAccounts.includes(account)) {
         readings = observe(readings, { ...figure, account }, seat.name, now);
       }
     }
