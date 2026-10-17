@@ -57,6 +57,7 @@ export {
   DIFFERENCE_SCHEMA_FRAGMENT,
   ERROR_OUTPUT_SCHEMA,
   PLAN_STEP_SCHEMA_FRAGMENT,
+  PROJECTS_OUTPUT_SCHEMA,
   publishCommandOutputSchema,
   renderCommandOutputSchema,
   schemaTagFragment,

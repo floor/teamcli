@@ -338,9 +338,49 @@ export const SEATS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team projects` (`schema/projects.schema.json`). */
+export const PROJECTS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.projects',
+  fileName: 'projects.schema.json',
+  title: 'team projects --json output',
+  required: ['format', 'projects'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    projects: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'name', 'entity', 'lead', 'teams', 'provenance'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          name: { type: 'string', minLength: 1 },
+          entity: { type: ['string', 'null'] },
+          lead: { type: ['string', 'null'] },
+          teams: {
+            type: 'array',
+            items: { type: 'string' },
+          },
+          provenance: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['registered_by', 'registered_at', 'updated_at'],
+            properties: {
+              registered_by: { type: 'string' },
+              registered_at: { type: 'string' },
+              updated_at: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
   SEATS_OUTPUT_SCHEMA,
+  PROJECTS_OUTPUT_SCHEMA,
 ];
