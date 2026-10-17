@@ -174,7 +174,7 @@ describe('team doctor on a file of every model shape', () => {
       'warn  plain-codex: its rules file is missing; run team reload plain-codex',
       'warn  plain-voyager: its rules file is missing; run team reload plain-voyager',
       'warn  plain-reviewer: its rules file is missing; run team reload plain-reviewer',
-      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.299: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into',
+      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.302: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into',
       'warn  script-seat: the launch runs zsh, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
     ]);
     expect(run.out).toContain('ok    the watch is running\n');

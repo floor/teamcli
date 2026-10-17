@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { boxHoldsText, deliverRules, refusalReport, type Delivery, type Refusal } from '../../src/launch/deliver.ts';
+import { profileFor } from '../../src/profiles/profile.ts';
 import { readScreen } from '../../src/watch/screen.ts';
 import { claudeBox } from '../helpers.ts';
 
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/claude-code/2.1.289/${name}.txt`, import.meta.url), 'utf8');
-const current = (name: string) => readFileSync(new URL(`../fixtures/claude-code/2.1.299/${name}.txt`, import.meta.url), 'utf8');
+const current = (name: string) => readFileSync(new URL(`../fixtures/claude-code/2.1.302/${name}.txt`, import.meta.url), 'utf8');
 
 /** The window the pane shows while a turn runs: the box back to empty, the footer's own line
  *  saying so. `deliverRules` observes this after the Enter. */
@@ -167,10 +168,17 @@ describe('the prompt-glyph continuation row', () => {
   });
 });
 
-describe('Claude Code 2.1.299 captures', () => {
-  test('trust, idle, working, question, permission and exit read as those kinds', () => {
+describe('Claude Code 2.1.302 captures', () => {
+  test('the captures the launch reads are the profile\'s tested ceiling', () => {
+    const profile = profileFor('claude-code');
+    if (profile === null) throw new Error('the claude-code profile is gone');
+    expect(profile.tested.to).toBe('2.1.302');
+  });
+
+  test('trust, idle, unsent, working, question, permission and exit read as those kinds', () => {
     expect(readScreen('claude-code', current('trust')).kind).toBe('trust');
     expect(readScreen('claude-code', current('idle')).kind).toBe('idle');
+    expect(readScreen('claude-code', current('unsent')).kind).toBe('unsent');
     expect(readScreen('claude-code', current('working')).kind).toBe('working');
     expect(readScreen('claude-code', current('question')).kind).toBe('question');
     expect(readScreen('claude-code', current('permission')).kind).toBe('permission');
