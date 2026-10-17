@@ -157,7 +157,7 @@ stop at all.
 | `team down: line <n>: <message>` | 2 |
 | `team down: herdr doesn't answer; is it installed and running?` | 2 |
 | `team down: the agents of session <session> can't be read` | 2 |
-| `team down: only the owner or \`leads\` stops the team; this call is <caller>` | 1 |
+| ``team down: only the owner or `leads` stops the team; this call is <caller>`` | 1 |
 | `team down: only the owner abandons a team, from a terminal outside herdr` | 1 |
 | `team down: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team down: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |

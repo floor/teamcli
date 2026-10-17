@@ -37,8 +37,8 @@ is read, so it is never printed by any reader.
 
 ## Who may run it
 
-The caller rule is `team down`'s: the owner, or the team's orchestrator or operator running on its
-own seat.
+The caller rule is the session walk's: the owner, or the team's orchestrator or operator running on
+its own seat.
 
 | Caller | May |
 | --- | --- |
