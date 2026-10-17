@@ -64,7 +64,8 @@ import { trustPolicy } from '../file/dialogs.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
-import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
+import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
@@ -573,7 +574,7 @@ function restartNote(
   if (!recorded.launched) return { restartNote: `a relaunch records its process: ${fix}` };
   // A running lead is at home in the lobby or in the project. Either recording is left as it
   // is. Every other seat still outside the lobby is told how to move.
-  if (recorded.start_cwd && recorded.start_cwd !== resolveLobby(home, team)) {
+  if (recorded.start_cwd && recorded.start_cwd !== lobbyOf(home, root, team)) {
     if (isLeadSeat(team, name) && recorded.start_cwd === root) return {};
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
@@ -800,7 +801,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // The lobby this team operates on: its own when it sets `entity` or `lobby`, else the
   // machine-global one. Every lobby read and make below runs against it, so a second team on the
   // machine no longer waits behind the first team's lobby.
-  const teamLobby = resolveLobby(sources.home, team);
+  const teamLobby = lobbyOf(sources.home, root, team);
   // Owner-only targets are honoured only when no gate decided: a delegated run is the default
   // file's own session, and an aimed run by anyone but the owner has already returned above.
   const session = verdict !== null ? team.session : (args.values.session ?? team.session);
