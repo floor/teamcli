@@ -108,7 +108,7 @@ function team(
   root: string,
   roster: { agent: string; seat: string; role: string; leads: boolean }[],
 ): void {
-  upsertTeam(home, id, { project, entity: project, session, root, lobby: join(home, 'lobby'), roster, lifecycle: 'running' });
+  upsertTeam(home, id, { project, entity: project, session, root, lobby: lobbyDir(home), roster, lifecycle: 'running' });
 }
 
 /** The state record `up` leaves for a launched seat: the pane herdr placed it on. Seats add to
