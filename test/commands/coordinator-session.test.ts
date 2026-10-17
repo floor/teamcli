@@ -430,7 +430,10 @@ const COMMANDS: Case[] = [
     anotherPane: (name, pane) => `team answer: ${ANOTHER_PANE(name, pane)}\n`,
     sessionOwner: (who) => `team answer: ${OWNER_ONLY(who)}\n`,
     fileOwner: (who) => `team answer: --file is the owner's, from a terminal outside herdr; this call is ${who}\n`,
-    owner: `${NEVER_APPROVED}\n`,
+    // Answering a trust dialog is the owner's live team grant, not an approval: with the
+    // fixture's no-grant home the owner meets the same policy refusal main does, and the file's
+    // approval standing is no longer read for it.
+    owner: `${SEAT}: use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)\n`,
   },
 ];
 
