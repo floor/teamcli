@@ -5,8 +5,10 @@
 // `--settings` plus a `UserPromptSubmit`/`Stop` command pair, proven against the CLI in a run
 // logged in the note, not recalled.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -200,6 +202,28 @@ describe('the state file a hook writes', () => {
     writeFileSync(join(dir, 'seat-state', 'worker.json'), '{"state":"working","since":"2026-10-17T12:00:00Z"}\n');
     resetCliHookState(dir, SESSION, ['worker']);
     expect(existsSync(join(dir, 'seat-state', 'worker.json'))).toBe(false);
+  });
+
+  test('the hook replaces a link planted at the state path instead of writing through it', () => {
+    mkdirSync(join(dir, 'seat-state', SESSION), { recursive: true, mode: 0o700 });
+    const target = join(base, 'elsewhere.json');
+    writeFileSync(target, '{"keep":true}\n');
+    const path = join(dir, 'seat-state', SESSION, 'worker.json');
+    symlinkSync(target, path);
+    const landed = installCliHooks(dir, SESSION, [{ name: 'worker', cli: 'claude-code', launch: CLAUDE }]);
+    const settings = JSON.parse(readFileSync(landed.worker!, 'utf8')) as {
+      hooks: Record<string, { hooks: { type: string; command: string }[] }[]>;
+    };
+    const start = settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command ?? '';
+    execFileSync('/bin/sh', ['-c', start], { stdio: 'ignore' });
+    // The word landed as a regular file of the hook's own; the planted link's target never saw
+    // it, and no temp file is left behind.
+    expect(readFileSync(target, 'utf8')).toBe('{"keep":true}\n');
+    expect(lstatSync(path).isFile()).toBe(true);
+    expect(readCliHook(dir, SESSION, 'worker')).toMatchObject({ state: 'working' });
+    expect(readdirSync(join(dir, 'seat-state', SESSION))).toEqual(['worker.json']);
+    // The writer's own umask keeps the state file private.
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   test('the paths are the two this module names', () => {

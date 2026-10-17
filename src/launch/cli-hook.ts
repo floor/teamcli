@@ -77,10 +77,14 @@ function setsSettings(launch: string): boolean {
   return /(^|\s)--settings(=|\s|$)/.test(launch);
 }
 
-/** One hook command: the state file, rewritten whole. The path is shell-quoted, the mode comes
- *  from the hook's own umask, and the command reads nothing from its stdin. */
+/** One hook command: the state file, replaced whole. The word goes to a temp file beside it and
+ *  is renamed over the name, so a link planted at the state path is replaced, never written
+ *  through — plain `> path` would follow it. The temp name comes from `mktemp`, which creates it
+ *  exclusively in the same folder (the rename never crosses a filesystem and cannot land on a
+ *  planted link); the mode comes from the hook's own umask, and the command reads nothing from
+ *  its stdin. */
 function hookCommand(statePath: string, state: 'working' | 'idle'): string {
-  return `umask 077; printf '{"state":"${state}","since":"%s"}\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > ${shellQuote(statePath)}`;
+  return `umask 077; f=$(mktemp ${shellQuote(`${statePath}.new.XXXXXX`)}) && printf '{"state":"${state}","since":"%s"}\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$f" && mv -f "$f" ${shellQuote(statePath)}`;
 }
 
 /** The settings text one seat's launch loads: `working` at turn start, `idle` at turn end. */
