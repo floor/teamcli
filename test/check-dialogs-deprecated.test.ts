@@ -145,13 +145,13 @@ describe('the dialogs section the 0.4 line wrote', () => {
     const { code, out } = check(root, home);
     const line = text.split('\n').indexOf('dialogs:') + 1;
     expect(out).toContain(
-      `warning: team.yaml line ${line}: \`dialogs:\` is deprecated and grants nothing; `
+      `warning: the file, line ${line}: \`dialogs:\` is deprecated and grants nothing; `
       + 'repair: remove dialogs: from .agents/team.yaml; trust answering is now an owner grant: '
       + 'team grant @team --capabilities dialogs.trust',
     );
     // A warning is not a difference: nothing to count, nothing to fail, no change to the exit.
     expect(out).not.toContain('difference:');
-    expect(out).toContain('team check: nothing wrong');
+    expect(out).toContain('0 difference(s)');
     expect(code).toBe(0);
   });
 
@@ -159,7 +159,7 @@ describe('the dialogs section the 0.4 line wrote', () => {
     const { root, home } = place(teamYaml());
     const { code, out } = check(root, home);
     expect(out).not.toContain('warning:');
-    expect(out).toContain('team check: nothing wrong');
+    expect(out).toContain('0 difference(s)');
     expect(code).toBe(0);
   });
 

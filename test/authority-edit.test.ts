@@ -16,6 +16,7 @@ import { delegateGate, delegateReadGate } from '../src/delegate.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { grantGate } from '../src/grant.ts';
 import { DELEGATE_OUTPUT_SCHEMA, GRANT_OUTPUT_SCHEMA, REVOKE_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { Standing } from '../src/store/store.ts';
 import { testIo, type TestIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -581,6 +582,17 @@ describe('grant and revoke parse the invocation before attempting an edit', () =
       action_summary: 'grant: updated',
       target: 'lead',
       scope: ['up', 'down'],
+    });
+
+    upsertTeam(place.home, teamIdOf(place.root), { project: 'beacon', session: 'arena', root: place.root });
+    const teamTrustDry = owner(place);
+    expect(await runGrant(['@team', '--capabilities', 'dialogs.trust', '--dry-run', '--json'], teamTrustDry, { home: place.home })).toBe(0);
+    const teamTrustDoc = assertMatchesOutputSchema(teamTrustDry.out, GRANT_OUTPUT_SCHEMA);
+    expect(teamTrustDoc).toMatchObject({
+      dry_run: true,
+      status: 'dry-run',
+      target: '@team',
+      capabilities: ['dialogs.trust'],
     });
 
     const delegateWrite = owner(place);

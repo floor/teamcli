@@ -27,10 +27,6 @@ import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, worksp
 import type { Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
-<<<<<<< HEAD
-import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
-import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
-=======
 import {
   collapseNotes,
   contextLine,
@@ -45,7 +41,7 @@ import {
   writeJsonError,
   type DeprecationWarning,
 } from '../output/index.ts';
->>>>>>> 601eb314 (feat(check): convert team check to the 0.5.0 output contract)
+import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { rosterOf } from '../permissions/who.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import { mayReadTeam } from '../read-gate.ts';
