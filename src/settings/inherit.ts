@@ -251,3 +251,54 @@ export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   policy: 'delivery-order',
   fallback: DELIVERY_LEGS,
 };
+
+/**
+ * How a seat's number is written at the front of its name: `width` is the digit count the number
+ * is padded to — 1 to 4, or `'auto'` for the smallest width that holds the team's largest number —
+ * and `separator` stands between the number and the rest of the name. The advised policy
+ * `seat-numbering` carries the two fields as one canonical string, `width` then `separator` (`2-`
+ * for the default), so every signed policy record holds one scalar; `seatNumberingOf` gives the
+ * fields back. It is set at entity, project or team, and a lower level chooses the format: an
+ * advised setting has no tighter numbering to judge against.
+ */
+export type SeatNumbering = { width: 1 | 2 | 3 | 4 | 'auto'; separator: string };
+
+/** The numbering when no level declares one: two digits and a hyphen. */
+export const SEAT_NUMBERING_DEFAULT: SeatNumbering = { width: 2, separator: '-' };
+
+/** The catalogue's release default, in the policy value's canonical string form. */
+export const SEAT_NUMBERING_DEFAULT_VALUE = '2-';
+
+/** The canonical policy value for a numbering: the width, then the separator as it stands. */
+export function seatNumberingValue(numbering: SeatNumbering): string {
+  return `${numbering.width}${numbering.separator}`;
+}
+
+/** Reads a policy value into its two fields; null when it cannot be a numbering. */
+export function seatNumberingOf(value: unknown): SeatNumbering | null {
+  if (typeof value !== 'string' || value === '') return null;
+  let width: SeatNumbering['width'];
+  let rest: string;
+  if (value.startsWith('auto')) {
+    width = 'auto';
+    rest = value.slice(4);
+  } else if (value[0] !== undefined && value[0] >= '1' && value[0] <= '4') {
+    width = Number(value[0]) as 1 | 2 | 3 | 4;
+    rest = value.slice(1);
+  } else {
+    return null;
+  }
+  return { width, separator: rest };
+}
+
+/** The width a number is padded to: `'auto'` is the digit count of the team's largest number. */
+export function seatWidthFor(numbering: SeatNumbering, largest: number): number {
+  if (numbering.width !== 'auto') return numbering.width;
+  return Math.max(1, String(Math.max(1, Math.floor(largest))).length);
+}
+
+/** The catalogue policy's value: the canonical string, or null when it is not a numbering. */
+export function parseSeatNumberingValue(raw: unknown): string | null {
+  const numbering = seatNumberingOf(raw);
+  return numbering === null ? null : seatNumberingValue(numbering);
+}
