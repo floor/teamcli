@@ -86,8 +86,12 @@ transcript or input box is not a reading. The supported screen grammars are:
   tested formatter contract, not a claim about the CLI's default status-line configuration.
 
 Antigravity's screen fixtures do not provide a quota percentage. Accounts without a supported
-screen grammar or a recorded figure print `not readable from a CLI screen`. Readable accounts
-without an observation print `unknown`.
+screen grammar or a recorded figure print `unknown  not readable from a CLI screen`. Readable
+accounts without an observation print `unknown`. A lab no screen reads and no reading reached is
+not an account row at all in the text face: it is one line `deepseek  not readable from a screen
+(11 seats)`, its seat count in place of an `unknown` row that would read as a figure not yet seen
+(Atlas, 2026-10-17). A lab whose own name is readable keeps its `unknown` row — that is a figure
+not yet seen, not one no screen reads.
 
 An undeclared lab is never a hole in the report: its paying seats synthesize one account named
 after the lab, printed `unknown` with no window until its first reading, and the quota block
@@ -99,7 +103,9 @@ whose name it starts with when several vendors pay it (`google-antigravity` → 
 single lab whose paying seats' vendor names it, else its own name. A machine-wide reading (no
 seat behind it) lands only on a lab the caller's own seats pay; the owner's view lands it
 everywhere. A lab with seats and no declared account and no reading prints its synthesized
-account in the quota block with `not known: no reading yet`.
+account in the quota block with `not known: no reading yet`, while the account table prints the
+one seats line: the two faces describe the same lab, and only the table says outright that no
+screen reads it.
 
 The watch merges observations into `~/.config/team/usage/readings.json` under a machine lock and
 replaces the file atomically. Each record contains account, optional pool, window, left/used
@@ -120,8 +126,9 @@ reading. Machine observations older than five minutes or past their reset are ma
 ## The quota view
 
 With `--tree`, after the account blocks the report prints `quota`: one block per visible lab, one
-line per account under it, one line per window, and one `advice:` line. Without the flag the text
-face is the table only; the flag changes no JSON key. The model lives in
+line per account under it, one line per window, and one `advice:` line. The same advice sentence
+also follows the account lines in the default text face: without the flag the text face is the
+table and that line, never the table alone (Atlas, 2026-10-17); the flag changes no JSON key. The model lives in
 `information/quota.ts`; the live readers in `information/quota-observe.ts`; `reportOf` builds the
 block from the labs it already shows, so a lab or account this view hides can never reach it.
 
@@ -135,11 +142,13 @@ already elapsed minus the share spent. The session window is five hours (the len
 Antigravity usage print names as `Five Hour Limit`); the weekly window is seven days. A status row
 that prints its own margin — Claude Code's `W: 12% (+13.3%)` — is believed as printed; otherwise
 the figure is computed from the reset when it is known and still ahead. A reading older than five
-minutes, or one whose reset has passed, is `stale`: it prints marked and carries no margin. States
-are `walled` (a live wall screen, or 100% used), `near cap` (90% used or above, or a fresh margin
-at or below −50%), `ok` below both, and `unknown` when nothing fresh is observed. The margin test
-matters as much as the used figure: an account 89% used with a −71.6% margin is spending far ahead
-of its window and prints `near cap`, not `ok`.
+minutes, or one whose reset has passed, prints marked `stale`, carries no margin, and its state
+is `unknown`. States are `walled` (a live wall screen, or 100% used), `near cap` (90% used or
+above, or a fresh margin at or below −50%), `ok` below both, and `unknown` when nothing fresh is
+observed. The account table's `STATE` column prints the same words — the quota view is where the
+figures come from, not where the state first appears — and marks a stale reading `stale`. The
+margin test matters as much as the used figure: an account 89% used with a −71.6% margin is
+spending far ahead of its window and prints `near cap`, not `ok`.
 
 The advice line is built only from what the block already shows. With walls, it names the seats
 on each walled account (up to two) and the account with the best fresh margin at or above +10% as
@@ -171,11 +180,14 @@ machine-wide, as the report's own machine lines already are.
 
 Text and JSON use the same report. `--json` has format 1, a read timestamp, view, caller project,
 counts, account rows grouped by lab, the `quota` block, unknown reasons, notes, and `teams` with
-seat mappings. Subscription rows carry the window, left/used percentages, reset countdown and
-reading age; Antigravity pool rows add `pool`. A machine account counts once even with multiple
-windows or pools. The `quota` block carries `format: 1`, the accounts file the declaration line
-points at, one lab per entry with its accounts, seats, states and windows (each with its source,
-age, staleness, wall flag and margin), and the one advice sentence.
+seat mappings. A lab no screen reads and no reading reached also carries its seat count (`seats`),
+which the text face prints as one line in place of its rows. Subscription rows carry the window,
+left/used percentages, reset countdown and reading age; Antigravity pool rows add `pool`. A
+machine account counts once even with multiple windows or pools. The `quota` block carries
+`format: 1`, the accounts file the declaration line points at, one lab per entry with its
+accounts, seats, states and windows (each with its source, age, staleness, wall flag and margin),
+and the one advice sentence. A team whose file cannot be read is one note: the owner's names the
+team and its `~` root, every other caller's names the team only.
 
 The full view belongs to the owner at a terminal. Every other caller receives the restricted
 view: its approved team names and rows, shared machine subscriptions, and anonymized counts or

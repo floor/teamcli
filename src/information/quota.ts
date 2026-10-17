@@ -205,6 +205,18 @@ function stateOf(windows: readonly ReportQuotaWindow[], walled: boolean): QuotaS
   return 'ok';
 }
 
+/** One window's state, the account rule on that window alone: a wall is a wall, nothing fresh is
+ *  unknown, a figure at the cap or half a window ahead is near cap, anything else ok. The table's
+ *  STATE cell reads this, so a row and the quota block's account can never disagree about a
+ *  figure they show. */
+export function windowState(one: ReportQuotaWindow): QuotaState {
+  if (one.wall) return 'walled';
+  if (one.stale || one.used === null) return 'unknown';
+  if (one.used >= 100) return 'walled';
+  if (one.used >= NEAR_CAP || (one.margin !== null && one.margin <= -AHEAD_CAP)) return 'near cap';
+  return 'ok';
+}
+
 const ORDER: QuotaState[] = ['walled', 'near cap', 'ok', 'unknown'];
 
 function worst(states: readonly QuotaState[]): QuotaState {

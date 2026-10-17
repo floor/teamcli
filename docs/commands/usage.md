@@ -3,7 +3,8 @@
 Shows what this machine holds: every team it keeps a store for, read as one report — each
 team's accounts and windows, with what is left and used, when each figure was last read and from
 which source — then one `SEAT  CLI  ACCOUNT` table per team. `--tree` adds a quota view per lab
-and per account with the pace margin, the seats drawing on it and one advice line. The caller's
+and per account with the pace margin and the seats drawing on it; the one advice line prints
+either way. The caller's
 own project is one of those teams, whether or not it holds a store. Anyone may run it, from
 anywhere, and it only reads: no check runs and nothing is written. It reads the seat panes herdr
 records and may run the CLI's own usage command where a seat runs a CLI that has one, bounded by a
@@ -19,7 +20,7 @@ timeout; it opens no credential, key or CLI session file.
 | --- | --- | --- |
 | `--all` | — | include every team’s seat-to-account breakdown for the owner; other callers see only their own team |
 | `--json` | — | the same report as one document, format 1, for a script to read; every key is printed in both views |
-| `--tree` | — | add the quota view — one block per lab and per account, with each window’s margin and the one advice line — between the account lines and the team tables |
+| `--tree` | — | add the quota view — one block per lab and per account, with each window’s margin — between the account lines and the team tables, its own `advice:` line inside it; without the flag the same advice line follows the account lines |
 
 The owner can list shared subscriptions in `~/.config/team/accounts.yaml`:
 
@@ -58,7 +59,10 @@ readable pane falls back to the file's vendor. A file's stale `vendor:` never ov
 model. Quota figures come from recorded screen readings or configured checks, never from seat
 counts, and a machine reading is shown only under an account a shipped screen or usage print
 measures: a figure the watch stored under any other account is not printed as that account's.
-Accounts with no screen parser and no recorded figure say `not readable from a CLI screen`.
+An account with no screen parser and no recorded figure reads `unknown  not readable from a CLI
+screen`; a lab its seats draw on that no screen reads is one line instead of an account row —
+`deepseek  not readable from a screen  (11 seats)` — so the seat count is the fact, not an
+`unknown` row that reads as a figure not yet seen.
 
 ## Who may run it
 
@@ -72,7 +76,7 @@ Accounts with no screen parser and no recorded figure say `not readable from a C
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the report printed, whatever its figures, and whether or not this folder holds a project | the account table headed `ACCOUNT  WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE`, then one line per account with no screen reading and per lab no file declares — that lab's seats as one account named after the lab — the caller's own team rows, one `SEAT  CLI  ACCOUNT` table per team, the collapsed notes, and the closing summary line (`usage on this machine, 1 team, 2 labs, 2 accounts`); `--tree` adds the quota view between the account lines and the team tables; in the restricted view — every caller but the owner at a terminal — a caller outside every project also reads shared machine subscriptions | 0 |
+| the report printed, whatever its figures, and whether or not this folder holds a project | the account table headed `ACCOUNT  WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE`, with `RESERVE` between `RESETS` and `READ` only when some row has a reserve to show, then one line per account with no screen reading and one line per lab no file declares — that lab's seats as one account named after the lab, or, when no screen reads that lab, its seat count in one line — the one `advice:` line, the caller's own team rows, one `SEAT  CLI  ACCOUNT` table per team, the collapsed notes, and the closing summary line (`usage on this machine, 1 team, 2 labs, 2 accounts`); `--tree` adds the quota view between the account lines and the team tables, with its own `advice:` line; in the restricted view — every caller but the owner at a terminal — a caller outside every project also reads shared machine subscriptions | 0 |
 | the invocation can't be read, or the stores folder can't be read | `team usage: <problem>`, with the usage for the invocation; the stores folder alone gets `team usage: the store folder cannot be read: the owner reads the reason` for every caller but the owner, who reads the read's own message, the folder among it | 2 |
 
 ## Example
@@ -138,10 +142,11 @@ it all the same. Run from the seat's own pane, the report is the restricted view
 
 ```console
 $ team usage ; echo "exit $?"
-ACCOUNT    WINDOW   LEFT  USED  RESETS  RESERVE  READ            SOURCE  STATE
-anthropic  -        -     -     -       -        -               -       unknown
-openai     session  40%   60%   in 44m  -        -  read 2m ago  check   fresh  pace not known
+ACCOUNT    WINDOW   LEFT  USED  RESETS  READ            SOURCE  STATE
+anthropic  -        -     -     -       -               -       unknown
+openai     session  40%   60%   in 44m  -  read 2m ago  check   ok  pace not known
   openai  beacon  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known
+advice: no readings yet: no seat status line and no CLI usage command has answered
 
 beacon
   SEAT           CLI          ACCOUNT
@@ -151,9 +156,9 @@ usage on this machine, 1 team, 2 labs, 2 accounts
 exit 0
 ```
 
-This is the default report: the table, with the pace beside each account whose reading is fresh,
-then one team table. `team usage --tree` adds the quota view between the account lines and the team
-table. Both of its blocks read unknown here, because this fixture holds a checked session reading
+This is the default report: the table, each account's quota state and pace in `STATE`, the one
+`advice:` line, then one team table. `team usage --tree` adds the quota view between the account
+lines and the team table, its own `advice:` line inside it. Both of its blocks read unknown here, because this fixture holds a checked session reading
 in the team's own state while the block reads the watch's machine-wide observations and the live
 sources, neither of which is present in an example run. On a machine where the watch has recorded a
 status row — or a seat's own screen has an `L:`/`W:` row, or a CLI's usage print answers — the same
@@ -179,30 +184,37 @@ figure came from. The margin is the window's own clock minus the spend: 125h26m 
 42h34m of a seven-day window gone, 25.3%, so 12% used reads `margin +13.3%`. A status row that
 prints its own margin (`W: 12% (+13.3%)`) is believed as printed; a row that prints none is read
 against the window's length (five hours for the session window, seven days for the weekly one). A
-figure older than five minutes, or one whose reset has passed, prints `stale` and carries no
-margin. A wall screen — `quota reached`, `out of usage`, `usage limit reached`, or the CLI's own
-rate-limit rejection — prints the account as `walled` with the reset words the screen showed.
+figure older than five minutes, or one whose reset has passed, prints marked `stale`, carries no
+margin, and reads `unknown` as its state. A wall screen — `quota reached`, `out of usage`, `usage
+limit reached`, or the CLI's own rate-limit rejection — prints the account as `walled` with the
+reset words the screen showed.
 
 An account's state is `walled` at 100% used or on a live wall, `near cap` at 90% used or above — or
 with a fresh margin at or below −50%, so an account spending well ahead of its window's clock is
 named even under the used figure — `ok` below both, and `unknown` when nothing fresh has been
-observed. The one `advice:` line names the accounts with headroom (a fresh margin of at least
-+10%), or the walled seats and the healthiest account to move them to, or the near-cap accounts,
-worst margin first, with the account that still has headroom beside them, or says that no readings
-have answered.
+observed. The same words print in the default account table's `STATE` column, so `near cap` is
+never hidden behind `--tree`; the table marks a stale reading `stale` beside its state, and
+`fresh`/`stale` stay the team rows' own pace words. The one `advice:` line — printed with or
+without `--tree` — names the accounts with headroom (a fresh margin of at least +10%), or the
+walled seats and the healthiest account to move them to, or the near-cap accounts, worst margin
+first, with the account that still has headroom beside them, or says that no readings have
+answered.
 
 The sources are all observable, and the block reads none of them from a credential, a key or a
 CLI session file: the watch's machine-wide readings
 (`~/.config/team/usage/readings.json`), the status row of each seat's pane through herdr, the
 CLI's own usage command where it has one (`agy --print /usage`, bounded by a 15-second timeout),
 and the quota screens above. A lab no account is declared for is one account named after the lab,
-drawn from the seats that pay into it; before its first reading it prints `unknown` with those
-seats behind it, and its windows appear as soon as a status row or a usage print answers. A figure
-an undeclared account's own read names lands under that account's lab the same way, and only a
-reading this caller may make can name it: under the restricted view a machine-wide reading lands
-only on a lab the caller's own seats pay. An unreadable seat pane or an unanswered usage command
-is one counted note, however many seats hit it, and a team whose own file cannot be read is named
-in its note by the team's name, never by its path. In `--json` the block is the `quota` key:
+drawn from the seats that pay into it; when no screen reads that lab and no reading reached it,
+the account table gives it one line with its seat count (`deepseek  not readable from a screen
+(11 seats)`), and the quota block keeps its account with those seats behind it until a status row
+or a usage print answers. A figure an undeclared account's own read names lands under that
+account's lab the same way, and only a reading this caller may make can name it: under the
+restricted view a machine-wide reading lands only on a lab the caller's own seats pay. An
+unreadable seat pane or an unanswered usage command is one counted note, however many seats hit
+it; a team whose own file cannot be read is one note too — the owner reads the team's name and its
+`~` root (`the team "team" (~/Code/floor/team): its file could not be read.`), every other caller
+the team's name only. In `--json` the block is the `quota` key:
 `format`, `accountsFile`, one entry per lab with its accounts, seats, states and windows, and
 `advice`.
 

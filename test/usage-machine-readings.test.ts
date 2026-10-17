@@ -77,12 +77,12 @@ test('a watch persists a Grok zero without team budgets; usage counts machine su
   expect(usage.out).toContain('2m ago');
   // The Antigravity account has a live reader of its own — the CLI's usage print — so with no
   // reading it is `unknown`, not "not readable from a CLI screen".
-  expect(usage.out).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown/);
+  expect(usage.out).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown/);
   expect(usage.out).toContain('lead  grok  xai');
   // The seat's own vendor forms a lab with no declared account: zero-config makes its seats one
-  // account named after the lab, unknown before its first reading. The machine's readings are
-  // counted, so the "nothing is counted" sentence never prints.
-  expect(usage.out).toMatch(/wrong-vendor\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown/);
+  // account named after the lab, and no screen reads that name, so the lab stands for its seat in
+  // one line. The machine's readings are counted, so the "nothing is counted" sentence never prints.
+  expect(usage.out).toContain('wrong-vendor  not readable from a screen  (1 seat)\n');
   expect(usage.out).toContain('  wrong-vendor  unknown\n');
   expect(usage.out).toContain('    wrong-vendor  unknown  seats: lead\n');
   expect(usage.out).not.toContain('nothing is counted');
@@ -165,7 +165,7 @@ test('the entity form of the machine list counts the same figures, the zero amon
   expect(machine.counts).toEqual({ teams: 0, labs: 2, accounts: 2 });
   const text = reportText(reportOf(machine, view, NOW, []));
   expect(text).toMatch(/xai\s+weekly\s+0%\s+100%\s+unknown/);
-  expect(text).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown/);
+  expect(text).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown/);
   expect(text).not.toContain('nothing is counted');
 });
 

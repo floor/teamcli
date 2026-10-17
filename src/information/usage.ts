@@ -22,7 +22,7 @@ import { readMachineReadings, type MachineReading } from './machine-readings.ts'
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
 import type { WindowName } from '../profiles/quota.ts';
-import { marginWord, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, type QuotaLabInput, type QuotaObservation, type ReportQuota } from './quota.ts';
+import { marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota } from './quota.ts';
 import { readState, type State } from '../state.ts';
 import { approvalStanding, readApproval, storesFolder, type ApprovalRecord, type Standing } from '../store/store.ts';
 
@@ -601,6 +601,8 @@ export type MachineLab = {
 };
 
 export type MachineUsage = {
+  /** The home folder the walk read, so a path in a note prints as `~/…` (the report's rule). */
+  home: string;
   machineAccounts: string[];
   readings: MachineReading[];
   /** Every team the walk read, in walk order. */
@@ -786,6 +788,7 @@ export function machineUsage(home: string, now: number, view: UsageView, session
     if (lab.accounts.length === 0 && lab.carried.length > 0) accountNames.add(lab.lab);
   }
   return {
+    home,
     machineAccounts, readings,
     teams,
     stores: entries.filter((entry): entry is StoreEntry => entry.kind === 'store').map((entry) => entry.text),
@@ -989,6 +992,9 @@ export type ReportLab = {
   /** Other teams' accounts this lab holds that the caller's own file does not name (restricted
    *  only): counted beside the lab, never named and never given a figure. */
   others?: number;
+  /** The seats drawing on a lab no screen reads and no reading reached: the one line that stands
+   *  for the lab says how many, in place of an `unknown` row that would read as a missing figure. */
+  seats?: number;
 };
 
 export type ReportWhy = { scope: string; account: string; why: string };
@@ -1303,6 +1309,13 @@ function synthesizeAccounts(
       },
     });
   }
+  // A lab the synthesis gave a figure prints that figure, not a seat count: the seats line was
+  // counted for a lab with no reading, and a reading arrived. A lab whose own name a screen can
+  // read keeps its `unknown` row too — that is a figure not yet seen, not one no screen reads.
+  for (const lab of labs) {
+    if (lab.seats === undefined) continue;
+    if (readable.has(lab.lab) || lab.accounts.some((entry) => entry.machine.state !== 'unknown')) delete lab.seats;
+  }
   // A lab a figure added is placed by its name with the machine's own labs, so the table's order
   // never depends on which lab was seen first.
   labs.sort((a, b) => (a.lab < b.lab ? -1 : a.lab > b.lab ? 1 : 0));
@@ -1371,7 +1384,19 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
       }
     }
     accounts.sort(byLine);
-    labs.push({ lab: name, accounts, ...(others > 0 ? { others } : {}) });
+    // A lab no screen reads and no reading reached yet is still the lab its team's seats draw
+    // on: count them, so the one line that stands for the lab says how many instead of the lab
+    // printing an `unknown` row that reads as a figure not yet seen (Atlas, 2026-10-17).
+    const noFigure = accounts.length === 0 || accounts.every((entry) =>
+      entry.machine.state === 'unknown' && entry.kind === 'subscription' && !entry.readable);
+    let seats = 0;
+    if (noFigure && others === 0) {
+      for (const team of machine.teams) {
+        if (team !== mineEntry && !view.full) continue;
+        for (const seat of team.usage.seatAccounts) if (seat.vendor === lab.lab) seats += 1;
+      }
+    }
+    labs.push({ lab: name, accounts, ...(others > 0 ? { others } : {}), ...(seats > 0 ? { seats } : {}) });
   }
 
   // Screen observations are informational at first sight, separate from budget confirmation. A
@@ -1507,10 +1532,12 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
       if (!shownProblem(problem)) continue;
       // A team the machine still records by name keeps its name: the store's own folder is the
       // record of which team this is, and the owner asked a team whose file cannot be read to
-      // print by that name — the name, never a path. Every other problem keeps the counted
-      // sentence, which names no team the view holds back.
+      // print by that name — the name, never a path. The owner's view names the root too, as
+      // `~/…` (the report's own rule for a path), so the line reads as the sentence it is.
       if (problem.kind === 'unreadable-file' && team.recorded !== undefined && team.recorded !== '') {
-        namedTeams.push({ scope: team.recorded, why: 'its file could not be read' });
+        namedTeams.push(view.full
+          ? { scope: 'named-team', why: `the team "${team.recorded}" (${tildify(team.root, machine.home)}): its file could not be read.` }
+          : { scope: team.recorded, why: 'its file could not be read' });
         continue;
       }
       const { why } = anonOf(problem);
@@ -1711,6 +1738,12 @@ export function reportText(report: UsageReport, tree = false): string {
   const rows: string[][] = [];
   const extras: string[] = [];
   for (const lab of report.labs) {
+    // A lab no screen reads stands for its seats in one line, in place of the `unknown` row its
+    // account would print: the seat count is the fact, and `not readable from a screen` says why.
+    if (lab.seats !== undefined) {
+      extras.push(`${lab.lab}  not readable from a screen  (${lab.seats} seat${lab.seats === 1 ? '' : 's'})`);
+      continue;
+    }
     let at = 0;
     while (at < lab.accounts.length) {
       const first = lab.accounts[at];
@@ -1735,15 +1768,27 @@ export function reportText(report: UsageReport, tree = false): string {
       at = end;
     }
     if (lab.accounts.length === 0 && lab.others === undefined) {
-      // One line per lab with no account declared, in the owner's words: the file it points at
-      // is where the declaration belongs. The quota block stays silent for such a lab, so the
-      // line appears once.
+      // A lab with no seats and no account keeps the declaration sentence, in the owner's words.
       extras.push(`${lab.lab}  not known: no account declared; declare it in ${report.quota.accountsFile}`);
     } else if (lab.others !== undefined) {
       extras.push(`${lab.lab}: ${lab.others} other account${lab.others === 1 ? '' : 's'}`);
     }
   }
-  const lines = [...renderTable({ headers: USAGE_HEADERS, rows, indent: '' }), ...extras];
+  // The RESERVE column is only there when a row has something in it: a table whose every row
+  // reads `-` drops the column (Atlas, 2026-10-17), headers and cells together.
+  const reserveAt = USAGE_HEADERS.indexOf('RESERVE');
+  const keepReserve = rows.length === 0 || rows.some((row) => row[reserveAt] !== '-');
+  const lines = [
+    ...renderTable({
+      headers: keepReserve ? [...USAGE_HEADERS] : USAGE_HEADERS.filter((header) => header !== 'RESERVE'),
+      rows: keepReserve ? rows : rows.map((row) => row.filter((_, at) => at !== reserveAt)),
+      indent: '',
+    }),
+    ...extras,
+  ];
+  // The advice line is the report's answer, not the tree's detail: the default view prints it
+  // too, under the table, so near cap and walled always have their one sentence beside them.
+  if (!tree) lines.push(`advice: ${report.quota.advice}`);
   // The tree is the second view, behind `--tree` (owner, 2026-10-17): per lab and per account the
   // window figures, margin, state, seats and the one advice line. The table alone is the default
   // report, and each of its STATE cells carries the margin the tree would print -- so the one
@@ -1797,8 +1842,11 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
   const m = entry.machine;
   if (m.state === 'unknown' || m.left === null || m.used === null) {
     // An account no CLI screen can expose a figure for says so, machine-wide: `unknown` reads as
-    // a figure not yet seen, and this account cannot be seen at all.
-    return [account, m.window ?? '-', '-', '-', '-', '-', '-', '-', entry.readable ? 'unknown' : 'not readable from a CLI screen'];
+    // a figure not yet seen, and this account cannot be seen at all. The state word stays one of
+    // the block's four — a wall with no figure is `walled` here — and the readability is the
+    // marker after it, never the word itself.
+    const state = quotaAccountState(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined);
+    return [account, m.window ?? '-', '-', '-', '-', '-', '-', '-', `${state}${entry.readable ? '' : '  not readable from a CLI screen'}`];
   }
   const reset = m.resetsIn === null ? 'unknown' : `in ${m.resetsIn}`;
   const from = m.source === 'status_line' ? 'status line'
@@ -1812,8 +1860,59 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
   // view prints (owner, 2026-10-17). With neither, the tool's own words stand.
   const margin = m.pace === null ? marginOnRow(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined, m.window) : null;
   const pace = m.other && report.view === 'restricted' ? '' : m.pace === null && margin !== null ? marginWord(margin) : paceWord(m.pace);
-  const state = `${m.state}  ${pace}${watchOf(m, report)}`.trimEnd();
-  return [account, m.window ?? '-', `${m.left}%`, `${m.used}%`, reset, reserve, provenanceOf(m, report), source, state];
+  // The STATE cell is the block's four words — ok, near cap, walled, unknown — with freshness as
+  // the marker after them (owner/Atlas, 2026-10-17): an account at 89% used and half a window
+  // ahead said `fresh` and nothing else, which is where it was read, not where it stands.
+  const state = quotaStateOnRow(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined, m.window)
+    ?? figureState(m);
+  const stale = m.state === 'stale' ? '  stale' : '';
+  const cell = `${state}  ${pace}${stale}${watchOf(m, report)}`.trimEnd();
+  return [account, m.window ?? '-', `${m.left}%`, `${m.used}%`, reset, reserve, provenanceOf(m, report), source, cell];
+}
+
+/** The state a row's own figure reads, when the quota block carries no window for it: fresh at
+ *  `NEAR_CAP` or above is near cap, at 100 walled, anything else ok; not fresh is unknown. The
+ *  margin's half-window-ahead reading is the block's (it needs the window's clock), and a block
+ *  window that exists always wins through `quotaStateOnRow`. */
+function figureState(m: ReportMachine): QuotaState {
+  if (m.state !== 'fresh' || m.used === null) return 'unknown';
+  if (m.used >= 100) return 'walled';
+  return m.used >= NEAR_CAP ? 'near cap' : 'ok';
+}
+
+/** The quota state the block reads for one machine row: the same account, pool and window, and
+ *  that window's own state — so a row at 89% used but half a window ahead says `near cap`, the
+ *  same word the tree prints. Null when the block carries no window of that name, so the row's
+ *  own figure decides (`figureState`). */
+function quotaStateOnRow(
+  quota: ReportQuota,
+  account: string,
+  pool: 'gemini' | 'claude-gpt' | undefined,
+  window: string | null,
+): QuotaState | null {
+  for (const lab of quota.labs) {
+    for (const entry of lab.accounts) {
+      if (entry.account !== account || entry.pool !== pool) continue;
+      const one = entry.windows.find((w) => w.window === window);
+      return one === undefined ? null : windowState(one);
+    }
+  }
+  return null;
+}
+
+/** The account's own state, for a row with no figure at all: a live wall reads `walled` even
+ *  with nothing to show beside it, and an account the block does not build reads `unknown`. */
+function quotaAccountState(
+  quota: ReportQuota,
+  account: string,
+  pool: 'gemini' | 'claude-gpt' | undefined,
+): QuotaState {
+  for (const lab of quota.labs) {
+    for (const entry of lab.accounts) {
+      if (entry.account === account && entry.pool === pool) return entry.state;
+    }
+  }
+  return 'unknown';
 }
 
 /** The margin the quota block reads for one machine row: the same account, pool and window, and
@@ -1877,6 +1976,9 @@ function borrowedClause(from: string | undefined): string {
  *  store's fixed sentence every other caller reads is one of the counted sentences. */
 function noteText(note: ReportNote): string {
   if (note.scope === 'mine') return note.why;
+  // The owner's one sentence for a team whose file cannot be read is whole in `why`: the name
+  // and the root it sits at are the line, so no scope stands in front of it.
+  if (note.scope === 'named-team') return note.why;
   if (note.scope === 'store' && !ANON.some((one) => one.why === note.why)) return note.why;
   if (note.scope !== 'another' && note.scope !== 'usage' && note.scope !== 'store') return `${note.scope}: ${note.why}`;
   const anon = ANON.find((one) => one.why === note.why);
