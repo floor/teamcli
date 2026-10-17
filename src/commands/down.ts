@@ -37,6 +37,7 @@ import { executePlan } from '../launch/execute.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
+import { resetCliHookState } from '../launch/cli-hook.ts';
 import { boxHoldsOther, boxHoldsText, DRAW_WAIT_MS, settleScreen } from '../launch/deliver.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { profileFor } from '../profiles/index.ts';
@@ -1026,6 +1027,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           }
           delete current.seats[name];
         });
+        // The seat's own hook reading goes with its record: a `working` left by a turn the stop
+        // interrupted must not answer for a seat that is no longer running.
+        resetCliHookState(dir, [name]);
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
         // The registry: the seat's agent ends with its pane. A temporary seat is gone for good.
         if (sources.home !== undefined) {

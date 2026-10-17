@@ -29,6 +29,7 @@ import { agentList, agentRename, paneForeground, paneProcesses, paneRead, report
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { launchedIdentity } from '../launch/identity.ts';
+import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { gateVerdict, rosterOf } from '../permissions/who.ts';
@@ -585,6 +586,10 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // resolves this team file from the pane it stands in. Kept when the session already names it.
     current.launched_file = path;
   });
+  // The reading a launch's own hooks left belongs to the record this run completes, and is
+  // retired with it: a `working` written before the registration must not answer for the seat
+  // now. The seat's next prompt writes the file again.
+  resetCliHookState(dir, [name]);
 
   const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev, owner: walked.kind === 'owner' }, seat, pane, id);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);

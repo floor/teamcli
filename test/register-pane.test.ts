@@ -113,6 +113,21 @@ const NOTHING = { state: false, agents: 0, log: false, panes: false };
 const teamId = (w: World): string => teamIdOf(w.root);
 
 describe('registering an unnamed pane with --pane', () => {
+  test('the reading a launch left before the registration is retired with the new record', async () => {
+    // A `working` written by the previous launch's hook belongs to the record this run replaces;
+    // it must not answer for the seat the run just recorded. The seat's next prompt writes it.
+    const w = world();
+    mkdirSync(join(w.dir, 'seat-state'), { recursive: true });
+    writeFileSync(join(w.dir, 'seat-state', 'lead.json'), `{"state":"working","since":"${NOW.toISOString()}"}\n`);
+    const r = await register(w, ['lead', '--pane', 'w2:p2'], {
+      agents: () => [],
+      foreground: () => ['claude'],
+      ...named([]),
+    });
+    expect(r.code).toBe(0);
+    expect(existsSync(join(w.dir, 'seat-state', 'lead.json'))).toBe(false);
+  });
+
   test('names the pane as the seat through the host, then records it', async () => {
     const w = world();
     const calls: string[] = [];

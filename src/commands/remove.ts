@@ -29,6 +29,7 @@ import { registerEnd } from '../registry/sync.ts';
 import { paneStillRunning, realSources as downSources, stateOf, stateOfPane, typeExit, type DownSources } from './down.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { removeRulesFile } from '../launch/rules-file.ts';
+import { resetCliHookState } from '../launch/cli-hook.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 
 export type RemoveSources = DownSources & {
@@ -568,6 +569,10 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         delete current.seats[name];
       });
     }
+    // The seat's own hook reading goes with its record: a `working` left by a turn the stop
+    // interrupted must not answer for a seat this run stopped or removed — a `--keep` entry is
+    // stopped too, so it is no longer mid-turn.
+    resetCliHookState(dir, [name]);
     // The swap's record: the gap is a replacement in progress, not a lost lead. Written after the
     // stop, so a refused or failed stop leaves no record; `add` clears it once the seat runs.
     if (swap) {

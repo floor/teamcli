@@ -86,8 +86,13 @@ and open nothing: the target is the file the caller's own place finds.
   text included — and the certainties (`held`, `unreachable`, `done`) never yield to it. The hook
   (`cli-hook`) is a per-launch settings file, written under the project's `.agents/`, that the CLI
   loads for two command hooks — a turn start and a turn end — and the state file it keeps there is
-  read for a day: a fresh `working` reads working, a fresh `idle` idle, and an older reading or one
-  this version cannot parse is no reading, so the screen answers again. A blocked screen outranks
+  read for a day: a fresh `working` reads working while its turn is young
+  (`state_hook_working_seconds`, 2m shipped, the project free to loosen it), past which a screen
+  that still reads answers instead — an interrupted turn leaves the file's `working` behind while
+  the prompt shows again — and a screen it cannot read leaves the hook to answer; a fresh `idle`
+  idle; an older reading or one this version cannot parse is no reading, so the screen answers
+  again. `team down`, `team remove` and `team register` take the seat's state file with the record
+  they change, so a stopped seat starts from no reading. A blocked screen outranks
   the hook, which cannot see a dialog the CLI stopped at after its last turn ended. `done` from the file's
   `stopped` or from a retained record stands only while herdr names no agent for the seat: a live
   agent is the observation, and a file's `stopped` beside a running seat is a difference of its
