@@ -19,8 +19,11 @@ export const USAGE = `Usage: team check [--session <name>] [--file <path>] [--re
 
   --session <name>  the session to read; the file's own when absent
   --file <path>     the team file, instead of .agents/team.yaml
-  --repair          drop the state's leftovers: a record for a seat the file no longer
-                    declares, and a session with no seat of the team in it
+  --repair          the owner's repair, one write: drop the state's leftovers (a
+                    record for a seat the file no longer declares, a session with
+                    no seat of the team in it), re-record a seat an agent
+                    registered under dev mode, and set herdr's drifted sidebar
+                    lines back from the file
   --json            the report as one JSON document on stdout
 
 Exits 0 when nothing needs acting on, 1 when something does, 2 when the check

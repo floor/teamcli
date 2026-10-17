@@ -1,10 +1,11 @@
 // Bare `team check`: one answer to "is anything wrong with this team that someone should act on",
 // for the callers who may see it — the owner, a seat of the team, and a pane the team's approved
-// file names (design note §3, §4). It needs no git, it reads, and it changes nothing but the two
-// leftovers the owner's `--repair` drops — a state record for a seat the file no longer declares, a
-// state record for a session with no seat of the team in it: the file is resolved with `remember`
-// false for every caller, nothing of the watch's pass, report, readings or nudge path is called, and
-// the one screen reading (§3.3a) is read-only.
+// file names (design note §3, §4). It needs no git, it reads, and it changes nothing. The owner's
+// `--repair` is the one act: the state's leftovers (a record for a seat the file no longer
+// declares, a session with no seat of the team in it), the dev-mode mark an agent's registration
+// left, and the two sidebar lines a drift moved off the file's text — and nothing else. The file is
+// resolved with `remember` false for every caller, nothing of the watch's pass, report, readings or
+// nudge path is called, and the one screen reading (§3.3a) is read-only.
 //
 // The caller decides, not the flags. The walk classifies the caller before any target is opened,
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
@@ -24,7 +25,7 @@ import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
-import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
+import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
@@ -53,7 +54,7 @@ import {
   type PolicyLoadRefusal,
 } from '../policy/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
-import { findAgent } from '../registry/agents.ts';
+import { findAgent, updateAgent } from '../registry/agents.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
@@ -63,7 +64,7 @@ import { compare, orderAndAnnotateDifferences, type Difference, type Live } from
 import { observeLabel } from '../labels/observe.ts';
 import { modelDiffers, seatModel } from '../status/statusline.ts';
 import type { Standing } from '../store/store.ts';
-import { plainText } from '../launch/plain.ts';
+import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -84,6 +85,10 @@ export type CheckSources = {
   home?: string;
   /** The approved pane's read gate's own reads; the real ones when absent. */
   gate?: DelegateSources;
+  /** The two sidebar writes `team register` makes: the workspace label and the display line.
+   *  `--repair` re-applies the file's lines through them; the real ones when absent. */
+  renameWorkspace?: (session: string, workspace: string, label: string) => boolean;
+  reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
 };
 
 /**
@@ -189,8 +194,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       // exit: check.session-owner
       return 1;
     }
-    // `--repair` writes the state: the one act the check has, and the owner's alone, as the two
-    // aimed flags are.
+    // `--repair` writes: the check's one act, and the owner's alone, as the two aimed flags are.
     if (args.repair === true) {
       const msg = "--repair is the owner's";
       if (args.json) {
@@ -227,7 +231,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // seats — the leftovers the repair drops are never among them — so the comparison below reads
   // the same live session either way.
   const recorded = whole.sessions[session] ?? emptySession();
-  const live = sources.live(session, team, recorded);
+  let live = sources.live(session, team, recorded);
   if (!live) {
     const msg = "herdr doesn't answer; is it installed and running?";
     if (args.json) {
@@ -245,15 +249,32 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // ever guessed back into it.
   let stale = staleState(team, session, whole);
   const repaired: string[] = [];
-  if (args.repair === true && (stale.seats.length > 0 || stale.sessions.length > 0)) {
-    // A write that fails throws, as every other command's state write does: the failure is
-    // `team.command-threw`'s, not a second reading of the state.
-    repaired.push(...dropStale(dir, session, stale));
-    for (const line of repaired) {
-      logLine(dir, 'check', callerLabel(walked), `repaired: ${line}`, sources.now());
+  if (args.repair === true) {
+    // The owner's one repair, in the order the readings below depend on: the state's leftovers
+    // first, then the registration an agent wrote under dev mode, then the two sidebar lines. Each
+    // line is printed and logged as its phase finishes, so a write that throws later leaves the
+    // repairs already made named. Every write that fails throws, as every other command's state
+    // write does.
+    const named = (lines: string[]): void => {
+      repaired.push(...lines);
+      for (const line of lines) logLine(dir, 'check', callerLabel(walked), `repaired: ${line}`, sources.now());
+    };
+    if (stale.seats.length > 0 || stale.sessions.length > 0) {
+      named(dropStale(dir, session, stale));
+      whole = readState(dir);
+      stale = staleState(team, session, whole);
     }
-    whole = readState(dir);
-    stale = staleState(team, session, whole);
+    named(reRecordMarked(team, root, sources.home));
+    // The file is the truth for both sidebar lines: a drifted one is set back from it, through
+    // the same two writes `team register <seat>` makes. The live session is read again after the
+    // writes, so the comparison below reads the sidebar the repair left; a session herdr no
+    // longer answers keeps the first read, and its rows stand.
+    const after = whole.sessions[session] ?? emptySession();
+    const drifts = labelDrifts(team, after, live);
+    if (drifts.length > 0) {
+      named(syncLabels(drifts, session, sources, io));
+      live = sources.live(session, team, after) ?? live;
+    }
   }
   const state = whole.sessions[session] ?? emptySession();
   const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked));
@@ -508,6 +529,26 @@ function devModeDifferences(
 }
 
 /**
+ * The owner's repair of a dev-mode mark: every file seat whose newest record an agent's folded run
+ * wrote is recorded again with the caller gate in force — the same write `team register <seat>`
+ * makes as the owner, with the one patch that clears `dev_mode`, `dev_mode_by` and `dev_mode_at`
+ * (`src/registry/agents.ts`). A team with no home has no registry to repair, and a seat the file
+ * does not declare is not this repair's. Each line returned is named and logged by the caller.
+ */
+function reRecordMarked(team: TeamFile, root: string, home: string | undefined): string[] {
+  if (home === undefined) return [];
+  const lines: string[] = [];
+  const teamId = teamIdOf(root);
+  for (const seat of team.seats) {
+    const record = findAgent(home, { team: teamId, seat: seat.name });
+    if (record?.provenance.dev_mode !== true) continue;
+    updateAgent(home, record.id, { provenance: { dev_mode: false } });
+    lines.push(`${seat.name}: re-recorded with the caller gate in force; the dev-mode mark is cleared`);
+  }
+  return lines;
+}
+
+/**
  * The lobby the registry holds against the one the file would derive. Once the registry holds a
  * team's lobby, the entity never derives it again (`src/lobby/recorded.ts`): changing `entity` on
  * a running team no longer moves its seats, so the check names the file that now derives another
@@ -621,40 +662,97 @@ function attentionDifferences(team: TeamFile, state: SessionState, live: Live): 
 }
 
 /**
- * The two herdr sidebar lines a file seat carries, as differences when they read as neither the
- * file's own text nor a line the watch is entitled to paint. Line 1 is exactly
- * `workspaceLabel(seat)` — nothing else writes it — so any other label is drift. Line 2 is the
- * watch's (`src/labels/observe.ts`): it may carry the model the pane shows in place of the file's
- * display, and an effort word read from a screen, so a line the observation explains is left
- * alone. The repair is `team register <seat>`, which re-applies both lines from the file without
- * a relaunch. One pane per seat, the one this project's state records — the same read the
- * attention report makes.
+ * One seat's drifted sidebar, read once for both the report and the owner's repair: the pane the
+ * project's state recorded for it, and each of the file's two lines herdr holds differently.
  */
-function labelDifferences(team: TeamFile, state: SessionState, live: Live): Difference[] {
-  const out: Difference[] = [];
+type LabelDrift = {
+  seat: Seat;
+  pane: string;
+  workspace?: { id: string; title: string };
+  display?: { line: string };
+};
+
+/**
+ * The two herdr sidebar lines a file seat carries, as drift when they read as neither the file's
+ * own text nor a line the watch is entitled to paint. Line 1 is exactly `workspaceLabel(seat)` —
+ * nothing else writes it — so any other label is drift. Line 2 is the watch's
+ * (`src/labels/observe.ts`): it may carry the model the pane shows in place of the file's display,
+ * and an effort word read from a screen, so a line the observation explains is left alone. One
+ * pane per seat, the one this project's state records — the same read the attention report makes.
+ */
+function labelDrifts(team: TeamFile, state: SessionState, live: Live): LabelDrift[] {
+  const out: LabelDrift[] = [];
   for (const seat of team.seats) {
     const recorded = state.seats[seat.name]?.pane;
     if (recorded === undefined) continue;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
     if (!agent || agent.pane !== recorded) continue;
     const title = live.workspaces.find((workspace) => workspace.id === agent.workspace)?.label;
-    if (title !== undefined && title !== workspaceLabel(seat)) {
-      out.push({
-        what: `${seat.name}: its herdr workspace label reads "${title}", the file says "${workspaceLabel(seat)}"`,
-        repair: `team register ${seat.name}`,
-      });
-    }
+    const drift: LabelDrift = { seat, pane: recorded };
+    if (title !== undefined && title !== workspaceLabel(seat)) drift.workspace = { id: agent.workspace, title };
     const line = agent.displayAgent;
     // A pane herdr holds no display for is not drift: many panes never had one reported, and the
     // file does not say a pane must carry one. Only a line something else wrote is named.
-    if (line !== undefined && !displayLineMatches(seat, line, live.screens[recorded])) {
+    if (line !== undefined && !displayLineMatches(seat, line, live.screens[recorded])) drift.display = { line };
+    if (drift.workspace !== undefined || drift.display !== undefined) out.push(drift);
+  }
+  return out;
+}
+
+/**
+ * The drifts as differences, one per line: the repair is `team register <seat>`, which re-applies
+ * both lines from the file without a relaunch.
+ */
+function labelDifferences(team: TeamFile, state: SessionState, live: Live): Difference[] {
+  const out: Difference[] = [];
+  for (const drift of labelDrifts(team, state, live)) {
+    const name = drift.seat.name;
+    if (drift.workspace !== undefined) {
       out.push({
-        what: `${seat.name}: its herdr display reads "${line}", the file's line is "${displayAgent(seat)}"`,
-        repair: `team register ${seat.name}`,
+        what: `${name}: its herdr workspace label reads "${drift.workspace.title}", the file says "${workspaceLabel(drift.seat)}"`,
+        repair: `team register ${name}`,
+      });
+    }
+    if (drift.display !== undefined) {
+      out.push({
+        what: `${name}: its herdr display reads "${drift.display.line}", the file's line is "${displayAgent(drift.seat)}"`,
+        repair: `team register ${name}`,
       });
     }
   }
   return out;
+}
+
+/**
+ * The owner's repair of the sidebar: each drifted line set back from the file alone — line 1
+ * through the rename, line 2 through the display report, the same two writes `team register <seat>`
+ * makes. A herdr that will not take one says so as `team register` does, and its difference stands;
+ * a line the repair wrote is named in the run's `repaired:` lines and logged with them.
+ */
+function syncLabels(drifts: LabelDrift[], session: string, sources: CheckSources, io: Io): string[] {
+  const lines: string[] = [];
+  const rename = sources.renameWorkspace ?? ((s: string, workspace: string, label: string) => workspaceRename(workspace, label, s));
+  const report = sources.reportDisplayAgent ?? ((s: string, pane: string, text: string) => reportDisplayAgent(pane, text, s));
+  for (const drift of drifts) {
+    const name = drift.seat.name;
+    if (drift.workspace !== undefined) {
+      const label = workspaceLabel(drift.seat);
+      if (rename(session, drift.workspace.id, label)) {
+        lines.push(`${name}: its herdr workspace label is set back to "${label}"`);
+      } else {
+        io.stdout(`${plainLine(name)}: its title was not reported\n`);
+      }
+    }
+    if (drift.display !== undefined) {
+      const text = displayAgent(drift.seat);
+      if (report(session, drift.pane, text)) {
+        lines.push(`${name}: its herdr display is set back to "${text}"`);
+      } else {
+        io.stdout(`${plainLine(name)}: its display was not reported\n`);
+      }
+    }
+  }
+  return lines;
 }
 
 /**
