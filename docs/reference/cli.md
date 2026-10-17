@@ -16,6 +16,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--about` | no | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | yes |
 | `--version` | no | no | no |
 | `-V` | no | no | yes |
 | `-h` | no | no | yes |

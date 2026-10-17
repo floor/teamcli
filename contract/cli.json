@@ -2593,6 +2593,12 @@
         "takesValue": false
       },
       {
+        "hidden": true,
+        "name": "--json",
+        "repeatable": false,
+        "takesValue": false
+      },
+      {
         "hidden": false,
         "name": "--version",
         "repeatable": false,

@@ -107,9 +107,11 @@ export async function main(argv: string[], io: Io): Promise<number> {
     // exit: team.no-command
     return name ? 0 : 2;
   }
-  if (name === '--version' || name === '-V' || name === '--about' || (name === '--json' && rest.includes('--about'))) {
-    const isAbout = name === '--about' || rest.includes('--about');
-    const isJson = isAbout && (name === '--json' || rest.includes('--json'));
+  // `--about` and `--json` are read as the line's first two words only: neither is a flag a
+  // command takes after its name, so the contract must not read it from `rest.includes`.
+  if (name === '--version' || name === '-V' || name === '--about' || (name === '--json' && rest[0] === '--about')) {
+    const isAbout = name === '--about' || (name === '--json' && rest[0] === '--about');
+    const isJson = isAbout && (name === '--json' || rest[0] === '--json');
     if (isJson) {
       writeJson(io, 'team.about', {
         format: 1,
