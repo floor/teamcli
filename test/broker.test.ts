@@ -562,10 +562,11 @@ async function claimSelftest(candidate: string): Promise<{ ok: boolean; line: st
   const until = Date.now() + 10_000;
   while (Date.now() < until) {
     const verdict = kid.selftest();
-    if (verdict !== undefined) { kid.kill(); return { ok: verdict.includes('"ok"'), line: verdict }; }
+    if (verdict !== undefined) { kid.kill(); await kid.exited; return { ok: verdict.includes('"ok"'), line: verdict }; }
     await new Promise((tick) => setTimeout(tick, 20));
   }
   kid.kill();
+  await kid.exited;
   return { ok: false, line: 'no selftest line' };
 }
 
@@ -1287,12 +1288,14 @@ describe('the start protocol', () => {
     // `touched ≥ rounds` carries the zero. The detector rides the first route that proves
     // itself on this runner (a canary import's own call must fire the wrap before any round is
     // scored); where no route arms, the tuples are pinned and the unlink event is unasserted,
-    // loudly. The timeout is the pin's own: 413 rounds of six real processes. Each round is a
-    // bounded step: its six starts are killed and reaped before the next round begins, the live
-    // set may never pass the six a round holds, and a step that outlives its budget tears its
-    // own round down at once and fails naming the step. A run that cannot finish inside its
-    // own budget stops with the round and step named — not at the suite's ten minutes with no
-    // name — and every start is reaped and the leftover count asserted on each of those paths.
+    // loudly. The timeout is the pin's own: 413 rounds of six real processes, with the step
+    // and run budgets scaled from a warm-up's measured pace (on a loaded laptop the six child
+    // boots, not the broker, set that pace). Each round is a bounded step: its six starts are
+    // killed and reaped before the next round begins, the live set may never pass the six a
+    // round holds, and a step that outlives its budget tears its own round down at once and
+    // fails naming the step. A run that cannot finish inside its budget stops with the round
+    // and step named — never at the test timeout with no name — and every start is reaped and
+    // the leftover count asserted on each of those paths.
     project();
     record();
     const routes = ['A1', 'A2', 'M', 'R'];
@@ -1304,14 +1307,19 @@ describe('the start protocol', () => {
       if (verdict.ok) { route = candidate; break; }
     }
     const ROUND_SIZE = 6;
-    const STEP_MS = 10_000;
-    // The pin's own measured wall is ≈0.23 s a round (≈95 s all told); a run that cannot get
-    // through 413 rounds in three times that is failing on the machine, not finding the race —
-    // it stops inside this budget with the round and step named, never at the suite's ten
-    // minutes with no name and its starts still alive.
-    const RUN_BUDGET_MS = 300_000;
-    // The inner waits outlive their step on purpose: the step's own budget is what names it.
-    const START_MS = STEP_MS + 10_000;
+    // The pin's own measured wall is ≈0.23 s a round on CI (≈95 s all told). A loaded laptop
+    // boots the six child starts far slower (measured here: ≈2.5–3.6 s a round at load ≈8–9),
+    // so the budgets come from the pace the run actually finds. The first rounds are a
+    // warm-up: after them the step deadline is twice the measured round pace (never under the
+    // pin's original ten seconds) and the run budget is twice the extrapolated total, between
+    // the pin's original five minutes and a forty-minute cap. A machine that cannot finish
+    // 413 rounds inside the cap still stops with the round and step named and every start
+    // reaped; what the budgets never do is let a slow machine pass as a broken broker.
+    const WARMUP_ROUNDS = 10;
+    const RUN_BUDGET_FLOOR_MS = 300_000;
+    const RUN_BUDGET_CAP_MS = 2_400_000;
+    let stepMs = 10_000;
+    let runBudgetMs = RUN_BUDGET_FLOOR_MS;
     const breaches: string[] = [];
     const live = new Set<ClaimChild>();
     /** A start joins the live set on spawn and leaves it when it is reaped. */
@@ -1326,8 +1334,8 @@ describe('the start protocol', () => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const late = new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`the claim lane: step "${label}" outlived its ${STEP_MS} ms budget; its starts were killed and reaped`)),
-          STEP_MS,
+          () => reject(new Error(`the claim lane: step "${label}" outlived its ${stepMs} ms budget; its starts were killed and reaped`)),
+          stepMs,
         );
       });
       try {
@@ -1352,8 +1360,13 @@ describe('the start protocol', () => {
     const runStart = Date.now();
     try {
       for (let round = 0; round < 413; round++) {
-        if (Date.now() - runStart > RUN_BUDGET_MS) {
-          throw new Error(`the claim lane: the run outlived its ${RUN_BUDGET_MS / 1000} s budget before round ${round} (step: start); its starts were killed and reaped`);
+        if (round === WARMUP_ROUNDS) {
+          const pace = (Date.now() - runStart) / WARMUP_ROUNDS;
+          stepMs = Math.max(10_000, Math.ceil(pace * 2));
+          runBudgetMs = Math.min(RUN_BUDGET_CAP_MS, Math.max(RUN_BUDGET_FLOOR_MS, Math.ceil(pace * 413 * 2)));
+        }
+        if (Date.now() - runStart > runBudgetMs) {
+          throw new Error(`the claim lane: the run outlived its ${runBudgetMs / 1000} s budget before round ${round} (step: start); its starts were killed and reaped`);
         }
         const roundRoot = join(base, `claimburst-${round}`);
         mkdirSync(join(roundRoot, '.agents'), { recursive: true });
@@ -1369,9 +1382,9 @@ describe('the start protocol', () => {
         if (live.size > ROUND_SIZE) {
           throw new Error(`the claim lane: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
         }
-        await within(`round ${round}: ready`, roundKids, () => Promise.all(roundKids.map((kid) => readyOf(kid, START_MS))));
+        await within(`round ${round}: ready`, roundKids, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
         writeFileSync(go, 'go\n');
-        const outcomes = await within(`round ${round}: outcomes`, roundKids, () => Promise.all(roundKids.map((kid) => outcomeOf(kid, START_MS))));
+        const outcomes = await within(`round ${round}: outcomes`, roundKids, () => Promise.all(roundKids.map((kid) => outcomeOf(kid, stepMs + 10_000))));
         const serving = outcomes.filter((outcome) => outcome.kind === 'serving' && !outcome.cleared);
         const busy = outcomes.filter((outcome) => outcome.kind === 'busy' && !outcome.cleared);
         if (serving.length !== 1 || busy.length !== 5) {
@@ -1410,7 +1423,7 @@ describe('the start protocol', () => {
     expect(touched).toBeGreaterThanOrEqual(413);
     expect(breaches).toEqual([]);
     expect(events).toBe(0);
-  }, 600_000);
+  }, 3_000_000);
 
   test('a start that waits out the lock deadline refuses with the one line and touches nothing', async () => {
     // A live holder — a real start, held pre-listen for a minute — keeps the lock past every
