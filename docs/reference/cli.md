@@ -358,14 +358,15 @@ Hidden: no
 
 Usage:
 
-    team hold <reason> [--until <time>]
-    team hold --release
+    team hold <reason> [--until <time>] [--json]
+    team hold --release [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--release` | no | no | no |
 | `--until` | yes | no | no |
 | `-h` | no | no | yes |
@@ -444,7 +445,7 @@ Hidden: no
 
 Usage:
 
-    team lock <name> [--for <text>] [--wait <seconds>]
+    team lock <name> [--for <text>] [--wait <seconds>] [--json]
 
 ### Flags
 
@@ -452,6 +453,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--for` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--wait` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -1067,13 +1069,14 @@ Hidden: no
 
 Usage:
 
-    team unlock <name>
+    team unlock <name> [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

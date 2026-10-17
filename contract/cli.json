@@ -646,6 +646,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--release",
           "repeatable": false,
           "takesValue": false
@@ -674,8 +680,8 @@
       ],
       "subcommands": [],
       "usage": [
-        "team hold <reason> [--until <time>]",
-        "team hold --release"
+        "team hold <reason> [--until <time>] [--json]",
+        "team hold --release [--json]"
       ]
     },
     {
@@ -793,6 +799,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--wait",
           "repeatable": false,
           "takesValue": true
@@ -815,7 +827,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team lock <name> [--for <text>] [--wait <seconds>]"
+        "team lock <name> [--for <text>] [--wait <seconds>] [--json]"
       ]
     },
     {
@@ -1851,6 +1863,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -1868,7 +1886,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team unlock <name>"
+        "team unlock <name> [--json]"
       ]
     },
     {

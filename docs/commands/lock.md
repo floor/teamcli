@@ -14,7 +14,7 @@ the seat's name. Unlocking (`team unlock`) removes the lock only when that same 
 
 ## Synopsis
 
-    team lock <name> [--for <text>] [--wait <seconds>]
+    team lock <name> [--for <text>] [--wait <seconds>] [--json]
 
 ## What it reads and writes
 
@@ -41,6 +41,7 @@ file is refused before the lock is touched: the holder has to name a project.
 | `<name>` | the lock's name: lowercase letters, digits and hyphens, at most 64 characters |
 | `--for <text>` | the note stored as `run`; a line break in it becomes a space |
 | `--wait <seconds>` | wait this many seconds, a second at a time, for the holder to release the lock; at most 86400 |
+| `--json` | emit a `team.lock` v1 JSON document (`schema/lock.schema.json`) on `stdout` |
 | `--help`, `-h` | the usage, and exit 0 |
 
 ## Refusals
@@ -157,6 +158,8 @@ $ team unlock heavy-run
 heavy-run: released
 $ team lock ../out ; echo "exit $?"
 team lock: "../out" is a name, not a path: lowercase letters, digits and hyphens
-Usage: team lock <name> [--for <text>] [--wait <seconds>]
+Usage: team lock <name> [--for <text>] [--wait <seconds>] [--json]
+
+Exits 0 when the lock is taken, 1 when it is already held or cannot be written, 2 when the invocation or project can't be read.
 exit 2
 ```

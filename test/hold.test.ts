@@ -9,8 +9,10 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { DETACHED_REFUSAL, type Caller } from '../src/caller.ts';
 import { runDoctor, holdFindings, type DoctorSources } from '../src/commands/doctor.ts';
 import { runHold, type HoldSources } from '../src/commands/hold.ts';
+import { HOLD_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { emptySession, holdText, liveHold, readState, updateState, type HoldRecord } from '../src/state.ts';
 import { testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -324,6 +326,74 @@ describe('team hold', () => {
     expect(code).toBe(1);
     expect(err).toBe(`team hold: ${DETACHED_REFUSAL}\n`);
     expect(stored(where)).toBeUndefined();
+  });
+
+  test('--json emits team.hold on placed and released and team.error on refusals', async () => {
+    const where = place();
+    const placed = await hold(['freeze deploys', '--until', '2026-10-04T12:00:00Z', '--json'], where);
+    expect(placed.code).toBe(0);
+    expect(placed.err).toBe('');
+    const placedDoc = assertMatchesOutputSchema(placed.out, HOLD_OUTPUT_SCHEMA);
+    expect(placedDoc).toEqual({
+      schema: { name: 'team.hold', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'placed',
+      action_summary: 'hold until 2026-10-04T12:00:00.000Z: freeze deploys',
+      project: 'acme',
+      session: 'acme',
+      target: 'hold',
+      value: 'freeze deploys',
+      hold: {
+        reason: 'freeze deploys',
+        by: 'owner',
+        at: NOW.toISOString(),
+        until: '2026-10-04T12:00:00.000Z',
+      },
+    });
+
+    const dup = await hold(['other', '--json'], where);
+    expect(dup.code).toBe(1);
+    expect(dup.err).toBe('');
+    assertJsonErrorShape(dup.out, {
+      id: 'hold.held',
+      messageContains: 'already held until 2026-10-04T12:00:00.000Z: freeze deploys',
+      repair: 'team hold --release',
+    });
+
+    const released = await hold(['--release', '--json'], where);
+    expect(released.code).toBe(0);
+    expect(released.err).toBe('');
+    const releasedDoc = assertMatchesOutputSchema(released.out, HOLD_OUTPUT_SCHEMA);
+    expect(releasedDoc).toEqual({
+      schema: { name: 'team.hold', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'released',
+      action_summary: 'hold: released',
+      project: 'acme',
+      session: 'acme',
+      target: 'hold',
+      value: null,
+    });
+
+    const notHeld = await hold(['--release', '--json'], where);
+    expect(notHeld.code).toBe(1);
+    expect(notHeld.err).toBe('');
+    assertJsonErrorShape(notHeld.out, {
+      id: 'hold.not-held',
+      messageContains: 'not held',
+      repair: null,
+    });
+
+    const badArg = await hold(['--nope', '--json'], where);
+    expect(badArg.code).toBe(2);
+    expect(badArg.err).toBe('');
+    assertJsonErrorShape(badArg.out, {
+      id: 'hold.invocation',
+      messageContains: 'unknown option --nope',
+      repair: null,
+    });
   });
 });
 

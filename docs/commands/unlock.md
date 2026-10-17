@@ -8,7 +8,7 @@ removes it by hand, as [team lock](lock.md) describes under "When the holder is 
 
 ## Synopsis
 
-    team unlock <name>
+    team unlock <name> [--json]
 
 ## What it reads and writes
 
@@ -26,6 +26,7 @@ The caller who took it. The same rules as `team lock` for who that is.
 | Flag | Meaning |
 | --- | --- |
 | `<name>` | the lock's name, the same closed set as `team lock` |
+| `--json` | emit a `team.unlock` v1 JSON document (`schema/unlock.schema.json`) on `stdout` |
 | `--help`, `-h` | the usage, and exit 0 |
 
 ## Refusals

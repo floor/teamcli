@@ -588,6 +588,67 @@ export const REVOKE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** Published `--json` output schema for `team hold` (`schema/hold.schema.json`). */
+export const HOLD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.hold',
+  fileName: 'hold.schema.json',
+  title: 'team hold --json output',
+  statuses: ['placed', 'released'],
+  required: ['project', 'session', 'target', 'value'],
+  properties: {
+    target: { type: 'string', minLength: 1 },
+    value: { type: ['string', 'null'] },
+    hold: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['reason', 'by', 'at'],
+      properties: {
+        reason: { type: 'string', minLength: 1 },
+        by: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+        until: { type: 'string', minLength: 1 },
+      },
+    },
+  },
+});
+
+/** Published `--json` output schema for `team lock` (`schema/lock.schema.json`). */
+export const LOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.lock',
+  fileName: 'lock.schema.json',
+  title: 'team lock --json output',
+  statuses: ['taken'],
+  required: ['project', 'target', 'value', 'holder'],
+  properties: {
+    target: { type: 'string', minLength: 1 },
+    value: { type: ['string', 'null'] },
+    holder: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['team', 'run', 'by', 'at'],
+      properties: {
+        team: { type: 'string', minLength: 1 },
+        run: { type: 'string' },
+        by: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+      },
+    },
+  },
+});
+
+/** Published `--json` output schema for `team unlock` (`schema/unlock.schema.json`). */
+export const UNLOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.unlock',
+  fileName: 'unlock.schema.json',
+  title: 'team unlock --json output',
+  statuses: ['released'],
+  required: ['project', 'target', 'value'],
+  properties: {
+    target: { type: 'string', minLength: 1 },
+    value: { type: ['string', 'null'] },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -600,6 +661,9 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   GRANT_OUTPUT_SCHEMA,
   DELEGATE_OUTPUT_SCHEMA,
   REVOKE_OUTPUT_SCHEMA,
+  HOLD_OUTPUT_SCHEMA,
+  LOCK_OUTPUT_SCHEMA,
+  UNLOCK_OUTPUT_SCHEMA,
 ];
 
 

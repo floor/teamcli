@@ -10,8 +10,8 @@ consults a hold: no command, no launch and no watch changes what it does while o
 
 ## Synopsis
 
-    team hold <reason> [--until <time>]
-    team hold --release
+    team hold <reason> [--until <time>] [--json]
+    team hold --release [--json]
 
 ## What it reads and writes
 
@@ -56,6 +56,7 @@ its own seat.
 | `<reason>` | the line stored as the reason; required unless `--release` |
 | `--until <time>` | a local `<HH:MM>`, the next time that clock comes (today, or tomorrow when today's has passed), or an ISO 8601 instant carrying `Z` or an offset |
 | `--release` | clears the hold that stands; takes no `<reason>` and no `--until` |
+| `--json` | emit a `team.hold` v1 JSON document (`schema/hold.schema.json`) on `stdout` |
 | `--help`, `-h` | the usage, and exit 0 |
 
 ## Refusals
