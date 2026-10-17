@@ -7,6 +7,8 @@ import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { observedSeatState, sayThreshold, type SeatStateWord, type StateSource } from '../labels/state.ts';
+import { readCliHook } from '../launch/cli-hook.ts';
+import { supportsCliHook } from '../profiles/profile.ts';
 import { newestTraceAt, seatTraces } from '../labels/traces.ts';
 import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -29,6 +31,9 @@ export type SeatTraceSources = {
   project: string;
   root: string;
   home?: string;
+  /** The project state folder (the team file's own): where the CLI's hook state files live.
+   *  Absent leaves the hook unread, which is the reading before the launch installed one. */
+  stateDir?: string;
 };
 
 export const realSeatsSources: SeatsSources = {
@@ -149,9 +154,16 @@ export function seatRegistryRows(
         : undefined);
     // A pane `team` did not launch is not this seat's process: the comparison says `restored, not
     // launched by team`, and neither that process's screen nor herdr's word for it is the seat's.
-    // Its reading is what TeamCLI's own records say and nothing else — unknown, untrusted.
+    // Its reading is what TeamCLI's own records say and nothing else — unknown, untrusted. The
+    // state hook is left unread with it: its file belongs to the process this seat launched.
     const untrusted = row.state === 'restored, not launched by team';
     const screenText = agent && !untrusted && live.screens[agent.pane] !== undefined ? live.screens[agent.pane] : undefined;
+    // The seat's own hook reading, when its CLI is one whose launch this team can give a settings
+    // file: the state file the CLI writes at turn start and turn end. Only read from the project
+    // state folder — never from any CLI home.
+    const hook = !untrusted && traceSources?.stateDir !== undefined && supportsCliHook(cli)
+      ? readCliHook(traceSources.stateDir, row.name)
+      : null;
     // The seat-state reading: the CLI's own screen first, then herdr, then the traces (a fresh
     // one even over an idle word) — and the certainties the comparison already judged. The
     // comparison's own 'missing'/'stopped' is such a certainty — it read the pane's processes —
@@ -181,6 +193,7 @@ export function seatRegistryRows(
       cli,
       ...(agent !== undefined && !untrusted ? { agent: { pane: agent.pane, status: agent.status } } : {}),
       ...(screenText !== undefined ? { screenText } : {}),
+      hook,
       trace,
       ...(goneOnPurpose ? { stopped: true } : {}),
       ...(held ? { held: true } : {}),

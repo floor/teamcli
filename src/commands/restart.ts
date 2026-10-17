@@ -51,6 +51,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { formatPlan, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
@@ -312,6 +313,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
+      cliHooks: plannedCliHooks(dir, [planSeat]),
     });
     return dryRunExit(out, `${stopStep}${plainText(formatPlan(preview))}`);
   }
@@ -387,13 +389,24 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     }
 
     const records = progressWriter({ stdout: io.stdout, stderr: io.stderr, isTTY: io.stdoutIsTTY ?? false });
+    // The state hook lands before the plan types the launch line. A seat whose settings file did
+    // not land is said once, in the log, and relaunches with the file's own line.
+    const plannedHooks = plannedCliHooks(dir, [planSeat]);
+    const installed = installCliHooks(dir, [planSeat]);
+    if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
+      logLine(dir, 'restart', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
+    }
     const plan = upPlan({
       root,
       session,
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
+      cliHooks: installed,
     });
+    // The old pane is closed: whatever its last turn wrote says nothing about the seat this
+    // plan starts.
+    resetCliHookState(dir, [planSeat.name]);
     const host = hostOf({
       dir,
       session,

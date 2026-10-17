@@ -31,7 +31,7 @@ active time, and pane.
 | EFFORT | the effort level, or `-` when unset |
 | STATUS | the comparison's phrase for the seat against the session (`working`, `missing`, `stopped`, …) |
 | STATE | the seat's own reading, best source first — `working`, `idle`, `done`, `blocked`, `held`, `unreachable` or `unknown`; an `unknown` past the blind threshold reads `unknown (blind)` |
-| SOURCE | where that reading came from — `cli`, `herdr`, `trace`, `process`, `hold` or `none` |
+| SOURCE | where that reading came from — `cli`, `cli-hook`, `herdr`, `trace`, `process`, `hold` or `none` |
 | LAST ACTIVE | `now` when working, relative age (`2m ago`), or `-` |
 | PANE | the herdr pane, or `-` when not running |
 

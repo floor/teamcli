@@ -1,13 +1,15 @@
 // The state half of a seat's own reading, beside observe.ts's label half: what the
 // seat is doing, best source first —
 //
-//   1. the CLI's own signal: the pane's screen, read against the seat's CLI — working, or idle
-//      at its prompt, or a screen that is neither (a dialog, a question, an error, a composer
-//      holding unsent text): blocked;
-//   2. herdr's own screen status;
-//   3. TeamCLI's traces within a window — the seat's last ack, message or commit: a trace this
-//      fresh means working, and it outranks an idle word from the screen or from herdr;
-//   4. otherwise unknown. Unknown past the blind threshold counts as not working, and `status`
+//   1. a screen that is neither mid-turn nor at its prompt — a dialog, a question, an error, a
+//      composer holding unsent text: blocked, whatever any clock says;
+//   2. the CLI's own signal through the hooks this run installed: working at turn start, idle at
+//      turn end, with the instant it wrote;
+//   3. the pane's screen, read against the seat's CLI — working, or idle at its prompt;
+//   4. herdr's own screen status;
+//   5. TeamCLI's traces within a window — the seat's last ack, message or commit: a trace this
+//      fresh means working, and it outranks an idle word, from the hook, the screen or herdr;
+//   6. otherwise unknown. Unknown past the blind threshold counts as not working, and `status`
 //      and `check` flag the seat `blind` as a must-fix.
 //
 // TeamCLI's own bookkeeping answers first where it is certain about something a screen cannot
@@ -20,9 +22,20 @@ import { readScreen } from '../watch/screen.ts';
 
 export type SeatStateWord = 'working' | 'idle' | 'done' | 'blocked' | 'held' | 'unreachable' | 'unknown';
 
-/** Where a reading came from: the CLI's own screen, herdr's status, TeamCLI's traces, the
- *  seat's own process, the hold over the team, or nothing at all. */
-export type StateSource = 'cli' | 'herdr' | 'trace' | 'process' | 'hold' | 'none';
+/** Where a reading came from: the CLI's own screen, the state file the CLI's hooks keep, herdr's
+ *  status, TeamCLI's traces, the seat's own process, the hold over the team, or nothing at all. */
+export type StateSource = 'cli' | 'cli-hook' | 'herdr' | 'trace' | 'process' | 'hold' | 'none';
+
+/** One reading the seat's CLI wrote through the hooks its launch installed: `working` when a turn
+ *  started, `idle` when the turn ended, and the instant it wrote, ISO 8601. */
+export type CliHookReading = {
+  state: 'working' | 'idle';
+  since: string;
+};
+
+/** The hook's reading stands for a day. A state file a day old was written by a run that no
+ *  longer speaks for this one, and the screen and herdr answer again. */
+export const CLI_HOOK_FRESH_SECONDS = 24 * 60 * 60;
 
 /** What one seat's reading is made of, already gathered: the caller reads panes and records,
  *  this module only decides. */
@@ -36,6 +49,8 @@ export type SeatStateObservation = {
   present?: boolean;
   /** The CLI's own signal: the pane's screen, read against the seat's CLI, when one was read. */
   screen?: Screen;
+  /** The state file the CLI's own hooks keep for the seat, when the launch installed them. */
+  hook?: CliHookReading | null;
   /** herdr's own screen status for the seat's agent, when herdr reports one. */
   herdr?: string | null;
   /** The newest TeamCLI trace of the seat that carries its own instant, ISO 8601: its last
@@ -53,8 +68,8 @@ export type SeatStateReading = {
 
 /**
  * The reading itself. First answer wins, in the order above — save one: a trace inside the
- * window beats an idle word, from the screen or from herdr, because a seat that just committed,
- * acked or was messaged is working even while its prompt shows. An absent or unrecognised
+ * window beats an idle word, from the hook, the screen or from herdr, because a seat that just
+ * committed, acked or was messaged is working even while its prompt shows. An absent or unrecognised
  * screen, like a herdr word that is neither `working` nor `idle`, falls through to the next
  * source. `unknown` carries `blind`: no trace at all, or none younger than the blind threshold.
  */
@@ -70,21 +85,38 @@ export function seatState(
   const traced = observation.trace ? Date.parse(observation.trace) : Number.NaN;
   const age = Number.isFinite(traced) ? now.getTime() - traced : Number.POSITIVE_INFINITY;
   // A trace inside the window is the freshest TeamCLI heard of the seat. It beats an idle word,
-  // never the certainties above nor a working screen: those need no help.
+  // from the screen, the hook or herdr; never the certainties above nor a working word: those
+  // need no help.
   const withinWindow = age <= limits.trace_window_seconds * 1000;
+  // Every screen this version reads that is neither mid-turn nor at the prompt — a permission
+  // dialog, a question, a trust screen, a rate limit, a provider error, a vendor notice, a
+  // composer holding unsent text — is the seat not working and waiting on someone: blocked. It
+  // outranks every clock, the hook included: the hook cannot see the dialog that the CLI stopped
+  // at after its last write, and nothing can be typed into a composer holding a line until its
+  // owner clears or sends it, however recent the last turn's end.
+  if (screen !== undefined && screen.kind !== 'working' && screen.kind !== 'idle'
+    && screen.kind !== 'unknown') {
+    return { state: 'blocked', source: 'cli', blind: false };
+  }
+  // The CLI's own hook: a fresh `working` is working; a fresh `idle` is idle unless a trace
+  // inside the window says the seat is still in the middle of its work. A reading older than the
+  // day says nothing about the seat now, and the screen answers.
+  const hook = observation.hook;
+  if (hook !== undefined && hook !== null) {
+    const wrote = Date.parse(hook.since);
+    if (Number.isFinite(wrote) && now.getTime() - wrote <= CLI_HOOK_FRESH_SECONDS * 1000) {
+      if (hook.state === 'working') return { state: 'working', source: 'cli-hook', blind: false };
+      if (withinWindow) return { state: 'working', source: 'trace', blind: false };
+      return { state: 'idle', source: 'cli-hook', blind: false };
+    }
+  }
   if (screen !== undefined) {
     if (screen.kind === 'working') return { state: 'working', source: 'cli', blind: false };
-    // A composer holding unsent text is not idle: nothing can be typed into it until its owner
-    // clears or sends the line, so the seat is blocked — and a fresh trace never hides that.
-    if (screen.kind === 'unsent') return { state: 'blocked', source: 'cli', blind: false };
     if (screen.kind === 'idle') {
       if (withinWindow) return { state: 'working', source: 'trace', blind: false };
       return { state: 'idle', source: 'cli', blind: false };
     }
-    // Every other screen this version reads — a permission dialog, a question, a trust screen,
-    // a rate limit, a provider error, a vendor notice — is the seat not working and waiting on
-    // someone: blocked. Only a screen it cannot read at all falls through.
-    if (screen.kind !== 'unknown') return { state: 'blocked', source: 'cli', blind: false };
+    // Only a screen it cannot read at all falls through.
   }
   if (observation.herdr === 'working') return { state: 'working', source: 'herdr', blind: false };
   if (observation.herdr === 'idle') {
@@ -106,6 +138,8 @@ export type ObservedSeatInput = {
   agent?: { pane: string; status: string };
   /** The pane's visible text, when the caller read one for that agent's pane. */
   screenText?: string;
+  /** The state file the CLI's own hooks keep for the seat, when the launch installed them. */
+  hook?: CliHookReading | null;
   /** The seat's newest recorded trace, ISO. */
   trace?: string | null;
   /** The file stops this seat: its process is gone on purpose, and it is done. */
@@ -129,6 +163,7 @@ export function observedSeatState(input: ObservedSeatInput): SeatStateReading {
     ...(input.agent !== undefined && input.screenText !== undefined
       ? { screen: readScreen(input.cli, input.screenText) }
       : {}),
+    hook: input.hook ?? null,
     trace: input.trace ?? null,
   };
   return seatState(observation, input.now, input.limits ?? DEFAULT_STATE_THRESHOLDS);

@@ -98,13 +98,29 @@ export function shellQuote(word: string): string {
 /**
  * The command a seat's pane runs: the unattended flag in its environment, the
  * file's launch line, then the profile's options and, where the CLI takes
- * them at launch, the rules.
+ * them at launch, the rules. A CLI that loads a per-launch settings file also
+ * gets that file, named at the end, unless its launch line already names one.
  */
-export function launchCommand(profile: Profile, launch: string, rules: string): string {
+export function launchCommand(
+  profile: Profile,
+  launch: string,
+  rules: string,
+  cliHook?: string | null,
+): string {
   const words = new Set(launch.trim().split(/\s+/));
   const options = profile.unattended.filter((option) => !words.has(option));
   if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
+  if (cliHook !== undefined && cliHook !== null && supportsCliHook(profile.cli)
+    && !/(^|\s)--settings(=|\s|$)/.test(launch)) {
+    options.push('--settings', cliHook);
+  }
   return ['AGENT_UNATTENDED=1', launch.trim(), ...options.map(shellQuote)].join(' ');
+}
+
+/** True when the CLI loads a settings file named on its launch line, and that file may install
+ *  command hooks: Claude Code's `--settings <file>`. */
+export function supportsCliHook(cli: string): boolean {
+  return cli === 'claude-code';
 }
 
 /** True when the CLI accepts an effort override flag on its launch line. */
