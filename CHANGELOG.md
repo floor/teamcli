@@ -182,10 +182,16 @@ commands read them.
   revocation is its own appended record, never an edit of the grant — `team revoke <name>`
   appends it. `team delegate <session/pane> --commands <acts>` records one pane outside the
   team, up to eight, and `team revoke delegate` removes one. A create-grant — a record in
-  `~/.config/team/grants/` naming its `runner` and the paths it covers — admits that runner,
-  outside herdr and before the record expires, to `init`, `up`, `add` and `remove` under those
-  paths; a caller under herdr is never admitted this way. Every one of these is the owner's,
-  from a terminal outside herdr, with a `--dry-run`, and none can widen its own entry.
+  `~/.config/team/grants/` naming its holder by registry identity, `agent:` an agent id (`agt_`
+  …) or `team:` a registry team id, with the paths or entity it covers and its expiry — admits
+  its holder to `init`, `up`, `add` and `remove` under those paths until the record expires.
+  The holder is the caller's own registry record while it is running, placed by the session,
+  pane and seat it stands as, and a team record admits an agent registered to that team; the
+  owner, an agentless pane and an unplaced process have no registry record, so no record admits
+  them. A record spelling a name, a seat, a pane, a session or a runner grants nothing, and one
+  naming both `agent` and `team`, or no holder, is skipped with the rule. Every one of these is
+  the owner's, from a terminal outside herdr, with a `--dry-run`, and none can widen its own
+  entry.
 
 - **The work queue.** `team issues` lists the typed records in the one file the team file names;
   `team next` claims one, held by a lease in this clone (`--mine`, `--release`, and `--wait` at
@@ -312,7 +318,6 @@ commands read them.
   dialog lines name the drop path and the retry, and a dialog's line reads `unreachable now
   (the screen reads <kind>); a running watch retries it when the seat is idle`.
 
-<!-- rc.4 draft: check --repair redirect — built at 58fbcbc0, merged to rc4-families as abc92eb4; verify on the integrated tip, then remove this line -->
 - `team check --repair` settles every finding the file alone can settle, in one owner-signed
   run: besides the state's leftovers, it re-records each seat an agent registered under dev
   mode, clearing the mark the way an owner's `team register <seat>` does, and sets herdr's
