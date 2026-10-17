@@ -214,7 +214,7 @@ describe('the walk records the channel and the legs it skipped', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
     const trigger = triggerLine(dropped(w.root, 'lead'));
@@ -288,7 +288,7 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('typed');
     expect(entry.failed).toEqual([NATIVE_SKIP, MCP_SKIP]);
@@ -304,7 +304,7 @@ describe('the chain is read from the files when the host hands none in', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     // The order in force holds the one leg, so the send goes by it and neither skip a default
     // walk records is walked: the history line has no `failed` at all.
     const entry = lastEntry(w.root, w.home);
@@ -406,7 +406,7 @@ describe('the dry run names only the legs this build can walk', () => {
     const code = await runSend(['lead', 'hello', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written\n');
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 
@@ -418,7 +418,7 @@ describe('the dry run names only the legs this build can walk', () => {
 
     expect(await runSend(['lead', 'hello', '--dry-run'], io, host)).toBe(0);
 
-    expect(io.out).toBe('lead: dry-run: claude-code via no leg of its delivery order this build can walk; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via no leg of its delivery order this build can walk; nothing was written\n');
   });
 });
 
@@ -444,7 +444,7 @@ describe('a waited send needs the native leg to lead the order', () => {
     const code = await runSend(['lead', 'hello', '--wait', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('lead: dry-run: claude-code --wait needs the native leg first, and its delivery order is typed, native; nothing was sent\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code --wait needs the native leg first, and its delivery order is typed, native; nothing was sent\n');
   });
 
   test('a dry run of a waited send to a native-CLI seat reports that seat’s refusal, exit 1', async () => {

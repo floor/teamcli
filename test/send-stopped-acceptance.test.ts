@@ -223,12 +223,12 @@ describe('send --list names the stopped seat', () => {
 
     expect(code, said(on)).toBe(0);
     const rows = on.out.split('\n');
-    const stoppedRow = rows.find((row) => row.startsWith(`${STOPPED}  `));
+    const stoppedRow = rows.find((row) => row.trimStart().startsWith(`${STOPPED}  `));
     expect(stoppedRow, on.out).toBeDefined();
-    expect(stoppedRow, on.out).toContain('(stopped)');
-    const liveRow = rows.find((row) => row.startsWith(`${LIVE}  `));
+    expect(stoppedRow, on.out).toContain('  stopped');
+    const liveRow = rows.find((row) => row.trimStart().startsWith(`${LIVE}  `));
     expect(liveRow, on.out).toBeDefined();
-    expect(liveRow, on.out).not.toContain('(stopped)');
+    expect(liveRow, on.out).not.toContain('stopped');
   });
 });
 
@@ -249,7 +249,7 @@ describe('the same seat without the stopped mark plans and delivers normally', (
     const delivered = io(w);
     const deliveredCode = await runSend([STOPPED, 'hello', 'there'], delivered, host);
     expect(deliveredCode, said(delivered)).toBe(0);
-    expect(delivered.out, said(delivered)).toBe(`${STOPPED}: delivered\n`);
+    expect(delivered.out, said(delivered)).toBe(`team acme, session "${SESSION}"\n${STOPPED}: delivered\n`);
     expect(host.typed.length).toBe(1);
     expect(dropFiles(w).length).toBe(1);
     expect(sendRecords(w)).toEqual(['delivered']);

@@ -2595,7 +2595,7 @@ scene('answer.ready', async (place) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
-  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'trust answered; ready');
+  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'answered trust');
 });
 
 // These returns are reached when a second validation disagrees with the first, or when no data
@@ -3302,7 +3302,7 @@ scene('send.dry-run', async (place) => {
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['--list'], owner, sendHost(place)), 'lead  claude-code');
+  return show(await sent(place, ['--list'], owner, sendHost(place)), '  lead  coordinator  acme     socket');
 });
 
 /** The file's lead seat, registered and rostered: `route` hands out addresses from the registry
@@ -3347,7 +3347,7 @@ scene('route.routed', async (place) => {
 scene('route.dry-run', async (place) => {
   write(place, TEAM);
   registeredLead(place);
-  return show(await routed(place, ['lead', '--dry-run'], owner, sendHost(place)), '(dry run; nothing was recorded)');
+  return show(await routed(place, ['lead', '--dry-run'], owner, sendHost(place)), 'append the route to');
 });
 scene('route.detached', async (place) => show(await routed(place, ['lead'], detachedCaller, sendHost(place)), SENTENCE));
 scene('route.refused', async (place) => {

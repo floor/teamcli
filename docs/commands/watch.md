@@ -115,7 +115,8 @@ repair is to stop it and run `team up`.
 | `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
 | `--no-nudge` | the owner's. Type nothing into any pane: no report nudge, no work prompt and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
 | `--no-notify` | the owner's. No desktop notification for a report addressed to the operator. A report addressed to the owner is still notified, still written to the log, and still visible in `team status` |
-| `--help`, `-h` | the usage, and exit 0 |
+| `--json` | not used on the daemon loop: the flag is an invocation refusal, one `team.error` document on stdout with stderr empty, and exit 2 |
+| `--help`, `-h` | the usage — the exits below in its last lines — and exit 0 |
 
 ## What it prints
 
@@ -278,6 +279,12 @@ a first sight, which the launch gate calls `first sight only, not yet counted`, 
 | `team watch: only the owner runs this, from a terminal outside herdr` | 1 |
 | `team watch: unknown option --x` / `team watch: unexpected "x"` (each with the usage) | 2 |
 | `team watch: team.yaml line <n>: <message>` / `team watch: <message>` | 2 |
+
+Under `--json` — not a flag the loop takes — that invocation refusal is one `team.error`
+document on stdout: `error.id` `watch.invocation`, `error.message` the sentence above without
+its `team watch: ` prefix, `error.repair` `null`, and stderr stays empty. Every refusal the
+command makes while the flag is present uses the same envelope under its own id; the running
+loop prints its lines as plain text either way.
 
 ## Exit codes
 

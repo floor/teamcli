@@ -290,7 +290,7 @@ describe('team up without an approval record', () => {
       expect(sent, `${sendIo.err}${sendIo.out}`).toBe(0);
       // No socket file under the host's sockets folder: a plain send is the typed trigger, and
       // the outcome is the plain word.
-      expect(sendIo.out).toBe('builder-1: delivered\n');
+      expect(sendIo.out).toBe('team acme, session "acme"\nbuilder-1: delivered\n');
       expect(existsSync(approval(here.root, here.home))).toBe(false);
     } finally {
       rmSync(here.base, { recursive: true, force: true });

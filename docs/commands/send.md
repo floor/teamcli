@@ -87,9 +87,13 @@ is every remaining word, joined with single spaces; `--file` reads the whole bod
 instead (and then takes no message words). A seat that has both a message and `--file` is a
 usage error. `--timeout` is a whole number of seconds, 1 to 86,400, and is only meaningful with
 `--wait`; without it a wait would run 120 seconds — a waited send is refused, so the window is
-never read. `--json` prints one result document instead of
-the lines — `{seat, status, exit, reply?, error?, ids}` — where `ids.sent` is the id of the
-message this command composed and `ids.reply` the reply frame's own, when there is one.
+never read. `--json` prints one document instead of the lines: the action surface and the outcome in one —
+`{format, dry_run, status, action_summary, project, session, seat, channel, ids, reply?, plan?}` —
+where `ids.sent` is the id of the message this command composed and `ids.reply` the reply
+frame's own, when there is one; `channel` is the leg that took it, `null` on a dry run, and
+`plan` is the dry run's own step. `--list` prints its own document —
+`{format, project, session, seats, summary}`. A run that exits 1 or 2 writes the structured
+error document instead — `{error: {id, message, repair}}` — and stderr stays empty.
 `--dry-run` resolves the seat and names the channel its walk would take — the first leg this
 build can actually walk, none it cannot — a drop file and one trigger line for every plain send
 of this build, since the socket write is skipped; a waited Claude Code send is named as the
@@ -221,19 +225,31 @@ was let through; the drop record carries the sender's id from day one.
 
 ## Outcomes
 
+Every run that reads a team file opens on stdout with one context line,
+`team <project>, session "<session>"`, before the outcome line or table; a refused run prints its
+line on stderr and has none.
+
 | Outcome | Exit | Printed |
 | --- | --- | --- |
 | delivered | 0 | `<seat>: delivered` on stdout |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
-| listed | 0 | one `<name>  <cli>  <role>` line per seat on stdout |
+| listed | 0 | a `SEAT  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat(s)` on stdout |
 | recorded | 0 | `<seat>: recorded (native, <n> ms)` on stdout, for a `--record` run |
 | timeout | 1 | `team send: <seat>: timeout: sent, no reply within <s>s; a seat which does not accept messages from other sessions holds the frame until a person lets it through` on stderr |
 | unreachable | 1 | `team send: <seat>: unreachable: <reason>` on stderr |
 | refused | 1 | `team send: refused: <reason>` on stderr |
 | usage | 2 | `team send: <message>` and the usage on stderr |
 | configuration | 2 | `team send: <message>` on stderr |
+
+Under `--json` the same outcomes are one document: the action surface for a send, the roster
+document for `--list`, and the structured error document for an exit 1 or 2 — `error.id` is the
+outcome's own (`send.refused`, `send.not-submitted`, …), `error.message` the text the plain run
+prints without its `team send: ` prefix, and `error.repair` a way out when there is one. Exit
+codes are the outcome's: 0 when delivered, answered, listed, recorded, or resolved by
+`--dry-run`, 1 when held, not-submitted, timed out, unreachable, stopped, or refused, 2 when the
+invocation or team file can't be read.
 
 Three of these rows are the native leg's: `answered`, `held (socket)` and `timeout` belong to
 the socket frame, and a waited send is refused before one exists, so no run of this build reaches
@@ -250,7 +266,7 @@ only text a second Enter is ever pressed for.
 
 `not-submitted` is a line typed and never taken: the message is on disk, the run exits 1, and the reason names the Enters
 pressed and what the input box holds (`the box holds "…"`, `the box is empty`, or `the box could
-not be read`); `--json` carries the same text as `box`, `null` when the box could not be read. The
+not be read`); under `--json` those words travel in the error document's `message`. The
 box is read with its styling (`herdr pane read --format ansi`), and faint text — a suggestion or a
 placeholder — counts as an empty box: it is never waited on, never cleared and never a reason for
 an Enter. After Enter the run verifies two things: the trigger has left the box, and either herdr reports
@@ -318,6 +334,7 @@ A plain send is a drop file and one trigger line, and the outcome is the plain w
 
 ```console
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
+team beacon, session "beacon"
 claude-keeper: delivered
 exit 0
 ```
@@ -334,6 +351,7 @@ A dry run of the same send prints that refusal and writes nothing either:
 
 ```console
 $ team send claude-keeper "is the gate green?" --wait --dry-run ; echo "exit $?"
+team beacon, session "beacon"
 claude-keeper: dry-run: claude-code --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent
 exit 0
 ```
@@ -344,8 +362,11 @@ project its team sits in: the registry's grouping when the machine has one, the 
 
 ```console
 $ team send --list ; echo "exit $?"
-claude-keeper  claude-code  coordinator  beacon
-gpt-reviewer  codex  reviewer  beacon
+team beacon, session "beacon"
+  SEAT           ROLE         PROJECT  REACH
+  claude-keeper  coordinator  beacon   socket
+  gpt-reviewer   reviewer     beacon   typed
+2 seat(s)
 exit 0
 ```
 
@@ -353,14 +374,51 @@ With `--json`, every outcome is one document on stdout:
 
 ```console
 $ team send --list --json ; echo "exit $?"
-{"seat":null,"status":"listed","exit":0,"ids":{"sent":null,"reply":null},"seats":[{"name":"claude-keeper","cli":"claude-code","role":"coordinator","stopped":false,"project":"beacon"},{"name":"gpt-reviewer","cli":"codex","role":"reviewer","stopped":false,"project":"beacon"}]}
+{
+  "schema": {
+    "name": "team.send.list",
+    "version": 1
+  },
+  "format": 1,
+  "project": "beacon",
+  "session": "beacon",
+  "seats": [
+    {
+      "name": "claude-keeper",
+      "cli": "claude-code",
+      "role": "coordinator",
+      "project": "beacon",
+      "reach": "socket",
+      "stopped": false
+    },
+    {
+      "name": "gpt-reviewer",
+      "cli": "codex",
+      "role": "reviewer",
+      "project": "beacon",
+      "reach": "typed",
+      "stopped": false
+    }
+  ],
+  "summary": "2 seat(s)"
+}
 exit 0
 ```
 
-A refused send's document carries the reason, no reply and no ids:
+A refused send's document carries the structured error, no ids and no reply:
 
 ```json
-{"seat":"claude-keeper","status":"refused","exit":1,"error":"claude-keeper: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent","ids":{"sent":null,"reply":null}}
+{
+  "schema": {
+    "name": "team.error",
+    "version": 1
+  },
+  "error": {
+    "id": "send.refused",
+    "message": "refused: claude-keeper: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent",
+    "repair": null
+  }
+}
 ```
 
 A name the file does not carry is refused, and the file's seats are named:
@@ -375,6 +433,7 @@ A native-CLI seat is a drop file and one trigger. `delivered` is herdr reporting
 
 ```console
 $ team send gpt-reviewer "hello" ; echo "exit $?"
+team beacon, session "beacon"
 gpt-reviewer: delivered
 exit 0
 ```
@@ -391,6 +450,7 @@ exit 1
 
 ```console
 $ team send gpt-reviewer "hello" --dry-run ; echo "exit $?"
+team beacon, session "beacon"
 gpt-reviewer: dry-run: codex via a 0600 drop file and one trigger line; nothing was written
 exit 0
 ```

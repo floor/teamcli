@@ -29,8 +29,8 @@ pane is never trusted — panes close and are reused, and an address read from a
 now stands on would be that seat's. A seat herdr does not name there, names twice, or names on
 another CLI is refused, and no address is answered.
 
-The answer names the recipient's agent id, session, CLI and pane, and its socket with the state the
-reading found it in:
+The answer opens on the team's context line, `team <project>, session "<session>"`, names the
+recipient's agent id, session, CLI and pane, and its socket with the state the reading found it in:
 
 - the recorded address, while its own process still runs in the pane and its path is still there —
   `live`;
@@ -41,17 +41,24 @@ reading found it in:
   about it is claimed, because a route never silently swaps a recorded address for another;
 - nothing — `none`.
 
+It closes on the resolved address, said once: `<seat>: routed at <path|no socket> (<state>)`.
+
 `native` says whether the recipient's CLI carries the cross-session channel at all. This process
 never opens, dials or writes to another session's socket; whether to dial the path is the sender's
-own decision, in its own process. `--json` prints one document instead of the lines:
-`{seat, agent, session, cli, pane, socket, socket_state, native, rule, status, exit}`.
+own decision, in its own process. `--json` prints one document instead of the lines: the action
+surface and the answer in one — `{format: 1, dry_run, status, action_summary, project, session,
+seat, agent, recipient_session, cli, pane, address, socket_state, native, rule}` — registered as
+`schema/route.schema.json`. `session` is the caller's team session; the recipient's travels as
+`recipient_session`. `--dry-run` adds `plan`: the one record step a real run would take.
 
 ## The record
 
 A route is one record before it is one answer: one JSON line is appended to the receiving project's
 `routes.jsonl`, beside its `messages.jsonl` in the state folder, naming the pair, the rule, the
 address and its state and when. A record that cannot be written is a refusal — an address this CLI
-handed out is accountable, or it is not handed out. `--dry-run` answers the same and writes nothing.
+handed out is accountable, or it is not handed out. `--dry-run` answers the same, prints the one
+plan step — `+ record: <seat>: append the route to <path>` — then `dry run: nothing was run`, and
+writes nothing.
 
 ## Telling a seat to use it
 
@@ -80,12 +87,15 @@ a warning about the pane, never a reason to hand-dial.
 
 | Outcome | Output | Exit |
 | --- | --- | --- |
-| addressed and recorded | `<seat>  <id>  (<name>)` and the session, cli, pane, socket, native and rule lines | 0 |
-| `--dry-run`, addressed, nothing written | the same, plus `(dry run; nothing was recorded)` | 0 |
+| addressed and recorded | the context line, `<seat>  <id>  (<name>)` and the session, cli, pane, socket, native and rule lines, then the summary `<seat>: routed at <path\|no socket> (<state>)` | 0 |
+| `--dry-run`, addressed, nothing written | the same lines, then the step `+ record: <seat>: append the route to <path>` and `dry run: nothing was run` | 0 |
 | run with no terminal | `team route: only the owner runs this, from a terminal outside herdr` | 1 |
 | refused (admission, or a seat with no registry record) | `team route: refused: <reason>` | 1 |
 | record could not be written | `team route: refused: the route record could not be written: <problem>` | 1 |
 | team file unreadable | `team route: <problem>` | 2 |
 | invocation cannot be read | `team route: <problem>` and the usage | 2 |
+
+Under `--json` the same answer is one document (`team.route`), and a refusal is the structured error
+document (`team.error`, its `error.id` the contract row), with stderr empty.
 
 `--help` and `-h` show usage and exit 0.
