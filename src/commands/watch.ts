@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, pressEnter, reportDisplayAgent, typeText, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
+import { readBacklogDepth, readQueueDepths } from '../queues.ts';
 import { emptySession, readState, updateState } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
 import type { Live } from '../status/compare.ts';
@@ -264,6 +265,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   const say = (text: string, desktop: boolean) => tell(text, desktop && !args.flags.has('no-notify'));
 
   const memory = newMemory();
+  // Summary delivery owns its unsent line independently of worker nudges.
+  const queueMemory = newMemory();
+  const queueDelivery: { pending: { key: string; body: string; trigger?: string; sent: boolean } | null } = { pending: null };
   const told = new Set<string>();
   let outcomes: CheckOutcome[] = [];
   let checksAt: number | null = null;
@@ -384,9 +388,13 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           logLine(dir, 'watch', 'watch', `readings: ${readingsText(machine)}`, sources.now());
         }
         const machineAccounts = sources.home === undefined ? [] : machineAccountsOf(sources.home);
+        const queueDepths = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
+        const queueBacklog = queueDepths ? readBacklogDepth(team, root, sources.home) : null;
         const run = (stored: readonly Seen[]) => pass({
           machineAccounts,
           team, state, live, machine, now, memory,
+          queueDepths,
+          queueBacklog,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce, outcomes, budgets: budget,
           quotaFor: (cli) => quotaWith(cli, overrides.profiles),
           readScreen: (cli, pane) => classifyWith(cli, pane, overrides.profiles),
@@ -405,7 +413,16 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             return { readings: folded.readings, value: folded };
           });
         if (!foreign && sources.home) saveMachineReadings(sources.home, result.machineReadings, now);
-        for (const report of result.reports) tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
+        if (queueDelivery.pending?.key !== result.queueSummary?.key) {
+          queueDelivery.pending = null;
+          queueMemory.ownNudge = null;
+        }
+        for (const report of result.reports) {
+          tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
+          if (report.to === 'orchestrator' && result.queueSummary) {
+            queueDelivery.pending = { key: result.queueSummary.key, body: report.text, sent: false };
+          }
+        }
         for (const label of result.labels) {
           const slot = (memory.seatLabels[label.name] ??= {});
           if (label.title && sources.renameWorkspace) {
@@ -419,6 +436,26 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         }
         const delivered = new Set<string>();
         if (!foreign) {
+          if (queueDelivery.pending && !queueDelivery.pending.sent && !args.flags.has('no-nudge')) {
+            const lead = team.seats.find((seat) => seat.name === team.orchestrator && !seat.stopped && !seat.parked);
+            const agents = live.agents.filter((agent) => agent.name === lead?.name);
+            const agent = agents.length === 1 ? agents[0] : undefined;
+            if (lead && agent && agent.pane !== ownPane && (agent.status === 'idle' || agent.status === 'done')) {
+              const screen = readScreen(lead.cli, live.screens[agent.pane]);
+              const mine = queueDelivery.pending.trigger && ownUnsent(queueMemory, agent.pane, queueDelivery.pending.trigger, lead.cli, live.screens[agent.pane]);
+              if (screen.kind === 'idle' || mine) {
+                if (!queueDelivery.pending.trigger) {
+                  const written = writeWorkDrop(dir, session, lead.name, queueDelivery.pending.body);
+                  if ('error' in written) tell(written.error, true);
+                  else queueDelivery.pending.trigger = written.trigger;
+                }
+                if (queueDelivery.pending.trigger) {
+                  queueDelivery.pending.sent = await deliver({ pane: agent.pane, text: queueDelivery.pending.trigger, pending: [], cli: lead.cli, seat: lead.name, said: queueDelivery.pending.body }, team, session, sources, queueMemory, say, tell, told);
+                  delivered.add(agent.pane);
+                }
+              }
+            }
+          }
           for (const item of result.work) {
             if (item.pane === ownPane) continue;
             if (args.flags.has('no-nudge')) {
@@ -551,7 +588,7 @@ async function deliver(
   nudge: { pane: string; text: string; pending: string[]; cli?: string; seat?: string; ring?: { to: string }; said?: string }, team: TeamFile, session: string, sources: WatchSources,
   memory: ReturnType<typeof newMemory>, say: (text: string, desktop: boolean) => void,
   tell: (text: string, notify: boolean) => void, told: Set<string>,
-): Promise<void> {
+): Promise<boolean> {
   const who = nudge.ring?.to ?? nudge.seat ?? 'the seat';
   const cli = nudge.cli ?? team.seats.find((seat) => seat.name === who)?.cli ?? '';
   const look = () => readScreen(cli, sources.screen(nudge.pane, session) ?? undefined).kind;
@@ -570,7 +607,7 @@ async function deliver(
   if (!live()) {
     tellOnce(told, noAgent, `a nudge was not typed: no live agent in ${who}'s pane`, tell);
     keep();
-    return;
+    return false;
   }
   told.delete(noAgent);
   // The box may already hold this line — but only the record of this process's own typing, in
@@ -587,7 +624,7 @@ async function deliver(
   }
   if ((status !== 'idle' && status !== 'done') || (!mine && (kind !== 'idle' || !sources.typeText(nudge.pane, nudge.text, session)))) {
     keep();
-    return;
+    return false;
   }
   // The typing, and the record of whose it is: from here this process can claim the line, and a
   // later pass may send it. Nothing of this survives a restart — a new process starts with none.
@@ -597,7 +634,7 @@ async function deliver(
   if (!live()) {
     tellOnce(told, noAgent, `a nudge was not typed: no live agent in ${who}'s pane`, tell);
     keep();
-    return;
+    return false;
   }
   // The box is read back before the Enter: it must hold exactly the nudge's own text. The pane
   // draws late — the reading right after the typing is still the idle prompt, and the box
@@ -616,13 +653,13 @@ async function deliver(
       if (currentStatus !== 'idle' && currentStatus !== 'done') {
         tell(`a nudge was typed and not sent: ${who} was not free when the box was read back`, true);
         keep();
-        return;
+        return false;
       }
       const kind = look();
       if (kind !== 'idle' && kind !== 'unsent') {
         tell(`a nudge was typed and not sent: ${who}'s box does not hold it`, true);
         keep();
-        return;
+        return false;
       }
       if (sources.now().getTime() >= deadline) break;
       const before = sources.now().getTime();
@@ -638,18 +675,18 @@ async function deliver(
   if (!live()) {
     tellOnce(told, noAgent, `a nudge was not typed: no live agent in ${who}'s pane`, tell);
     keep();
-    return;
+    return false;
   }
   if (!drawn) {
     tell(`a nudge was typed and not sent: ${who}'s box does not hold it`, true);
     keep();
-    return;
+    return false;
   }
   const free = sources.status(nudge.pane, session);
   if (free !== 'idle' && free !== 'done') {
     tell(`a nudge was typed and not sent: ${who} was not free when the box was read back`, true);
     keep();
-    return;
+    return false;
   }
   if (sources.pressEnter(nudge.pane, session)) {
     // Sent: the line has left the box, so nothing here can claim it any more.
@@ -660,7 +697,10 @@ async function deliver(
       : mine
         ? `nudged ${who} (its own unsent line was already in its box): ${spoken}`
         : `nudged ${who}: ${spoken}`, false);
-  } else keep();
+    return true;
+  }
+  keep();
+  return false;
 }
 
 function tellOnce(told: Set<string>, key: string, text: string, tell: (text: string, notify: boolean) => void): void {

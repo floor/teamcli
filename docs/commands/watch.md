@@ -11,13 +11,37 @@ left alone. `watch.nudge`, when the file sets it, is sent to each idle worker on
 `idle_first` has passed and again every `idle_repeat` when that is set. The body goes to the
 same drop file `team send` uses, and the pane receives one short line naming that file.
 When `watch.nudge` is omitted, that body is the report line. The text is taken from the
-live file, so it does not wait for an approval. The operator, the orchestrator, and the
-pane the watch itself is running in are never the target, and neither is a pane that is in
+live file, so it does not wait for an approval. For these worker prompts, the operator,
+the orchestrator, and the pane the watch itself is running in are never the target, and neither is a pane that is in
 a dialog or already holds unsent text. A box that already holds the nudge's own line is sent, not typed into twice — and only
 by the watch process that typed it: the same text from anyone else, or found after a restart, is
 its owner's, and is never sent or cleared. A screen hatch is an escape hatch for a CLI whose
 screens the data primitives cannot express. The guarantees cover what a hatch returns and what load
 accepts; a hatch is trusted package code, not a sandbox.
+
+## Queue reports
+
+Set `watch.queue_dir` to the team's notes/queue directory to report idle capacity alongside
+queue depth. Paths are relative to the project root, absolute, or begin with `~/` for the
+selected home. Each seat's queue is `<seat>.md`; top-level numbered entries and unchecked
+Markdown tasks count, while checked tasks, nested details and fenced examples do not.
+Use `[x]` to mark a finished task. A missing or unreadable queue is unknown, not empty.
+The directory's `linear-backlog.md`, when it is there, is read the same way: its top-level
+numbered items that are unchecked and carry no `claimed:` or `done:` marker are unclaimed work.
+
+When every active worker has a known empty queue, the watch waits `watch.team_idle` and
+reports `N seats idle, queues empty` once per unchanged stretch. Only workers with an idle
+screen count; leads, parked or stopped seats, quota screens, unknown screens and unsent text
+do not. Quota-blocked workers are named separately. Unclaimed items in the backlog file are
+named in the same sentence — `; 2 unclaimed backlog items` — so empty queues with a full
+backlog do not read as a team out of work; an absent, unreadable or fully claimed backlog adds
+nothing. A pending queue, an unreadable queue or a missing worker suppresses the summary. With
+no queue directory, the existing team-idle report remains unchanged.
+
+This summary goes to the declared orchestrator through a drop file, once its prompt is free.
+The watch retains the same drop across failed delivery attempts and discards a pending
+summary when the condition changes. It never types over a draft or into a prompt, and
+`--no-nudge` and watching a different session suppress this delivery.
 
 ## Synopsis
 

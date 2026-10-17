@@ -15,6 +15,7 @@ import { usesLauncher } from '../launch/line.ts';
 import { profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
 import type { SessionState } from '../state.ts';
+import type { QueueDepths } from '../queues.ts';
 import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
 import { seatModel } from '../status/statusline.ts';
@@ -45,7 +46,7 @@ import { modelDrift } from './checks/model-drift.ts';
 import { restored } from './checks/restored.ts';
 import { swapFree } from './checks/swap-free.ts';
 import { swapGrowth } from './checks/swap-growth.ts';
-import { teamIdle } from './checks/team-idle.ts';
+import { idleQueueSummary, teamIdle } from './checks/team-idle.ts';
 import { unsent } from './checks/unsent.ts';
 import type { Machine } from './machine.ts';
 import { readScreen, statusRow, type Screen } from './screen.ts';
@@ -115,6 +116,7 @@ export type MailboxWaiting = {
 };
 
 export type PassResult = {
+  queueSummary?: { key: string; text: string } | null;
   reports: Report[];
   // The one line to type into an idle seat's pane, when one is free. `pending` holds the
   // report texts it stands for, so a delivery that fails puts them back rather than losing them.
@@ -196,6 +198,9 @@ export type PassInput = {
   machine: Machine;
   now: number;
   memory: Memory;
+  queueDepths?: QueueDepths | null;
+  /** Unclaimed items in the queue directory's backlog file, read beside the depths. */
+  queueBacklog?: number | null;
   approval?: string[] | null;
   // The case in one line when no verified approval is in force and the record says why. The
   // watch says it itself, once; the pass's approval check reads it and adds nothing.
@@ -231,6 +236,8 @@ export function pass({
   machine,
   now,
   memory,
+  queueDepths,
+  queueBacklog,
   approval,
   approvalReason,
   watch,
@@ -420,6 +427,8 @@ export function pass({
   }
 
   const teamObservation: TeamObservation = {
+    queueDepths,
+    queueBacklog,
     team,
     state,
     live,
@@ -537,7 +546,7 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  return { reports, nudge, work: workDrops(team, live, observations, watch, now, memory, read), fallback, ring, mailboxNote, readings, machineReadings, labels };
+  return { reports, ...(queueDepths ? { queueSummary: enabled('team-idle') ? idleQueueSummary(teamObservation) : null } : {}), nudge, work: workDrops(team, live, observations, watch, now, memory, read), fallback, ring, mailboxNote, readings, machineReadings, labels };
 }
 
 /** Idle workers due a work drop this pass. Leads, parked and stopped seats, a dialog and a
