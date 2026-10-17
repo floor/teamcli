@@ -119,10 +119,20 @@ export function commitTrace(worktree: string): SeatTrace | null {
 }
 
 /**
+ * The outcomes that put the message in front of the seat: a delivery it took, an answer it gave,
+ * and the native record's own word (`recorded`; its history line says `delivered`). A send that
+ * never reached the seat — `unreachable`, `not-submitted`, `held`, `timeout` — is the sender's
+ * trouble, not the seat's work, and is no trace: counting it would read a seat as working because
+ * someone failed to reach it, and would clear a blind seat's flag without a sign it moved.
+ */
+const REACHED_SEAT: ReadonlySet<string> = new Set(['delivered', 'answered', 'recorded']);
+
+/**
  * The last ack or message the send history holds for the seat: the newest entry of
  * `messages.jsonl` (`src/send/history.ts`) addressed to it or sent by it, in the history's own
- * words — an `answered` outcome on a message to the seat is its ack. A history that cannot be
- * read has no trace. The mailbox receipts (`.agents/messages/*.read.json`) are a later phase.
+ * words — an `answered` outcome on a message to the seat is its ack. Only an entry whose outcome
+ * reached the seat counts (`REACHED_SEAT`). A history that cannot be read has no trace. The
+ * mailbox receipts (`.agents/messages/*.read.json`) are a later phase.
  */
 export function messageTrace(project: string, root: string, seat: string, home: string): SeatTrace | null {
   const read = readHistory(project, root, home);
@@ -130,6 +140,7 @@ export function messageTrace(project: string, root: string, seat: string, home: 
   let found: SeatTrace | null = null;
   for (const entry of read.entries) {
     if (entry.from !== seat && entry.to !== seat) continue;
+    if (!REACHED_SEAT.has(entry.outcome)) continue;
     if (entry.to === seat && entry.outcome === 'answered') {
       found = { kind: 'ack', at: entry.ts, what: `answered a message from ${entry.from}` };
     } else if (entry.to === seat) {
