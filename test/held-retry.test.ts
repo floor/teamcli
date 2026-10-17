@@ -25,8 +25,10 @@ import {
   readPending,
   type PendingDrop,
 } from '../src/send/pending.ts';
+import { readTaken, TAKEN_IDLE_GRACE_MS } from '../src/send/taken.ts';
 import type { Live } from '../src/status/compare.ts';
 import { retryHeldDrops, type RetrySources } from '../src/watch/retry.ts';
+import { confirmTakenDrops } from '../src/watch/taken.ts';
 import { claudeBox, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
@@ -93,12 +95,14 @@ function world(): World {
   return { root, dir: join(root, '.agents'), home, sockets, cleanup: () => rmSync(base, { recursive: true, force: true }) };
 }
 
-/** A pane this test scripts: the screen it shows, the status it reports, and whether an Enter
- *  actually submits. `typed` and `enters` are the calls it received. */
+/** A pane this test scripts: the screen it shows, the status it reports, whether an Enter
+ *  actually submits, and whether submitting moves the status off idle. `typed` and `enters` are
+ *  the calls it received. */
 type Pane = {
   screen: string | null;
   status: string;
   submits: boolean;
+  moves?: boolean;
   typed: string[];
   enters: number;
 };
@@ -119,7 +123,7 @@ function scripts(one: Pane): RetrySources {
     pressEnter: () => {
       one.enters += 1;
       if (one.submits) {
-        one.status = 'working';
+        if (one.moves !== false) one.status = 'working';
         one.screen = claudeBox('');
       }
       return true;
@@ -319,6 +323,87 @@ describe('retryHeldDrops', () => {
     expect(said).toEqual([
       `lead: a held send from owner was not delivered (its drop file is gone from ${dropDir}); send it again`,
     ]);
+  });
+});
+
+describe('a retry that ends taken', () => {
+  test('it leaves the taken marker and the taken word, and the later confirmation types nothing', async () => {
+    const made = world();
+    // The first send is not-submitted: the box keeps the trigger and the retry record is written.
+    const one = pane(claudeBox(''));
+    one.submits = false;
+    const native: NativePane = {
+      typeText: (_session, _pane, text) => { one.typed.push(text); one.screen = claudeBox(text); return true; },
+      pressEnter: () => { one.enters += 1; if (one.submits) one.screen = claudeBox(''); return true; },
+      status: () => one.status,
+      wait: async () => {},
+      paneText: () => one.screen,
+    };
+    const host: SendHost = {
+      agents: () => [{ name: 'lead', pane: 'w1:p1' }],
+      processInfo: () => ({ shell: 111, foreground: [222] }),
+      socketsDir: made.sockets,
+      deliver: async () => ({ ok: true }),
+      native,
+      now: () => NOW,
+      home: made.home,
+    };
+    const io = testIo(made.root, { kind: 'owner' });
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const pending = readPending(dropDir);
+    expect(pending).toHaveLength(1);
+    const id = (pending[0] as { id: string }).id;
+
+    // The retry's Enter takes the line, but the seat never shows it working: the box clears and
+    // the retry itself ends taken. Its record moves from the retry store to the taken one.
+    const sent = new Date(NOW.getTime() + 5_000);
+    one.submits = true;
+    one.moves = false;
+    one.status = 'idle';
+    one.screen = claudeBox('');
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: sent,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(readPending(dropDir)).toEqual([]);
+    const taken = readTaken(dropDir);
+    expect(taken).toHaveLength(1);
+    expect(taken[0]?.id).toBe(id);
+    expect(taken[0]?.before).toBe('idle');
+    expect(said).toEqual(['lead: a held send from owner was delivered on retry (taken, not yet confirmed)']);
+
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.note])).toEqual([
+      [id, 'not-submitted', undefined],
+      [id, 'delivered', 'taken, not yet confirmed'],
+    ]);
+
+    // Later, the confirmation reports the never-acted line once — and types nothing, ever.
+    one.typed = [];
+    one.enters = 0;
+    one.screen = claudeBox('');
+    one.status = 'idle';
+    const after = {
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one),
+      now: new Date(sent.getTime() + TAKEN_IDLE_GRACE_MS + 1_000),
+      say: (text: string) => said.push(text),
+    };
+    confirmTakenDrops(after);
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readTaken(dropDir)).toEqual([]);
+    expect(said.at(-1)).toBe(
+      `lead: a send from owner was taken but never acted on; the drop file is at ${join(dropDir, id)}`,
+    );
   });
 });
 
