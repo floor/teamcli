@@ -144,6 +144,7 @@ The fixture's session is running, and both seats are idle:
 $ team list ; echo "exit $?"
 TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE
 beacon  beacon   running  2      2 idle
+1 session(s)
 exit 0
 ```
 
@@ -155,23 +156,31 @@ TEAM    PROJECT  STATUS   SEATS  ACTIVITY                                     NO
 beacon  beacon   running  2      2 ready / 0 working / 0 waiting / 0 stopped
   claude-keeper  -  idle  -  -  -
   claude-beacon  -  idle  -  -  -
+1 session(s)
 exit 0
 ```
 
-`--json` prints the same rows as an array. The keys are stable, and an empty list is `[]`:
+`--json` prints the `team.list` envelope (`schema/list.schema.json`) with one object per row in `rows`:
 
 ```console
 $ team list --json ; echo "exit $?"
-[
-  {
-    "team": "beacon",
-    "project": "beacon",
-    "status": "running",
-    "seats": "2",
-    "activity": "2 idle",
-    "note": ""
-  }
-]
+{
+  "schema": {
+    "name": "team.list",
+    "version": 1
+  },
+  "format": 1,
+  "rows": [
+    {
+      "team": "beacon",
+      "project": "beacon",
+      "status": "running",
+      "seats": "2",
+      "activity": "2 idle",
+      "note": ""
+    }
+  ]
+}
 exit 0
 ```
 
@@ -187,6 +196,7 @@ exit 0
 $ team list --all ; echo "exit $?"
 TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE
 beacon  beacon   stopped  2      -
+1 session(s)
 exit 0
 ```
 
@@ -198,7 +208,14 @@ exit 0
 
 ```console herdr=none
 $ team list --json ; echo "exit $?"
-[]
+{
+  "schema": {
+    "name": "team.list",
+    "version": 1
+  },
+  "format": 1,
+  "rows": []
+}
 exit 0
 ```
 
@@ -212,5 +229,8 @@ Usage: team list [--all] [--seats] [--watch] [--json]
 Run from any folder. Lists the herdr sessions on this machine, the running ones unless --all is given, and changes nothing.
 
 A duplicate is two listed sessions whose team files resolve to the same directory, the real path of the folder that holds .agents. The same project name in two directories is two teams and is not flagged. Session names that match after lowercasing and removing hyphens, underscores and dots are near-duplicates. A pair the directory rule already names is not named again as near.
+
+Exits 0 when the sessions are listed (including when none are running or herdr is down), 2 when the invocation can't be read.
 exit 2
 ```
+

@@ -172,7 +172,7 @@ describe('the recorded lobby is the team\'s law', () => {
       team: () => null,
     });
     expect(readback.code).toBe(0);
-    const rows = JSON.parse(readback.out) as Array<{ lobby: string | null }>;
+    const rows = (JSON.parse(readback.out) as { rows: Array<{ lobby: string | null }> }).rows;
     expect(rows[0]?.lobby).toBe(recorded);
   });
 

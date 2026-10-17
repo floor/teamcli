@@ -450,6 +450,96 @@ export const CHECK_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team list` (`schema/list.schema.json`). */
+export const LIST_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.list',
+  fileName: 'list.schema.json',
+  title: 'team list --json output',
+  required: ['format', 'rows'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    rows: {
+      type: 'array',
+      items: {
+        oneOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['team', 'project', 'status', 'seats', 'activity', 'note'],
+            properties: {
+              team: { type: 'string', minLength: 1 },
+              project: { type: 'string', minLength: 1 },
+              status: { type: 'string', enum: ['running', 'stopped'] },
+              seats: { type: 'string', minLength: 1 },
+              activity: { type: 'string', minLength: 1 },
+              active: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                required: ['ready', 'working', 'waiting', 'stopped'],
+                properties: {
+                  ready: { type: 'integer', minimum: 0 },
+                  working: { type: 'integer', minimum: 0 },
+                  waiting: { type: 'integer', minimum: 0 },
+                  stopped: { type: 'integer', minimum: 0 },
+                },
+              },
+              roster: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['name', 'status'],
+                  properties: {
+                    name: { type: ['string', 'null'] },
+                    status: { type: ['string', 'null'] },
+                    id: { type: ['string', 'null'] },
+                    role: { type: ['string', 'null'] },
+                    cli: { type: ['string', 'null'] },
+                    model: { type: ['string', 'null'] },
+                    effort: { type: ['string', 'null'] },
+                    pane: { type: ['string', 'null'] },
+                    last_active: { type: ['string', 'null'] },
+                  },
+                },
+              },
+              note: { type: 'string' },
+            },
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['entity', 'team', 'project', 'lobby', 'seats', 'defined', 'approved', 'running', 'source'],
+            properties: {
+              entity: { type: ['string', 'null'] },
+              team: { type: 'string', minLength: 1 },
+              project: { type: ['string', 'null'] },
+              lobby: { type: ['string', 'null'] },
+              seats: { type: ['integer', 'null'], minimum: 0 },
+              defined: { type: 'boolean' },
+              approved: { type: 'boolean' },
+              running: { type: ['boolean', 'null'] },
+              source: { type: 'string', enum: ['registry', 'discovered'] },
+              roster: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['seat'],
+                  properties: {
+                    seat: { type: 'string', minLength: 1 },
+                    agent: { type: ['string', 'null'] },
+                    role: { type: ['string', 'null'] },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -458,4 +548,6 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   PROJECTS_OUTPUT_SCHEMA,
   DOCTOR_OUTPUT_SCHEMA,
   CHECK_OUTPUT_SCHEMA,
+  LIST_OUTPUT_SCHEMA,
 ];
+
