@@ -236,6 +236,10 @@ describe('team seats', () => {
       model: 'Claude Opus 5.5',
       effort: 'high',
       status: 'working',
+      // The seat's own reading, beside `status`: the fresh trace (12s before NOW) over the
+      // idle screen, the table's STATE and SOURCE columns.
+      state: 'working',
+      state_source: 'trace',
       last_active: NOW.toISOString(),
       pane: 'pane-1',
       launch_line: 'claude --model claude-opus-5-5',
@@ -254,10 +258,47 @@ describe('team seats', () => {
       model: 'Grok 4.7',
       effort: null,
       status: 'stopped',
+      // A retained seat is done (its process is gone), never judged blind: the table's reading.
+      state: 'done',
+      state_source: 'process',
       last_active: '2026-10-02T14:10:00Z',
       pane: null,
       launch_line: 'grok --model grok-4.7',
     });
+  });
+
+  test('--json carries each seat’s state and state_source, and blind only where it applies', async () => {
+    // herdr lists deepseek-acme and reports "blocked" — a word the reading does not take as one
+    // of its own — the pane holds no screen, and its only trace is the record's own last_active
+    // an hour before NOW, past the 30m blind threshold (src/labels/state.ts). The reading is
+    // unknown from no source and blind: the seat counts as not working. The comparison's phrase
+    // about the record stays `blocked`, so the reading is visibly its own thing beside it.
+    live!.agents.find((listed) => listed.name === 'deepseek-acme')!.status = 'blocked';
+
+    const ioSeats = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], ioSeats, statusSources)).toBe(0);
+    const seatsDoc = JSON.parse(ioSeats.out) as SeatsJson;
+    const blindSeat = seatsDoc.seats.find((row) => row.name === 'deepseek-acme');
+    expect(blindSeat).toMatchObject({ state: 'unknown', state_source: 'none', blind: true });
+    // The flag is present only where it applies: a seat that reads a word from a source
+    // carries no `blind` key at all, not a false.
+    const coordinator = seatsDoc.seats.find((row) => row.name === 'claude-coordinator-acme');
+    expect(coordinator).toMatchObject({ state: 'working', state_source: 'trace' });
+    expect(Object.keys(coordinator!)).not.toContain('blind');
+
+    const ioStatus = testIo(dir, { kind: 'owner' });
+    // The blind seat is a must-fix difference of its own (blindDifferences), so status exits 1
+    // as any team with differences does — and still prints the document.
+    expect(await runStatus(['--file', file, '--json'], ioStatus, statusSources)).toBe(1);
+    const statusDoc = JSON.parse(ioStatus.out) as StatusJson;
+    const statusRow = statusDoc.rows.find((row) => row.name === 'deepseek-acme')!;
+    // `state` keeps its published meaning on a status row — the comparison's phrase about the
+    // record — so the reading rides beside it as seat_state/seat_state_source.
+    expect(statusRow.state).toBe('blocked');
+    expect(statusRow).toMatchObject({ seat_state: 'unknown', seat_state_source: 'none', blind: true });
+    // Without --all the expanded columns stay out, and the reading is on the row anyway.
+    expect(Object.keys(statusRow)).not.toContain('role');
+    expect(Object.keys(statusRow)).not.toContain('cli');
   });
 
   test('two seats recorded under one handle are not both shown as that handle', async () => {

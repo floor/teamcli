@@ -73,6 +73,13 @@ export interface SeatsJson {
     model: string;
     effort: string | null;
     status: string;
+    /** The seat's own reading (src/labels/state.ts), the table's STATE and SOURCE columns,
+     *  beside `status`, which is the comparison's phrase about the record. */
+    state: SeatStateWord;
+    state_source: StateSource;
+    /** Present, true, only where it applies: `unknown` past the blind threshold, which counts
+     *  as not working (the table's `(blind)`). */
+    blind?: true;
     last_active: string | null;
     pane: string | null;
     launch_line: string | null;
@@ -318,6 +325,9 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
           model: row.model,
           effort: row.effort,
           status: row.stored ?? row.status,
+          state: row.state,
+          state_source: row.state_source,
+          ...(row.blind ? { blind: true as const } : {}),
           last_active: row.last_active,
           pane: row.pane,
           launch_line: row.launch_line,

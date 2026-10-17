@@ -16,7 +16,7 @@ active time, and pane.
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
 | `--all` | — | include the seats whose STATUS reads `stopped`; without it those rows are dropped, and every other state is listed either way |
 | `--watch` | — | refresh the table every 2 seconds until interrupted |
-| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`) |
+| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`), each seat carrying its own reading as `state` and `state_source`, and `blind: true` where it applies |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Columns
@@ -115,5 +115,35 @@ $ team seats --all ; echo "exit $?"
 SEAT           ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
 claude-keeper  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
 claude-beacon  seat_fedcba987654  implementer  claude-code  Claude Opus 5.5  -       stopped  done   process  1h ago       -
+exit 0
+```
+
+`--json` prints the same registry as one document: each seat's `status` is the comparison's
+phrase about the record, and its own reading — the table's `STATE` and `SOURCE` — rides beside it
+as `state` and `state_source`, with `blind: true` only where it applies:
+
+```console
+$ team seats --json ; echo "exit $?"
+{
+  "format": 1,
+  "project": "beacon",
+  "session": "beacon",
+  "seats": [
+    {
+      "name": "claude-keeper",
+      "id": "seat_0123456789ab",
+      "role": "coordinator",
+      "cli": "claude-code",
+      "model": "Claude Opus 5.5",
+      "effort": "max",
+      "status": "missing",
+      "state": "done",
+      "state_source": "process",
+      "last_active": "2026-10-04T08:58:00.000Z",
+      "pane": null,
+      "launch_line": "claude --model claude-opus-5-5"
+    }
+  ]
+}
 exit 0
 ```

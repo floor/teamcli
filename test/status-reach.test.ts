@@ -127,8 +127,12 @@ test('the plain table prints each seat how a send would reach it, as its last co
   expect(line('grok-acme')).toMatch(/  typed$/);
 });
 
-test('--json keeps the row shape it published: the reach word is the plain table\'s alone', async () => {
+test('--json keeps the reach word out of the rows: it is the plain table\'s alone', async () => {
   const { out } = await status(live({ 'w1:p1': processes(SESSION_PID) }), '--json');
   const doc = JSON.parse(out) as { rows: Record<string, unknown>[] };
-  for (const row of doc.rows) expect(Object.keys(row).sort()).toEqual(['model', 'name', 'pane', 'state']);
+  // The published keys stand, the seat's own reading riding beside them additively; `reach`
+  // never crosses over, and no row here is blind (each reads a word), so no `blind` key either.
+  for (const row of doc.rows) {
+    expect(Object.keys(row).sort()).toEqual(['model', 'name', 'pane', 'seat_state', 'seat_state_source', 'state']);
+  }
 });
