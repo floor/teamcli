@@ -5,7 +5,10 @@ by renaming a temporary file into place, and types one short trigger line that n
 The body is never split across several writes. A seat whose CLI builds its own work item from
 its screens — a profile with a compose module — still gets the drop file, but the body is typed
 through those screens and never becomes a trigger line; `delivered` there means the CLI printed
-the line that creates the item. The receiving seat's
+the line that creates the item. A compose seat's brief is typed for one repo: the repo of the
+seat's own folder, read from `git remote get-url origin` there. The module proves the CLI's own
+chooser collapsed on that repo before it types, and refuses with nothing typed when the CLI's
+list does not hold it. The receiving seat's
 delivery order decides the channel: `native`, `mcp-inbox`, then `typed` when no level of the
 seat's chain declares one. Each leg in turn either takes the send, which ends the walk, or
 definitely cannot take it, which hands the send to the next leg and is recorded as a failure —
