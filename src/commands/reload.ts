@@ -29,6 +29,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
+import { modelDiffers } from '../status/statusline.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -327,7 +328,16 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
 
 /** `model`, `effort`, or `model; effort`. Null when the launch record already matches the file. */
 function driftOf(recorded: SeatState, seat: Seat): string | null {
-  const model = recorded.model !== seat.model || recorded.version !== seat.version;
+  // The shared comparison (`modelDiffers`): another word order, another casing, or the version
+  // written inside the recorded model name is the model the file declares. A record without a
+  // model is a drift, as before — the caller refuses those seats earlier anyway.
+  const model =
+    recorded.model === undefined || recorded.version === undefined
+      ? true
+      : modelDiffers(
+          { model: recorded.model, version: recorded.version },
+          { model: seat.model, version: seat.version },
+        );
   const effort = (recorded.effort ?? null) !== (seat.effort ?? null);
   if (!model && !effort) return null;
   return [model ? 'model' : '', effort ? 'effort' : ''].filter(Boolean).join('; ');

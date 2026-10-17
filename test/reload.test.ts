@@ -82,7 +82,7 @@ function approve(text = teamYaml(['reload'])): void {
   );
 }
 
-function remember(name: string, effort: string | undefined, version = '5.5'): void {
+function remember(name: string, effort: string | undefined, version = '5.5', model = 'Claude Opus'): void {
   updateState(dir, (file) => {
     const session = (file.sessions.alpha ??= emptySession());
     session.watch = { pid: 1, heartbeat: NOW.toISOString() };
@@ -92,7 +92,7 @@ function remember(name: string, effort: string | undefined, version = '5.5'): vo
       workspace: `${name}-ws`,
       cli: 'claude-code',
       launched: { shell: 1, cli: [2] },
-      model: 'Claude Opus',
+      model,
       version,
       launch_line: 'claude --model claude-opus-5-5',
       ...(effort === undefined ? {} : { effort }),
@@ -253,6 +253,28 @@ describe('team reload', () => {
     expect(code).toBe(1);
     expect(io.err).toContain('were not recorded at launch');
     expect(closed).toEqual([]);
+  });
+
+  test('a record spelling the same model in another word order is no drift', async () => {
+    // The record holds the version inside the model name; the file writes the split spelling.
+    // The words and the version are the same, so nothing is closed.
+    remember('worker', 'high', '5.5', 'Opus 5.5 Claude');
+    const { sources, closed } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect({ code, err: io.err, closed, log: logText() }).toEqual({ code: 0, err: '', closed: [], log: '' });
+    expect(io.out).toContain('already running what the file declares');
+  });
+
+  test('a record naming another model still drifts', async () => {
+    remember('worker', 'high', '5.5', 'Claude Sonnet');
+    const { sources, closed } = harness();
+    const code = await runReload(['worker'], testIo(root, OWNER), sources);
+    expect(code).toBe(0);
+    expect(closed).toEqual(['worker-ws']);
+    expect(logText()).toContain('reload [owner] worker: model');
+    expect(logText()).not.toContain('effort');
+    expect(readState(dir).sessions.alpha?.seats.worker?.model).toBe('Claude Opus');
   });
 
   test('the owner reloads a lead that up left ready', async () => {
