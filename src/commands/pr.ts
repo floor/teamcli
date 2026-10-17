@@ -58,8 +58,9 @@ function loadProblemId(errors: Problem[]): 'pr.not-a-repo' | 'pr.file' | 'pr.fil
 export async function pr(argv: string[], io: Io, load: LoadConfig = loadConfig): Promise<number> {
   const args = readArgs(argv, ['file'], ['json']);
   // Read from the raw argv before the parser runs: a bad option before `--json`, or a
-  // malformed `--json=<value>`, still asks for the structured refusal.
-  const json = hasJsonFlag(argv);
+  // malformed `--json=<value>`, still asks for the structured refusal. A `--json` that is the
+  // value of `--file` is that option's value — a path, not the flag.
+  const json = hasJsonFlag(argv, ['file']);
   const sub = args.rest[0];
   const fail = (message: string): number => {
     refuse(io, json, 'pr check', { id: 'pr.invocation', message, repair: null, usage: USAGE });

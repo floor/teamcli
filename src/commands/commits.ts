@@ -206,8 +206,9 @@ export async function runCommits(io: Io, load: LoadConfig, options: CommitsRun):
 
 export async function commits(argv: string[], io: Io, load: LoadConfig = loadConfig): Promise<number> {
   // Read from the raw argv before the parser runs: a bad option before `--json`, or a
-  // malformed `--json=<value>`, still asks for the structured refusal.
-  const json = hasJsonFlag(argv);
+  // malformed `--json=<value>`, still asks for the structured refusal. A `--json` that is the
+  // value of `--file` or `--since` is that option's value — a path, not the flag.
+  const json = hasJsonFlag(argv, VALUE_OPTIONS);
   const args = parse(argv);
   if (typeof args === 'string') {
     refuse(io, json, 'commits check', {

@@ -75,9 +75,22 @@ export function toJsonDifference(diff: OutputDifference): JsonDifference {
  *   through the `team.error` JSON envelope, and
  * - `team check` never treats `--json` / `--json=…` as a spelling-breaker that flips
  *   dispatch back to the old 0.3.3 `team check <file> --by <seat>` spelling.
+ *
+ * `valueOptions` names the command's options that take a value. Their value is taken as given,
+ * whatever it looks like, so a `--json` that is some option's value (`--file --json`, naming a
+ * file called `--json`) is a path and does not select the JSON output — the same reading
+ * `team release` documents and `team commits check` and `team pr check` share.
  */
-export function hasJsonFlag(argv: readonly string[]): boolean {
-  return argv.some((arg) => arg === '--json' || arg.startsWith('--json='));
+export function hasJsonFlag(argv: readonly string[], valueOptions: readonly string[] = []): boolean {
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index] as string;
+    if (valueOptions.some((name) => argument === `--${name}`)) {
+      index += 1;
+      continue;
+    }
+    if (argument === '--json' || argument.startsWith('--json=')) return true;
+  }
+  return false;
 }
 
 /**
