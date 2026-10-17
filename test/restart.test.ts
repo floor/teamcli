@@ -351,6 +351,25 @@ describe('team restart <seat>', () => {
     expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
   });
 
+  test('the lead can start a seat the file lists and no pane holds', async () => {
+    // The check names `team restart <seat>` for a seat that is in the file and not running, so a
+    // lead must be able to run it with no record and no agent to stop: the map admits the team's
+    // leads, and the seat starts where nothing was closed.
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+    });
+    const { sources, did } = makeHarness(fixture, { initialRunning: false });
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const io = testIo(fixture.root, leadCaller);
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code).toBe(0);
+    expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(1);
+  });
+
   test('refuses self-restart from a seat caller', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {

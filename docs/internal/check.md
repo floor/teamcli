@@ -176,8 +176,8 @@ one, prints above the findings. The check prints no seat table and no budget blo
 
     note: main/w9:p3's delegate entry names approve, which no command acts on since team approve was removed; drop it from the file
     difference: claude-beacon is in the file and is not running
-      repair: the owner runs team up
-    team check: 1 difference(s), 1 for the owner
+      repair: team restart claude-beacon
+    team check: 1 difference(s)
 
 The note is earned by a `delegates` entry still naming `approve`: `team approve` was removed,
 and the word stays accepted only so a file that already names it loads unchanged. It is a note

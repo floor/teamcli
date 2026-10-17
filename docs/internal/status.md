@@ -158,7 +158,7 @@ here.
 
 | Difference | Repair |
 | --- | --- |
-| `<seat> is in the file and is not running` | `team add <seat>` when something else runs, `the owner runs team up` when nothing does |
+| `<seat> is in the file and is not running` | `team restart <seat>` when something else runs — the map admits the owner and the team's leads — and `the owner runs team up` when nothing does (the session is down, so a lead cannot prove its pane) |
 | `<seat>: its pane runs no CLI (the CLI ended or the session was restored)` | `team up` (it closes the pane without input and launches the seat fresh; the map admits the owner and the team's leads) |
 | `<seat>: the process in its pane is not the one team launched; nothing checks its model, account or rules` | `team up` (it closes the pane without input and launches the seat fresh; the map admits the owner and the team's leads) |
 | `<seat>: its pane holds a process this record cannot tie to the launch` | `look at the pane`. The row is `restored, not launched by team` and its model is `-`. A screen that names a model adds a note; it is not shown as the model running |
@@ -187,7 +187,8 @@ here.
 
 The one precondition `status` knows and orders is the real one: the record is legacy, or the
 verification refused it. That difference is printed first, and a repair that names a command that
-refuses while the record is not in force — `team up`, `team add`, `team worktree` — is marked
+refuses while the record is not in force — `team up`, `team add`, `team restart`, `team worktree`
+— is marked
 `(after: …)`. Nothing else is reordered or marked: a missing or stale watch blocks no repair, and
 what blocks a launch is `team doctor`'s
 to report. When at least one repair is the owner's, the summary line reports
@@ -213,7 +214,7 @@ line):
       "session": "beacon",
       "rows": [{ "name": "claude-keeper", "state": "missing", "model": "Claude Opus 5.5", "pane": "-", "seat_state": "done", "seat_state_source": "process" }],
       "notes": [],
-      "differences": [{ "what": "claude-keeper is in the file and is not running", "repair": "team add claude-keeper" }],
+      "differences": [{ "what": "claude-keeper is in the file and is not running", "repair": "team restart claude-keeper" }],
       "notice": null
     }
 
@@ -354,7 +355,7 @@ budgets:
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 difference: claude-keeper is in the file and is not running
-  repair: team add claude-keeper
+  repair: team restart claude-keeper
 1 difference(s)
 Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 1
@@ -391,7 +392,7 @@ team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's 
   "differences": [
     {
       "what": "claude-keeper is in the file and is not running",
-      "repair": "team add claude-keeper"
+      "repair": "team restart claude-keeper"
     }
   ],
   "notice": null,
@@ -443,11 +444,11 @@ team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's 
 exit 1
 ```
 
-The repair is the command `add` starts a stopped or missing seat with:
+The repair names `restart`, the command that starts a seat the file lists and no pane holds:
 
 ```console
-$ team add claude-keeper
-claude-keeper: ready
+$ team restart claude-keeper
+team restart: restarted claude-keeper; pane none -> w2:p1
 ```
 
 Now nothing disagrees:

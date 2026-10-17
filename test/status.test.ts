@@ -151,7 +151,7 @@ describe('team status', () => {
   test('a missing seat, with its repair', async () => {
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const { code, out } = await status();
-    expect(out).toContain('difference: deepseek-acme-2 is in the file and is not running\n  repair: team add deepseek-acme-2');
+    expect(out).toContain('difference: deepseek-acme-2 is in the file and is not running\n  repair: team restart deepseek-acme-2');
     expect(out).toContain('1 difference(s)');
     expect(code).toBe(1);
   });
@@ -629,7 +629,7 @@ describe('team status', () => {
     const doc = JSON.parse(out);
     expect(doc.format).toBe(1);
     expect(doc.differences).toEqual([
-      { what: 'deepseek-acme-2 is in the file and is not running', repair: 'team add deepseek-acme-2' },
+      { what: 'deepseek-acme-2 is in the file and is not running', repair: 'team restart deepseek-acme-2' },
     ]);
   });
 
@@ -668,14 +668,14 @@ describe('team status', () => {
 
     const missingWatch = await status();
     expect(missingWatch.code).toBe(1);
-    const add1 = missingWatch.out.indexOf('difference: deepseek-acme is in the file and is not running\n  repair: team add deepseek-acme\n');
-    const add2 = missingWatch.out.indexOf('difference: deepseek-acme-2 is in the file and is not running\n  repair: team add deepseek-acme-2\n');
+    const restart1 = missingWatch.out.indexOf('difference: deepseek-acme is in the file and is not running\n  repair: team restart deepseek-acme\n');
+    const restart2 = missingWatch.out.indexOf('difference: deepseek-acme-2 is in the file and is not running\n  repair: team restart deepseek-acme-2\n');
     const watch = missingWatch.out.indexOf('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
-    expect(add1).toBeGreaterThanOrEqual(0);
-    expect(add2).toBeGreaterThanOrEqual(0);
+    expect(restart1).toBeGreaterThanOrEqual(0);
+    expect(restart2).toBeGreaterThanOrEqual(0);
     // The differences keep the order they were created in: the watch's, made after them, stays after them.
-    expect(watch).toBeGreaterThan(add1);
-    expect(watch).toBeGreaterThan(add2);
+    expect(watch).toBeGreaterThan(restart1);
+    expect(watch).toBeGreaterThan(restart2);
     expect(missingWatch.out).not.toContain('(after:');
 
     // 2. A record the verification refused: the record's own row first, then the repairs that
@@ -686,8 +686,8 @@ describe('team status', () => {
     expect(refused.code).toBe(1);
     const approve = refused.out.indexOf(`difference: ${REFUSED_WHY}\n  repair: the live file is what the commands read`);
     expect(approve).toBeGreaterThanOrEqual(0);
-    expect(refused.out).toContain('repair: team add deepseek-acme (after: the live file is what the commands read)');
-    expect(refused.out).toContain('repair: team add deepseek-acme-2 (after: the live file is what the commands read)');
+    expect(refused.out).toContain('repair: team restart deepseek-acme (after: the live file is what the commands read)');
+    expect(refused.out).toContain('repair: team restart deepseek-acme-2 (after: the live file is what the commands read)');
     expect(refused.out.indexOf('difference: deepseek-acme is in the file and is not running')).toBeGreaterThan(approve);
     expect(refused.out).toContain('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
   });
@@ -883,7 +883,7 @@ describe('team status', () => {
   });
 
   test('D: summary line: with and without an owner repair', async () => {
-    // 1. Without an owner repair: only a missing seat (repair: team add <seat>)
+    // 1. Without an owner repair: only a missing seat (repair: team restart <seat>)
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const noOwner = await status();
     expect(noOwner.out).toContain('1 difference(s)\n');
@@ -895,7 +895,7 @@ describe('team status', () => {
     const withOwner = await status();
     expect(withOwner.out).toContain('1 difference(s), 1 for the owner\n');
 
-    // 3. Mixed: 1 owner repair (the record's row) + 1 non-owner repair (add)
+    // 3. Mixed: 1 owner repair (the record's row) + 1 non-owner repair (restart)
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const mixed = await status();
     expect(mixed.out).toContain('2 difference(s), 1 for the owner\n');

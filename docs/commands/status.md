@@ -221,7 +221,7 @@ budgets:
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 note: watch: pane w9:p1, pid 4242, last heartbeat 0s ago
 difference: claude-keeper is in the file and is not running
-  repair: team add claude-keeper
+  repair: team restart claude-keeper
 1 difference(s)
 Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 1

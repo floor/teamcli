@@ -45,10 +45,11 @@ export const APPROVAL_REPAIR = 'the live file is what the commands read';
  * re-derive from the repair's wording, both set where the difference is created:
  *
  * - `needs`: the repair names a command that refuses while no approval is in force.
- *   Confirmed from the commands themselves: `team up` (`up.ts`), `team add` (`add.ts`), and
- *   `team worktree` (`worktree.ts`) each refuse on the standing before they do anything. Such a
- *   repair waits for `APPROVAL_REPAIR`, and is printed with `(after: …)` while the approval
- *   difference is there. A difference is never marked for a command that does not refuse.
+ *   Confirmed from the commands themselves: `team up` (`up.ts`), `team add` (`add.ts`),
+ *   `team restart` (`restart.ts`) and `team worktree` (`worktree.ts`) each refuse on the
+ *   standing before they do anything. Such a repair waits for `APPROVAL_REPAIR`, and is printed
+ *   with `(after: …)` while the approval difference is there. A difference is never marked for
+ *   a command that does not refuse.
  * - `owner`: the repair is one of the owner's commands (the summary line counts these).
  *
  * `approval` marks the approval difference itself: it is the precondition, printed first.
@@ -402,7 +403,11 @@ export function compare(
     });
     differences.push({
       what: `${seat.name} is in the file and is not running`,
-      repair: anyRunning ? `team add ${seat.name}` : 'the owner runs team up',
+      // With the session up, `team restart <seat>` is the per-seat repair the map admits to the
+      // owner and the team's leads alike; `team add` is the owner's alone, and a lead that reads
+      // this line must be handed a command it can run. With nothing running the session itself is
+      // down, a lead cannot prove its pane, and the owner's `team up` is what starts it.
+      repair: anyRunning ? `team restart ${seat.name}` : 'the owner runs team up',
       needs: 'approve',
       ...(anyRunning ? {} : { owner: true as const }),
     });
