@@ -3,8 +3,10 @@
 Restarts one declared seat in place without editing `.agents/team.yaml`: prints the seat's input-box,
 turn and context facts, asks a free seat to exit and waits for its pane to return to its shell,
 closes its workspace, and launches the seat again in a fresh workspace. A seat that is busy —
-working, blocked at a prompt, at its own exit question, on a screen the profile does not recognise,
-or holding unsent text — is left as it is unless `--abandon` is given.
+working, blocked at a prompt, at its own exit question, or holding unsent text — is left as it is
+unless `--abandon` is given. A screen the profile does not recognise is advice, not a block: when
+herdr reports the seat idle or done, the workspace is closed without typing into it, and the run
+says the screen was not read.
 
 ## Synopsis
 

@@ -311,6 +311,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
       : `${plainLine(name)}: not currently running\n`;
+    // An unread screen on a seat herdr calls idle is advice: the dry answer says what the run
+    // does without typing into it.
+    const advice = inspected.unrecognised === undefined
+      ? ''
+      : `${plainLine(name)}: screen: not recognised; herdr reports it ${plainLine(inspected.unrecognised)}; the workspace is closed without typing into it\n`;
     const preview = upPlan({
       root,
       session,
@@ -320,7 +325,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       cliHooks: plannedCliHooks(dir, session, [planSeat]),
       watchLabel: watchLabel(team.project),
     });
-    return dryRunExit(out, `${stopStep}${plainText(formatPlan(preview))}`);
+    return dryRunExit(out, `${stopStep}${advice}${plainText(formatPlan(preview))}`);
   }
 
   const runLock = acquireRunLock(dir, session);
@@ -341,10 +346,17 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
 
     if (rechecked.agent) {
-      // Print the three pre-close facts before stopping or closing the seat's workspace.
-      out.stdout(`${plainLine(name)}: input box: ${rechecked.where === 'unsent' ? 'holds unsent text' : 'empty'}\n`);
+      // Print the three pre-close facts before stopping or closing the seat's workspace. A screen
+      // the profile cannot read is not claimed empty: its input box was not read.
+      const box = rechecked.unrecognised !== undefined
+        ? 'not read (the screen is not recognised)'
+        : rechecked.where === 'unsent' ? 'holds unsent text' : 'empty';
+      out.stdout(`${plainLine(name)}: input box: ${box}\n`);
       out.stdout(`${plainLine(name)}: turn: ${rechecked.where === 'working' ? 'mid-turn (working)' : `not working (${rechecked.where})`}\n`);
       out.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(declared.launch)}" in a new workspace without passing the old transcript\n`);
+      if (rechecked.unrecognised !== undefined) {
+        out.stdout(`${plainLine(name)}: screen: not recognised; herdr reports it ${plainLine(rechecked.unrecognised)}; the workspace is closed without typing into it\n`);
+      }
 
       const stopped = await stopRunning({
         io: out,
@@ -363,7 +375,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
           ...(rechecked.atExitQuestion ? { atExitQuestion: true } : {}),
         },
         keep: false,
-        abandon: abandon && rechecked.where !== 'free',
+        // An unrecognised screen on a seat herdr calls idle is closed, not typed into: `abandon`
+        // says "close without typing" here, and the owner's own `--abandon` stays what it was.
+        abandon: (abandon || rechecked.unrecognised !== undefined) && rechecked.where !== 'free',
         closeUnasked: abandon,
         unasked: `team restart ${name} --abandon closes it`,
       });
@@ -461,6 +475,8 @@ type InspectedSeat =
       where: DownSeat['state'];
       exitInBox: boolean;
       atExitQuestion: boolean;
+      /** herdr's own status, when the screen is not recognised but herdr says idle or done. */
+      unrecognised?: string;
     };
 
 function inspectSeat(
@@ -517,6 +533,19 @@ function inspectSeat(
 
   if (abandon && !owner && where === 'working') {
     return { kind: 'abandon-working' };
+  }
+  // herdr's own status is the last word on a seat whose screen the profile cannot read: one
+  // herdr reports idle or done is restartable, and its workspace is closed without typing into
+  // it. The unread screen is advice on the pre-close line, never a block.
+  if (where === 'unknown' && (agent.status === 'idle' || agent.status === 'done')) {
+    return {
+      kind: 'ok',
+      agent,
+      where,
+      exitInBox: false,
+      atExitQuestion: false,
+      unrecognised: agent.status,
+    };
   }
   if (where !== 'free' && where !== 'exited' && !abandon && !clearable) {
     const way = where !== 'unknown'

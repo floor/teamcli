@@ -31,7 +31,7 @@ const NO_TERMINAL_ROW =
 const LEAD_ROW =
   'never its own recorded pane, never `--abandon` on the orchestrator\'s or the operator\'s seat, and never `--abandon` on a `working` seat';
 const BUSY_ENUMERATION =
-  'working, blocked at a prompt, at its own exit question, on a screen the profile does not recognise, or holding unsent text';
+  'working, blocked at a prompt, at its own exit question, or holding unsent text';
 const FILE_FLAG = 'the team file, instead of `.agents/team.yaml`; the owner\'s alone';
 const SESSION_FLAG = 'the herdr session, instead of `team.session`; the owner\'s alone';
 const RESTARTED_ROW = 'team restart: restarted <seat>; pane <old-pane> -> <new-pane>';
@@ -323,13 +323,27 @@ describe('the restart page, held to its command', () => {
     expect(ioBlocked.err).toBe('team restart: worker is blocked at a prompt, which team never answers; left as it is\n');
     expect(blocked.did.closed).toEqual([]);
 
-    // A screen the profile does not recognise: the owner's refusal names the way out.
+    // A screen the profile does not recognise is advice when herdr itself reports the seat
+    // idle: the workspace is closed without typing and the seat restarts. Only herdr's own
+    // busy word keeps the refusal.
     const unknown = makeWorld('unknown');
     record(unknown.dir, { worker: 'pane-old' });
     const ioUnknown = testIo(unknown.root, { kind: 'owner' });
-    expect(await runRestart(['worker'], ioUnknown, unknown.sources)).toBe(1);
-    expect(ioUnknown.err).toBe('team restart: worker shows a screen the profile does not recognise; left as it is (team restart worker --abandon closes its workspace without typing)\n');
-    expect(unknown.did.closed).toEqual([]);
+    expect(await runRestart(['worker'], ioUnknown, unknown.sources)).toBe(0);
+    expect(unknown.did.typed).toEqual([]);
+    expect(unknown.did.closed).toEqual(['ws-old']);
+    expect(ioUnknown.out).toContain('worker: input box: not read (the screen is not recognised)\n');
+    expect(ioUnknown.out).toContain('worker: screen: not recognised; herdr reports it idle; the workspace is closed without typing into it\n');
+    expect(ioUnknown.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+
+    // The same unread screen with herdr reporting a turn: the refusal stands, and the owner's
+    // way out is named.
+    const unknownWorking = makeWorld('unknown', 'working');
+    record(unknownWorking.dir, { worker: 'pane-old' });
+    const ioUnknownWorking = testIo(unknownWorking.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], ioUnknownWorking, unknownWorking.sources)).toBe(1);
+    expect(ioUnknownWorking.err).toBe('team restart: worker shows a screen the profile does not recognise; left as it is (team restart worker --abandon closes its workspace without typing)\n');
+    expect(unknownWorking.did.closed).toEqual([]);
 
     // The owner's --abandon on a working seat closes it without typing and restarts it. The
     // launch command itself is not "typing into the pane": only closeUnasked skips the pane.

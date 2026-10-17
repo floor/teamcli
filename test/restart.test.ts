@@ -484,4 +484,52 @@ describe('team restart <seat>', () => {
     expect(await runRestart(['worker'], ioLocked, sources)).toBe(1);
     expect(ioLocked.err).toContain('another session-mutating run is holding');
   });
+
+  test('an unread screen on a seat herdr calls idle does not block a lead: closed without typing, then restarted', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+    });
+    const { sources, did } = makeHarness(fixture, { workerScreen: 'unknown' });
+    const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+    const code = await runRestart(['worker'], io, sources);
+    expect(code, io.err).toBe(0);
+    // The workspace is closed without a typed exit: the screen is not recognised.
+    expect(did.typed).toEqual([]);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(io.out).toContain('worker: input box: not read (the screen is not recognised)\n');
+    expect(io.out).toContain('worker: screen: not recognised; herdr reports it idle; the workspace is closed without typing into it\n');
+    expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-new');
+  });
+
+  test('a dry run on an unread screen says how the workspace is closed', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const { sources, did } = makeHarness(fixture, { workerScreen: 'unknown' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--dry-run'], io, sources)).toBe(0);
+    expect(io.out).toContain('stop worker in pane-old (unknown)\n');
+    expect(io.out).toContain('worker: screen: not recognised; herdr reports it idle; the workspace is closed without typing into it\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  test('the same unread screen with herdr reporting a turn stays a refusal', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const { sources, did } = makeHarness(fixture, { workerScreen: 'unknown', workerStatus: 'working' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: worker shows a screen the profile does not recognise; left as it is (team restart worker --abandon closes its workspace without typing)\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
 });

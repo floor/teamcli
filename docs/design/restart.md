@@ -74,7 +74,10 @@ Before typing an exit sequence or closing a live pane, `team restart` checks `se
 - `free` — idle at its prompt with an empty input box and verified process identity.
 - `exited` — the CLI has already exited and the pane is back at a bare shell.
 - `gone` — no live pane in the session carries the seat.
-- Busy states: `working`, `unsent`, `permission`, `question`, `exit-question`, `trust`, `error`, `unknown`.
+- Busy states: `working`, `unsent`, `permission`, `question`, `exit-question`, `trust`, `error`, and `unknown` — except that an unread screen on a seat herdr itself reports `idle` or `done` is not busy: it is advice, and the workspace is closed without typing into it:
+  ```
+  <seat>: screen: not recognised; herdr reports it <status>; the workspace is closed without typing into it
+  ```
 
 Without `--abandon`:
 - Only `free`, `exited`, and `gone` are stopped.
@@ -95,7 +98,7 @@ With `--abandon`:
 Whenever `team restart` closes a running or exited pane, it first prints three lines on stdout stating what is in the pane and what closing it entails:
 
 ```
-<seat>: input box: empty | holds unsent text
+<seat>: input box: empty | holds unsent text | not read (the screen is not recognised)
 <seat>: turn: not working (<state>) | mid-turn (working)
 <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace without passing the old transcript
 ```
