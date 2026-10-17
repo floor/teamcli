@@ -2578,7 +2578,7 @@ scene('answer.ready', async (place) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
-  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'trust answered; ready');
+  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'answered trust');
 });
 
 // These returns are reached when a second validation disagrees with the first, or when no data

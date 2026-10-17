@@ -21,26 +21,26 @@ The owner, from outside herdr, or the orchestrator from its own seat — the sea
 
 ## What it prints
 
-Human output is one line: refusals and recovery on stderr, success on stdout. Under `--json`, the same outcomes print one object on stdout and stderr stays empty.
+Human output is the team's context line and one summary line on stdout on success; refusals and recovery go to stderr. Under `--json`, a success prints one action document on stdout, and a run that exits 1 or 2 prints the structured `team.error` document on stdout too — stderr stays empty in both cases.
 
 | Outcome | Exit | stdout | stderr |
 | --- | --- | --- | --- |
-| answered | 0 | `<seat>: trust answered; ready` | — |
+| answered | 0 | `team <project>, session "<session>"`, then `<seat>: answered trust (<folder>)` | — |
 | refused | 1 | — | `<seat>: <reason>` |
 | recovery | 1 | — | `<seat>: trust sent; recovery required` or `<seat>: the key could not be sent; recovery required` |
-| usage | 2 | — | `team answer: <message>` and the synopsis line |
+| usage | 2 | — | `team answer: <message>` and the usage |
 | configuration | 2 | — | `team answer: <message>` |
 
-The JSON objects, by `status`:
+The JSON documents, by outcome:
 
-| status | Object |
+| Outcome | Document |
 | --- | --- |
-| `answered` | `{"seat":"<seat>","dialog":"trust","status":"answered","state":"ready"}` |
-| `refused` | `{"seat":"<seat>","dialog":"trust","status":"refused","reason":"<reason>"}` |
-| `recovery` | `{"seat":"<seat>","dialog":"trust","status":"recovery","state":"trust-sent-recovery","reason":"<reason>"}` |
-| error | `{"error":{"code":"usage"\|"configuration","message":"<message>"}}` |
+| answered | `{"schema":{"name":"team.answer","version":1},"format":1,"dry_run":false,"status":"answered","action_summary":"<seat>: answered trust (<folder>)","project":"<project>","session":"<session>","seat":"<seat>","pane":"<pane>","dialog":"trust","state":"ready","folder":"<folder>"}` |
+| refused, recovery, usage, configuration | `{"schema":{"name":"team.error","version":1},"error":{"id":"<answer.* row>","message":"<message>","repair":<string|null>}}` |
 
-The recovery reasons are `its key could not be sent`, `its idle prompt did not come`, and `its rules were not delivered`. The usage message is `a seat and trust are required`, `unknown dialog "<word>"`, or the argument parser's own message. The configuration message is the file's problem list (`line <n>: <problem>`, joined with `; `) or `the team file cannot be read`.
+`error.id` is the contract row for the refusal site (`answer.recovery` on a run that did not complete, `answer.usage` and `answer.configuration` on a bad invocation or file), and `error.message` is the sentence above without a `team answer: ` prefix. `error.repair` is a repair string where one applies — `answer.detached` carries `run team answer from a terminal outside herdr` — and `null` elsewhere. A recovery retry whose record carries no folder prints the summary without the parenthetical.
+
+The usage message is `a seat and trust are required`, `unknown dialog "<word>"`, or the argument parser's own message. The configuration message is the file's problem list (`line <n>: <problem>`, joined with `; `) or `the team file cannot be read`.
 
 ### Refusals
 
@@ -113,6 +113,24 @@ The examples below are the page's own, moved here whole. The console is also on
 $ team answer
 team answer: a seat and trust are required
 Usage: team answer <seat> trust [--session <name>] [--file <path>] [--json]
+
+Presses the one recorded key of a folder-trust dialog, and only that key. Every check has
+to pass on two fresh reads of the pane, and the folder must be the lobby on three readings
+at once: the path the screen shows, the folder the pane itself reports working in, and the
+lobby's parent directory. <seat> names one seat of the approved copy; trust is the only
+dialog word. No option takes a key, a text, or another dialog. The pane is herdr's one agent
+of that name; a pane recorded in the state selects nothing. A name the copy does not carry
+is left as it is, and two agents of the name send nothing. --session is the owner's alone,
+and so is --file: each is refused before the flagged session or file is read. The answer
+opens on the team's context line and closes on <seat>: answered trust (<folder>). A refused
+or incomplete answer names its reason on stderr, and a recovery stays recorded for the next
+answer to observe. --json prints one document instead of the lines: {format, dry_run,
+status, action_summary, project, session, seat, pane, dialog, state, folder?}. A run that
+exits 1 or 2 writes the structured error document instead — {error: {id, message, repair}} —
+and stderr stays empty.
+
+Exits 0 when the trust dialog is answered and the seat is ready, 1 when the answer is
+refused or does not complete, 2 when the invocation or team file can't be read.
 ```
 
 ## Known limits

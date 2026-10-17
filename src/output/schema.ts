@@ -689,6 +689,24 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
   ],
 };
 
+/** Published `--json` output schema for `team answer` (`schema/answer.schema.json`): the action
+ *  surface of the one trust dialog answered. A refused or incomplete answer, and a run whose
+ *  invocation or team file cannot be read, writes the `team.error` envelope instead. */
+export const ANSWER_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.answer',
+  fileName: 'answer.schema.json',
+  title: 'team answer --json output',
+  statuses: ['answered'],
+  required: ['project', 'session', 'seat', 'pane', 'dialog', 'state'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    pane: { type: ['string', 'null'] },
+    dialog: { type: 'string', const: 'trust' },
+    state: { type: 'string', const: 'ready' },
+    folder: { type: 'string', minLength: 1 },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -703,5 +721,6 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   MESSAGES_OUTPUT_SCHEMA,
   ROUTE_OUTPUT_SCHEMA,
   SEND_OUTPUT_SCHEMA,
+  ANSWER_OUTPUT_SCHEMA,
 ];
 

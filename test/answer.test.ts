@@ -299,7 +299,7 @@ describe('team answer', () => {
       expect(boxHoldsText(cli, sample, boxed(sample))).toBe(true);
       const io = testIo(root, { kind: 'owner' });
       expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(0);
-      expect(io.out).toBe('lead: trust answered; ready\n');
+      expect(io.out).toBe(`team acme, session "acme"\nlead: answered trust (${lobby})\n`);
       expect(io.err).toBe('');
       expect(host.keys).toEqual([cli === 'cursor' ? 'a' : 'enter']);
       expect(host.typed.length).toBe(1);
@@ -325,7 +325,7 @@ describe('team answer', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(0);
     expect(host.keys).toEqual([]);
-    expect(io.out).toBe('lead: trust answered; ready\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: answered trust\n');
 
     updateState(dir, (state) => {
       const seat = state.sessions.acme?.seats.lead;
@@ -387,7 +387,7 @@ describe('team answer', () => {
     const againIo = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], againIo, again)).toBe(0);
     expect(again.keys).toEqual(['a']);
-    expect(againIo.out).toBe('lead: trust answered; ready\n');
+    expect(againIo.out).toBe(`team acme, session "acme"\nlead: answered trust (${lobby})\n`);
   });
 
   test('a send that throws keeps recovery, and the retry sends no key', async () => {
@@ -410,11 +410,12 @@ describe('team answer', () => {
     expect(retry.keys).toEqual([]);
     expect(json.err).toBe('');
     expect(JSON.parse(json.out)).toEqual({
-      seat: 'lead',
-      dialog: 'trust',
-      status: 'recovery',
-      state: 'trust-sent-recovery',
-      reason: 'its idle prompt did not come',
+      schema: { name: 'team.error', version: 1 },
+      error: {
+        id: 'answer.recovery',
+        message: 'lead: trust sent; recovery required',
+        repair: null,
+      },
     });
   });
 
@@ -688,7 +689,7 @@ describe('team answer', () => {
     }
 
     test('same: ordered calls include processInfo directly before each of the 3 inputs', async () => {
-      const { root, home, dir, host } = setupIdentitySeat();
+      const { root, home, lobby, dir, host } = setupIdentitySeat();
       await approve(root, home);
       const calls: string[] = [];
       const origAgents = host.agents.bind(host);
@@ -719,7 +720,7 @@ describe('team answer', () => {
       const io = testIo(root, { kind: 'owner' });
       const code = await runAnswer([...FILE, 'lead', 'trust'], io, host);
       expect(code).toBe(0);
-      expect(io.out).toBe('lead: trust answered; ready\n');
+      expect(io.out).toBe(`team acme, session "acme"\nlead: answered trust (${lobby})\n`);
       expect(host.keys).toEqual(['a']);
       expect(host.typed.length).toBe(1);
       expect(calls).toEqual([
@@ -818,7 +819,7 @@ describe('team answer', () => {
     });
 
     test('process changes (a) between inspection and key: no key sent, the record is put back', async () => {
-      const { root, home, dir, host } = setupIdentitySeat();
+      const { root, home, lobby, dir, host } = setupIdentitySeat();
       await approve(root, home);
       let reads = 0;
       host.processInfo = () => {
@@ -846,7 +847,7 @@ describe('team answer', () => {
       const again = testIo(root, { kind: 'owner' });
       const code2 = await runAnswer([...FILE, 'lead', 'trust'], again, host);
       expect(code2).toBe(0);
-      expect(again.out).toBe('lead: trust answered; ready\n');
+      expect(again.out).toBe(`team acme, session "acme"\nlead: answered trust (${lobby})\n`);
       expect(host.keys).toEqual(['a']);
       expect(readState(dir).sessions.acme?.seats.lead?.stage).toBe('ready');
       expect(readState(dir).sessions.acme?.seats.lead?.waiting).toBeUndefined();
@@ -1086,7 +1087,7 @@ describe('team answer', () => {
       const io = testIo(root, { kind: 'owner' });
       const code = await runAnswer([...FILE, 'lead', 'trust'], io, host);
       expect(code).toBe(0);
-      expect(io.out).toBe('lead: trust answered; ready\n');
+      expect(io.out).toBe('team acme, session "acme"\nlead: answered trust\n');
       expect(host.keys).toEqual([]);
       expect(host.typed.length).toBe(1);
       expect(calls).toEqual([
@@ -1164,7 +1165,7 @@ describe('team answer', () => {
       const io = testIo(root, { kind: 'owner' });
       expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(0);
       expect(sent).toEqual(['w1:p1']);
-      expect(io.out).toBe('lead: trust answered; ready\n');
+      expect(io.out).toBe(`team acme, session "acme"\nlead: answered trust (${lobby})\n`);
       expect(readState(dir).sessions.acme?.seats.lead?.pane).toBe('w1:p1');
     });
 
@@ -1265,7 +1266,7 @@ describe('team answer', () => {
     const done = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], done, plain)).toBe(0);
     expect(plain.keys).toEqual(['a']);
-    expect(done.out).toBe('lead: trust answered; ready\n');
+    expect(done.out).toBe(`team acme, session "acme"\nlead: answered trust (${lobby})\n`);
   });
 
   test("a pane folder that is not the lobby, or cannot be read, sends nothing", async () => {
@@ -1471,20 +1472,39 @@ describe('team answer', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer(['--json'], io, fake(home, root, '', 'cursor'))).toBe(2);
     expect(io.err).toBe('');
-    expect(JSON.parse(io.out)).toEqual({ error: { code: 'usage', message: 'a seat and trust are required' } });
+    expect(JSON.parse(io.out)).toEqual({
+      schema: { name: 'team.error', version: 1 },
+      error: { id: 'answer.usage', message: 'a seat and trust are required', repair: null },
+    });
 
     writeFileSync(join(dir, 'team.yaml'), 'format: 1\n');
     const bad = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, '--json', 'lead', 'trust'], bad, fake(home, root, '', 'cursor'))).toBe(2);
     expect(bad.err).toBe('');
-    expect(JSON.parse(bad.out).error.code).toBe('configuration');
+    expect(JSON.parse(bad.out).error.id).toBe('answer.configuration');
 
     writeFileSync(join(dir, 'team.yaml'), file(lobby, 'owner'));
     await approve(root, home);
     const refused = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, '--json', 'lead', 'trust'], refused, fake(home, root, '', 'cursor'))).toBe(1);
     expect(refused.err).toBe('');
-    expect(JSON.parse(refused.out)).toEqual({ seat: 'lead', dialog: 'trust', status: 'refused', reason: 'lead: use team up and [o]' });
+    expect(JSON.parse(refused.out)).toEqual({
+      schema: { name: 'team.error', version: 1 },
+      error: { id: 'answer.policy', message: 'lead: use team up and [o]', repair: null },
+    });
+
+    // A caller sentence keeps its `team answer: ` prefix on stderr; the error document drops it.
+    const caller = testIo(root, { kind: 'seat', name: 'other', pane: 'w9:p1' });
+    expect(await runAnswer(['--json', 'lead', 'trust'], caller, fake(home, root, '', 'cursor'))).toBe(1);
+    expect(caller.err).toBe('');
+    expect(JSON.parse(caller.out)).toEqual({
+      schema: { name: 'team.error', version: 1 },
+      error: {
+        id: 'answer.caller',
+        message: 'lead: only the owner, or the orchestrator from its own seat, can answer',
+        repair: null,
+      },
+    });
   });
 
   test('a folder outside the trust list, a key that is not sent, and a seat that is not live', async () => {
@@ -1554,7 +1574,20 @@ describe('team answer', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, '--json', 'lead', 'trust'], io, host)).toBe(0);
     expect(io.err).toBe('');
-    expect(JSON.parse(io.out)).toEqual({ seat: 'lead', dialog: 'trust', status: 'answered', state: 'ready' });
+    expect(JSON.parse(io.out)).toEqual({
+      schema: { name: 'team.answer', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'answered',
+      action_summary: `lead: answered trust (${lobby})`,
+      project: 'acme',
+      session: 'acme',
+      seat: 'lead',
+      pane: 'w1:p1',
+      dialog: 'trust',
+      state: 'ready',
+      folder: lobby,
+    });
 
     updateState(dir, (state) => {
       const seat = state.sessions.acme?.seats.lead;
@@ -1566,11 +1599,12 @@ describe('team answer', () => {
     expect(again.err).toBe('');
     expect(stuck.keys).toEqual([]);
     expect(JSON.parse(again.out)).toEqual({
-      seat: 'lead',
-      dialog: 'trust',
-      status: 'recovery',
-      state: 'trust-sent-recovery',
-      reason: 'its idle prompt did not come',
+      schema: { name: 'team.error', version: 1 },
+      error: {
+        id: 'answer.recovery',
+        message: 'lead: trust sent; recovery required',
+        repair: null,
+      },
     });
   });
 
