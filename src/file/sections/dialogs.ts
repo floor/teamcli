@@ -22,7 +22,11 @@ export const dialogs: Section = {
     const trust = ctx.check.oneOf(trustEntry, 'dialogs.trust', ['owner', 'orchestrator', 'coordinator']);
     // The old word is still read, and says so once, at its own line.
     if (trust === 'coordinator' && trustEntry) {
-      ctx.check.warnings.push({ line: trustEntry.value.line, message: '`dialogs.trust: coordinator` is now `orchestrator`, and is still read' });
+      ctx.check.warnings.push({
+        line: trustEntry.value.line,
+        message: '`dialogs.trust: coordinator` is now `orchestrator`, and is still read',
+        repair: 'set `dialogs.trust: orchestrator` in .agents/team.yaml',
+      });
     }
     // One policy, one parsed value: the new word normalises to the one every record's digest was
     // written with, so a file rewritten to it is still the file the owner approved.

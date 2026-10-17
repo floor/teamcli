@@ -80,7 +80,11 @@ function readBudgets(
   const declared = new Set(accounts?.value.kind === 'map' ? accounts.value.entries.map((account) => account.key) : []);
   const marks = percentList(fields.get('marks'), 'budgets.marks', check);
   if (marks && legacyMarks) {
-    check.warnings.push({ line: fields.get('marks')?.line ?? entry.line, message: 'budgets.marks replaces watch.quota_marks' });
+    check.warnings.push({
+      line: fields.get('marks')?.line ?? entry.line,
+      message: 'budgets.marks replaces watch.quota_marks',
+      repair: 'remove `watch.quota_marks` from .agents/team.yaml and keep `budgets.marks`',
+    });
   }
   // A pause of zero is not a pause: it would run the check commands on every pass. Zero falls
   // back to the default like an unmeasurable value — the fail has already invalidated the file.

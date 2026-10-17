@@ -21,8 +21,8 @@ import { claudeBox, testIo } from '../helpers.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8');
-/** The notice the example fixture carries: it still spells the lead `coordinator:`, on line 5. */
-const WARNING = 'team approve: warning, line 5: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read\n';
+/** `team approve` no longer prints deprecation warnings on stderr (0.5.0 output contract §2.4). */
+const WARNING = '';
 /** The same notice as doctor prints it, among the file's own lines. */
 const FILE_WARNING = 'warn  the file, line 5: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read';
 const FILE = ['--file', '.agents/team.yaml'];

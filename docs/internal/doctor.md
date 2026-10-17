@@ -830,7 +830,6 @@ An option it doesn't know stops it before it reads anything:
 $ team doctor --nope ; echo "exit $?"
 team doctor: unknown option --nope
 Usage: team doctor [--session <name>] [--file <path>] [--login] [--json]
-
 Exits 0 when nothing is missing, 1 when something is missing, 2 when the invocation or team file can't be read.
 exit 2
 ```

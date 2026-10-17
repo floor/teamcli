@@ -1,10 +1,10 @@
 // The decision record's "must not pretend" list in the product (decided-grants-minimum-2026-10-17,
-// "What 0.5.0 must not pretend, said plainly"): `team check` prints its six lines under both of
-// its answers — the gaps the release does not close, named in the check's output as the record
-// asks — and `team status` closes its plain reading with the first of them, the record's "every
-// record and view says so". The sentences below are typed out here rather than read from the
-// module, so an edit to src/permissions/must-not-pretend.ts fails these tests instead of riding
-// through them; the one assertion against the module pins the two together.
+// "What 0.5.0 must not pretend, said plainly"): under the 0.5.0 output contract (§2.3),
+// `NOT_PRETENDED` is printed only by `team doctor` and `team --about`, while `team check` and
+// `team status` omit `NOT_PRETENDED`, `INTEGRITY_NOT_AUTHORITY`, and `not known:` on every run.
+// The sentences below are typed out here rather than read from the module, so an edit to
+// src/permissions/must-not-pretend.ts fails these tests instead of riding through them; the one
+// assertion against the module pins the two together.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,7 +23,7 @@ import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
-/** The record's six lines, under its heading, as `team check` prints them. */
+/** The record's six lines, under its heading, as `team doctor` and `team --about` print them. */
 const LIST = [
   'what 0.5.0 must not pretend:',
   '  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt',
@@ -35,7 +35,7 @@ const LIST = [
 ];
 const BLOCK = `${LIST.join('\n')}\n`;
 
-/** The line the check prints above the block, whatever its answer. */
+/** The former `not known:` line, which `team check` no longer prints under the 0.5.0 output contract. */
 const NOT_KNOWN = 'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n';
 
 /** One seat leads: a file with none is refused. */

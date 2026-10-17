@@ -9,7 +9,7 @@
 import { loadConfig, type LoadConfig } from '../check/load.ts';
 import { realCheckSources, runTeamCheck, type CheckSources } from '../check/team.ts';
 import type { Io } from '../io.ts';
-import { writeJsonError } from '../output/index.ts';
+import { hasJsonFlag, writeJsonError } from '../output/index.ts';
 import { runCommits, type CommitsRun } from './commits.ts';
 
 export { loadConfig };
@@ -122,10 +122,13 @@ type Dispatched =
   | { kind: 'refused'; text: string; usage: string };
 
 function dispatch(argv: string[]): Dispatched {
-  const forTheTeam = spelledForTheTeam(argv);
+  const forTheTeam = hasJsonFlag(argv) || spelledForTheTeam(argv);
   const parsed = parse(argv, forTheTeam ? NEW_OPTIONS : OLD_OPTIONS, forTheTeam ? FLAG_OPTIONS : []);
   if (typeof parsed === 'string') return { kind: 'refused', text: parsed, usage: forTheTeam ? USAGE : OLD_USAGE };
   if (forTheTeam) {
+    if (parsed.positional.length > 0) {
+      return { kind: 'refused', text: `unexpected "${parsed.positional[0]}"`, usage: USAGE };
+    }
     return {
       kind: 'team',
       args: {
@@ -153,7 +156,7 @@ function dispatch(argv: string[]): Dispatched {
 export async function check(argv: string[], io: Io, load: LoadConfig = loadConfig, sources: CheckSources = realCheckSources): Promise<number> {
   const parsed = dispatch(argv);
   if (parsed.kind === 'refused') {
-    if (argv.includes('--json') && parsed.usage === USAGE) {
+    if (hasJsonFlag(argv)) {
       writeJsonError(io, 'check.invocation', parsed.text, null);
     } else {
       // The bytes an old spelling's refusal always had; a team check refusal names its own usage.

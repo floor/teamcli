@@ -10,6 +10,7 @@ import { readArgs } from '../args.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import {
+  hasJsonFlag,
   renderTable,
   ttyStyle,
   writeJson,
@@ -70,7 +71,7 @@ function unreadable(io: Io, out: Io, reason: string, json: boolean): number {
 export async function runProjects(argv: string[], io: Io, sources: ProjectSources): Promise<number> {
   const out = cleanedIo(io);
   const args = readArgs(argv, [], ['json']);
-  const json = args.flags.has('json');
+  const json = hasJsonFlag(argv);
   if (args.error || args.rest.length) {
     const why = plainText(args.error ?? `unexpected "${args.rest[0]}"`);
     if (json) {

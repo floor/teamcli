@@ -266,9 +266,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const deprecationWarnings: DeprecationWarning[] = current.warnings.map((w) => ({
     line: w.line || undefined,
     message: w.message,
-    repair: w.message.includes('`coordinator:`')
-      ? "set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml"
-      : undefined,
+    ...(w.repair !== undefined ? { repair: w.repair } : {}),
   }));
   const warnings = renderDeprecationWarnings(deprecationWarnings);
   // The notes print above the differences, as `team status` prints them: a note names something

@@ -189,6 +189,7 @@ A stopped session is left out unless `--all` is set. Herdr not answering is not 
 ```console herdr=stopped
 $ team list ; echo "exit $?"
 no running sessions
+0 session(s)
 exit 0
 ```
 

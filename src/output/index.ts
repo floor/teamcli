@@ -37,6 +37,7 @@ export {
   type TableSpec,
 } from './text.ts';
 export {
+  hasJsonFlag,
   jsonEnvelope,
   jsonError,
   toJsonDifference,

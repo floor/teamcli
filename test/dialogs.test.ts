@@ -51,7 +51,11 @@ describe('dialogs', () => {
     // Only the fixture's own legacy `coordinator:` key warns here (line 3); the new trust
     // value is today's word and says nothing.
     expect(result.warnings).toEqual([
-      { line: 3, message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read' },
+      {
+        line: 3,
+        message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
+        repair: "set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml",
+      },
     ]);
     expect(result.team.dialogs).toEqual({ trust: 'coordinator' });
     expect(trustPolicy(result.team)).toBe('coordinator');
@@ -64,8 +68,16 @@ describe('dialogs', () => {
     const result = validateTeamFile(`${minimal}dialogs:\n  trust: coordinator\n`);
     if (!result.ok) throw new Error(JSON.stringify(result.errors));
     expect(result.warnings).toEqual([
-      { line: 3, message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read' },
-      { line: minimal.split('\n').length + 1, message: '`dialogs.trust: coordinator` is now `orchestrator`, and is still read' },
+      {
+        line: 3,
+        message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
+        repair: "set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml",
+      },
+      {
+        line: minimal.split('\n').length + 1,
+        message: '`dialogs.trust: coordinator` is now `orchestrator`, and is still read',
+        repair: 'set `dialogs.trust: orchestrator` in .agents/team.yaml',
+      },
     ]);
     expect(result.team.dialogs).toEqual({ trust: 'coordinator' });
   });

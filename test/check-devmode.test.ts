@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
+import { realSeatsSources, runSeats } from '../src/commands/seats.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { readAgents, registerAgent, updateAgent } from '../src/registry/agents.ts';
@@ -220,5 +221,39 @@ describe('the dev-mode mark on a record', () => {
     const { code, out } = check(root, undefined);
     expect(out).not.toContain('registered under dev mode');
     expect(code).toBe(0);
+  });
+
+  test('realSeatsSources carries home so team seats shows the dev mark in the table and --json', async () => {
+    expect(typeof realSeatsSources.home).toBe('string');
+    expect(realSeatsSources.home!.length).toBeGreaterThan(0);
+    const { root, home } = place();
+    record(home, root, { by: DEV_CALLER, dev: true });
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions.acme!.seats.lead!.id = 'seat_111111111111';
+    });
+    const tableIo = testIo(root, { kind: 'owner' });
+    const tableCode = await runSeats(['--file', '.agents/team.yaml'], tableIo, {
+      ...realSeatsSources,
+      live: () => live(),
+      branch: () => 'main',
+      standing: (at) => approvalStanding(at, home),
+      now: () => NOW,
+      home,
+    });
+    expect(tableCode).toBe(0);
+    expect(tableIo.out).toContain('seat_111111111111 (dev)');
+
+    const jsonIo = testIo(root, { kind: 'owner' });
+    const jsonCode = await runSeats(['--file', '.agents/team.yaml', '--json'], jsonIo, {
+      ...realSeatsSources,
+      live: () => live(),
+      branch: () => 'main',
+      standing: (at) => approvalStanding(at, home),
+      now: () => NOW,
+      home,
+    });
+    expect(jsonCode).toBe(0);
+    const parsed = JSON.parse(jsonIo.out) as { seats: Array<{ name: string; dev_mode?: boolean }> };
+    expect(parsed.seats[0]?.dev_mode).toBe(true);
   });
 });

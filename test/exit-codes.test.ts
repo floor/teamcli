@@ -2057,7 +2057,7 @@ async function listed(place: Place, argv: string[], sources: ListSources): Promi
 const noTeam: ListSources = { sessions: () => [], roster: () => [], team: () => null };
 scene('list.invocation', async (place) => show(await listed(place, ['--nope'], noTeam), 'unknown option'), false);
 scene('list.herdr-down', async (place) => show(await listed(place, [], { ...noTeam, sessions: () => null }), 'herdr is not running'), false);
-scene('list.empty', async (place) => show(await listed(place, [], noTeam), 'no running sessions'), false);
+scene('list.empty', async (place) => show(await listed(place, [], noTeam), 'no running sessions\n0 session(s)'), false);
 scene('list.shown', async (place) => show(await listed(place, [], {
   sessions: () => [{ name: 'acme', running: true }],
   roster: () => [],

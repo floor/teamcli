@@ -1,7 +1,7 @@
 // A `delegates` entry that still names `approve`: `team approve` was removed, and the word stays
 // accepted only so a file that already names it loads unchanged. `team check` names the stale word
 // in a note above its findings — a note, not a difference: it is in neither the total nor the exit
-// code, so a file whose only finding is the note still answers `team check: nothing wrong` — and
+// code, so a file whose only finding is the note still answers `0 difference(s)` — and
 // the repair it names is the file, one word shorter. Fake herdr throughout: no live session is read.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -9,12 +9,15 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
+import { check as checkCommand } from '../src/commands/check.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { CHECK_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T11:00:00Z');
 
@@ -179,14 +182,17 @@ describe('a delegate entry naming approve', () => {
       now: () => NOW,
     });
     expect(jsonCode).toBe(1);
-    const doc = JSON.parse(jsonIo.out) as {
+    const doc = assertMatchesOutputSchema<{
       schema: { name: string; version: number };
       format: number;
       project: string;
       session: string;
-      differences: Array<{ what: string; repair: string; who: string; owner: boolean }>;
+      warnings: string[];
+      repaired: string[];
+      notes: string[];
+      differences: Array<{ what: string; repair: string; who: string }>;
       summary: { differences: number; owner_differences: number };
-    };
+    }>(jsonIo.out, CHECK_OUTPUT_SCHEMA);
     expect(doc.schema).toEqual({ name: 'team.check', version: 1 });
     expect(doc.format).toBe(1);
     expect(doc.project).toBe('acme');
@@ -194,5 +200,51 @@ describe('a delegate entry naming approve', () => {
     expect(doc.differences).toHaveLength(1);
     expect(doc.differences[0]?.who).toBe('the owner');
     expect(doc.summary).toEqual({ differences: 1, owner_differences: 1 });
+  });
+
+  test('--json invocation refusals (--json --nope, --nope --json, --json extra, --json=1) emit team.error on stdout', async () => {
+    const root = place(CLEAN);
+    const cases: Array<[string[], string]> = [
+      [['--json', '--nope'], 'unknown option --nope'],
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json', 'extra'], 'unexpected "extra"'],
+      [['--json=1'], '--json takes no value'],
+    ];
+    for (const [argv, messageContains] of cases) {
+      const io = testIo(root, { kind: 'owner' });
+      const code = await checkCommand(argv, io);
+      expect(code).toBe(2);
+      expect(io.err).toBe('');
+      assertJsonErrorShape(io.out, { id: 'check.invocation', messageContains, repair: null });
+    }
+  });
+
+  test('every deprecation warning in team check carries its repair command', () => {
+    const withDeprecations = [
+      ...HEAD.trimEnd().split('\n'),
+      'dialogs:',
+      '  trust: coordinator',
+      'watch:',
+      '  quota_marks: [50, 75]',
+      'budgets:',
+      '  marks: [50, 75]',
+      '',
+    ].join('\n');
+    const root = place(withDeprecations);
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({ json: true }, io, {
+      live: () => live(TITLE),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' }),
+      now: () => NOW,
+    });
+    expect(code).toBe(0);
+    const doc = assertMatchesOutputSchema<{ warnings: string[] }>(io.out, CHECK_OUTPUT_SCHEMA);
+    expect(doc.warnings).toEqual([
+      "warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml",
+      'warning: the file, line 17: `dialogs.trust: coordinator` is now `orchestrator`, and is still read; repair: set `dialogs.trust: orchestrator` in .agents/team.yaml',
+      'warning: the file, line 19: watch.quota_marks is now budgets.marks, and is still read; repair: move `watch.quota_marks` to `budgets.marks` in .agents/team.yaml',
+      'warning: the file, line 21: budgets.marks replaces watch.quota_marks; repair: remove `watch.quota_marks` from .agents/team.yaml and keep `budgets.marks`',
+    ]);
   });
 });

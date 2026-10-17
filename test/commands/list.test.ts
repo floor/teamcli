@@ -103,7 +103,7 @@ test('no running session is empty, and --all shows a stopped one', async () => {
   });
   const text = capture();
   expect(await runList([], text, stopped)).toBe(0);
-  expect(text.out).toBe('no running sessions\n');
+  expect(text.out).toBe('no running sessions\n0 session(s)\n');
   const all = capture();
   expect(await runList(['--all'], all, stopped)).toBe(0);
   expect(all.out).toBe('TEAM  PROJECT  STATUS   SEATS  ACTIVITY  NOTE\nacme  acme     stopped  2      -\n1 session(s)\n');
