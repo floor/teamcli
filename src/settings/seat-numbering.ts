@@ -3,10 +3,9 @@
 // declares one. An advised format is a word about how names are written, never a reason to
 // refuse a run: a source that cannot be read, verified or ordered leaves the default in force,
 // the way a file that does not read is no level's word.
+import { projectIdOfTeam } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
 import { loadAndResolvePolicyChain } from '../policy/index.ts';
-import { byName, ofTeam, projectIdOf } from '../registry/projects.ts';
-import { teamIdOf } from '../registry/teams.ts';
 import { seatNumberingOf, SEAT_NUMBERING_DEFAULT, type SeatNumbering } from './inherit.ts';
 
 export type SeatNumberingContext = {
@@ -20,18 +19,6 @@ export type SeatNumberingContext = {
   now?: Date;
 };
 
-/** The project a team belongs to, read the way the dev-mode chain reads it. */
-function projectIdOfTeam(home: string, root: string, team: TeamFile): string | null {
-  try {
-    const byTeam = ofTeam(home, teamIdOf(root));
-    if (byTeam) return byTeam.id ?? null;
-    if (team.inProject) return byName(home, team.inProject)?.id ?? projectIdOf(team.inProject);
-    return projectIdOf(team.project);
-  } catch {
-    return null;
-  }
-}
-
 /**
  * The numbering in force for a team's named seats: the effective `seat-numbering` policy, or the
  * shipped `2-` when no level declares one — or when a source on the chain will not load, since
@@ -42,7 +29,7 @@ export function seatNumberingInForce(context: SeatNumberingContext): SeatNumberi
   const chain = loadAndResolvePolicyChain(
     {
       home: context.home,
-      projectId: projectIdOfTeam(context.home, context.root, team),
+      projectId: projectIdOfTeam(context.home, team, context.root),
       teamRoot: context.root,
       team,
     },

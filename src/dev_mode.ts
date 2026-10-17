@@ -84,8 +84,9 @@ export type DevModeRun = {
   refusals: PolicyLoadRefusal[];
 };
 
-/** The project a team belongs to, read the way `team check`'s policy pass reads it. */
-function projectIdOfTeam(home: string, team: TeamFile | null, root: string | null): string | null {
+/** The project a team belongs to, read the way `team check`'s policy pass reads it. The
+ *  seat-numbering setting reads it through this one copy. */
+export function projectIdOfTeam(home: string, team: TeamFile | null, root: string | null): string | null {
   if (team === null) return null;
   try {
     if (root !== null) {
