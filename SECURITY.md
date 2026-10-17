@@ -36,6 +36,9 @@ binds, and the behaviour its own documentation states.
 
 - TeamCLI protects against an agent's mistake, not against a hostile program running as
   you: agents run as your user, and what you can read on your machine, they can read.
+- The owner check tells the owner's own terminal from an agent's seat; it stops mistakes
+  and agents that follow the rules, not a program running as you that sets out to look
+  like the owner.
 - What an agent's own program or its lab does with what it reads; whether a lab's model
   can be trusted; what a page an agent read told it to do.
 - Keys and tokens your own shell exports are visible to every agent started from it.
