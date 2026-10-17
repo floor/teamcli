@@ -4,7 +4,9 @@
 //   1. a screen that is neither mid-turn nor at its prompt — a dialog, a question, an error, a
 //      composer holding unsent text: blocked, whatever any clock says;
 //   2. the CLI's own signal through the hooks this run installed: working at turn start, idle at
-//      turn end, with the instant it wrote;
+//      turn end, with the instant it wrote — the working word outranking the screen only while
+//      its turn is young (`state_hook_working_seconds`), so an interrupted turn cannot leave a
+//      stale `working` standing for the day;
 //   3. the pane's screen, read against the seat's CLI — working, or idle at its prompt;
 //   4. herdr's own screen status;
 //   5. TeamCLI's traces within a window — the seat's last ack, message or commit: a trace this
@@ -67,11 +69,14 @@ export type SeatStateReading = {
 };
 
 /**
- * The reading itself. First answer wins, in the order above — save one: a trace inside the
+ * The reading itself. First answer wins, in the order above — save two: a trace inside the
  * window beats an idle word, from the hook, the screen or from herdr, because a seat that just
- * committed, acked or was messaged is working even while its prompt shows. An absent or unrecognised
- * screen, like a herdr word that is neither `working` nor `idle`, falls through to the next
- * source. `unknown` carries `blind`: no trace at all, or none younger than the blind threshold.
+ * committed, acked or was messaged is working even while its prompt shows; and a screen that
+ * still reads outranks a `working` hook older than the short working window, because an
+ * interrupted turn leaves that word behind while the prompt is what the seat shows now. An
+ * absent or unrecognised screen, like a herdr word that is neither `working` nor `idle`, falls
+ * through to the next source. `unknown` carries `blind`: no trace at all, or none younger than
+ * the blind threshold.
  */
 export function seatState(
   observation: SeatStateObservation,
@@ -98,16 +103,26 @@ export function seatState(
     && screen.kind !== 'unknown') {
     return { state: 'blocked', source: 'cli', blind: false };
   }
-  // The CLI's own hook: a fresh `working` is working; a fresh `idle` is idle unless a trace
-  // inside the window says the seat is still in the middle of its work. A reading older than the
-  // day says nothing about the seat now, and the screen answers.
+  // The CLI's own hook: a fresh `working` is working while its turn is young; a fresh `idle`
+  // is idle unless a trace inside the window says the seat is still in the middle of its work.
+  // Past the short working window (`state_hook_working_seconds`) a screen that still reads —
+  // an interrupted turn leaves the file's `working` behind, and the prompt shows again — is the
+  // fresher word and answers instead; a screen it cannot read leaves the hook to answer for the
+  // rest of its day. A reading older than the day says nothing about the seat now at all.
   const hook = observation.hook;
   if (hook !== undefined && hook !== null) {
     const wrote = Date.parse(hook.since);
     if (Number.isFinite(wrote) && now.getTime() - wrote <= CLI_HOOK_FRESH_SECONDS * 1000) {
-      if (hook.state === 'working') return { state: 'working', source: 'cli-hook', blind: false };
-      if (withinWindow) return { state: 'working', source: 'trace', blind: false };
-      return { state: 'idle', source: 'cli-hook', blind: false };
+      if (hook.state === 'working') {
+        const fresh = now.getTime() - wrote <= limits.hook_working_seconds * 1000;
+        if (fresh || screen === undefined || screen.kind === 'unknown') {
+          return { state: 'working', source: 'cli-hook', blind: false };
+        }
+        // Stale: a working screen says the same thing through the screen, an idle one answers idle.
+      } else {
+        if (withinWindow) return { state: 'working', source: 'trace', blind: false };
+        return { state: 'idle', source: 'cli-hook', blind: false };
+      }
     }
   }
   if (screen !== undefined) {

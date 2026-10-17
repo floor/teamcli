@@ -584,6 +584,17 @@ describe('team remove', () => {
     expect(text).toContain('name: lead');
   });
 
+  test('a hook reading left before the stop goes with the seat', async () => {
+    // A turn the stop interrupted never writes its `idle`: the state file still says working.
+    // The run that stops the seat takes the reading with it — `--keep`'s stopped entry is no
+    // more mid-turn than a full removal.
+    mkdirSync(join(dir, '.agents', 'seat-state'), { recursive: true });
+    writeFileSync(join(dir, '.agents', 'seat-state', 'worker.json'), '{"state":"working","since":"2026-10-17T09:00:00Z"}\n');
+    const made = world();
+    expect(await runRemove(['worker', '--keep', '--file', file], testIo(dir, owner), made.sources)).toBe(0);
+    expect(existsSync(join(dir, '.agents', 'seat-state', 'worker.json'))).toBe(false);
+  });
+
   test('--keep retains the seat id and last_active while a full remove clears them', async () => {
     const id = 'seat_0123456789ab';
     const lastActive = '2026-10-14T10:00:00.000Z';

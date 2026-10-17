@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { seatRegistryRows, type SeatRegistryRow } from '../src/commands/seats.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { CLI_HOOK_FRESH_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
+import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import {
   cliHookSettingsPath, cliHookStatePath, installCliHooks, plannedCliHooks, readCliHook, resetCliHookState,
 } from '../src/launch/cli-hook.ts';
@@ -170,6 +171,39 @@ describe('the reading the hook feeds', () => {
       .toEqual({ state: 'working', source: 'cli-hook', blind: false });
   });
 
+  test('past its short window a working hook yields to the prompt on screen', () => {
+    // An interrupted turn (an Esc, a crash the CLI survived) never writes its `idle`: the file
+    // still says working. The prompt showing again is the fresher word. The boundary counts as
+    // inside; one second past it the screen answers.
+    expect(seatState({ screen: { kind: 'idle' }, hook: { state: 'working', since: ago(DEFAULT_STATE_THRESHOLDS.hook_working_seconds) } }, NOW))
+      .toEqual({ state: 'working', source: 'cli-hook', blind: false });
+    expect(seatState({ screen: { kind: 'idle' }, hook: { state: 'working', since: ago(DEFAULT_STATE_THRESHOLDS.hook_working_seconds + 1) } }, NOW))
+      .toEqual({ state: 'idle', source: 'cli', blind: false });
+    // The same stale word over a working screen reads working, now from the screen.
+    expect(seatState({ screen: { kind: 'working' }, hook: { state: 'working', since: ago(3600) } }, NOW))
+      .toEqual({ state: 'working', source: 'cli', blind: false });
+    // A trace inside its window still outranks the prompt, as everywhere else.
+    expect(seatState({ screen: { kind: 'idle' }, hook: { state: 'working', since: ago(3600) }, trace: ago(30) }, NOW))
+      .toEqual({ state: 'working', source: 'trace', blind: false });
+  });
+
+  test('a working hook past its short window still answers where no screen was read', () => {
+    // Nothing contradicts the hook — no screen, or a screen this version cannot read — so it
+    // answers for the rest of its day.
+    expect(seatState({ hook: { state: 'working', since: ago(3600) } }, NOW))
+      .toEqual({ state: 'working', source: 'cli-hook', blind: false });
+    expect(seatState({ screen: { kind: 'unknown' }, hook: { state: 'working', since: ago(3600) } }, NOW))
+      .toEqual({ state: 'working', source: 'cli-hook', blind: false });
+  });
+
+  test('the short window is the caller’s to set', () => {
+    const limits = { ...DEFAULT_STATE_THRESHOLDS, hook_working_seconds: 30 };
+    expect(seatState({ screen: { kind: 'idle' }, hook: { state: 'working', since: ago(60) } }, NOW, limits))
+      .toEqual({ state: 'idle', source: 'cli', blind: false });
+    expect(seatState({ screen: { kind: 'idle' }, hook: { state: 'working', since: ago(10) } }, NOW, limits))
+      .toEqual({ state: 'working', source: 'cli-hook', blind: false });
+  });
+
   test('a fresh idle hook is idle, even over a screen still showing the turn', () => {
     expect(seatState({ screen: { kind: 'working' }, hook: { state: 'idle', since: ago(10) } }, NOW))
       .toEqual({ state: 'idle', source: 'cli-hook', blind: false });
@@ -181,8 +215,10 @@ describe('the reading the hook feeds', () => {
   });
 
   test('a hook older than its day says nothing, and the screen answers again', () => {
-    expect(seatState({ screen: { kind: 'idle' }, hook: { state: 'working', since: ago(CLI_HOOK_FRESH_SECONDS) } }, NOW))
+    expect(seatState({ hook: { state: 'working', since: ago(CLI_HOOK_FRESH_SECONDS) } }, NOW))
       .toEqual({ state: 'working', source: 'cli-hook', blind: false });
+    expect(seatState({ hook: { state: 'working', since: ago(CLI_HOOK_FRESH_SECONDS + 1) } }, NOW))
+      .toEqual({ state: 'unknown', source: 'none', blind: true });
     expect(seatState({ screen: { kind: 'idle' }, hook: { state: 'working', since: ago(CLI_HOOK_FRESH_SECONDS + 1) } }, NOW))
       .toEqual({ state: 'idle', source: 'cli', blind: false });
   });
@@ -241,6 +277,18 @@ describe('a registry row reads the state file', () => {
   test('a fresh hook answers when the screen and herdr have nothing', () => {
     writeState(`{"state":"working","since":"${ago(5)}"}\n`);
     expect(row({ stateDir: dir })).toMatchObject({ state: 'working', state_source: 'cli-hook', blind: false });
+  });
+
+  test('a working reading carries LAST ACTIVE now, whatever source answered', () => {
+    // No agent, no herdr word, no trace: only the hook says the seat works. The row's last
+    // activity is this run's instant — the reading, not herdr alone, is what counts.
+    writeState(`{"state":"working","since":"${ago(5)}"}\n`);
+    expect(row({ stateDir: dir })).toMatchObject({
+      state: 'working',
+      state_source: 'cli-hook',
+      last_active: NOW.toISOString(),
+      last_active_display: 'now',
+    });
   });
 
   test('a stale hook falls through to the reading without it', () => {

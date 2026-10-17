@@ -80,7 +80,7 @@ describe('the reading, best source first', () => {
   });
 
   test('a caller may run the reading by its own thresholds', () => {
-    const limits = { trace_window_seconds: 600, blind_after_seconds: 600 };
+    const limits = { trace_window_seconds: 600, blind_after_seconds: 600, hook_working_seconds: 600 };
     expect(seatState({ trace: ago(300) }, NOW, limits)).toEqual({ state: 'working', source: 'trace', blind: false });
     expect(seatState({ trace: ago(601) }, NOW, limits)).toEqual({ state: 'unknown', source: 'none', blind: true });
   });
@@ -140,22 +140,28 @@ describe('the gatherer the readers share', () => {
 describe('the thresholds are settings', () => {
   test('nothing declared keeps the shipped fallbacks', () => {
     expect(stateThresholds({})).toEqual(DEFAULT_STATE_THRESHOLDS);
-    expect(DEFAULT_STATE_THRESHOLDS).toEqual({ trace_window_seconds: 120, blind_after_seconds: 1800 });
+    expect(DEFAULT_STATE_THRESHOLDS)
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 1800, hook_working_seconds: 120 });
   });
 
-  test('a team may tighten either threshold freely, and the other field is untouched', () => {
+  test('a team may tighten any threshold freely, and the other fields are untouched', () => {
     expect(stateThresholds({ team: { blind_after_seconds: 600 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 600 });
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 600, hook_working_seconds: 120 });
     expect(stateThresholds({ seat: { trace_window_seconds: 10, blind_after_seconds: 60 } }))
-      .toEqual({ trace_window_seconds: 10, blind_after_seconds: 60 });
+      .toEqual({ trace_window_seconds: 10, blind_after_seconds: 60, hook_working_seconds: 120 });
+    // The hook's own window: a team may make the screen win sooner, never later.
+    expect(stateThresholds({ team: { hook_working_seconds: 30 } }))
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 1800, hook_working_seconds: 30 });
   });
 
   test('a team may not loosen: the word is refused and the inherited value stands', () => {
     expect(stateThresholds({ team: { blind_after_seconds: 7200 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 1800 });
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 1800, hook_working_seconds: 120 });
+    expect(stateThresholds({ team: { hook_working_seconds: 900 } }))
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 1800, hook_working_seconds: 120 });
     // The project may open it, the same level `seats_cross_teams` allows.
-    expect(stateThresholds({ project: { blind_after_seconds: 7200 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 7200 });
+    expect(stateThresholds({ project: { blind_after_seconds: 7200, hook_working_seconds: 900 } }))
+      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 7200, hook_working_seconds: 900 });
   });
 
   test('the resolver the settings share reports what it set aside', () => {

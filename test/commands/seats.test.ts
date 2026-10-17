@@ -191,8 +191,30 @@ describe('team seats', () => {
     expect(await runSeats(['--file', file], io, statusSources)).toBe(0);
     // codex-acme's pane holds no screen read and herdr says idle — without the commit its row
     // reads `idle herdr`, as the scene above pins. The commit inside the window is a trace, and
-    // a fresh trace beats an idle word: working, from TeamCLI's own record.
-    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  working  trace   4m ago       pane-2');
+    // a fresh trace beats an idle word: working, from TeamCLI's own record. A working reading is
+    // activity now, whatever carried the word — the row says so, not the trace's age.
+    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  working  trace   now          pane-2');
+  });
+
+  test('a seat’s own hook file is read from the state folder beside the team file', async () => {
+    // deepseek-acme-2's screen and herdr both read idle/no-screen, so without the state folder
+    // the row says idle from herdr, as the table test pins. The hook the seat's own launch
+    // installed wrote `working` five seconds ago: `team seats` passes `<dir>` and reads it.
+    mkdirSync(join(dir, '.agents', 'seat-state'), { recursive: true });
+    writeFileSync(
+      join(dir, '.agents', 'seat-state', 'deepseek-acme-2.json'),
+      `{"state":"working","since":"${new Date(NOW.getTime() - 5000).toISOString()}"}\n`,
+    );
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], io, statusSources)).toBe(0);
+    const doc = JSON.parse(io.out) as SeatsJson;
+    // The working reading also carries LAST ACTIVE as this run's instant: the row counts the
+    // reading, not herdr's idle word, as activity.
+    expect(doc.seats.find((item) => item.name === 'deepseek-acme-2')).toMatchObject({
+      state: 'working',
+      state_source: 'cli-hook',
+      last_active: NOW.toISOString(),
+    });
   });
 
   test('an idle screen whose scrollback holds an old tool row reads idle, not working', async () => {

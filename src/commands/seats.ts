@@ -200,7 +200,11 @@ export function seatRegistryRows(
       reachable: live.running,
       now,
     });
-    const workingNow = Boolean(agent !== undefined && !untrusted && (agent.status === 'working' || row.state.startsWith('working')));
+    // Working now: the reading says so — the screen, a trace inside its window, herdr or the
+    // seat's own hook — or herdr's word and the record say the turn is still on. The seat's
+    // `last_active` is this run's instant while it works, whatever carried the word.
+    const workingNow = reading.state === 'working'
+      || Boolean(agent !== undefined && !untrusted && (agent.status === 'working' || row.state.startsWith('working')));
     const lastActive = workingNow ? now.toISOString() : (recorded?.last_active ?? retained?.last_active ?? null);
     const lastActiveDisplay = workingNow ? 'now' : formatRelativeTime(lastActive, now);
     const pane = row.pane === '-' ? null : row.pane;
@@ -352,6 +356,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       project: team.project,
       root,
       home: sources.home,
+      stateDir: dir,
     });
 
     if (json) {

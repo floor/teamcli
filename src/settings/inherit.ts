@@ -149,13 +149,16 @@ export function numberDeclarationsOf(declared: Partial<Record<SettingLevel, numb
 }
 
 /**
- * The two thresholds the seat-state reading runs by: how fresh a TeamCLI trace must
- * be for the seat to read as working, and how long a seat may read unknown before it counts as
- * not working — the reading `status` and `check` flag `blind`. A longer window tolerates more,
- * so the permissive side is 'higher'; the project may open either, and every level inside may
- * tighten again. Declared per seat as a partial pair, each field inherited on its own.
+ * The three thresholds the seat-state reading runs by: how fresh a TeamCLI trace must
+ * be for the seat to read as working, how long a seat may read unknown before it counts as
+ * not working — the reading `status` and `check` flag `blind` — and how long the CLI's own
+ * `working` word outranks the screen outright. Past the last one, a screen that still reads
+ * — a prompt showing again after an interrupted turn — answers instead; a screen it cannot
+ * read leaves the hook to answer for the day. A longer window tolerates more, so the permissive
+ * side is 'higher'; the project may open any of them, and every level inside may tighten again.
+ * Declared per seat as a partial set, each field inherited on its own.
  */
-export type StateThresholds = { trace_window_seconds: number; blind_after_seconds: number };
+export type StateThresholds = { trace_window_seconds: number; blind_after_seconds: number; hook_working_seconds: number };
 
 export const STATE_THRESHOLDS: { [K in keyof StateThresholds]: NumberSettingSpec } = {
   trace_window_seconds: {
@@ -170,15 +173,22 @@ export const STATE_THRESHOLDS: { [K in keyof StateThresholds]: NumberSettingSpec
     permissive: 'higher',
     looseningLevels: ['project'],
   },
+  hook_working_seconds: {
+    name: 'state_hook_working_seconds',
+    fallback: 120,
+    permissive: 'higher',
+    looseningLevels: ['project'],
+  },
 };
 
 /** The values when nothing declares any — the same fallbacks the specs carry. */
 export const DEFAULT_STATE_THRESHOLDS: StateThresholds = {
   trace_window_seconds: STATE_THRESHOLDS.trace_window_seconds.fallback,
   blind_after_seconds: STATE_THRESHOLDS.blind_after_seconds.fallback,
+  hook_working_seconds: STATE_THRESHOLDS.hook_working_seconds.fallback,
 };
 
-/** The one call the state reading makes: the chain in, both thresholds out. */
+/** The one call the state reading makes: the chain in, every threshold out. */
 export function stateThresholds(declared: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>): StateThresholds {
   const said = (name: keyof StateThresholds): NumberDeclaration[] => {
     const out: NumberDeclaration[] = [];
@@ -191,6 +201,7 @@ export function stateThresholds(declared: Partial<Record<SettingLevel, Partial<S
   return {
     trace_window_seconds: resolveNumberSetting(STATE_THRESHOLDS.trace_window_seconds, said('trace_window_seconds')).value,
     blind_after_seconds: resolveNumberSetting(STATE_THRESHOLDS.blind_after_seconds, said('blind_after_seconds')).value,
+    hook_working_seconds: resolveNumberSetting(STATE_THRESHOLDS.hook_working_seconds, said('hook_working_seconds')).value,
   };
 }
 
