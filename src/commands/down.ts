@@ -637,7 +637,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       // A registry that cannot be read is said by the write below, which reads it again.
     }
     if (session !== addressed) return;
-    const unrecorded = noteTeam(sources.home, root, { ...team, session }, 'stopped', describeCaller(caller));
+    const unrecorded = noteTeam(
+      sources.home,
+      root,
+      // The run notes the session it stopped; the file's own session keeps the same lobby.
+      { ...team, session, aliasSession: team.session },
+      'stopped',
+      describeCaller(caller),
+    );
     if (unrecorded) io.stderr(`team down: ${unrecorded}\n`);
   };
   // A session found already stopped has no agent left in it: the registry's agents that were

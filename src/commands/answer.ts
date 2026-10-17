@@ -200,7 +200,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     const profile = profileFor(cli);
     // The lobby the file resolves to: its own when the file sets `entity` or `lobby`, else
     // the machine-global one. The folder shown in the dialog must be this lobby, as team writes it.
-    const answerLobby = lobbyOf(host.home, root, team);
+    const answerLobby = lobbyOf(host.home, root, { ...team, session });
     const checked = inspect(seatName, host, session, pane, profile, team.trust, answerLobby, root, recorded?.launched);
     if ('class' in checked) return refused(checked);
     const again = inspect(seatName, host, session, pane, profile, team.trust, answerLobby, root, recorded?.launched);

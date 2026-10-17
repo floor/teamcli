@@ -121,6 +121,7 @@ describe('the registry file', () => {
         session: 'acme',
         root: '/work/acme',
         lobby: '/home/lobby',
+        lobbies: { acme: '/home/lobby' },
         roster,
         lifecycle: 'defined',
         provenance: { registered_by: 'owner', registered_at: AT, updated_at: AT },

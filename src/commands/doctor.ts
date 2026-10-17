@@ -479,7 +479,7 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
     if (inRange) {
       const shown = extractFolder(inRange.extract, screen);
       const landed = shown ? showLanding(shown) : null;
-      const lobby = showLanding(lobbyOf(sources.home, root, team));
+      const lobby = showLanding(lobbyOf(sources.home, root, { ...team, session }));
       const project = showLanding(root);
       // A lead may be showing the lobby or the project: both are folders `up` leaves a running
       // lead in. The shown spelling must be that folder itself, not something that only
@@ -655,7 +655,7 @@ export function doctorFindings(
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
   findings.push(...trustFindings(team, root, dir, session, sources));
 
-  const lobby = lobbyOf(sources.home, root, team);
+  const lobby = lobbyOf(sources.home, root, { ...team, session });
   // The same walk `up` and `add` use before a launch into the lobby: a path a shipped CLI
   // reads at start is a miss. A file a CLI only writes is named afterwards, so an owner
   // still sees whose lock is sitting in the folder.
@@ -765,7 +765,7 @@ export function doctorFindings(
     const fromText = oldLobby ? `from ${plainLine(oldLobby)} to ${plainLine(lobby)}` : `to ${plainLine(lobby)}`;
     findings.push({
       level: 'note',
-      text: plainText(`the file is legacy: migrate ${fromText} by writing:\n${migrationText(team, root, sources.home)}`),
+      text: plainText(`the file is legacy: migrate ${fromText} by writing:\n${migrationText({ ...team, session }, root, sources.home)}`),
     });
   }
   return findings;
@@ -809,7 +809,12 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   } catch {
     // Tests may supply a proxy that throws on any read to prove no source was touched before validation.
   }
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), ...(home ? { home } : {}) });
+  const loaded = loadTeamFile(io.cwd, {
+    ...(args.values.file ? { file: args.values.file } : {}),
+    ...(home ? { home } : {}),
+    // The session this run addresses: the placement check reads that session's recorded lobby.
+    ...(args.values.session !== undefined ? { session: args.values.session } : {}),
+  });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       out.stderr(`team doctor: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);

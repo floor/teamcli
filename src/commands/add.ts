@@ -228,7 +228,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), home: sources.home });
+  const loaded = loadTeamFile(io.cwd, {
+    ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
+    home: sources.home,
+    // The session this run addresses: the placement check reads that session's recorded lobby.
+    ...(args.values.session !== undefined ? { session: args.values.session } : {}),
+  });
   if (!loaded.ok) {
     for (const problem of loaded.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
     // exit: add.not-a-repo
@@ -500,12 +505,15 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.prepared
     return 2;
   }
-  for (const problem of placedProblems(prepared.team, root, sources.home, sources.fs)) {
+  for (const problem of placedProblems(prepared.team, root, sources.home, sources.fs, session)) {
     out.stderr(`team add: ${plainText(problem.message)}\n`);
     // exit: add.placed
     return 1;
   }
-  const lobby = lobbyOf(sources.home, root, prepared.team);
+  // The session this run addresses — `--session`, or the caller's own placement — reads its own
+  // recorded lobby, which is the file's own unless the run names another.
+  const runTeam = { ...prepared.team, session };
+  const lobby = lobbyOf(sources.home, root, runTeam);
   let startProblem: string | null = null;
   let verifiedLobby: string | null = null;
   let lobbySeen: LobbySeen | null = null;
@@ -513,12 +521,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // to launch there, after `wouldLaunch` is known, so a dry run refuses in the same words.
   const startupReads = shippedStartupReads();
   if (!prepared.team.trust || prepared.team.trust.length === 0 || isLegacyTrust(prepared.team.trust)) {
-    startProblem = `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(prepared.team, root, sources.home)}`;
+    startProblem = `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(runTeam, root, sources.home)}`;
   }
   // Where the seat waits: the lobby the gate verified, or a refusal — before the file is edited.
   const start: SeatStart = startProblem
     ? { problem: startProblem }
-    : seatStart(prepared.team, built.seat, root, sources.home, verifiedLobby ?? undefined);
+    : seatStart(runTeam, built.seat, root, sources.home, verifiedLobby ?? undefined);
   if ('problem' in start) {
     out.stderr(`team add: ${plainText(start.problem)}\n`);
     // exit: add.start

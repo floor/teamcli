@@ -68,7 +68,7 @@ export function findRoot(cwd: string): string | null {
 
 // Finds, reads and validates the team file. With `file`, the root is the folder that holds the
 // file's `.agents/`, or the file's own folder when it sits elsewhere.
-export function loadTeamFile(cwd: string, options: { file?: string; home?: string; checkOnly?: boolean; fs?: FsReader } = {}): LoadResult {
+export function loadTeamFile(cwd: string, options: { file?: string; home?: string; checkOnly?: boolean; fs?: FsReader; session?: string } = {}): LoadResult {
   let path: string;
   let root: string;
   if (options.file) {
@@ -115,7 +115,7 @@ export function loadTeamFile(cwd: string, options: { file?: string; home?: strin
   const result = validateTeamFile(text, { home: options.home, fs: options.fs, root });
   if (!result.ok) return { ...result, path };
   if (options.checkOnly) return { ...result, root, path, text };
-  const errors = placedProblems(result.team, root, options.home, options.fs);
+  const errors = placedProblems(result.team, root, options.home, options.fs, options.session);
   return errors.length ? { ok: false, errors, path } : { ...result, root, path, text };
 }
 
@@ -130,7 +130,15 @@ function real(path: string): string {
 // What only shows once the root is known: a folder named by its own name can still be the
 // project's parent, as "../../Code/*" is for a project at ~/Code/acme. Validation on the text
 // alone can't see that; here every fixed folder is resolved, symlinks included.
-export function placedProblems(team: TeamFile, root: string, home: string = homedir(), fs?: FsReader): Problem[] {
+export function placedProblems(
+  team: TeamFile,
+  root: string,
+  home: string = homedir(),
+  fs?: FsReader,
+  /** The session the command addresses: the lobby trust must list is that session's recorded
+   *  one, which is the file's own unless the run names another (`up --session alt`). */
+  session: string = team.session,
+): Problem[] {
   const problems: Problem[] = [];
   const readLanding = (path: string) => {
     const res = canonicalLanding(path, fs);
@@ -176,7 +184,7 @@ export function placedProblems(team: TeamFile, root: string, home: string = home
   }
 
   if (isMigratedTrust(team.trust)) {
-    const lobby = lobbyOf(home, root, team);
+    const lobby = lobbyOf(home, root, { ...team, session });
     const lobbyRead = readLanding(lobby);
     const lobbyLanding = 'error' in lobbyRead ? null : lobbyRead.landing;
     if ('error' in lobbyRead) problems.push({ line: 0, message: `trust: ${lobbyRead.error}` });

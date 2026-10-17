@@ -38,8 +38,9 @@ of the SHA-256 of the root's real path, so two stores of one root are one team:
 | --- | --- |
 | `project`, `entity` | the team's own name — today's `project:` key in the team file, not the project it sits in — and the entity it belongs to, which seeds the team's lobby at registration |
 | `project_id` | the project the team sits in, by project ID, or `null`: a team no project names is its own project; written from the team file's `in_project` |
-| `session` | the herdr session |
-| `root`, `lobby` | the checkout, and the lobby folder — recorded at registration and kept: editing the file's `entity` never moves a registered team's lobby, and an explicit `lobby:` in the file re-records it |
+| `session` | the herdr session — the last one a command acted on, `up --session alt` included |
+| `root`, `lobby` | the checkout, and the lobby folder for `session` |
+| `lobbies` | the lobby recorded for each session, `session` among them — recorded at a session's first registration and kept: editing the file's `entity` never moves a registered team's lobby, and an explicit `lobby:` in the file re-records it. A second team file in the same checkout, and `up --session alt`, each record their own session's entry without taking another's; `up --session alt` also records the file's own session, so a plain `team check` reads the same lobby back. A record written before the map reads as one entry: `lobby` under `session` |
 | `roster` | one `{agent, seat, role}` per seat, and the capabilities on the seats that hold them: `leads: true` on the one seat the team file marks as its lead, `assistant: true` on the one it marks as its entity's assistant — readable without a role name; an absent field means the seat is not known to hold the capability, so a record written before the fields reads unchanged |
 | `lifecycle` | `defined`, `running`, `stopped` or `archived` |
 | `provenance` | including when the record was last updated |
