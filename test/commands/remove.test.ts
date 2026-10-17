@@ -1107,7 +1107,7 @@ describe('team remove', () => {
   test('a caller who may not change the team changes nothing', async () => {
     const io = testIo(dir, { kind: 'seat', name: 'worker', pane: 'w1:p1' });
     expect(await runRemove(['worker'], io, world().sources)).toBe(1);
-    expect(io.err).toContain('only the owner, the orchestrator or the operator');
+    expect(io.err).toContain('only the owner or `leads` removes a seat');
     expect(readFileSync(file, 'utf8')).toContain('name: worker');
   });
 });
@@ -1161,7 +1161,7 @@ describe('team remove delegated', () => {
       delegateGate: () => { asked += 1; return passed; },
     });
     expect(code).toBe(1);
-    expect(io.err).toBe('team remove: only the owner, the orchestrator or the operator runs it; this call is pilot\n');
+    expect(io.err).toBe('team remove: only the owner or `leads` removes a seat; this call is pilot\n');
     expect(asked).toBe(0);
     expect(readFileSync(file, 'utf8')).toContain('name: worker');
   });

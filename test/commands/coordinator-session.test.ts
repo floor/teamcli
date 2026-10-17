@@ -363,8 +363,9 @@ const COMMANDS: Case[] = [
   {
     name: 'remove',
     run: (caller, argv = [], options) => call((io) => runRemove([SEAT, ...argv], io, removeSources()), caller, options),
-    refusal: (who) => `team remove: only the owner, the orchestrator or the operator runs it; this call is ${who}\n`,
+    refusal: (who) => `team remove: only the owner or \`leads\` removes a seat; this call is ${who}\n`,
     noPane: (name) => `team remove: ${NO_PANE(name)}\n`,
+    operatorAdmitted: false,
     anotherPane: (name, pane) => `team remove: ${ANOTHER_PANE(name, pane)}\n`,
     sessionOwner: (who) => `team remove: ${OWNER_ONLY(who)}\n`,
     fileOwner: (who) => `team remove: --file is the owner's, from a terminal outside herdr; this call is ${who}\n`,
@@ -827,7 +828,7 @@ describe('the renamed pane in another session', () => {
     const run = await call((io) => runRemove([SEAT], io, removeSources()), placed(OTHER, COORDINATOR, COORDINATOR_PANE));
     expect(run.code).toBe(1);
     expect(run.out).toBe('');
-    expect(run.err).toBe(`team remove: only the owner, the orchestrator or the operator runs it; this call is ${COORDINATOR}\n`);
+    expect(run.err).toBe(`team remove: only the owner or \`leads\` removes a seat; this call is ${COORDINATOR}\n`);
     expect(readFileSync(file, 'utf8')).toBe(run.before);
     expect(readFileSync(stateFile, 'utf8')).toBe(run.beforeState);
     expect(readFileSync(file, 'utf8')).toContain(`name: ${SEAT}`);

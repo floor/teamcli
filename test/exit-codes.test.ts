@@ -1375,7 +1375,7 @@ scene('remove.file-owner', async (place) => {
 });
 scene('remove.caller', async (place) => {
   write(place, TWO);
-  return show(await removed(place, ['worker'], other, downSources({ home: place.home })), 'only the owner, the orchestrator or the operator');
+  return show(await removed(place, ['worker'], other, downSources({ home: place.home })), 'only the owner or `leads` removes a seat');
 });
 scene('remove.no-pane', async (place) => {
   write(place, TWO);
