@@ -1,0 +1,23 @@
+│<id>...                                     │
+│<session>                                   │
+│                                            │
+│<repo>                <when> ago  Completed │
+╰────────────────────────────────────────────╯
+
+ task:pull   Pull the latest code into the
+ task:open   Open the task in the website
+
+
+
+
+
+
+
+
+
+
+
+
+ enter: select action | esc: go back
+ Working in: <workspace>
+<ws>     unknown/<workspace> (<branch>)

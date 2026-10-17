@@ -7,6 +7,7 @@
     "cursor",
     "gemini",
     "grok",
+    "jules",
     "muse"
   ],
   "kinds": [
@@ -365,6 +366,63 @@
         "undocumented": 0
       }
     },
+    "jules": {
+      "idle": {
+        "real": 2,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "working": {
+        "real": 1,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "unsent": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "permission": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "question": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "exit question": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "trust": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "vendor notice": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "provider error": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "rate limit": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "unknown": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      }
+    },
     "muse": {
       "idle": {
         "real": 4,
@@ -430,6 +488,16 @@
     "cursor": {},
     "gemini": {},
     "grok": {},
+    "jules": {
+      "unsent": "reason not stated",
+      "permission": "reason not stated",
+      "question": "reason not stated",
+      "exit question": "reason not stated",
+      "trust": "reason not stated",
+      "vendor notice": "reason not stated",
+      "provider error": "reason not stated",
+      "rate limit": "reason not stated"
+    },
     "muse": {
       "rate limit": "the Power plan stood at `0% used` on both windows throughout",
       "unknown": "the screen after `/exit` was not captured"
@@ -1807,6 +1875,24 @@
     {
       "file": "grok/1.0.52/working.txt",
       "cli": "grok",
+      "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/done.txt",
+      "cli": "jules",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/idle.txt",
+      "cli": "jules",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/working.txt",
+      "cli": "jules",
       "kind": "working",
       "provenance": "capture"
     },
