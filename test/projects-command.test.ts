@@ -167,6 +167,7 @@ test('team status --project --json carries the record and each team\'s own readi
     const code = await runStatus(['--project', 'TeamCLI', '--json'], io, statusWith(place.dir, sourcesOf([project()])));
     expect(code).toBe(0);
     expect(JSON.parse(io.out)).toEqual({
+      schema: { name: 'team.status.project', version: 1 },
       format: 1,
       project: project(),
       teams: [

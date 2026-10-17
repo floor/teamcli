@@ -795,6 +795,8 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
   return findings;
 }
 
+import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
+
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
   const out = cleanedIo(io);
   const args = readArgs(argv, ['session', 'file'], ['login']);
@@ -861,6 +863,9 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   if (!missing) summary = `team doctor: nothing missing, ${warnings} warning${plural}`;
   else if (blockers) summary += `: ${blockers} of them block \`up\` and \`add\``;
   out.stdout(`${summary}\n`);
+  if (!args.flags.has('login')) {
+    out.stdout(`${NOT_PRETENDED.join('\n')}\n`);
+  }
   // exit: doctor.clear
   // exit: doctor.missing
   return missing ? 1 : 0;

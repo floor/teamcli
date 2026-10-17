@@ -162,11 +162,10 @@
               "who": {
                 "type": "string",
                 "enum": [
-                  "owner",
-                  "lead",
-                  "owner or lead",
-                  "seat",
-                  "any"
+                  "the owner",
+                  "the team's lead",
+                  "a grant holder",
+                  "any seat"
                 ]
               }
             }

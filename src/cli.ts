@@ -2,7 +2,8 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Command, Io } from './io.ts';
-import { description, version } from './version.ts';
+import { NOT_PRETENDED } from './permissions/must-not-pretend.ts';
+import { description, homepage, license, version } from './version.ts';
 
 // Each command is loaded only when it is called. A slice adds its line here. The table is exported
 // so a test can walk it: every command, `--help`, `-h` and a usage line.
@@ -59,12 +60,27 @@ Commands:
 
 Options:
   --version   print the version
+  --about     print what this release is and what 0.5.0 must not pretend
   --help      print this text
 
 The team is declared in <project>/.agents/team.yaml.
+
+Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error, 2 when no command or an unknown command is given.
 `;
 
 export { version };
+
+/** `team --about`'s text: version, licence, docs link, and the `what 0.5.0 must not pretend` block. */
+export function aboutText(): string {
+  return [
+    `team ${version()} — ${description()}`,
+    `licence: ${license()}`,
+    `docs: ${homepage()}`,
+    '',
+    ...NOT_PRETENDED,
+    '',
+  ].join('\n');
+}
 
 /** `team --help`'s text, exactly as printed: the owner's opening sentence (package.json's
  *  description), a blank line, then the usage. */
@@ -88,8 +104,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
     // exit: team.no-command
     return name ? 0 : 2;
   }
-  if (name === '--version' || name === '-V') {
-    io.stdout(`${version()}\n`);
+  if (name === '--version' || name === '-V' || name === '--about') {
+    io.stdout(name === '--about' ? aboutText() : `${version()}\n`);
     return 0; // exit: team.version
   }
   // Hidden: a port speaks this protocol. It is not a command in the help text.
@@ -120,6 +136,7 @@ export function processIo(): Io {
     env: process.env,
     stdinIsTTY: Boolean(process.stdin.isTTY),
     stdoutIsTTY: Boolean(process.stdout.isTTY),
+    stderrIsTTY: Boolean(process.stderr.isTTY),
   };
 }
 

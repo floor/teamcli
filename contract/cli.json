@@ -2124,6 +2124,12 @@
     "flags": [
       {
         "hidden": false,
+        "name": "--about",
+        "repeatable": false,
+        "takesValue": false
+      },
+      {
+        "hidden": false,
         "name": "--help",
         "repeatable": false,
         "takesValue": false

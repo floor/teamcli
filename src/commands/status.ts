@@ -21,7 +21,22 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import type { SeatStateWord, StateSource } from '../labels/state.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
-import { INTEGRITY_NOT_AUTHORITY } from '../permissions/must-not-pretend.ts';
+import {
+  contextLine,
+  projectContextLine,
+  renderDifferences,
+  renderNotes,
+  renderSummary,
+  renderTable,
+  summaryCounts,
+  toJsonDifference,
+  ttyStyle,
+  writeJson,
+  type DifferenceSummaryCounts,
+  type DifferenceWho,
+  type OutputSchemaTag,
+  type TtyStyle,
+} from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { readTeams } from '../registry/teams.ts';
@@ -118,6 +133,7 @@ export default status;
  * Format 1.
  */
 export interface StatusJson {
+  schema: OutputSchemaTag;
   format: 1;
   project: string;
   session: string;
@@ -148,7 +164,9 @@ export interface StatusJson {
   differences: Array<{
     what: string;
     repair: string;
+    who: DifferenceWho;
   }>;
+  summary: DifferenceSummaryCounts;
   notice: string | null;
   /** Present when the file names an account, or a reading is stored. */
   budgets?: BudgetRow[];
@@ -164,7 +182,10 @@ export interface StatusJson {
   }>;
 }
 
-export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]\n';
+export const USAGE = `Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
+
+Exits 0 when the session agrees with the file (or the project is listed), 1 when it differs or is refused, 2 when the invocation, team file, or herdr can't be read.
+`;
 
 export async function runStatus(argv: string[], io: Io, sources: StatusSources): Promise<number> {
   const out = cleanedIo(io);
@@ -229,7 +250,6 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   }
   const { team, root, dir } = current;
   if (!args.flags.has('json') && current.notice) out.stdout(`${plainText(current.notice)}\n`);
-  for (const warning of current.warnings) out.stderr(`team status: warning, line ${warning.line}: ${plainText(warning.message)}\n`);
 
   const session = args.values.session ?? team.session;
   // The one read of the approval store: everything below derives from it.
@@ -308,12 +328,16 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ...blindDifferences(team, state, live, comparison, now, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
   ]);
 
+  const visibleRows = all
+    ? comparison.rows
+    : comparison.rows.filter((row) => row.state !== 'stopped');
+
   if (args.flags.has('json')) {
-    const doc: StatusJson = {
-      format: 1,
+    writeJson(io, 'team.status', {
+      format: 1 as const,
       project: team.project,
       session,
-      rows: comparison.rows.map((row) => {
+      rows: visibleRows.map((row) => {
         // The expanded columns stay `--all`'s: without it `extra` is undefined and every field
         // the row published stands as it was. The reading below is every row's, `--all` or not.
         const found = registryByName?.get(row.name);
@@ -334,17 +358,21 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         };
       }),
       notes: comparison.notes,
-      // Format 1: the extra facts a difference carries (needs/owner/approval) are for the
-      // renderer, not the document.
-      differences: comparison.differences.map(({ what, repair }) => ({ what, repair })),
+      differences: comparison.differences.map(toJsonDifference),
+      summary: summaryCounts(comparison.differences),
       notice: current.notice ?? null,
       ...(budgets.length ? { budgets } : {}),
       ...(hold ? { hold } : {}),
       ...(procs.length ? { procs } : {}),
-    };
-    io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
+    });
   } else {
-    out.stdout(render(team, session, comparison, budgets, registryRows));
+    const style = ttyStyle(io);
+    const rendered = render(team, session, comparison, budgets, all ? registryRows : undefined, style);
+    if (style.enabled) {
+      io.stdout(rendered);
+    } else {
+      out.stdout(rendered);
+    }
   }
   // exit: status.agrees
   // exit: status.difference
@@ -449,12 +477,9 @@ function projectReport(name: string, out: Io, io: Io, sources: StatusSources, js
     };
   });
   if (json) {
-    io.stdout(`${JSON.stringify({ format: 1, project, teams }, null, 2)}\n`);
+    writeJson(io, 'team.status.project', { format: 1 as const, project, teams });
   } else {
-    const head = [`project ${plainLine(project.name)}  ${plainLine(project.id ?? '-')}`];
-    if (project.entity !== null) head.push(`entity ${plainLine(project.entity)}`);
-    head.push(`lead ${plainLine(project.lead ?? '-')}`);
-    const lines = [head.join('  ')];
+    const lines = [projectContextLine(project)];
     for (const team of teams) {
       lines.push(team.session === null
         ? `  ${plainLine(team.name)}  not registered`
@@ -472,49 +497,37 @@ function render(
   comparison: Comparison,
   budgets: BudgetRow[],
   registryRows?: SeatRegistryRow[],
+  style: TtyStyle = ttyStyle(false),
 ): string {
-  const lines = [`team ${plainLine(team.project)}, session "${plainLine(session)}"`];
+  const lines = [contextLine(team.project, session)];
   if (registryRows) {
     lines.push(...renderSeatsTable(registryRows, '  ').trimEnd().split('\n'));
   } else {
-    const rows = comparison.rows.map((row) => ({
-      name: plainLine(row.name),
-      state: plainLine(row.state),
-      model: plainLine(row.model),
-      pane: plainLine(row.pane),
-      // How a send would reach the seat: the socket its session answers at, else the typed
-      // delivery. The JSON row keeps its published shape; this is the plain table's word.
-      reach: row.reach ?? 'typed',
-    }));
-    const widths = [0, 0, 0];
-    for (const row of rows) {
-      widths[0] = Math.max(widths[0] as number, row.name.length);
-      widths[1] = Math.max(widths[1] as number, row.state.length);
-      widths[2] = Math.max(widths[2] as number, row.model.length);
-    }
-    for (const row of rows) {
-      lines.push(`  ${row.name.padEnd(widths[0] as number)}  ${row.state.padEnd(widths[1] as number)}  ${row.model.padEnd(widths[2] as number)}  ${row.pane.padEnd(4)}  ${row.reach}`.trimEnd());
-    }
+    const visibleRows = comparison.rows.filter((row) => row.state !== 'stopped');
+    lines.push(
+      ...renderTable({
+        headers: ['SEAT', 'STATE', 'MODEL', 'PANE', 'REACH'],
+        rows: visibleRows.map((row) => [
+          row.name,
+          row.state,
+          row.model,
+          row.pane,
+          row.reach ?? 'typed',
+        ]),
+        indent: '  ',
+        style,
+        styleCell: (padded, _raw, _r, col, s) => (col === 1 ? s.styleState(padded) : padded),
+      }),
+    );
   }
   if (budgets.length) {
     lines.push('budgets:');
     // The row carries its own reserve: the line and the JSON can't disagree (queue 79).
     for (const row of budgets) lines.push(`  ${plainLine(budgetLine(row))}`);
   }
-  for (const note of comparison.notes) lines.push(`note: ${plainLine(note)}`);
-  for (const difference of comparison.differences) {
-    lines.push(`difference: ${plainLine(difference.what)}`, `  repair: ${plainLine(difference.repair)}`);
-  }
-  const ownerCount = comparison.differences.filter((difference) => difference.owner === true).length;
-  if (ownerCount > 0) {
-    lines.push(`${comparison.differences.length} difference(s), ${ownerCount} for the owner`);
-  } else {
-    lines.push(`${comparison.differences.length} difference(s)`);
-  }
-  // The footer the decision record puts on a view of records
-  // (decided-grants-minimum-2026-10-17, "every record and view says so"): this reading is a view,
-  // not an authority. The plain reading alone carries it; the document is a script's to read.
-  lines.push(INTEGRITY_NOT_AUTHORITY);
+  lines.push(...renderNotes(comparison.notes));
+  lines.push(...renderDifferences(comparison.differences, style));
+  lines.push(renderSummary(comparison.differences));
   return `${lines.join('\n')}\n`;
 }
 

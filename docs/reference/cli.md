@@ -14,6 +14,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--about` | no | no | no |
 | `--help` | no | no | no |
 | `--version` | no | no | no |
 | `-V` | no | no | yes |

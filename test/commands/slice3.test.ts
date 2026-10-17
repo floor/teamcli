@@ -428,6 +428,13 @@ describe('team doctor', () => {
         `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root, replacing "."; `
           + `${join(base, 'worktrees', 'acme-web')} is the folder workspace.path "../worktrees/{repo}/{task}" places worktrees in, replacing "../worktrees/acme-web/*"`,
         'team doctor: nothing missing, 3 warnings',
+        'what 0.5.0 must not pretend:',
+        '  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt',
+        '  Standing grants with an expiry, not leases',
+        '  No two-granter agreement, no `agree`, no `create` bounds',
+        '  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating',
+        '  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)',
+        '  No policy object yet (amendment 02)',
         '',
       ].join('\n'),
     );
@@ -557,7 +564,7 @@ describe('team doctor', () => {
       'warn  deepseek-acme: the launch runs team-deepseek, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher\n',
     );
     expect(run.out).not.toContain('cursor-other: the launch names no model this version knows');
-    expect(run.out).toEndWith('team doctor: nothing missing, 4 warnings\n');
+    expect(run.out).toContain('team doctor: nothing missing, 4 warnings\nwhat 0.5.0 must not pretend:\n');
   });
 
   test("a launch whose model is not the file's warns", async () => {
