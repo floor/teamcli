@@ -147,7 +147,8 @@ export const realSources: DoctorSources = {
   },
 };
 
-export const USAGE = 'Usage: team doctor [--session <name>] [--file <path>] [--login]\n';
+export const USAGE =
+  "Usage: team doctor [--session <name>] [--file <path>] [--login] [--json]\nExits 0 when nothing is missing, 1 when something is missing, 2 when the invocation or team file can't be read.\n";
 
 export type Level = 'ok' | 'warn' | 'miss' | 'note';
 export type Finding = { level: Level; text: string };
@@ -795,13 +796,20 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
   return findings;
 }
 
+import { contextLine, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
 
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'file'], ['login']);
+  const args = readArgs(argv, ['session', 'file'], ['login', 'json']);
+  const json = argv.includes('--json');
   if (args.error || args.rest.length) {
-    out.stderr(`team doctor: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
+    const why = plainText(args.error ?? `unexpected "${args.rest[0]}"`);
+    if (json) {
+      writeJsonError(io, 'doctor.invocation', why, null);
+    } else {
+      out.stderr(`team doctor: ${why}\n${USAGE}`);
+    }
     // exit: doctor.invocation
     return 2;
   }
@@ -818,8 +826,18 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
     ...(args.values.session !== undefined ? { session: args.values.session } : {}),
   });
   if (!loaded.ok) {
-    for (const problem of loaded.errors) {
-      out.stderr(`team doctor: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
+    if (json) {
+      const id = loaded.errors[0]?.message.includes('not inside a git repository')
+        ? 'doctor.not-a-repo'
+        : loaded.errors.some((p) => p.line !== undefined)
+          ? 'doctor.file-invalid'
+          : 'doctor.file';
+      const msg = loaded.errors.map((p) => `${p.line ? `line ${p.line}: ` : ''}${plainText(p.message)}`).join('; ');
+      writeJsonError(io, id, msg, null);
+    } else {
+      for (const problem of loaded.errors) {
+        out.stderr(`team doctor: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
+      }
     }
     // exit: doctor.not-a-repo
     // exit: doctor.file
@@ -830,7 +848,8 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   const session = args.values.session ?? team.session;
   // The one read of the approval store: every finding below derives from it.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
-  const findings = args.flags.has('login')
+  const loginOnly = args.flags.has('login');
+  const findings = loginOnly
     ? doctorLoginFindings(team, sources)
     : [
         ...doctorFindings(
@@ -851,20 +870,48 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
         ...holdFindings(dirname(loaded.path), sources),
       ];
 
-  const label: Record<Level, string> = { ok: 'ok  ', warn: 'warn', miss: 'MISS', note: '--  ' };
-  out.stdout(findings.map((finding) => `${label[finding.level]}  ${finding.text}\n`).join(''));
   const missing = findings.filter((finding) => finding.level === 'miss').length;
   const warnings = findings.filter((finding) => finding.level === 'warn').length;
   // The same rule `up` and `add` refuse on. A missing watch is `miss` but blocks nothing, so the
   // refusal line is printed only when at least one finding blocks, and counts those.
   const blockers = findings.filter(blocksLaunch).length;
-  const plural = warnings === 1 ? '' : 's';
-  let summary = `team doctor: ${missing} missing, ${warnings} warning${plural}`;
-  if (!missing) summary = `team doctor: nothing missing, ${warnings} warning${plural}`;
-  else if (blockers) summary += `: ${blockers} of them block \`up\` and \`add\``;
-  out.stdout(`${summary}\n`);
-  if (!args.flags.has('login')) {
-    out.stdout(`${NOT_PRETENDED.join('\n')}\n`);
+
+  if (json) {
+    writeJson(io, 'team.doctor', {
+      format: 1,
+      project: plainLine(team.project),
+      session: plainLine(session),
+      login_only: loginOnly,
+      findings: findings.map((finding) => ({
+        level: finding.level,
+        text: finding.text,
+        blocks_launch: blocksLaunch(finding),
+      })),
+      summary: {
+        missing,
+        warnings,
+        blockers,
+      },
+    });
+  } else {
+    const style = ttyStyle(io);
+    const plural = warnings === 1 ? '' : 's';
+    let summary = `team doctor: ${missing} missing, ${warnings} warning${plural}`;
+    if (!missing) summary = `team doctor: nothing missing, ${warnings} warning${plural}`;
+    else if (blockers) summary += `: ${blockers} of them block \`up\` and \`add\``;
+
+    const lines: string[] = [];
+    if (!loginOnly) lines.push(contextLine(team.project, session));
+    for (const finding of findings) lines.push(renderFinding(finding, style));
+    lines.push(summary);
+    if (!loginOnly) lines.push(...NOT_PRETENDED);
+
+    const rendered = `${lines.join('\n')}\n`;
+    if (style.enabled) {
+      io.stdout(rendered);
+    } else {
+      out.stdout(rendered);
+    }
   }
   // exit: doctor.clear
   // exit: doctor.missing

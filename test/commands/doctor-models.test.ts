@@ -86,6 +86,7 @@ describe('team doctor on a file of every model shape', () => {
     expect(run.err).toBe('');
     expect(run.out).toBe(
       [
+        'team pilot, session "pilot"',
         // The fixture still spells the lead `coordinator:`, on line 4: doctor prints the file's
         // notice before the seats' own warnings, and counts it.
         'warn  the file, line 4: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
