@@ -216,7 +216,7 @@ Hidden: no
 
 Usage:
 
-    team delegate <session/pane> --commands <act,...> [--dry-run]
+    team delegate <session/pane> --commands <act,...> [--dry-run] [--json]
 
 ### Flags
 
@@ -225,6 +225,7 @@ Usage:
 | `--commands` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -312,8 +313,8 @@ Hidden: no
 
 Usage:
 
-    team grant <seat> --scope <act,...> [--dry-run]
-    team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run]
+    team grant <seat> --scope <act,...> [--dry-run] [--json]
+    team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
 
 ### Flags
 
@@ -323,6 +324,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--expires` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--name` | yes | no | no |
 | `--scope` | yes | no | no |
 | `-h` | no | no | yes |
@@ -869,9 +871,9 @@ Hidden: no
 
 Usage:
 
-    team revoke grant [--dry-run]
-    team revoke delegate <session/pane> [--dry-run]
-    team revoke <name> [--dry-run]
+    team revoke grant [--dry-run] [--json]
+    team revoke delegate <session/pane> [--dry-run] [--json]
+    team revoke <name> [--dry-run] [--json]
 
 ### Flags
 
@@ -879,6 +881,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -893,7 +896,7 @@ Hidden: no
 
 Usage:
 
-    team revoke delegate <session/pane> [--dry-run]
+    team revoke delegate <session/pane> [--dry-run] [--json]
 
 #### Flags
 
@@ -901,6 +904,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -915,7 +919,7 @@ Hidden: no
 
 Usage:
 
-    team revoke grant [--dry-run]
+    team revoke grant [--dry-run] [--json]
 
 #### Flags
 
@@ -923,6 +927,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals

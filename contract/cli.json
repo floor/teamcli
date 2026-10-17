@@ -364,6 +364,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -381,7 +387,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team delegate <session/pane> --commands <act,...> [--dry-run]"
+        "team delegate <session/pane> --commands <act,...> [--dry-run] [--json]"
       ]
     },
     {
@@ -577,6 +583,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--name",
           "repeatable": false,
           "takesValue": true
@@ -610,8 +622,8 @@
       ],
       "subcommands": [],
       "usage": [
-        "team grant <seat> --scope <act,...> [--dry-run]",
-        "team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run]"
+        "team grant <seat> --scope <act,...> [--dry-run] [--json]",
+        "team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]"
       ]
     },
     {
@@ -1457,6 +1469,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -1488,6 +1506,12 @@
               "takesValue": false
             },
             {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -1505,7 +1529,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team revoke delegate <session/pane> [--dry-run]"
+            "team revoke delegate <session/pane> [--dry-run] [--json]"
           ]
         },
         {
@@ -1523,6 +1547,12 @@
               "takesValue": false
             },
             {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -1534,14 +1564,14 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team revoke grant [--dry-run]"
+            "team revoke grant [--dry-run] [--json]"
           ]
         }
       ],
       "usage": [
-        "team revoke grant [--dry-run]",
-        "team revoke delegate <session/pane> [--dry-run]",
-        "team revoke <name> [--dry-run]"
+        "team revoke grant [--dry-run] [--json]",
+        "team revoke delegate <session/pane> [--dry-run] [--json]",
+        "team revoke <name> [--dry-run] [--json]"
       ]
     },
     {

@@ -540,6 +540,54 @@ export const LIST_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team grant` (`schema/grant.schema.json`). */
+export const GRANT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.grant',
+  fileName: 'grant.schema.json',
+  title: 'team grant --json output',
+  statuses: ['updated', 'unchanged', 'dry-run'],
+  required: ['project', 'session', 'target'],
+  properties: {
+    target: { type: 'string', minLength: 1 },
+    capabilities: {
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+    },
+    scope: {
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+    },
+  },
+});
+
+/** Published `--json` output schema for `team delegate` (`schema/delegate.schema.json`). */
+export const DELEGATE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.delegate',
+  fileName: 'delegate.schema.json',
+  title: 'team delegate --json output',
+  statuses: ['updated', 'unchanged', 'dry-run'],
+  required: ['project', 'session', 'target', 'commands'],
+  properties: {
+    target: { type: 'string', minLength: 1 },
+    commands: {
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+    },
+  },
+});
+
+/** Published `--json` output schema for `team revoke` (`schema/revoke.schema.json`). */
+export const REVOKE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.revoke',
+  fileName: 'revoke.schema.json',
+  title: 'team revoke --json output',
+  statuses: ['updated', 'unchanged', 'dry-run'],
+  required: ['project', 'session', 'target'],
+  properties: {
+    target: { type: 'string', minLength: 1 },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -549,5 +597,9 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   DOCTOR_OUTPUT_SCHEMA,
   CHECK_OUTPUT_SCHEMA,
   LIST_OUTPUT_SCHEMA,
+  GRANT_OUTPUT_SCHEMA,
+  DELEGATE_OUTPUT_SCHEMA,
+  REVOKE_OUTPUT_SCHEMA,
 ];
+
 
