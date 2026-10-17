@@ -1,9 +1,9 @@
 // The state's records and the team file's seats drift apart: a seat the file no longer declares
 // keeps its record — and the pane that record names — until something drops it. The file is the
 // truth. `team register` records the seat that stands on a pane a departed record still claims;
-// `team check` names the departed records and the sessions herdr no longer runs, and the owner's
-// `--repair` drops them in one logged write. Fake herdr, a temporary home and a pinned caller: no
-// live session is read.
+// `team check` names the departed records and the sessions with no seat of the team in them, and
+// the owner's `--repair` drops them in one logged write. Fake herdr, a temporary home and a pinned
+// caller: no live session is read.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -70,8 +70,9 @@ seats:
 
 /**
  * The state the reported team kept: two records for seats the file no longer declares — one on
- * the lead's own pane, one on a pane of its own — beside two session records herdr no longer
- * runs. Nothing here is a temporary seat: the file never lists one, and its record is its own.
+ * the lead's own pane, one on a pane of its own — beside two session records with no seat of the
+ * team in them. Nothing here is a temporary seat: the file never lists one, and its record is its
+ * own.
  */
 function seed(w: World): void {
   updateState(w.dir, (state) => {
@@ -119,7 +120,7 @@ function live(): Live {
   };
 }
 
-/** The check's own reads: `--repair`'s stale-session read answers for the sessions herdr runs. */
+/** The check's own reads: herdr's one live session, and nothing else. */
 function checkSources(w: World, over: Partial<CheckSources> = {}): CheckSources {
   return {
     live: () => live(),
@@ -127,7 +128,6 @@ function checkSources(w: World, over: Partial<CheckSources> = {}): CheckSources 
     standing: () => ({ kind: 'none' }),
     now: () => NOW,
     home: w.home,
-    sessionRuns: (name) => name === 'acme',
     ...over,
   };
 }
@@ -183,8 +183,8 @@ describe('a state seat the file no longer declares', () => {
     expect(r.code).toBe(1);
     expect(r.out).toContain('difference: helper: a state seat not in the file claims pane w1:p1');
     expect(r.out).toContain('difference: runner: a state seat not in the file claims pane w2:p1');
-    expect(r.out).toContain('difference: the state records the session "gone-one", and herdr does not run it');
-    expect(r.out).toContain('difference: the state records the session "gone-two", and herdr does not run it');
+    expect(r.out).toContain('difference: the state records the session "gone-one", and no seat of the team is in it');
+    expect(r.out).toContain('difference: the state records the session "gone-two", and no seat of the team is in it');
     expect(r.out).toContain('repair: drop its record from the state (team check --repair)');
     expect(r.out).toContain('team check: 4 difference(s), 4 for the owner');
     // A plain check is a read: every record stands where it was.
@@ -219,8 +219,8 @@ describe('a state seat the file no longer declares', () => {
     expect(fixed.code).toBe(0);
     expect(fixed.out).toContain('repaired: helper: a state seat not in the file claimed pane w1:p1; its record is dropped');
     expect(fixed.out).toContain('repaired: runner: a state seat not in the file claimed pane w2:p1; its record is dropped');
-    expect(fixed.out).toContain('repaired: the state\'s session "gone-one" is not running; its record is dropped');
-    expect(fixed.out).toContain('repaired: the state\'s session "gone-two" is not running; its record is dropped');
+    expect(fixed.out).toContain('repaired: the state\'s session "gone-one" holds no seat of the team; its record is dropped');
+    expect(fixed.out).toContain('repaired: the state\'s session "gone-two" holds no seat of the team; its record is dropped');
     expect(fixed.out).toContain('team check: nothing wrong');
     // The file's own seat is untouched, and the leftovers are gone from the state.
     expect(seats(w)).toEqual(['lead']);
@@ -228,7 +228,7 @@ describe('a state seat the file no longer declares', () => {
     // The drop is accountable: every line it printed is in the project's log under the check.
     const log = readFileSync(join(w.dir, LOG_FILE), 'utf8');
     expect(log).toContain('check [owner] repaired: helper: a state seat not in the file claimed pane w1:p1; its record is dropped');
-    expect(log).toContain('check [owner] repaired: the state\'s session "gone-two" is not running; its record is dropped');
+    expect(log).toContain('check [owner] repaired: the state\'s session "gone-two" holds no seat of the team; its record is dropped');
 
     // The next plain check reads the state the file would have written.
     const after = check(w);
@@ -236,18 +236,25 @@ describe('a state seat the file no longer declares', () => {
     expect(after.out).toContain('team check: nothing wrong');
   });
 
-  test('--repair leaves a seat herdr still runs alone, whatever the file says', async () => {
+  test('--repair keeps a session a seat of the team lives in, and drops one with none', async () => {
     const w = world();
     seed(w);
     await register(w, ['lead', '--pane', PANE]);
 
-    const r = check(w, { repair: true }, OWNER, { sessionRuns: (name) => name === 'acme' || name === 'gone-one' });
+    // The state holds a second session the file does not name, with the file's own seat in it —
+    // a launch that took `--session` — and one holding only a seat the file does not declare.
+    updateState(w.dir, (state) => {
+      state.sessions.moved = { seats: { lead: { stage: 'ready', pane: 'w3:p1', workspace: 'w3' } }, worktrees: {} };
+      state.sessions.held = { seats: { helper: { stage: 'ready', pane: 'w4:p1', workspace: 'w4' } }, worktrees: {} };
+    });
 
-    // One of the two stale sessions is running after all: its record is not a leftover, and the
-    // check says so before the repair.
+    const r = check(w, { repair: true });
+
+    // The file decides: a session with a seat it still declares is the team's, and is left where
+    // it is; a session with no such seat is a leftover. Herdr is not consulted either way.
     expect(r.code).toBe(0);
-    expect(r.out).toContain('repaired: the state\'s session "gone-two" is not running; its record is dropped');
-    expect(r.out).not.toContain('session "gone-one"');
-    expect(Object.keys(readState(w.dir).sessions).sort()).toEqual(['acme', 'gone-one']);
+    expect(r.out).not.toContain('session "moved"');
+    expect(r.out).toContain('repaired: the state\'s session "held" holds no seat of the team; its record is dropped');
+    expect(Object.keys(readState(w.dir).sessions).sort()).toEqual(['acme', 'moved']);
   });
 });

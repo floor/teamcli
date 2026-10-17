@@ -23,12 +23,12 @@ through 0.3.3; the last section keeps those spellings and their bytes.
 ## The state's leftovers, and the owner's `--repair`
 
 The file is the truth about who the seats are. The state can keep a record the file no longer
-speaks for — a seat an older file named and this one dropped — and, once its session is gone, a
-record for a session herdr no longer runs. Both are leftovers, and both are named:
+speaks for — a seat an older file named and this one dropped — and a session the file does not
+name with no seat of the team in it. Both are leftovers, and both are named:
 
     difference: <seat>: a state seat not in the file claims pane <pane>
       repair: drop its record from the state (team check --repair)
-    difference: the state records the session "<name>", and herdr does not run it
+    difference: the state records the session "<name>", and no seat of the team is in it
       repair: drop its record from the state (team check --repair)
 
 A record with no pane reads `<seat>: a state seat not in the file`, without the pane clause. The
@@ -40,8 +40,11 @@ exactly the leftovers it named, in one locked state write, re-checking each reco
 state now on disk; it prints one `repaired:` line per record, logs each line under `check` and the
 owner, and leaves the file, the approval store and every other record as they stood. A temporary
 seat is never a leftover: `team add --temporary` never writes one into the file, so its record is
-the only place it exists, and neither the check nor the repair touches it. A session herdr cannot
-answer for is not a leftover either — a read that failed is not a finding.
+the only place it exists, and neither the check nor the repair touches it. A session with a seat
+of the team in it — a name the file declares, or a temporary seat — is the team's too, whatever
+the file's own `session` key says, and is left where it is. Herdr is not read for any of this: the
+state's own claims are the subject, a pane herdr no longer lists is still a pane the state claims,
+and a session it runs is still a leftover with no seat of the team in it.
 
 The repair is the owner's alone. A caller that passes the gate but is not the owner meets
 `team check: --repair is the owner's` and exit 1, as it does for the two aimed flags; nothing is

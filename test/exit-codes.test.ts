@@ -901,8 +901,8 @@ scene('check.repaired', async (place) => {
     const session = (state.sessions.acme ??= emptySession());
     session.watch = { pid: 1, heartbeat: NOW.toISOString() };
     session.seats.lead = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
-    // A record for a seat the file no longer declares, and one for a session herdr no longer
-    // runs: the owner's --repair drops both, and the state says what the file does.
+    // A record for a seat the file no longer declares, and a session with no seat of the team in
+    // it: the owner's --repair drops both, and the state says what the file does.
     session.seats.gone = { stage: 'ready', pane: 'w1:p2', workspace: 'w1' };
     state.sessions.left = { seats: {}, worktrees: {} };
   });
@@ -914,7 +914,6 @@ scene('check.repaired', async (place) => {
     screens: { 'w1:p1': IDLE },
   };
   const sources = checkSources(matched, approvalStanding(place.root, place.home));
-  sources.sessionRuns = (name) => name === 'acme';
   return show(await checked(place, ['--repair'], owner, sources), 'repaired:');
 });
 scene('check.not-yours', async (place) => {
