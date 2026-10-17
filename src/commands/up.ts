@@ -538,10 +538,10 @@ function seatPlan(
   };
 }
 
-// What only a relaunch repairs, for a ready seat this `up` leaves as it is: a process team it
-// never recorded (a launch from before identities were), or a start outside the team's lobby
-// (an old release's start). The skip line says what does repair it; both repairs relaunch the
-// seat — one seat at a time, or the whole team (for an orchestrator or operator, only the whole team).
+// What a ready seat this `up` leaves as it is needs: a process team it never recorded (a launch
+// from before identities were), repaired in place by `team register <seat>`; or a start outside
+// the team's lobby (an old release's start), repaired by a relaunch — one seat at a time, or the
+// whole team for a seat the file names as its orchestrator or operator. The skip line says which.
 /** The restored seat's detail. A model that differs from the file is reported and is not closed. */
 function restoredDetail(
   seat: Seat,

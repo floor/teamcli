@@ -245,9 +245,10 @@ export interface UpSeat {
    */
   budget?: { kind: 'refuse'; why: string } | { kind: 'unknown'; account: string; text: string };
   /**
-   * Set when a ready seat's own state is repaired only by a relaunch this `up` never performs —
-   * its process was never recorded, or it still starts outside the team's lobby. The skip line
-   * says it, so the owner is not left with a seat that is "already ready" and stale.
+   * Set when a ready seat's own state needs a repair this `up` never performs — its process was
+   * never recorded (a per-seat `team register` run records it), or it still starts outside the
+   * team's lobby (a relaunch moves it). The skip line says it, so the owner is not left with a
+   * seat that is "already ready" and stale.
    */
   restartNote?: string;
   /**
