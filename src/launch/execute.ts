@@ -87,6 +87,10 @@ export type Host = {
   paneText?(session: string, pane: string): string | null;
   /** Whether the pane's foreground program is back to its shell; null when herdr can't tell. */
   shellBack?(session: string, pane: string): boolean | null;
+  /** The status herdr reports for the pane's agent; null when herdr can't tell. Read when the
+   *  screen is not recognised: an agent herdr reports idle or done is at its prompt, exactly as
+   *  `reload` and `restart` read it before a close that types nothing. */
+  agentStatus?(session: string, pane: string): string | null;
   /** The pane's process identity, read to record it for the seat; null when herdr can't tell. */
   processInfo?(session: string, pane: string): PaneProcesses | null;
   sleep(ms: number): Promise<void>;
@@ -938,6 +942,16 @@ export async function executePlan(
               }
             }
           } else shellBackSince = null;
+          // Herdr's own status is the last word on a screen the profile cannot read: an agent it
+          // reports idle or done is at its prompt, the same reading `reload` and `restart` make
+          // before a close that types nothing. The shell in front of the pane is not: a pane back
+          // at its shell shows no CLI prompt whatever herdr reports, and the ended read below is
+          // left to say so. The rules delivery still waits for its own recognised idle screen, so
+          // a ready taken on herdr's word never types into a screen this run could not read.
+          if (kind === 'unknown' && back !== true && unreadIdle(host.agentStatus?.(session, here.pane))) {
+            outcome = 'idle';
+            break;
+          }
           if (kind === 'idle' || kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit') {
             outcome = kind;
             break;

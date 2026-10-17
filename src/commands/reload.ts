@@ -375,6 +375,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         return readScreen(cli, launch.paneText(current, pane) ?? undefined).kind;
       },
       shellBack: (current, pane) => launch.shellBack?.(current, pane) ?? null,
+      agentStatus: (current, pane) => launch.agentStatus?.(current, pane) ?? null,
       agentPanes: (current) => launch.agentPanes(current),
       createWorkspace: (current, cwd, label) => launch.createWorkspace(current, cwd, label),
       paneRun: (current, pane, command) => launch.paneRun(current, pane, command),

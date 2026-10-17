@@ -1418,6 +1418,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       classify: (name, pane, cli) => readScreen(cli, launch.paneText(name, pane) ?? undefined).kind,
       paneText: (session, pane) => launch.paneText(session, pane),
       shellBack: (session, pane) => launch.shellBack?.(session, pane) ?? null,
+      agentStatus: (session, pane) => launch.agentStatus?.(session, pane) ?? null,
       processInfo: (session, pane) => launch.processInfo?.(session, pane) ?? null,
       sleep: sharedSleep,
       now: () => now().getTime(),
