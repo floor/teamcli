@@ -143,7 +143,7 @@ function registerSeat(home: string, seat: string, role: string): void {
       '  team: "acme"',
       `  seat: "${seat}"`,
       '  session: "acme"',
-      '  pane: "pane-lead"',
+      `  pane: "pane-${seat}"`,
       '  address: null',
       'mcp: []',
       'skills: []',

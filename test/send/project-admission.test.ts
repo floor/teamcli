@@ -20,6 +20,7 @@ import { upsertProject } from '../../src/registry/projects.ts';
 import { readTeams, teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
 import { admitSend, PROJECT_RULES, PROJECT_RULE_SUMMARY, RULE_SUMMARY } from '../../src/send/admit.ts';
 import type { NativePane } from '../../src/send/native.ts';
+import { updateState } from '../../src/state.ts';
 import { testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-17T02:00:00Z');
@@ -148,13 +149,14 @@ function scripted(samples: string[]): Scripted {
 }
 
 /** The fake herdr of the scene: each seat's pane has its own scripted status, and a trigger
- *  typed into any other pane is not taken. */
-function sendHost(world: SendWorld, seats: Record<string, { session: string; pane: string; paneStatus: NativePane }>): SendHost & { typedInto: (pane: string) => Typed[] } {
+ *  typed into any other pane is not taken. The live name is the seat's own — herdr names the
+ *  seat it lists, which is what a send reads by before it types. */
+function sendHost(world: SendWorld, seats: Record<string, { name?: string; session: string; pane: string; paneStatus: NativePane }>): SendHost & { typedInto: (pane: string) => Typed[] } {
   const byPane = new Map(Object.values(seats).map((seat) => [seat.pane, seat]));
   const bySession = new Map<string, { name: string; pane: string }[]>();
-  for (const [name, seat] of Object.entries(seats)) {
+  for (const [key, seat] of Object.entries(seats)) {
     const list = bySession.get(seat.session) ?? [];
-    list.push({ name, pane: seat.pane });
+    list.push({ name: seat.name ?? key, pane: seat.pane });
     bySession.set(seat.session, list);
   }
   return {
@@ -204,6 +206,11 @@ function twoTeams(): {
   const ioLead = registered(world.home, { name: 'lead', role: 'chief', team: ioId, seat: 'lead', session: 'teamcli.io', pane: 'pane-io-lead' });
   teamRecord(world.home, cliId, { project: 'teamcli', session: 'teamcli', root: cliRoot, roster: [{ agent: cliLead.id, seat: 'lead', role: 'chief' }] });
   teamRecord(world.home, ioId, { project: 'teamcli.io', session: 'teamcli.io', root: ioRoot, roster: [{ agent: ioLead.id, seat: 'lead', role: 'chief' }] });
+  // The state record `up` leaves for the caller: the pane the seat stands on, which is what
+  // binds the call to its registry record.
+  updateState(join(cliRoot, '.agents'), (state) => {
+    state.sessions.teamcli = { seats: { lead: { stage: 'launched', pane: 'pane-cli-lead', workspace: 'w1' } }, worktrees: {} };
+  });
   return { world, cliId, ioId, cliRoot, cliLead, ioLead, caller: { kind: 'seat', name: 'lead', pane: 'pane-cli-lead', session: 'teamcli' } };
 }
 
@@ -211,8 +218,8 @@ function sceneHost(world: SendWorld): { host: SendHost & { typedInto: (pane: str
   const cliPane = scripted(['idle']);
   const ioPane = scripted(['idle', 'working']);
   const host = sendHost(world, {
-    'cli-lead': { session: 'teamcli', pane: 'pane-cli-lead', paneStatus: cliPane },
-    'io-lead': { session: 'teamcli.io', pane: 'pane-io-lead', paneStatus: ioPane },
+    'cli-lead': { name: 'lead', session: 'teamcli', pane: 'pane-cli-lead', paneStatus: cliPane },
+    'io-lead': { name: 'lead', session: 'teamcli.io', pane: 'pane-io-lead', paneStatus: ioPane },
   });
   return { host, cliPane, ioPane };
 }
