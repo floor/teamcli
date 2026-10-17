@@ -626,8 +626,8 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
         // A dry run's document is its plan whatever the real run would find, the already path
         // included: its one step is the write it would make, and nothing is launched.
         const detail = unlisted
-          ? `${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written`
-          : `${plainLine(name)}: ${ended}; the record was refreshed from the file, nothing relaunched`;
+          ? `${plainLine(name)}: ${ended}; the team registry's roster did not list it, and would be written`
+          : `${plainLine(name)}: ${ended}; the record would be refreshed from the file, nothing relaunched`;
         writeJson(io, 'team.register', {
           format: 1,
           dry_run: true,

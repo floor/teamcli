@@ -188,7 +188,7 @@ describe('team register --json', () => {
     expect(doc.plan[0]!.step).toBe('register');
     expect(doc.plan[0]!.seat).toBe('lead');
     expect(doc.plan[0]!.prefix).toBe('+');
-    expect(doc.plan[0]!.detail.startsWith(`lead: already registered — pane ${PANE}`)).toBe(true);
+    expect(doc.plan[0]!.detail).toBe(`lead: already registered — pane ${PANE}; the record would be refreshed from the file, nothing relaunched`);
     // And the record the real first run wrote is left exactly as it stands.
     expect(readFileSync(join(w.dir, STATE_FILE), 'utf8')).toBe(before);
   });
