@@ -42,9 +42,15 @@ owner, and leaves the file, the approval store and every other record as they st
 seat is never a leftover: `team add --temporary` never writes one into the file, so its record is
 the only place it exists, and neither the check nor the repair touches it. A session with a seat
 of the team in it — a name the file declares, or a temporary seat — is the team's too, whatever
-the file's own `session` key says, and is left where it is. Herdr is not read for any of this: the
-state's own claims are the subject, a pane herdr no longer lists is still a pane the state claims,
-and a session it runs is still a leftover with no seat of the team in it.
+the file's own `session` key says, and is left where it is. The file's own session and the session
+this run addresses — `--session`, or `team.session` when it aims nothing — are never leftovers
+themselves either: one is where the team runs, and the other is what the run is about, so
+`--repair` never drops the record the check is reading. The records inside the addressed session
+are compared with the file all the same. Herdr is not consulted about which records are leftovers:
+the state's own claims are the subject, a pane herdr no longer lists is still a pane the state
+claims, and a session it runs is still a leftover with no seat of the team in it. The repair still
+waits for the live read: a check whose herdr cannot answer exits `check.herdr` before it drops
+anything, so a refused run has changed nothing.
 
 The repair is the owner's alone. A caller that passes the gate but is not the owner meets
 `team check: --repair is the owner's` and exit 1, as it does for the two aimed flags; nothing is
