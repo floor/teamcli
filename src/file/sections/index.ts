@@ -21,6 +21,7 @@ import { watch } from './watch.ts';
 import { watchChecks } from './watch-checks.ts';
 import { seats } from './seats.ts';
 import { deliveryOrder } from './delivery_order.ts';
+import { policies } from './policies.ts';
 import { releases } from './releases.ts';
 import { delegates } from './delegate.ts';
 import { grant } from './grant.ts';
@@ -32,7 +33,7 @@ import type { Section } from './section.ts';
  * Every section of the team file, in one order. The owner-only list is generated from this order
  * (`SECTIONS.filter(s => s.owner).map(s => s.name)`), and that order feeds the approval digest,
  * so it is part of the contract: the owner sections appear here exactly as the digest reads them.
- * The validator walks the list running each section once every section it names in `after` has
+ * The validator walks the list running each section once every section it reads (`after`) has
  * run, which is the order `validate.ts` read them in before the sections were modules.
  */
 export const SECTIONS: readonly Section[] = [
@@ -74,6 +75,9 @@ export const SECTIONS: readonly Section[] = [
   // before it keeps every digest and approval it had, and it changes no approval fingerprint.
   // The seat-level word sits on a seat and is read by the seats section above.
   deliveryOrder,
+  // Owner-signed team-level policies (Kernel amendment 02 §2.12). Non-owner in the section list
+  // so existing approval digests stay intact; each entry carries its own Ed25519 signature.
+  policies,
   releases,
   // The sections before `tasks` keep the relative order records were written with.
   tasks,

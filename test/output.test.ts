@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildActionSchemaSpec,
+  buildCommandOutputSchema,
   collapseNotes,
+  COMMAND_OUTPUT_SCHEMAS,
   contextLine,
   DIFFERENCE_WHO_VALUES,
   ERROR_OUTPUT_SCHEMA,
@@ -36,6 +38,7 @@ import {
   assertMatchesOutputSchema,
   assertNoAnsi,
   stripAnsi,
+  validateAgainstJsonSchema,
 } from './helpers/output.ts';
 
 describe('src/output/ — context line and tables', () => {
@@ -288,5 +291,243 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
     expect(checked.error.id).toBe('add.caller');
     expect((checked.error as { rule?: string }).rule).toBe('owner-only');
     expect(() => assertMatchesOutputSchema(raw, ERROR_OUTPUT_SCHEMA)).not.toThrow();
+  });
+
+  test('walks COMMAND_OUTPUT_SCHEMAS and validates a real payload for every command (and every oneOf branch)', () => {
+    const samplePayloads: Record<string, unknown[]> = {
+      'team.error': [
+        jsonError('policy.refused', 'refused', 'team policy unset team dev-mode', 1, 'owner-only'),
+      ],
+      'team.status': [
+        jsonEnvelope('team.status', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          rows: [{ name: 'lead', state: 'working', model: 'Claude Opus 5.5', pane: 'w1:p1' }],
+          notes: [],
+          differences: [],
+          summary: { differences: 0, owner_differences: 0 },
+          notice: null,
+        }),
+        jsonEnvelope('team.status.project', {
+          format: 1 as const,
+          project: { id: 'beacon', name: 'beacon', entity: 'floor', lead: null },
+          teams: [{ name: 'beacon', session: 'beacon', lifecycle: 'running', seats: 2 }],
+        }),
+      ],
+      'team.seats': [
+        jsonEnvelope('team.seats', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          seats: [
+            {
+              name: 'lead',
+              id: 'seat_000000000001',
+              role: 'coordinator',
+              cli: 'claude-code',
+              model: 'Claude Opus 5.5',
+              effort: null,
+              status: 'working',
+              state: 'working',
+              state_source: 'cli',
+              last_active: null,
+              pane: 'w1:p1',
+              launch_line: 'claude --model claude-opus-5-5',
+            },
+          ],
+        }),
+      ],
+      'team.projects': [
+        jsonEnvelope('team.projects', {
+          format: 1 as const,
+          projects: [
+            {
+              id: 'beacon',
+              name: 'beacon',
+              entity: 'floor',
+              lead: null,
+              teams: ['tm_000000000001'],
+              provenance: {
+                registered_by: 'owner',
+                registered_at: '2026-10-17T12:00:00Z',
+                updated_at: '2026-10-17T12:00:00Z',
+              },
+            },
+          ],
+        }),
+      ],
+      'team.doctor': [
+        jsonEnvelope('team.doctor', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          findings: [{ level: 'ok', text: 'herdr 0.7.1', blocks_launch: false }],
+          summary: { missing: 0, warnings: 0, blockers: 0 },
+        }),
+      ],
+      'team.check': [
+        jsonEnvelope('team.check', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          warnings: [],
+          repaired: [],
+          notes: [],
+          differences: [],
+          summary: { differences: 0, owner_differences: 0 },
+        }),
+      ],
+      'team.list': [
+        jsonEnvelope('team.list', {
+          format: 1 as const,
+          rows: [
+            {
+              team: 'beacon',
+              project: '/tmp/beacon',
+              status: 'running',
+              seats: '2/2',
+              activity: 'working',
+              note: '',
+            },
+          ],
+        }),
+      ],
+      'team.grant': [
+        jsonEnvelope('team.grant', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'updated',
+          action_summary: 'granted up to lead',
+          project: 'beacon',
+          session: 'beacon',
+          target: 'lead',
+        }),
+      ],
+      'team.delegate': [
+        jsonEnvelope('team.delegate', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'updated',
+          action_summary: 'delegated status to w1:p1',
+          project: 'beacon',
+          session: 'beacon',
+          target: 'w1:p1',
+          commands: ['status'],
+        }),
+      ],
+      'team.revoke': [
+        jsonEnvelope('team.revoke', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'updated',
+          action_summary: 'revoked lead',
+          project: 'beacon',
+          session: 'beacon',
+          target: 'lead',
+        }),
+      ],
+      'team.hold': [
+        jsonEnvelope('team.hold', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'placed',
+          action_summary: 'hold: freeze deploys',
+          project: 'beacon',
+          session: 'beacon',
+          target: 'beacon',
+          value: 'freeze deploys',
+        }),
+      ],
+      'team.lock': [
+        jsonEnvelope('team.lock', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'taken',
+          action_summary: 'locked deploy',
+          project: 'beacon',
+          target: 'deploy',
+          value: 'deploy',
+          holder: { team: 'beacon', run: '1', by: 'lead', at: '2026-10-17T12:00:00Z' },
+        }),
+      ],
+      'team.unlock': [
+        jsonEnvelope('team.unlock', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'released',
+          action_summary: 'unlocked deploy',
+          project: 'beacon',
+          target: 'deploy',
+          value: null,
+        }),
+      ],
+      'team.release': [
+        jsonEnvelope('team.release', {
+          format: 1 as const,
+          package: '@floor/teamcli',
+          version: '0.5.0',
+          checks: {
+            npm: { status: 'pass', detail: 'published' },
+            tag: { status: 'pass', detail: 'v0.5.0' },
+            github: { status: 'pass', detail: 'release exists' },
+            changelog: { status: 'pass', detail: 'entry present' },
+          },
+          summary: { checks: 4, missing: 0, unknown: 0 },
+        }),
+      ],
+      'team.policy': [
+        jsonEnvelope('team.policy', {
+          format: 1 as const,
+          status: 'ok' as const,
+          project: 'beacon',
+          session: 'beacon',
+          entity: 'floor',
+          in_project: null,
+          seat: null,
+          dev_mode_governed: false,
+          policies: [
+            {
+              name: 'dev-mode',
+              value: 'off',
+              level: 'default',
+              setter: null,
+              date: null,
+              expiry: null,
+              kind: 'enforced',
+            },
+          ],
+        }),
+        jsonEnvelope('team.policy', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'updated',
+          action_summary: 'policy: set dev-mode=on at team (tm_000000000001)',
+          project: 'beacon',
+          session: 'beacon',
+          level: 'team',
+          target: 'tm_000000000001',
+          policy: 'dev-mode',
+          value: 'on',
+          expiry: null,
+          kind: 'enforced',
+        }),
+      ],
+    };
+
+    for (const spec of COMMAND_OUTPUT_SCHEMAS) {
+      const payloads = samplePayloads[spec.name];
+      expect(payloads, `missing sample payload for ${spec.name}`).toBeDefined();
+      const schema = buildCommandOutputSchema(spec);
+      for (const payload of payloads ?? []) {
+        expect(validateAgainstJsonSchema(payload, schema)).toEqual([]);
+      }
+      if (spec.oneOf) {
+        expect(payloads?.length).toBeGreaterThanOrEqual(spec.oneOf.length);
+        spec.oneOf.forEach((branch, index) => {
+          expect(validateAgainstJsonSchema(payloads?.[index], branch)).toEqual([]);
+        });
+      }
+    }
   });
 });

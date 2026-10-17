@@ -88,6 +88,8 @@ export type Agent = {
   provenance: AgentProvenance;
   /** The stable `seat_<12 hex>` handle `team seats` shows, kept for continuity when the seat had one. */
   seat_handle?: string | null;
+  /** Owner-signed seat-level policy declarations (Kernel amendment 02 §2.12), when present. */
+  policies?: Record<string, YamlValue>;
 };
 
 export type AgentInit = Omit<Agent, 'id' | 'provenance'> & {
@@ -209,6 +211,9 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
       reach: { ...current.reach, ...definedOnly(reach ?? {}) },
       provenance: nextProvenance,
     };
+    if (next.policies !== undefined && Object.keys(next.policies).length === 0) {
+      delete next.policies;
+    }
     const problem = invalid(next);
     if (problem) throw new Error(`cannot update ${id}: ${problem}`);
     writeAgentFile(file, next);
@@ -395,6 +400,9 @@ function fromValue(value: YamlValue): Agent | null {
     },
   };
   if (handle !== null) agent.seat_handle = handle;
+  if (isObj(value.policies) && Object.keys(value.policies).length > 0) {
+    agent.policies = value.policies;
+  }
   return agent;
 }
 
@@ -426,6 +434,32 @@ function scalarOrNull(value: string | null | undefined): string {
 
 function list(items: string[]): string {
   return items.length ? `[${items.map(quote).join(', ')}]` : '[]';
+}
+
+function emitYamlValue(v: YamlValue): string {
+  if (v === null) return 'null';
+  if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+  if (typeof v === 'string') return quote(v);
+  if (Array.isArray(v)) return `[${v.map((item) => emitYamlValue(item)).join(', ')}]`;
+  return JSON.stringify(v);
+}
+
+function emitPolicies(policies: Record<string, YamlValue>): string[] {
+  const keys = Object.keys(policies).sort();
+  if (keys.length === 0) return [];
+  const lines = ['policies:'];
+  for (const name of keys) {
+    const entry = policies[name];
+    if (isObj(entry)) {
+      lines.push(`  ${quote(name)}:`);
+      for (const [k, v] of Object.entries(entry)) {
+        lines.push(`    ${k}: ${emitYamlValue(v ?? null)}`);
+      }
+    } else {
+      lines.push(`  ${quote(name)}: ${emitYamlValue(entry ?? null)}`);
+    }
+  }
+  return lines;
 }
 
 function emit(agent: Agent): string {
@@ -471,5 +505,8 @@ function emit(agent: Agent): string {
     lines.push(`    command: ${quote(agent.provenance.delegated.command)}`);
   }
   if (agent.seat_handle != null) lines.push(`seat_handle: ${quote(agent.seat_handle)}`);
+  if (agent.policies && Object.keys(agent.policies).length > 0) {
+    lines.push(...emitPolicies(agent.policies));
+  }
   return `${lines.join('\n')}\n`;
 }

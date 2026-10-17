@@ -699,6 +699,76 @@ export const RELEASE_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team policy` (`schema/policy.schema.json`). */
+export const POLICY_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.policy',
+  fileName: 'policy.schema.json',
+  title: 'team policy --json output',
+  required: [],
+  properties: {},
+  oneOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['schema', 'format', 'status', 'project', 'session', 'dev_mode_governed', 'policies'],
+      properties: {
+        schema: schemaTagFragment('team.policy', 1),
+        format: { type: 'integer', const: 1 },
+        status: { type: 'string', const: 'ok' },
+        project: { type: 'string', minLength: 1 },
+        session: { type: 'string', minLength: 1 },
+        entity: { type: ['string', 'null'] },
+        in_project: { type: ['string', 'null'] },
+        seat: { type: ['string', 'null'] },
+        dev_mode_governed: { type: 'boolean' },
+        policies: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name', 'value', 'level', 'setter', 'date', 'expiry', 'kind'],
+            properties: {
+              name: { type: 'string', minLength: 1 },
+              value: {},
+              level: { type: 'string', enum: ['default', 'entity', 'project', 'team', 'seat'] },
+              setter: { type: ['string', 'null'] },
+              date: { type: ['string', 'null'] },
+              expiry: { type: ['string', 'null'] },
+              kind: { type: 'string', enum: ['enforced', 'advised'] },
+            },
+          },
+        },
+        notice: { type: ['string', 'null'] },
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['schema', 'format', 'dry_run', 'status', 'action_summary', 'level', 'target', 'policy'],
+      properties: {
+        schema: schemaTagFragment('team.policy', 1),
+        format: { type: 'integer', const: 1 },
+        dry_run: { type: 'boolean' },
+        status: { type: 'string', enum: ['updated', 'unchanged', 'dry-run'] },
+        action_summary: { type: 'string', minLength: 1 },
+        project: { type: ['string', 'null'] },
+        session: { type: ['string', 'null'] },
+        level: { type: 'string', enum: ['entity', 'project', 'team', 'seat'] },
+        target: { type: 'string', minLength: 1 },
+        policy: { type: 'string', minLength: 1 },
+        value: {},
+        expiry: { type: ['string', 'null'] },
+        kind: { type: 'string', enum: ['enforced', 'advised'] },
+        plan: {
+          type: 'array',
+          items: PLAN_STEP_SCHEMA_FRAGMENT,
+        },
+        notice: { type: ['string', 'null'] },
+      },
+    },
+  ],
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -715,6 +785,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
   RELEASE_OUTPUT_SCHEMA,
+  POLICY_OUTPUT_SCHEMA,
 ];
 
 

@@ -3,6 +3,7 @@ export type Problem = { line: number; message: string };
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
 import type { DeliveryLeg, LivenessThresholds } from '../settings/inherit.ts';
+import type { YamlValue } from '../yaml.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
 /**
@@ -159,6 +160,10 @@ export type TeamFile = {
    * additive — it changes no approval fingerprint, so a file written before it keeps its digests.
    */
   deliveryOrder: DeliveryLeg[] | null;
+  /**
+   * Owner-signed team-level policy declarations (Kernel amendment 02 §2.12), when present.
+   */
+  policies?: YamlValue;
   tools: Record<string, Record<string, string>>;
   identity: {
     signature: {

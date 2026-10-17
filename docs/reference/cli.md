@@ -583,6 +583,89 @@ Usage:
 
 None.
 
+## `policy`
+
+Hidden: no
+
+Usage:
+
+    team policy [--seat <name>] [--file <path>] [--json]
+    team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
+    team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--seat` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `set`
+
+Hidden: no
+
+Usage:
+
+    team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--entity` | yes | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--kind` | yes | no | no |
+| `--project` | yes | no | no |
+| `--seat` | yes | no | no |
+| `--until` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `level` | no | no |
+| `name` | no | no |
+| `value` | no | no |
+
+### `unset`
+
+Hidden: no
+
+Usage:
+
+    team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--entity` | yes | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--project` | yes | no | no |
+| `--seat` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `level` | no | no |
+| `name` | no | no |
+
 ## `pr`
 
 Hidden: no

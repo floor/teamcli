@@ -41,6 +41,8 @@ export type ProjectRecord = {
    * aside where the thresholds resolve, and the inherited value stands.
    */
   liveness?: Partial<LivenessThresholds>;
+  /** Owner-signed project-level policy declarations (Kernel amendment 02 §2.12), when present. */
+  policies?: Record<string, YamlValue>;
   provenance: ProjectProvenance;
 };
 
@@ -174,8 +176,12 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
         teams: fields.teams ?? [],
         ...(fields.deliveryOrder !== undefined ? { deliveryOrder: fields.deliveryOrder } : {}),
         ...(fields.liveness !== undefined ? { liveness: fields.liveness } : {}),
+        ...(fields.policies !== undefined ? { policies: fields.policies } : {}),
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
       };
+    }
+    if (record.policies !== undefined && Object.keys(record.policies).length === 0) {
+      delete record.policies;
     }
     if (typeof record.name !== 'string' || !record.name) throw new ProjectsError('a project needs a name');
     if (record.entity !== null && typeof record.entity !== 'string') throw new ProjectsError('"entity" must be text or null');
@@ -270,6 +276,32 @@ function nullable(text: string | null): string {
   return text === null ? 'null' : scalar(text);
 }
 
+function emitPolicyValue(v: YamlValue): string {
+  if (v === null) return 'null';
+  if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+  if (typeof v === 'string') return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map((item) => emitPolicyValue(item)).join(', ')}]`;
+  return JSON.stringify(v);
+}
+
+function emitPolicies(indent: string, policies: Record<string, YamlValue>): string[] {
+  const keys = Object.keys(policies).sort();
+  if (keys.length === 0) return [];
+  const lines = [`${indent}policies:`];
+  for (const name of keys) {
+    const entry = policies[name];
+    if (isMap(entry)) {
+      lines.push(`${indent}  ${scalar(name)}:`);
+      for (const [k, v] of Object.entries(entry)) {
+        lines.push(`${indent}    ${scalar(k)}: ${emitPolicyValue(v ?? null)}`);
+      }
+    } else {
+      lines.push(`${indent}  ${scalar(name)}: ${emitPolicyValue(entry ?? null)}`);
+    }
+  }
+  return lines;
+}
+
 function emit(projects: Record<string, ProjectRecord>): string {
   const ids = Object.keys(projects).sort();
   if (!ids.length) return 'projects: {}\n';
@@ -289,6 +321,9 @@ function emit(projects: Record<string, ProjectRecord>): string {
         .filter((key) => project.liveness?.[key] !== undefined)
         .map((key) => `${key}: ${project.liveness?.[key]}`);
       if (said.length) lines.push(`    liveness: { ${said.join(', ')} }`);
+    }
+    if (project.policies && Object.keys(project.policies).length > 0) {
+      lines.push(...emitPolicies('    ', project.policies));
     }
     const p = project.provenance;
     lines.push(`    provenance: { registered_by: ${scalar(p.registered_by)}, registered_at: ${scalar(p.registered_at)}, updated_at: ${scalar(p.updated_at)} }`);
@@ -342,6 +377,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
   const liveness = raw.liveness === undefined
     ? undefined
     : checkedLiveness(raw.liveness, (what) => bad(what));
+  const policies = isMap(raw.policies) && Object.keys(raw.policies).length > 0 ? raw.policies : undefined;
   const prov = raw.provenance;
   if (!isMap(prov)) return bad('"provenance" must be a map');
   for (const key of ['registered_by', 'registered_at', 'updated_at']) {
@@ -355,6 +391,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     teams: teams as string[],
     ...(order !== undefined ? { deliveryOrder: order as DeliveryLeg[] } : {}),
     ...(liveness !== undefined ? { liveness } : {}),
+    ...(policies !== undefined ? { policies } : {}),
     provenance: { registered_by: prov.registered_by as string, registered_at: prov.registered_at as string, updated_at: prov.updated_at as string },
   };
 }
