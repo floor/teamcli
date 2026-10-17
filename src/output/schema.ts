@@ -649,6 +649,53 @@ export const UNLOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+const RELEASE_CHECK_OUTCOME_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['status', 'detail'],
+  properties: {
+    status: { type: 'string', enum: ['pass', 'missing', 'unknown'] },
+    detail: { type: 'string', minLength: 1 },
+  },
+};
+
+/** Published `--json` output schema for `team release` (`schema/release.schema.json`). */
+export const RELEASE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.release',
+  fileName: 'release.schema.json',
+  title: 'team release --json output',
+  required: ['format', 'package', 'version', 'checks', 'summary'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    package: { type: 'string', minLength: 1 },
+    version: { type: 'string', minLength: 1 },
+    checks: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['npm', 'tag', 'github', 'changelog'],
+      properties: {
+        npm: RELEASE_CHECK_OUTCOME_FRAGMENT,
+        tag: RELEASE_CHECK_OUTCOME_FRAGMENT,
+        github: RELEASE_CHECK_OUTCOME_FRAGMENT,
+        changelog: RELEASE_CHECK_OUTCOME_FRAGMENT,
+        linear: RELEASE_CHECK_OUTCOME_FRAGMENT,
+        activity: RELEASE_CHECK_OUTCOME_FRAGMENT,
+      },
+    },
+    warning: { type: 'string', minLength: 1 },
+    summary: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['checks', 'missing', 'unknown'],
+      properties: {
+        checks: { type: 'integer', minimum: 0 },
+        missing: { type: 'integer', minimum: 0 },
+        unknown: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -664,6 +711,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   HOLD_OUTPUT_SCHEMA,
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
+  RELEASE_OUTPUT_SCHEMA,
 ];
 
 
