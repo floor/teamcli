@@ -256,6 +256,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `plan.shape` | `plan` | 1 | nothing was printed, and a record is not a task or the task file is not a list | `team plan` |
 | `plan.invocation` | `plan` | 2 | the invocation can't be read | `team plan extra` |
 | `plan.not-a-repo` | `plan` | 2 | not inside a git repository | `team plan` |
+| `policy.done` | `policy` | 0 | the effective policies were listed, updated, or planned | `team policy` |
+| `policy.refused` | `policy` | 1 | a non-owner attempted set or unset, a lower level loosened a higher level, or a source failed verification | `team policy set team dev-mode on` |
+| `policy.invalid` | `policy` | 2 | the team file, policy name, or value is invalid | `team policy set team dev-mode maybe` |
+| `policy.invocation` | `policy` | 2 | the invocation can't be read | `team policy set` |
 | `pr.passed` | `pr` | 0 | the pull request body passed | `team pr check body.md` |
 | `pr.refused` | `pr` | 1 | the pull request body was refused | `team pr check body.md` |
 | `pr.body` | `pr` | 2 | the pull request body can't be read | `team pr check missing.md` |

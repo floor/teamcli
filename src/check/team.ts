@@ -44,9 +44,10 @@ import {
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { rosterOf } from '../permissions/who.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
+import { loadAndResolvePolicyChain, type PolicyLoadRefusal } from '../policy/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
-import { byName, ofTeam, ProjectsError } from '../registry/projects.ts';
+import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, resolveOrderSetting, type DeliveryLeg } from '../settings/inherit.ts';
 import { emptySession, liveHold, readState, seatOfFile, updateState, type SessionState, type State } from '../state.ts';
@@ -247,6 +248,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     stale = staleState(team, session, whole);
   }
   const state = whole.sessions[session] ?? emptySession();
+  const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked));
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
   // at all: the setting is one record, never a file key and never a stale approval.
   const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team), undefined, dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()));
@@ -259,6 +261,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...rosterDifferences(team, state, live, root, sources.home),
     ...registryDifferences(team, root, sources.home),
     ...deliveryOrderDifferences(team, root, sources.home),
+    ...policyChecked.differences,
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same row `status` prints: a legacy record or one the verification refused still says what
     // it is; a machine that never approved the file is the ordinary file now, and nothing to repair.
@@ -293,6 +296,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const notes = collapseNotes([
     ...delegateNotes(team),
     ...lobbyNotes(team, root, sources.home, session),
+    ...policyChecked.notes,
     ...unknownStatusNotes(team, state, live),
   ]);
   if (args.json) {
@@ -871,5 +875,131 @@ function deprecationRepairOf(message: string, shownFile: string): string | undef
     return `remove \`watch.quota_marks\` from ${shownFile} and keep \`budgets.marks\``;
   }
   return undefined;
+}
+
+function policyRefusalRepair(refusal: PolicyLoadRefusal, seatName?: string): string {
+  const seatFlag = seatName ? ` --seat ${seatName}` : '';
+  if (refusal.kind === 'loosening') {
+    return `team policy unset ${refusal.lowerLevel} ${refusal.policy}${seatFlag}`;
+  }
+  if (refusal.kind === 'invalid-policy') {
+    return `team policy unset ${refusal.level} ${refusal.policy}${seatFlag}`;
+  }
+  const match = /policy "([^"]+)"/.exec(refusal.why);
+  if (match?.[1]) {
+    return `team policy unset ${refusal.level} ${match[1]}${seatFlag}`;
+  }
+  return `team policy unset ${refusal.level} <name>${seatFlag}`;
+}
+
+/**
+ * Policy chain verification and `dev-mode` migration notice (Kernel Amendment 02, Gap 6 & Gap 7):
+ * - Reads and resolves the policy chain (`entity → project → team`, plus each registered `seat`).
+ * - Any unreadable/unverified source, invalid policy, or load-time loosening refusal is reported
+ *   as an owner difference with a `team policy unset` repair.
+ * - While no `dev-mode` policy is set in the chain (`devModeGoverned === false`) and
+ *   `TEAMCLI_DEV_MODE=1` is set in the environment, emits the one migration note.
+ */
+function policyCheck(
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+  now: Date,
+  env: Record<string, string | undefined>,
+  stateDir: string,
+  caller: string,
+): { differences: Difference[]; notes: string[] } {
+  if (home === undefined) {
+    const notes =
+      env.TEAMCLI_DEV_MODE === '1'
+        ? ['dev-mode: no policy is set yet for this entity; TEAMCLI_DEV_MODE=1 still applies until the owner sets dev-mode']
+        : [];
+    return { differences: [], notes };
+  }
+
+  let projectId: string | null = null;
+  try {
+    const byTeam = ofTeam(home, teamIdOf(root));
+    if (byTeam) {
+      projectId = byTeam.id ?? null;
+    } else if (team.inProject) {
+      projectId = byName(home, team.inProject)?.id ?? projectIdOf(team.inProject);
+    } else {
+      projectId = projectIdOf(team.project);
+    }
+  } catch {
+    projectId = null;
+  }
+
+  const differences: Difference[] = [];
+  const teamChain = loadAndResolvePolicyChain(
+    {
+      home,
+      entity: team.entity ?? null,
+      projectId,
+      teamRoot: root,
+      team,
+    },
+    { now, upToLevel: 'team' },
+  );
+
+  if (!teamChain.ok) {
+    for (const refusal of teamChain.refusals) {
+      differences.push({
+        what: refusal.message,
+        repair: policyRefusalRepair(refusal),
+        owner: true,
+      });
+    }
+  }
+
+  const teamId = teamIdOf(root);
+  for (const seat of team.seats) {
+    let agentId: string | null = null;
+    try {
+      agentId = findAgent(home, { team: teamId, seat: seat.name })?.id ?? null;
+    } catch {
+      agentId = null;
+    }
+    if (!agentId) continue;
+    const seatChain = loadAndResolvePolicyChain(
+      {
+        home,
+        entity: team.entity ?? null,
+        projectId,
+        teamRoot: root,
+        team,
+        agentId,
+        seat,
+      },
+      { now, upToLevel: 'seat' },
+    );
+    if (!seatChain.ok) {
+      for (const refusal of seatChain.refusals) {
+        const isSeatRefusal =
+          (refusal.kind === 'loosening' && refusal.lowerLevel === 'seat') ||
+          ((refusal.kind === 'unreadable-source' || refusal.kind === 'invalid-policy') && refusal.level === 'seat');
+        if (!isSeatRefusal) continue;
+        differences.push({
+          what: `${seat.name}: ${refusal.message}`,
+          repair: policyRefusalRepair(refusal, seat.name),
+          owner: true,
+        });
+      }
+    }
+  }
+
+  const notes: string[] = [];
+  if (env.TEAMCLI_DEV_MODE === '1') {
+    if (!teamChain.devModeGoverned) {
+      notes.push(
+        'dev-mode: no policy is set yet for this entity; TEAMCLI_DEV_MODE=1 still applies until the owner sets dev-mode',
+      );
+    } else if (teamChain.ok && teamChain.policies['dev-mode']?.value === 'off') {
+      logLine(stateDir, 'check', caller, 'dev-mode: TEAMCLI_DEV_MODE=1 ignored because dev-mode policy is off', now);
+    }
+  }
+
+  return { differences, notes };
 }
 

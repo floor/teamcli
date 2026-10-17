@@ -38,6 +38,7 @@ import { runDelegate } from '../src/commands/delegate.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
+import { runPolicy } from '../src/commands/policy.ts';
 import { pr } from '../src/commands/pr.ts';
 import { runProc, type ProcSources } from '../src/commands/proc.ts';
 import { runProjects, type ProjectSources, type ProjectView } from '../src/commands/projects.ts';
@@ -3958,6 +3959,23 @@ for (const [name, command, args, invalidArgs] of [
     expect(preview.out).toBe(`${name}: would change\n`);
     expect(readFileSync(place.file, 'utf8')).toBe(original);
     return show(await managed(place, args), `${name}: updated`);
+  });
+}
+
+{
+  async function policyRun(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runPolicy([...argv], io, { home: place.home }), out: io.out, err: io.err };
+  }
+  scene('policy.invocation', async (place) => show(await policyRun(place, ['--unknown']), 'unknown option'));
+  scene('policy.refused', async (place) => show(await policyRun(place, ['set', 'team', 'dev-mode', 'on'], detachedCaller), 'only the owner runs this'));
+  scene('policy.invalid', async (place) => {
+    write(place, TEAM);
+    return show(await policyRun(place, ['set', 'team', 'dev-mode', 'maybe']), 'team policy:');
+  });
+  scene('policy.done', async (place) => {
+    write(place, TEAM);
+    return show(await policyRun(place, []), 'POLICY');
   });
 }
 

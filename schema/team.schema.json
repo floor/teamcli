@@ -649,6 +649,53 @@
       },
       "$comment": "the legs a send may walk, outermost first: native, mcp-inbox, typed; a level may drop or reorder the legs in force and may never add one"
     },
+    "policies": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "value",
+          "setter",
+          "date",
+          "kind",
+          "generation",
+          "signature"
+        ],
+        "properties": {
+          "value": {},
+          "setter": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "expiry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "enforced",
+              "advised"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "signature": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "$comment": "owner-signed team-level policy declarations (Kernel amendment 02 §2.12)"
+    },
     "releases": {
       "type": "array",
       "minItems": 1,

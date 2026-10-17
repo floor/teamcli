@@ -435,7 +435,6 @@ describe('team doctor', () => {
         '  No two-granter agreement, no `agree`, no `create` bounds',
         '  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating',
         '  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)',
-        '  No policy object yet (amendment 02)',
         '',
       ].join('\n'),
     );

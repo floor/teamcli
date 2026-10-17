@@ -33,10 +33,21 @@ export {
 
 export {
   loadAndResolvePolicyChain,
+  planPolicySet,
+  planPolicyUnset,
+  policySignaturePayload,
   readEntityPolicySource,
   readPolicyChain,
   readProjectPolicySource,
   readSeatPolicySource,
   readTeamPolicySource,
+  writePolicySet,
+  writePolicyUnset,
   type PolicyChainInput,
+  type PolicySetRequest,
+  type PolicyUnsetPlan,
+  type PolicyUnsetRequest,
+  type PolicyWriteOptions,
+  type PolicyWritePlan,
+  type SignedPolicyDiskEntry,
 } from './sources.ts';

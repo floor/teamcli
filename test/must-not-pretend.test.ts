@@ -23,7 +23,7 @@ import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
-/** The record's six lines, under its heading, as `team doctor` and `team --about` print them. */
+/** The record's five lines, under its heading, as `team doctor` and `team --about` print them. */
 const LIST = [
   'what 0.5.0 must not pretend:',
   '  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt',
@@ -31,7 +31,6 @@ const LIST = [
   '  No two-granter agreement, no `agree`, no `create` bounds',
   '  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating',
   '  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)',
-  '  No policy object yet (amendment 02)',
 ];
 const BLOCK = `${LIST.join('\n')}\n`;
 
