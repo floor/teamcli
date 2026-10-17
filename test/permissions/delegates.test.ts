@@ -13,8 +13,9 @@
 // (src/commands/add.ts) for a delegated add that would write. The rest are `test.todo`, their
 // names the rules they will pin: each flips to a real scene as its wiring lands. A delegated
 // run's record naming its signer and its actor — (a) — has no field on this base; the
-// same-copy boundary of (b) is builder wiring under way; (c)'s protected removal is a real
-// scene, both halves pinned by runs: the removal gate clamps the lead's seats itself
+// same-copy boundary of (b) is the command's own scenes below — a copy started, a changed
+// stanza refused, and dev mode saying the rule and continuing; (c)'s protected removal is a
+// real scene, both halves pinned by runs: the removal gate clamps the lead's seats itself
 // (src/commands/remove.ts), and the owner's own attempt meets the file's validation, which
 // refuses the dangling `operator:` — a lead seat is never taken out of the file.
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -35,7 +36,7 @@ import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, type State, updateState } from '../../src/state.ts';
 import { type Standing } from '../../src/store/store.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00.000Z');
 
@@ -205,7 +206,7 @@ function layout(): Place {
   const root = join(base, 'acme');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
-  mkdirSync(join(home, '.config', 'team', 'lobby'), { recursive: true });
+  mkdirSync(join(home, '.config', 'team', 'lobby'), { recursive: true, mode: 0o700 });
   return { base, root, home, file: join(root, '.agents', 'team.yaml') };
 }
 
@@ -237,8 +238,9 @@ const agent: HerdrAgent = { name: 'lead', agent: 'claude', pane: 'w1:p1', worksp
 
 function launching(): Launch {
   let session: 'absent' | 'running' = 'absent';
-  const panes = new Map<string, boolean>();
+  const panes = new Map<string, { text: string; agent: boolean }>();
   let n = 0;
+  let clock = NOW.getTime();
   return {
     sessionState: () => session,
     startServer() {
@@ -249,21 +251,24 @@ function launching(): Launch {
     createWorkspace() {
       n += 1;
       const pane = `w${n}:p1`;
-      panes.set(pane, false);
+      panes.set(pane, { text: CLAUDE_IDLE, agent: false });
       return { pane, workspace: `w${n}` };
     },
     paneRun(_session, pane) {
-      if (panes.has(pane)) panes.set(pane, true);
+      const known = panes.get(pane);
+      if (known) known.agent = true;
       return true;
     },
     renameAgent: () => true,
     closeWorkspace: () => true,
-    agentPanes: () => [...panes].filter(([, up]) => up).map(([id]) => id),
+    agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
     agents: () => [],
-    paneText: () => '',
+    paneText: (_session, pane) => panes.get(pane)?.text ?? '',
     foreground: () => ['claude'],
-    sleep: async () => {},
-    now: () => NOW,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => new Date(clock),
   };
 }
 
@@ -294,8 +299,15 @@ function addSources(place: Place, over: Partial<AddSources> = {}): AddSources {
 
 type Ran = { code: number; out: string; err: string };
 
-async function added(place: Place, argv: string[], caller: Caller, sources: AddSources): Promise<Ran> {
+async function added(
+  place: Place,
+  argv: string[],
+  caller: Caller,
+  sources: AddSources,
+  env: Record<string, string> = {},
+): Promise<Ran> {
   const io = testIo(place.root, caller);
+  io.env = env;
   const code = await runAdd(argv, io, sources);
   return { code, out: io.out, err: io.err };
 }
@@ -334,12 +346,74 @@ describe('the delegated add: the file it may not write', () => {
     expect(ran.err).toBe('team add: only the owner or a standing grant (delegate) runs it; this call is pilot\n');
   });
 
-  test.todo('a delegate may add a same-copy seat: a stanza the file already holds, copied hash for hash', () => {
-    // Flipped when the same-copy wiring lands: the one add a delegate may write is the copy.
+  test('a delegate may add a same-copy seat: a stanza the file already holds, copied hash for hash', async () => {
+    const place = layout();
+    // The approved file declares `worker` and stops it nowhere: the live file is the approved
+    // copy byte for byte, so the stanza the add starts is the one the owner signed.
+    const text = addFile(place, entry('main/w1:p1', 'add')).replace('    stopped: true\n', '');
+    writeFileSync(place.file, text);
+    const launch = launching();
+    const sources = addSources(place, {
+      launch,
+      standing: () => verified(parsed(text), text),
+      delegateGate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
+    });
+    const ran = await added(place, ['worker'], pilot, sources);
+    expect(ran.code).toBe(0);
+    // The copy starts the seat and writes nothing: the file is still the owner's bytes, and the
+    // run is attributed to the delegate before its one effect.
+    expect(readFileSync(place.file, 'utf8')).toBe(text);
+    expect(launch.agentPanes('acme')).toEqual(['w1:p1']);
+    expect(readFileSync(join(place.root, '.agents', 'team.log'), 'utf8').startsWith(
+      `${NOW.toISOString()} delegate [delegate] main/w1:p1 add\n`,
+    )).toBe(true);
   });
 
-  test.todo('a non-copy add is refused outside dev mode, the refusal naming the same-copy rule, even with a delegate entry', () => {
-    // Flipped when the refusal names the same-copy rule rather than the edit alone.
+  test('a non-copy add is refused outside dev mode, the refusal naming the same-copy rule, even with a delegate entry', async () => {
+    const place = layout();
+    // The approval holds the worker as the file first declared it; the live stanza has moved
+    // since, so the add would start a seat the owner's copy does not hold.
+    const approved = addFile(place, entry('main/w1:p1', 'add')).replace('    stopped: true\n', '');
+    const changed = approved.replace('    label: worker\n', '    label: worker-2\n');
+    writeFileSync(place.file, changed);
+    const launch = launching();
+    const sources = addSources(place, {
+      launch,
+      standing: () => verified(parsed(approved), approved),
+      delegateGate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
+    });
+    const ran = await added(place, ['worker'], pilot, sources);
+    expect(ran.code).toBe(1);
+    expect(ran.err).toBe(`team add: ${ADD_DELEGATE_EDIT.text}\n`);
+    expect(ran.err).toContain('same-copy');
+    expect(readFileSync(place.file, 'utf8')).toBe(changed);
+    expect(launch.agentPanes('acme')).toEqual([]);
+    expect(existsSync(join(place.root, '.agents', 'team.log'))).toBe(false);
+  });
+
+  test('in dev mode the same non-copy add says the rule once and continues, the warning in the log', async () => {
+    const place = layout();
+    const approved = addFile(place, entry('main/w1:p1', 'add')).replace('    stopped: true\n', '');
+    const changed = approved.replace('    label: worker\n', '    label: worker-2\n');
+    writeFileSync(place.file, changed);
+    const launch = launching();
+    const sources = addSources(place, {
+      launch,
+      standing: () => verified(parsed(approved), approved),
+      delegateGate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
+    });
+    const ran = await added(place, ['worker'], pilot, sources, { TEAMCLI_DEV_MODE: '1' });
+    expect(ran.code).toBe(0);
+    expect(ran.err).toBe(`team add: warning: ${ADD_DELEGATE_EDIT.text}; dev mode continues\n`);
+    // The run continued: the moved stanza is the one started, and the file is still the live
+    // bytes — dev mode says the rule, it never makes the copied edit for the delegate.
+    expect(readFileSync(place.file, 'utf8')).toBe(changed);
+    expect(launch.agentPanes('acme')).toEqual(['w1:p1']);
+    const log = readFileSync(join(place.root, '.agents', 'team.log'), 'utf8');
+    expect(log.startsWith(
+      `${NOW.toISOString()} add [pilot] warning: ${ADD_DELEGATE_EDIT.text}; dev mode continues\n`,
+    )).toBe(true);
+    expect(log).toContain(`${NOW.toISOString()} delegate [delegate] main/w1:p1 add\n`);
   });
 });
 
