@@ -280,7 +280,7 @@ describe('the project lead changes nothing outside its own team', () => {
   test('add refuses the project lead on another team of its project', async () => {
     const io = leadIo(bravoRoot);
     const code = await runAdd(['helper'], io, addSources());
-    expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs it; this call is lead\n');
+    expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is lead\n');
     expect(code).toBe(1);
   });
 

@@ -431,7 +431,7 @@ describe('commands and flags', () => {
       'only the owner, `leads` or the approved delegate stops the team; this call is owner',
     );
     expect(refused({ command: 'add', ancestors: terminal }).text).toBe(
-      'only the owner or a standing grant (delegate) runs it; this call is owner',
+      'only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is owner',
     );
     expect(refused({ command: 'remove', ancestors: terminal }).text).toBe(
       'only the owner, `leads` or the approved delegate removes a seat; this call is owner',

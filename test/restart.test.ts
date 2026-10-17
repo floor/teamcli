@@ -6,16 +6,18 @@ import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { DownLaunch } from '../src/commands/down.ts';
-import { runRestart, type RestartSources } from '../src/commands/restart.ts';
+import { runRestart, USAGE, type RestartSources } from '../src/commands/restart.ts';
 import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { readAgents } from '../src/registry/agents.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -483,5 +485,153 @@ describe('team restart <seat>', () => {
     const ioLocked = testIo(fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker'], ioLocked, sources)).toBe(1);
     expect(ioLocked.err).toContain('another session-mutating run is holding');
+  });
+
+  test('--json: a restarted seat is the team.restart document, its working lines collapsed to notes', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--json'], io, sources)).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{
+      schema: { name: string; version: number };
+      format: number;
+      dry_run: boolean;
+      status: string;
+      action_summary: string;
+      project: string;
+      session: string;
+      seat: string;
+      pane: string | null;
+      notes: string[];
+    }>(io.out, RESTART_OUTPUT_SCHEMA);
+    expect(doc.schema).toEqual({ name: 'team.restart', version: 1 });
+    expect(doc).toMatchObject({
+      format: 1,
+      dry_run: false,
+      status: 'ready',
+      action_summary: 'team restart: restarted worker; pane pane-old -> pane-new',
+      project: 'acme',
+      seat: 'worker',
+      pane: 'pane-new',
+    });
+    expect(doc.notes).toContain('worker: input box: empty');
+    expect(doc.notes).toContain('worker: turn: not working (free)');
+    expect(io.out).not.toContain('worker: input box: empty\n');
+  });
+
+  test('--json --dry-run: the plan carries the stop then the launch, and nothing is run', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--dry-run', '--json'], io, sources)).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{
+      dry_run: boolean;
+      status: string;
+      action_summary: string;
+      seat: string;
+      plan: { step: string; detail: string; seat?: string; prefix?: string }[];
+    }>(io.out, RESTART_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      dry_run: true,
+      status: 'dry-run',
+      action_summary: 'dry run: nothing was run',
+      seat: 'worker',
+    });
+    expect(doc.plan[0]).toEqual({
+      step: 'stop',
+      seat: 'worker',
+      detail: 'stop worker in pane-old (free)',
+      prefix: '+',
+    });
+    expect(doc.plan.some((step) => step.step === 'launch' && step.seat === 'worker')).toBe(true);
+    expect(did.typed).toEqual([]);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  test('--json: a dev-mode warning is a note, on the plan and on the real run, and stdout is the document alone', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources } = makeHarness(fixture);
+    const warning = 'warning: only the owner or `leads` restarts a seat; this call is helper; dev mode continues';
+
+    // The dry answer is the document: the warning rides in its notes, never in front of it.
+    const dry = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    dry.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['worker', '--dry-run', '--json'], dry, sources)).toBe(0);
+    expect(dry.err).toBe('');
+    const dryDoc = JSON.parse(dry.out) as { status: string; notes: string[] };
+    expect(dryDoc.status).toBe('dry-run');
+    expect(dryDoc.notes).toContain(warning);
+    expect(dry.out.startsWith('{')).toBe(true);
+
+    // The real run's terminal line carried the command's name; the document's note does not.
+    const real = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    real.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['worker', '--json'], real, sources)).toBe(0);
+    expect(real.err).toBe('');
+    const realDoc = JSON.parse(real.out) as { status: string; notes: string[] };
+    expect(realDoc.status).toBe('ready');
+    expect(realDoc.notes).toContain(warning);
+    expect(realDoc.notes.some((note) => note.startsWith('team restart:'))).toBe(false);
+  });
+
+  test('--json: the owner-or-leads repair names the owner\'s command without this run\'s --json', async () => {
+    const fixture = makeFixture();
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+
+    expect(await runRestart(['worker', '--json'], io, sources)).toBe(1);
+    expect(io.err).toBe('');
+    const doc = assertJsonErrorShape(io.out, { id: 'restart.caller', messageContains: 'only the owner or `leads` restarts a seat' });
+    expect(doc.error.repair).toContain('`team restart worker`');
+    expect(doc.error.repair).not.toContain('--json');
+
+    // The dry answer's line is the same command, without the dry run's own flag.
+    const dry = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    expect(await runRestart(['worker', '--dry-run'], dry, sources)).toBe(1);
+    expect(dry.out).toContain('! to unblock: the owner runs `team restart worker` from this folder');
+    expect(dry.out).not.toContain('--dry-run`');
+  });
+
+  test('--json: a refusal is the team.error document and leaves stderr empty', async () => {
+    const fixture = makeFixture();
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['no-such-seat', '--json'], io, sources)).toBe(1);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, {
+      id: 'restart.unknown',
+      messageContains: 'no-such-seat is not a signed declared seat',
+      repair: 'team seats lists the seats the file declares',
+    });
+  });
+
+  test('--json: a bad invocation is the usage row, without the usage text in the document', async () => {
+    const fixture = makeFixture();
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['--json'], io, sources)).toBe(2);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, { id: 'restart.usage', messageContains: 'a seat name is required' });
+    expect(io.out).not.toContain('Usage:');
+    expect(USAGE).toContain('Exits 0 when the seat is restarted');
   });
 });

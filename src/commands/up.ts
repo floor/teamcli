@@ -7,7 +7,7 @@ import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
-import { devMode, logDevMode } from '../dev_mode.ts';
+import { devMode, devModeCallerGate, logDevMode } from '../dev_mode.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
@@ -67,6 +67,7 @@ import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts'
 import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
+import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
@@ -249,10 +250,14 @@ export const realSources: UpSources = {
   launch: realLaunch,
 };
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--session <name>] [--file <path>]\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
+
+/** One refusal this run carries to its single exit site: its contract row, the sentence, and
+ *  the repair when one is known. */
+type UpRefusal = { id: string; message: string; repair?: string | null };
 
 function resolveState(sources: UpSources, session: string): SessionState | null {
   if (sources.sessionState) return sources.sessionState(session);
@@ -571,9 +576,18 @@ function restartNote(
   return {};
 }
 
-/** A caller who is not the owner and is not named for `up`. Stderr is the word `deny`. */
-function denyUp(out: { stderr(text: string): void }): number {
-  out.stderr('deny\n');
+/** A caller who is not the owner and is not named for `up`. Stderr is the word `deny`; under
+ *  `--json` the same word is the error document, with the contract row of the gate that refused
+ *  it (`up.deny` when no gate named one) and the resolver's rule. */
+function denyUp(
+  out: { stderr(text: string): void },
+  io: Io,
+  json: boolean,
+  id = 'up.deny',
+  rule: string | null = 'no-record',
+): number {
+  if (json) refuse(io, true, 'up', { id, message: 'deny', repair: null, code: 1, rule });
+  else out.stderr('deny\n');
   // exit: up.deny
   // exit: up.delegate
   // exit: up.delegate-approval
@@ -607,12 +621,12 @@ function ownerUpRun(values: { file?: string; session?: string }): string {
 }
 
 /** Pulls the dev-mode warnings out of `refusals` and joins them into the one line. */
-function devWarningLine(refusals: string[], standing: Standing, caller: Caller): string {
+function devWarningLine(refusals: UpRefusal[], standing: Standing, caller: Caller): string {
   const placement = placementRefusal(caller);
-  const kept: string[] = [];
+  const kept: UpRefusal[] = [];
   const warnings: string[] = [];
   for (const line of refusals) {
-    if (devModeWarning(line, standing, placement)) warnings.push(line);
+    if (devModeWarning(line.message, standing, placement)) warnings.push(line.message);
     else kept.push(line);
   }
   refusals.splice(0, refusals.length, ...kept);
@@ -625,13 +639,43 @@ function devModeWarning(line: string, standing: Standing, placement: string): bo
   return line === notInForce(standing);
 }
 
+/** The run's refusals, each sentence once, in the order the run reached them: the same cause can
+ *  arrive from two readers (the gate and `doctor` both read the approval). */
+function uniqueRefusals(refusals: readonly UpRefusal[]): UpRefusal[] {
+  const seen = new Set<string>();
+  return refusals.filter((refusal) => {
+    if (seen.has(refusal.message)) return false;
+    seen.add(refusal.message);
+    return true;
+  });
+}
+
 export async function runUp(argv: string[], io: Io, sources: UpSources): Promise<number> {
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'serial']);
+  // A bad option stops the parser before `--json` is read when it comes first, and the
+  // structured refusal is still the one the caller asked for.
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'serial', 'json']);
+  // The lines plain output writes beside the records ride on the document as notes under
+  // `--json`; stdout carries the one document and nothing else.
+  const jsonNotes: string[] = [];
+  const collect = (text: string): void => {
+    for (const line of text.split('\n')) if (line !== '') jsonNotes.push(line);
+  };
+  const stderrLine = (text: string): void => {
+    if (json) collect(text);
+    else out.stderr(text);
+  };
   if (args.error || args.rest.length) {
-    out.stderr(`team up: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
+    refuse(io, json, 'up', {
+      id: 'up.invocation',
+      message: plainText(args.error ?? `unexpected "${args.rest[0]}"`),
+      repair: null,
+      code: 2,
+      usage: USAGE,
+    });
     // exit: up.invocation
     return 2;
   }
@@ -666,7 +710,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const aimed = otherFile || args.values.session !== undefined;
   if (detached !== undefined && aimed) {
-    out.stderr(`team up: ${detached}\n`);
+    refuse(io, json, 'up', { id: 'up.detached', message: detached, repair: null, code: 1 });
     // exit: up.detached
     return 1;
   }
@@ -712,7 +756,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const gates = judgeGates();
     if (gates.grantedSeat !== null) {
       const flag = args.values.session !== undefined ? 'session' : 'file';
-      out.stderr(`team up: --${flag} is the owner's; the granted seat cannot use it\n`);
+      refuse(io, json, 'up', {
+        id: 'up.grant-flag',
+        message: `--${flag} is the owner's; the granted seat cannot use it`,
+        repair: null,
+        code: 1,
+      });
       // exit: up.grant-flag
       return 1;
     }
@@ -721,7 +770,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // the reason and the owner's own command. Either way the flagged file stays unread, so the dry
     // run prints no plan for it.
     if (gates.verdict === null && !dev) {
-      if (dry) {
+      if (json) {
+        refuse(io, true, 'up', { id: 'up.not-owner', message: 'deny', repair: null, code: 1, rule: 'no-record' });
+      } else if (dry) {
         out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}\n`);
         out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
       } else {
@@ -731,7 +782,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       return 1;
     }
     if (gates.verdict?.kind === 'refused') {
-      out.stderr(`team up: ${gates.verdict.text}\n`);
+      refuse(io, json, 'up', {
+        id: 'up.delegate-flag',
+        message: plainText(gates.verdict.text),
+        repair: null,
+        code: 1,
+      });
       // exit: up.delegate-flag
       return 1;
     }
@@ -783,10 +839,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // `team up`'s own words, the dry one says what a real run would stop on (`! up would
     // refuse:`, the dry run's line for every refusal it reaches) and prints no plan, because
     // this file builds none. Both exit as the file error does, and neither launches anything.
-    for (const problem of loaded.errors) {
-      const said = `${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}`;
-      if (dry) out.stdout(`! up would refuse: ${said}\n`);
-      else out.stderr(`team up: ${said}\n`);
+    const said = loaded.errors.map(
+      (problem) => `${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}`,
+    );
+    if (json) {
+      const id = loaded.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
+        ? 'up.not-a-repo'
+        : loaded.errors.some((problem) => problem.line > 0) ? 'up.file-invalid' : 'up.file';
+      refuse(io, true, 'up', { id, message: said.join('; '), repair: null, code: 2 });
+    } else {
+      for (const problem of said) {
+        if (dry) out.stdout(`! up would refuse: ${problem}\n`);
+        else out.stderr(`team up: ${problem}\n`);
+      }
     }
     // exit: up.not-a-repo
     // exit: up.file
@@ -841,22 +906,32 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     createGranted;
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
-  const refusals: string[] = [];
+  const refusals: UpRefusal[] = [];
   // A detached run is refused unless a create-grant admits it: the grant holder's own runner
   // outside herdr is the one detached caller the grant may name.
   if (detached !== undefined && !createGranted) {
-    refusals.push(detached);
+    refusals.push({ id: 'up.detached', message: detached });
   } else if (!named) {
     // Dev mode mounts and says the placement as a warning; a dry run says it beside the plan it
     // would refuse. Anyone else is denied, and the bare word is the whole answer.
-    if (!dev && !dry) return denyUp(out);
-    refusals.push(placementRefusal(caller));
+    if (!dev && !dry) {
+      // The gate that refused names the contract row it refuses on; a run neither fallback
+      // took is the bare `up.deny`.
+      const grantedId = grantRefusal !== null && grantRefusal.startsWith('grant.')
+        ? `up.grant-${grantRefusal.slice('grant.'.length)}`
+        : undefined;
+      const id = verdict?.kind === 'refused' ? verdict.id : grantedId;
+      return denyUp(out, io, json, id);
+    }
+    refusals.push({ id: 'up.placement', message: placementRefusal(caller) });
   }
   // The live file is the record. A verified copy that no longer matches is not a refusal.
   // A legacy or refused record still is: its text is the case, and dev mode warns instead.
   if (standing.kind === 'none') {
-    if (dev) refusals.push(notInForce(standing));
-  } else if (standing.kind !== 'verified') refusals.push(notInForce(standing));
+    if (dev) refusals.push({ id: 'up.never-approved', message: notInForce(standing) });
+  } else if (standing.kind !== 'verified') {
+    refusals.push({ id: 'up.never-approved', message: notInForce(standing) });
+  }
   // The budget readings the gate refuses on are the live file's own: a standing that is not
   // verified names no account at all, not even for a dry run's plan.
   const budgets = budgetsInForceOf(standing, team);
@@ -870,7 +945,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       if (!blocksLaunch(finding)) continue;
       if (!dev && (finding.text.includes('team approve') || finding.text.includes('never approved'))) continue;
       if (finding.text.includes(' is read at start by ')) startupReadRefusals.push(finding.text);
-      else refusals.push(finding.text);
+      else refusals.push({ id: 'up.doctor', message: finding.text });
     }
   }
   const samples: SwapSample[] = [];
@@ -888,24 +963,25 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       if (!dry && (ordinaryAdmitted || delegated !== null || grantedSeat !== null || createGranted || ownerToken)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
-      refusals.push(problem);
+      refusals.push({ id: 'up.machine', message: problem });
     }
   }
 
-  if (state === null) refusals.push("herdr doesn't answer");
+  if (state === null) refusals.push({ id: 'up.herdr', message: "herdr doesn't answer" });
   if (state === 'stopped') {
     if (Object.hasOwn(readState(dir).sessions, session)) {
       clearStopped = true;
       state = 'absent';
     } else {
-      refusals.push(`session ${session} is stopped`);
+      refusals.push({ id: 'up.stopped', message: `session ${session} is stopped` });
     }
   }
   const agents = state === 'running' ? sources.agents(session) : [];
   if (state === 'running') {
     const recorded = readState(dir).sessions[session]?.seats ?? {};
-    if (agents === null) refusals.push(`session ${session} runs, and its agents can't be read`);
-    else {
+    if (agents === null) {
+      refusals.push({ id: 'up.agents', message: `session ${session} runs, and its agents can't be read` });
+    } else {
       // §5: a seat recorded waiting was left in its pane for the owner — by `add`, whose seat
       // was never renamed, so herdr lists its pane with no `name` field at all. That agent is
       // known by its pane, whatever its name is now: the resume path verifies pane and process
@@ -945,9 +1021,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           !launchedPanes.has(agent.pane),
       );
       if (unknown.length) {
-        refusals.push(
-          `session ${session} has ${unknown.length} agent${unknown.length === 1 ? '' : 's'} this file's state doesn't record: \`up\` never touches a running team`,
-        );
+        refusals.push({
+          id: 'up.unknown',
+          message: `session ${session} has ${unknown.length} agent${unknown.length === 1 ? '' : 's'} this file's state doesn't record: \`up\` never touches a running team`,
+        });
       }
     }
   }
@@ -956,9 +1033,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   if (!team.trust || team.trust.length === 0 || isLegacyTrust(team.trust)) {
     // The block names every entry the next `up` will require, computed from the file, so one
     // edit takes the file past validation. The same block is what `doctor` and `add` print.
-    refusals.push(
-      `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText({ ...team, session }, root, sources.home)}`,
-    );
+    refusals.push({
+      id: 'up.doctor',
+      message: `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText({ ...team, session }, root, sources.home)}`,
+    });
   }
 
   const recorded = readState(dir).sessions[session];
@@ -989,8 +1067,25 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // way, and every other line of the run on stderr, after the record it belongs to. It exists
   // from here, before the planning pass, because the launch-line note is one of its detail lines.
   // It is handed the raw pair on purpose: the writer cleans its own fields and draws its own
-  // `\r\x1b[K` on a TTY, and the cleaned pair would strip those bytes.
-  const records = progressWriter({ stdout: io.stdout, stderr: io.stderr, isTTY: io.stdoutIsTTY ?? false });
+  // `\r\x1b[K` on a TTY, and the cleaned pair would strip those bytes. Under `--json` the same
+  // writer feeds the document instead of the terminal: the final records are kept whole, in
+  // order — the last one is the run's `action_summary` — and every other line is a note. The
+  // provisional lines are off (nothing is a terminal in that mode).
+  const finalRecords: string[] = [];
+  const records = progressWriter({
+    stdout: (text) => {
+      if (!json) {
+        io.stdout(text);
+        return;
+      }
+      for (const line of text.split('\n')) if (line !== '') finalRecords.push(line);
+    },
+    stderr: (text) => {
+      if (json) collect(text);
+      else io.stderr(text);
+    },
+    isTTY: json ? false : (io.stdoutIsTTY ?? false),
+  });
   const seats: UpSeat[] = [];
   const refused = new Set<string>();
   for (const seat of team.seats) {
@@ -1057,8 +1152,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // stdout with the plan it belongs to.
     if (line?.level === 'note') {
       const note = `  note ${seat.name}: ${line.why}`;
-      if (dry) out.stdout(`${plainLine(note)}\n`);
-      else records.detail(note);
+      if (dry) {
+        if (json) collect(note);
+        else out.stdout(`${plainLine(note)}\n`);
+      } else records.detail(note);
     }
     // The plan, the record and the log hold the reason in words (`record`); the full finding —
     // the start folder it names — rides along as the record's stderr detail only.
@@ -1078,7 +1175,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     if ('problem' in start) {
       if (!start.once || !refused.has(start.problem)) {
         refused.add(start.problem);
-        refusals.push(start.problem);
+        refusals.push({ id: 'up.placement', message: start.problem });
       }
       continue;
     }
@@ -1108,7 +1205,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       return seat.budget?.kind !== 'refuse';
     });
     if (launchingIntoLobby) {
-      for (const text of startupReadRefusals) refusals.push(text);
+      for (const text of startupReadRefusals) refusals.push({ id: 'up.doctor', message: text });
     }
     // Every migrated run checks links and ownership. A file a CLI reads at start is refused
     // only when a seat is about to start in the lobby.
@@ -1122,7 +1219,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       create: false, getuid: sources.getuid, fs: sources.fs,
       reads: launchingIntoLobby ? startupReads : [], lobby: teamLobby,
     });
-    if (!gate.ok) refusals.push(gate.text);
+    if (!gate.ok) refusals.push({ id: 'up.lobby', message: gate.text });
     else if ('path' in gate) {
       verifiedLobby = gate.path;
       lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
@@ -1191,29 +1288,39 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // Dev mode says the no-approval lines and the caller-placement line once, as a warning,
   // and mounts. Every other refusal stays a refusal. Unset, the list is unchanged.
   const warning = dev ? devWarningLine(refusals, standing, caller) : '';
+  // The one override sentence every lifecycle command prints, its tail included.
+  const folded = warning ? devModeCallerGate('up', io, warning) ?? warning : '';
   // The audit line the fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
-  if (!dry && warning) logDevMode(dir, 'up', callerLabel(caller), `warning: ${warning}`, sources.now?.() ?? new Date());
+  if (!dry && folded) logDevMode(dir, 'up', callerLabel(caller), folded, sources.now?.() ?? new Date());
 
   if (dry) {
     stampLobbyTrust(false);
-    if (warning) out.stdout(`! warning: ${plainText(warning)}\n`);
-    // The same cause can reach the list twice — the gate and `doctor` both read the
-    // approval — so a refusal is said once. A refusal leaves through the real run's
-    // return below, so the status and the exit id are that refusal's; the words stay these.
-    const said = [...new Set(refusals)];
-    for (const refusal of said) out.stdout(`! up would refuse: ${plainText(refusal)}\n`);
-    // A caller the run does not admit is the one refusal with a command of its own behind it:
-    // nothing in the file changes it, the owner's run does. So the dry run names that command.
-    if (said.includes(placementRefusal(caller))) {
-      out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
+    if (!json) {
+      if (folded) out.stdout(`! ${plainText(folded)}\n`);
+      // The same cause can reach the list twice — the gate and `doctor` both read the
+      // approval — so a refusal is said once. A refusal leaves through the real run's
+      // return below, so the status and the exit id are that refusal's; the words stay these.
+      const said = uniqueRefusals(refusals).map((refusal) => refusal.message);
+      for (const refusal of said) out.stdout(`! up would refuse: ${plainText(refusal)}\n`);
+      // A caller the run does not admit is the one refusal with a command of its own behind it:
+      // nothing in the file changes it, the owner's run does. So the dry run names that command.
+      if (said.includes(placementRefusal(caller))) {
+        out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
+      }
+      out.stdout(plainText(formatPlan(buildPlan())));
     }
-    out.stdout(plainText(formatPlan(buildPlan())));
   }
   if (refusals.length) {
-    if (!dry) {
-      if (warning) out.stderr(`team up: warning: ${plainText(warning)}\n`);
-      for (const refusal of [...new Set(refusals)]) out.stderr(`team up: ${plainText(refusal)}\n`);
+    // Under `--json` the run's first refusal is the document's: its contract row, its sentence.
+    // A dev-mode warning rides in the same sentence, so it is not lost in the envelope.
+    if (json) {
+      const first = refusals[0]!;
+      const message = folded ? `${plainText(folded)}; ${plainText(first.message)}` : plainText(first.message);
+      refuse(io, true, 'up', { id: first.id, message, repair: first.repair ?? null, code: 1 });
+    } else if (!dry) {
+      if (folded) out.stderr(`team up: ${plainText(folded)}\n`);
+      for (const refusal of uniqueRefusals(refusals)) out.stderr(`team up: ${plainText(refusal.message)}\n`);
     }
     // exit: up.never-approved
     // exit: up.doctor
@@ -1225,14 +1332,38 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.placement
     return 1;
   }
-  if (!dry && warning) out.stderr(`team up: warning: ${plainText(warning)}\n`);
+  if (!dry && folded) stderrLine(`team up: ${plainText(folded)}\n`);
   if (dry) {
+    if (json) {
+      // The plan is the document's: the warning first when there is one, then one step per
+      // plan line, each with the prefix the terminal draws (`+`, `!`, `skip`).
+      const plan: PlanStep[] = [
+        ...(folded ? [{ step: 'warning', detail: folded, prefix: '!' as const }] : []),
+        ...planStepsOf(buildPlan()),
+      ];
+      writeJson(io, 'team.up', {
+        format: 1,
+        dry_run: true,
+        status: 'dry-run',
+        action_summary: 'dry run: nothing was run',
+        project: team.project,
+        session,
+        seats: [...new Set(team.seats.map((seat) => seat.name))],
+        plan,
+        notes: jsonNotes,
+      });
+    }
     // exit: up.dry-run
     return 0;
   }
   const launch = sources.launch;
   if (!launch) {
-    out.stderr('team up: this call has no way to reach herdr\n');
+    refuse(io, json, 'up', {
+      id: 'up.no-launch',
+      message: 'this call has no way to reach herdr',
+      repair: null,
+      code: 1,
+    });
     // exit: up.no-launch
     return 1;
   }
@@ -1246,7 +1377,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // by the next one (`launch/seat-lock.ts`).
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
-    out.stderr(`team up: ${plainText(runLockText(runLock.held, session, dir))}\n`);
+    refuse(io, json, 'up', {
+      id: 'up.run-lock',
+      message: plainText(runLockText(runLock.held, session, dir)),
+      repair: null,
+      code: 1,
+    });
     // exit: up.run-lock
     return 1;
   }
@@ -1268,7 +1404,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // make cannot land on another run's — which is what the read-only pass exists for.
       const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby });
       if (!gate.ok) {
-        out.stderr(`team up: ${plainText(gate.text)}\n`);
+        refuse(io, json, 'up', { id: 'up.lobby', message: plainText(gate.text), repair: null, code: 1 });
         // exit: up.lobby
         return 1;
       }
@@ -1284,7 +1420,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     if (clearStopped) {
       const cleared = await launch.deleteSession?.(session);
       if (!cleared) {
-        out.stderr(`team up: ${plainText(`session ${session} is stopped and did not clear`)}\n`);
+        refuse(io, json, 'up', {
+          id: 'up.clear',
+          message: `session ${session} is stopped and did not clear`,
+          repair: null,
+          code: 1,
+        });
         // exit: up.clear
         return 1;
       }
@@ -1519,7 +1660,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
       // here with the same function the records use: no escape sequence or bidi override reaches
       // the terminal from a file's word, a screen's word or a folder's name.
-      say: (line) => out.stderr(plainText(line)),
+      say: (line) => stderrLine(plainText(line)),
       progress: (seat, state) => records.progress(seat, state),
       final: (seat, record) => records.final(seat, record),
       detail: (line) => records.detail(line),
@@ -1673,11 +1814,39 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     });
     // A seat the plan left behind (a repair it would not close, a dialog it timed out at) is a
     // seat left short of ready even when its state still says ready: `held` makes that exit 1.
+    const failed = pending.length > 0 || report.serverFailed || report.watchFailed || report.held;
+    if (json) {
+      if (failed) {
+        // The run's own failure named by its row: the seats short of ready first, then what the
+        // plan reported; a held step with nothing pending is the pending row too.
+        const id = pending.length > 0
+          ? 'up.pending'
+          : report.serverFailed ? 'up.server' : report.watchFailed ? 'up.watch' : 'up.pending';
+        const message = pending.length > 0
+          ? `${pending.length} seat${pending.length === 1 ? '' : 's'} not ready: ${pending.map((seat) => seat.name).join(', ')}`
+          : report.serverFailed ? 'the herdr server did not start'
+            : report.watchFailed ? 'the watch did not start' : 'a step was held';
+        refuse(io, true, 'up', { id, message, repair: null, code: 1 });
+      } else {
+        writeJson(io, 'team.up', {
+          format: 1,
+          dry_run: false,
+          status: 'ready',
+          // The last record is the run's closing line (`<seat>: ready`); with no record at all
+          // the file's own outcome is said.
+          action_summary: finalRecords.at(-1) ?? 'the team is ready',
+          project: team.project,
+          session,
+          seats: [...new Set(team.seats.map((seat) => seat.name))],
+          notes: [...jsonNotes, ...finalRecords.slice(0, -1)],
+        });
+      }
+    }
     // exit: up.ready
     // exit: up.pending
     // exit: up.server
     // exit: up.watch
-    return pending.length || report.serverFailed || report.watchFailed || report.held ? 1 : 0;
+    return failed ? 1 : 0;
   } finally {
     runLock.release();
   }

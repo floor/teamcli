@@ -11,6 +11,7 @@ import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
+import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { noteTeam } from '../registry/teams.ts';
 import { LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
@@ -134,7 +135,10 @@ export function exclude(root: string): string[] {
 export const init: Command = (argv, io) => runInit(argv, io, undefined, undefined, { ...doctorSources, registryHome: homedir() });
 export default init;
 
-export const USAGE = 'Usage: team init [--restore]\n';
+export const USAGE = `Usage: team init [--restore] [--json]
+
+Exits 0 when the team file is written or restored, 1 when init is refused, 2 when the invocation can't be read or this folder is not a git repository.
+`;
 
 // `home` is where the user-level store is looked for; tests hand in a temporary one.
 // `readStanding` stands in for the store's one read, so a test can count it or swap the
@@ -147,9 +151,18 @@ export async function runInit(
   readStanding?: (root: string) => Standing,
   sources: Pick<DoctorSources, 'loggedIn'> & { now?: () => Date; registryHome?: string } = doctorSources,
 ): Promise<number> {
-  const args = readArgs(argv, [], ['restore']);
+  // A bad option stops the parser before `--json` is read when it comes first, and the
+  // structured refusal is still the one the caller asked for.
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, [], ['restore', 'json']);
   if (args.error || args.rest.length) {
-    io.stderr(`team init: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
+    refuse(io, json, 'init', {
+      id: 'init.invocation',
+      message: args.error ?? `unexpected "${args.rest[0]}"`,
+      repair: null,
+      code: 2,
+      usage: USAGE,
+    });
     // exit: init.invocation
     return 2;
   }
@@ -168,7 +181,7 @@ export async function runInit(
   // outside herdr is the one detached caller the grant may name.
   const detached = detachedRefusal(caller);
   if (detached !== undefined && !createGranted) {
-    io.stderr(`team init: ${detached}\n`);
+    refuse(io, json, 'init', { id: 'init.detached', message: detached, repair: null, code: 1 });
     // exit: init.detached
     return 1;
   }
@@ -176,33 +189,53 @@ export async function runInit(
   // warning, and the run continues — exactly as `up` does. Every other refusal stays a
   // refusal. The warning is logged where the run knows the folder it writes in.
   let devOwnerLine: string | null = null;
+  // Collapsed notes: the warnings plain output writes to stderr ride on the document instead.
+  const notes: string[] = [];
   if (!isOwner(caller) && !createGranted) {
-    const ownerLine = `only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+    const ownerLine = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     const folded = devModeCallerGate('init', io, ownerLine);
     if (folded === null) {
-      io.stderr(`team init: ${ownerLine}\n`);
+      refuse(io, json, 'init', {
+        id: 'init.not-owner',
+        message: ownerLine,
+        repair: 'the owner runs `team init` from a terminal outside herdr',
+        code: 1,
+        rule: 'owner-only',
+      });
       // exit: init.not-owner
       return 1;
     }
     devOwnerLine = folded;
-    io.stderr(`team init: ${devOwnerLine}\n`);
+    if (json) notes.push(devOwnerLine);
+    else io.stderr(`team init: ${devOwnerLine}\n`);
   }
   const root = rootOf();
   if (!root) {
-    io.stderr('team init: not inside a git repository\n');
+    refuse(io, json, 'init', { id: 'init.not-a-repo', message: 'not inside a git repository', repair: null, code: 2 });
     // exit: init.not-a-repo
     return 2;
   }
   const path = join(root, TEAM_FILE);
   if (devOwnerLine !== null) logDevMode(dirname(path), 'init', describeCaller(caller), devOwnerLine, sources.now?.());
   if (git(root, 'ls-files', '--error-unmatch', TEAM_FILE) !== null) {
-    io.stderr(`team init: ${TEAM_FILE} is tracked by git, and a team file is private. Untrack it, keeping the file:\n  git rm --cached ${TEAM_FILE}\nthen run team init again. History is not rewritten.\n`);
+    refuse(io, json, 'init', {
+      id: 'init.tracked',
+      message: `${TEAM_FILE} is tracked by git, and a team file is private`,
+      repair: `git rm --cached ${TEAM_FILE}, then run team init again; history is not rewritten`,
+      code: 1,
+      plain: `${TEAM_FILE} is tracked by git, and a team file is private. Untrack it, keeping the file:\n  git rm --cached ${TEAM_FILE}\nthen run team init again. History is not rewritten.`,
+    });
     // exit: init.tracked
     return 1;
   }
   if (existsSync(path)) {
     exclude(root);
-    io.stderr(`team init: ${TEAM_FILE} exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.\n`);
+    refuse(io, json, 'init', {
+      id: 'init.exists',
+      message: `${TEAM_FILE} exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.`,
+      repair: null,
+      code: 1,
+    });
     // exit: init.exists
     return 1;
   }
@@ -217,18 +250,34 @@ export async function runInit(
         ? approvalStanding(root)
         : approvalStanding(root, home);
     if (standing.kind === 'legacy') {
-      io.stderr(`team init: nothing was restored: the record for this folder was ${LEGACY_LINE}.\n`);
+      refuse(io, json, 'init', {
+        id: 'init.legacy',
+        message: `nothing was restored: the record for this folder was ${LEGACY_LINE}.`,
+        repair: null,
+        code: 1,
+      });
       // exit: init.legacy
       return 1;
     }
     if (standing.kind === 'refused') {
-      io.stderr(`team init: nothing was restored: ${standing.why}.\n`);
+      refuse(io, json, 'init', {
+        id: 'init.refused',
+        message: `nothing was restored: ${standing.why}.`,
+        repair: null,
+        code: 1,
+      });
       // exit: init.refused
       return 1;
     }
     const copy = standing.kind === 'verified' ? standing.record.file : null;
     if (copy === null) {
-      io.stderr('team init: nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.\n');
+      refuse(io, json, 'init', {
+        id: 'init.nothing',
+        message: 'nothing to restore: no team file was approved for this folder on this machine',
+        repair: 'team init writes a skeleton',
+        code: 1,
+        plain: 'nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.',
+      });
       // exit: init.nothing
       return 1;
     }
@@ -236,8 +285,16 @@ export async function runInit(
   } else {
     text = skeleton(basename(root), git(root, 'rev-parse', 'HEAD'), version(), root, firstLoggedInCli(sources));
     const check = validateTeamFile(text);
-    // exit: init.skeleton
-    if (!check.ok) throw new Error(`the skeleton doesn't validate: ${check.errors[0]?.message}`);
+    if (!check.ok) {
+      refuse(io, json, 'init', {
+        id: 'init.skeleton',
+        message: `the skeleton doesn't validate: ${check.errors[0]?.message}`,
+        repair: null,
+        code: 1,
+      });
+      // exit: init.skeleton
+      return 1;
+    }
   }
   mkdirSync(dirname(path), { recursive: true });
   const added = exclude(root);
@@ -251,12 +308,31 @@ export async function runInit(
     const written = loadTeamFile(root, { home: registryHome, checkOnly: true });
     if (written.ok) {
       const unrecorded = noteTeam(registryHome, root, written.team, 'defined', describeCaller(caller));
-      if (unrecorded) io.stderr(`team init: ${unrecorded}\n`);
+      if (unrecorded) {
+        if (json) notes.push(unrecorded);
+        else io.stderr(`team init: ${unrecorded}\n`);
+      }
     }
   }
-  io.stdout(args.flags.has('restore')
-    ? `Restored ${TEAM_FILE} from the copy you last approved on this machine.\n\n${PRIVACY}\n`
-    : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run the seats.\n\n${PRIVACY}\n`);
+  const restored = args.flags.has('restore');
+  // The existing closing line is the action summary; the privacy paragraph is plain-only prose
+  // the document has no field for.
+  const action_summary = restored
+    ? `Restored ${TEAM_FILE} from the copy you last approved on this machine.`
+    : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run the seats.`;
+  if (json) {
+    writeJson(io, 'team.init', {
+      format: 1 as const,
+      dry_run: false,
+      status: restored ? 'restored' : 'wrote',
+      action_summary,
+      file: TEAM_FILE,
+      restored,
+      notes,
+    });
+  } else {
+    io.stdout(`${action_summary}\n\n${PRIVACY}\n`);
+  }
   // exit: init.wrote
   // exit: init.restored
   return 0;

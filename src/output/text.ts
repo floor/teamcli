@@ -375,6 +375,40 @@ export function renderDryRunPlan(header: string | null, steps: readonly PlanStep
   return lines;
 }
 
+/**
+ * One launch-plan step (`src/launch/plan.ts`), read structurally so the output layer never
+ * depends on the launch layer.
+ */
+export interface PlanSource {
+  readonly kind: 'run' | 'wait' | 'skip';
+  readonly argv?: readonly string[];
+  readonly text?: string;
+  readonly do?: { readonly do: string; readonly seat?: string };
+}
+
+/**
+ * The `--dry-run` plan as `PlanStep`s (§5.4): one step per plan line, carrying the same seat
+ * and the command the plain plan prints. A run step is named by the op it performs
+ * (`workspace`, `launch`, …), a wait and a skip by their own kind.
+ */
+export function planStepsOf(sources: readonly PlanSource[]): PlanStep[] {
+  return sources.map((source) => {
+    const seat = source.do?.seat;
+    if (source.kind === 'run') {
+      return {
+        step: source.do?.do === 'create' ? 'workspace' : (source.do?.do ?? 'run'),
+        ...(seat !== undefined ? { seat } : {}),
+        detail: (source.argv ?? []).map((word) => plainLine(word)).join(' '),
+        prefix: '+' as const,
+      };
+    }
+    if (source.kind === 'wait') {
+      return { step: 'wait', ...(seat !== undefined ? { seat } : {}), detail: plainLine(source.text ?? '') };
+    }
+    return { step: 'skip', ...(seat !== undefined ? { seat } : {}), detail: plainLine(source.text ?? ''), prefix: 'skip' as const };
+  });
+}
+
 export interface ActionSummarySpec {
   readonly command?: string;
   readonly summary: string;

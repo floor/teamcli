@@ -451,6 +451,18 @@ export const CHECK_OUTPUT_SCHEMA: CommandSchemaSpec = {
     summary: SUMMARY_SCHEMA_FRAGMENT,
   },
 };
+/** Published `--json` output schema for `team reload` (`schema/reload.schema.json`). */
+export const RELOAD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.reload',
+  fileName: 'reload.schema.json',
+  title: 'team reload --json output',
+  statuses: ['reloaded', 'same'],
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    pane: { type: ['string', 'null'] },
+  },
+});
 
 /** Published `--json` output schema for `team list` (`schema/list.schema.json`). */
 export const LIST_OUTPUT_SCHEMA: CommandSchemaSpec = {
@@ -541,6 +553,19 @@ export const LIST_OUTPUT_SCHEMA: CommandSchemaSpec = {
     },
   },
 };
+/** Published `--json` output schema for `team init` (`schema/init.schema.json`). */
+export const INIT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.init',
+  fileName: 'init.schema.json',
+  title: 'team init --json output',
+  statuses: ['wrote', 'restored'],
+  required: ['file', 'restored'],
+  properties: {
+    file: { type: 'string', minLength: 1 },
+    restored: { type: 'boolean' },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
 
 /** Published `--json` output schema for `team grant` (`schema/grant.schema.json`). */
 export const GRANT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
@@ -826,6 +851,87 @@ export const RELEASE_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team restart` (`schema/restart.schema.json`). */
+export const RESTART_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.restart',
+  fileName: 'restart.schema.json',
+  title: 'team restart --json output',
+  statuses: ['ready', 'dry-run'],
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    pane: { type: ['string', 'null'] },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
+/** Published `--json` output schema for `team down` (`schema/down.schema.json`). */
+export const DOWN_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.down',
+  fileName: 'down.schema.json',
+  title: 'team down --json output',
+  statuses: ['stopped', 'idle', 'dry-run'],
+  required: ['seats'],
+  properties: {
+    seats: { type: 'array', items: { type: 'string', minLength: 1 } },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
+/** Published `--json` output schema for `team up` (`schema/up.schema.json`). */
+export const UP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.up',
+  fileName: 'up.schema.json',
+  title: 'team up --json output',
+  statuses: ['ready', 'dry-run'],
+  required: ['seats'],
+  properties: {
+    seats: { type: 'array', items: { type: 'string', minLength: 1 } },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
+/** Published `--json` output schema for `team add` (`schema/add.schema.json`). */
+export const ADD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.add',
+  fileName: 'add.schema.json',
+  title: 'team add --json output',
+  statuses: ['ready', 'dry-run'],
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    pane: { type: ['string', 'null'] },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
+/** Published `--json` output schema for `team remove` (`schema/remove.schema.json`). */
+export const REMOVE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.remove',
+  fileName: 'remove.schema.json',
+  title: 'team remove --json output',
+  statuses: ['removed', 'kept', 'temporary', 'swapped'],
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
+/** Published `--json` output schema for `team register` (`schema/register.schema.json`). */
+export const REGISTER_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.register',
+  fileName: 'register.schema.json',
+  title: 'team register --json output',
+  statuses: ['ready', 'already', 'dry-run'],
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    pane: { type: ['string', 'null'] },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -846,6 +952,14 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   FEED_OUTPUT_SCHEMA,
   PLAN_OUTPUT_SCHEMA,
   NEXT_OUTPUT_SCHEMA,
+  RELOAD_OUTPUT_SCHEMA,
+  INIT_OUTPUT_SCHEMA,
+  RESTART_OUTPUT_SCHEMA,
+  DOWN_OUTPUT_SCHEMA,
+  UP_OUTPUT_SCHEMA,
+  ADD_OUTPUT_SCHEMA,
+  REMOVE_OUTPUT_SCHEMA,
+  REGISTER_OUTPUT_SCHEMA,
 ];
 
 

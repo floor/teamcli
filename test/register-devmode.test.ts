@@ -134,12 +134,12 @@ test('TEAMCLI_DEV_MODE=1: an unplaced caller registers with the caller gate as a
   const w = world();
   const r = await register(w, ['lead'], { caller: UNPLACED, dev: true });
   expect(r.code).toBe(0);
-  expect(r.err).toContain(`team register: warning: ${CALLER_GATE}\n`);
+  expect(r.err).toContain(`team register: warning: ${CALLER_GATE}; dev mode continues\n`);
   expect(r.err).not.toContain(`team register: ${CALLER_GATE}`);
   expect(written(w)).toEqual({ state: true, agents: 1, log: true, panes: true });
   // Two audit lines: the folded gate, written where the gate is used, and the record's own.
   const log = readFileSync(join(w.dir, LOG_FILE), 'utf8');
-  expect(log).toContain(`warning: ${CALLER_GATE}\n`);
+  expect(log).toContain(`warning: ${CALLER_GATE}; dev mode continues\n`);
   expect(log).toContain('lead: registered seat_');
   expect(log).toContain(PANE);
   expect(readState(w.dir).sessions.acme?.seats.lead?.stage).toBe('ready');
@@ -207,7 +207,7 @@ test('TEAMCLI_DEV_MODE=1: a pane herdr does not place as the seat is still refus
   expect(noAgent.err).toContain('no agent named lead is running in session "acme"');
   // Nothing was registered, and the folded gate is on record all the same.
   expect(written(missing)).toEqual({ ...NOTHING, log: true });
-  expect(readFileSync(join(missing.dir, LOG_FILE), 'utf8')).toContain(`warning: ${CALLER_GATE}\n`);
+  expect(readFileSync(join(missing.dir, LOG_FILE), 'utf8')).toContain(`warning: ${CALLER_GATE}; dev mode continues\n`);
 
   // An agent of the name whose foreground process is not the file-cli's program: still refused.
   const foreign = world();
@@ -216,7 +216,7 @@ test('TEAMCLI_DEV_MODE=1: a pane herdr does not place as the seat is still refus
   expect(other.err).toContain('team register: warning:');
   expect(other.err).toContain('lead: pane w1:p1 holds no `claude-code` process; nothing was registered');
   expect(written(foreign)).toEqual({ ...NOTHING, log: true });
-  expect(readFileSync(join(foreign.dir, LOG_FILE), 'utf8')).toContain(`warning: ${CALLER_GATE}\n`);
+  expect(readFileSync(join(foreign.dir, LOG_FILE), 'utf8')).toContain(`warning: ${CALLER_GATE}; dev mode continues\n`);
 });
 
 test('--dry-run says the refusal and the owner\'s own command, and under dev mode the record instead', async () => {
@@ -234,7 +234,7 @@ test('--dry-run says the refusal and the owner\'s own command, and under dev mod
   const mounted = world();
   const dev = await register(mounted, ['lead', '--dry-run'], { caller: UNPLACED, dev: true });
   expect(dev.code).toBe(0);
-  expect(dev.out).toContain(`! warning: ${CALLER_GATE}\n`);
+  expect(dev.out).toContain(`! warning: ${CALLER_GATE}; dev mode continues\n`);
   expect(dev.out).not.toContain('! register would refuse:');
   expect(dev.out).not.toContain('! to unblock:');
   expect(dev.out).toContain('lead: would register — pane w1:p1; nothing would be launched');

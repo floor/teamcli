@@ -29,6 +29,7 @@ import { upPlan } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
+import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { modelDiffers } from '../status/statusline.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
@@ -37,7 +38,10 @@ import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import type { Launch } from './up.ts';
 
-export const USAGE = 'Usage: team reload <seat> [--file <path>]\n';
+export const USAGE = `Usage: team reload <seat> [--file <path>] [--json]
+
+Exits 0 when the seat is reloaded or already matches the file, 1 when reload is refused or relaunch fails, 2 when the invocation or team file can't be read.
+`;
 
 export type ReloadSources = {
   launch: Launch;
@@ -91,12 +95,15 @@ export default reload;
  */
 export async function runReload(argv: string[], io: Io, sources: ReloadSources = realSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['file'], []);
-  if (args.error) return invocation(out, args.error);
+  // A bad option stops the parser before `--json` is read when it comes first, and the
+  // structured refusal is still the one the caller asked for.
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['file'], ['json']);
+  if (args.error) return invocation(io, json, args.error);
   const name = args.rest.length === 1 ? args.rest[0] : undefined;
   if (!name) {
     const extra = args.rest[1];
-    return invocation(out, extra === undefined ? 'a <seat> is required' : `unexpected "${plainLine(extra)}"`);
+    return invocation(io, json, extra === undefined ? 'a <seat> is required' : `unexpected "${plainLine(extra)}"`);
   }
 
   const caller = walkCaller(io);
@@ -107,7 +114,12 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   if (!owner) {
     const said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home });
     if (said.kind === 'refused') {
-      out.stderr(`team reload: ${said.text}\n`);
+      refuse(io, json, 'reload', {
+        id: `reload.${said.id.replace(/^grant\./, 'grant-')}`,
+        message: said.text,
+        repair: null,
+        code: 1,
+      });
       // exit: reload.grant-another-pane
       // exit: reload.grant-approval
       // exit: reload.grant-caller
@@ -119,7 +131,12 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     }
     grantSeat = said.grant.seat;
     if (foreign) {
-      out.stderr(`team reload: --file is the owner's; the granted seat cannot use it\n`);
+      refuse(io, json, 'reload', {
+        id: 'reload.grant-flag',
+        message: "--file is the owner's; the granted seat cannot use it",
+        repair: null,
+        code: 1,
+      });
       // exit: reload.grant-flag
       return 1;
     }
@@ -130,9 +147,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     ...(sources.home ? { home: sources.home } : {}),
   });
   if (!loaded.ok) {
-    for (const problem of loaded.errors) {
-      out.stderr(`team reload: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
-    }
+    const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
+    if (json) refuse(io, json, 'reload', { id: 'reload.file', message: said.join('; '), repair: null, code: 2 });
+    else for (const line of said) out.stderr(`team reload: ${line}\n`);
     // exit: reload.file
     return 2;
   }
@@ -140,12 +157,22 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   const team = loaded.team;
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) {
-    out.stderr(`team reload: no seat of that name\n`);
+    refuse(io, json, 'reload', {
+      id: 'reload.absent',
+      message: 'no seat of that name',
+      repair: 'team seats lists the seats the file declares',
+      code: 1,
+    });
     // exit: reload.absent
     return 1;
   }
   if (grantSeat !== null && seat.name === grantSeat) {
-    out.stderr(`team reload: a granted reload does not close the caller's seat\n`);
+    refuse(io, json, 'reload', {
+      id: 'reload.self',
+      message: "a granted reload does not close the caller's seat",
+      repair: null,
+      code: 1,
+    });
     // exit: reload.self
     return 1;
   }
@@ -154,18 +181,42 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   const session = team.session;
   const recorded = readState(dir).sessions[session]?.seats[seat.name];
   if (seat.stopped || !recorded || recorded.stage !== 'ready' || !recorded.pane || !recorded.workspace || !recorded.launched) {
-    out.stderr(`team reload: ${seat.name} has no ready pane to close\n`);
+    refuse(io, json, 'reload', {
+      id: 'reload.not-running',
+      message: `${seat.name} has no ready pane to close`,
+      repair: `team up launches ${seat.name}; team reload needs a seat already at its idle prompt`,
+      code: 1,
+    });
     // exit: reload.not-running
     return 1;
   }
   if (recorded.model === undefined || recorded.version === undefined) {
-    out.stderr(`team reload: ${seat.name}: its model and effort were not recorded at launch\n`);
+    refuse(io, json, 'reload', {
+      id: 'reload.unrecorded',
+      message: `${seat.name}: its model and effort were not recorded at launch`,
+      repair: null,
+      code: 1,
+    });
     // exit: reload.unrecorded
     return 1;
   }
   const detail = driftOf(recorded, seat);
   if (detail === null) {
-    out.stdout(`team reload: ${seat.name} is already running what the file declares\n`);
+    const summary = `team reload: ${seat.name} is already running what the file declares`;
+    if (json) {
+      writeJson(io, 'team.reload', {
+        format: 1 as const,
+        dry_run: false,
+        status: 'same',
+        action_summary: summary,
+        project: team.project,
+        session,
+        seat: seat.name,
+        pane: recorded.pane,
+      });
+    } else {
+      out.stdout(`${summary}\n`);
+    }
     // exit: reload.same
     return 0;
   }
@@ -175,17 +226,32 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     const text = sources.launch.paneText(session, recorded.pane);
     const kind = readScreen(seat.cli, text ?? undefined).kind;
     if (listed.status === 'working' || kind === 'working') {
-      out.stderr(`team reload: ${seat.name} is working; nothing closed\n`);
+      refuse(io, json, 'reload', {
+        id: 'reload.working',
+        message: `${seat.name} is working; nothing closed`,
+        repair: null,
+        code: 1,
+      });
       // exit: reload.working
       return 1;
     }
     if (kind === 'unsent') {
-      out.stderr(`team reload: ${seat.name} holds unsent text; nothing closed\n`);
+      refuse(io, json, 'reload', {
+        id: 'reload.unsent',
+        message: `${seat.name} holds unsent text; nothing closed`,
+        repair: null,
+        code: 1,
+      });
       // exit: reload.unsent
       return 1;
     }
     if (!((listed.status === 'idle' || listed.status === 'done') && kind === 'idle')) {
-      out.stderr(`team reload: ${seat.name} is not at an idle prompt; nothing closed\n`);
+      refuse(io, json, 'reload', {
+        id: 'reload.not-idle',
+        message: `${seat.name} is not at an idle prompt; nothing closed`,
+        repair: null,
+        code: 1,
+      });
       // exit: reload.not-idle
       return 1;
     }
@@ -193,7 +259,12 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
 
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
-    out.stderr(`team reload: ${plainLine(runLockText(runLock.held, session, dir))}\n`);
+    refuse(io, json, 'reload', {
+      id: 'reload.run-lock',
+      message: runLockText(runLock.held, session, dir),
+      repair: null,
+      code: 1,
+    });
     // exit: reload.run-lock
     return 1;
   }
@@ -327,17 +398,41 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     if (!report.dropped.includes(seat.name)) {
       const after = readState(dir).sessions[session]?.seats[seat.name];
       if (after?.stage === 'ready') {
-        out.stdout(`team reload: ${seat.name} reloaded\n`);
+        const summary = `team reload: ${seat.name} reloaded`;
+        if (json) {
+          writeJson(io, 'team.reload', {
+            format: 1 as const,
+            dry_run: false,
+            status: 'reloaded',
+            action_summary: summary,
+            project: team.project,
+            session,
+            seat: seat.name,
+            pane: after.pane ?? recorded.pane,
+          });
+        } else {
+          out.stdout(`${summary}\n`);
+        }
         // exit: reload.reloaded
         return 0;
       }
     }
     if (!closed) {
-      out.stderr(`team reload: the seat changed before it closed; nothing relaunched\n`);
+      refuse(io, json, 'reload', {
+        id: 'reload.changed',
+        message: 'the seat changed before it closed; nothing relaunched',
+        repair: null,
+        code: 1,
+      });
       // exit: reload.changed
       return 1;
     }
-    out.stderr(`team reload: the close happened and the new launch did not reach ready\n`);
+    refuse(io, json, 'reload', {
+      id: 'reload.launch',
+      message: 'the close happened and the new launch did not reach ready',
+      repair: null,
+      code: 1,
+    });
     // exit: reload.launch
     return 1;
   } finally {
@@ -362,8 +457,8 @@ function driftOf(recorded: SeatState, seat: Seat): string | null {
   return [model ? 'model' : '', effort ? 'effort' : ''].filter(Boolean).join('; ');
 }
 
-function invocation(io: Io, message: string): number {
-  io.stderr(`team reload: ${message}\n${USAGE}`);
+function invocation(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'reload', { id: 'reload.invocation', message, repair: null, code: 2, usage: USAGE });
   // exit: reload.invocation
   return 2;
 }

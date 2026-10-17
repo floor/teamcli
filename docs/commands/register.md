@@ -32,7 +32,7 @@ agent session.
 
 ## Synopsis
 
-    team register <seat> [--session <name>] [--pane <id>] [--dry-run]
+    team register <seat> [--session <name>] [--pane <id>] [--dry-run] [--json]
 
 ## Flags
 
@@ -41,6 +41,7 @@ agent session.
 | `--session` | `<name>` | the herdr session the pane is verified in, instead of `team.session`; the owner's alone |
 | `--pane` | `<id>` | a pane herdr never named: it is named as the seat through herdr and recorded; a pane herdr already answers to needs no flag |
 | `--dry-run` | — | verify the seat and print the line the real run would print, writing nothing |
+| `--json` | — | one `team.register` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## What it reads and writes
@@ -92,6 +93,16 @@ declares, and every gate wired to the bridge refuses it what the file says it ho
 | `--dry-run` succeeded | `<seat>: would register — pane <pane>; nothing would be launched`; with `--pane`, `the pane would be named <seat> and recorded` stands before `, nothing would be launched` | 0 |
 | the run was refused | `team register: <reason>` | 1 |
 | the invocation or the team file can't be read | `team register: <problem>`, with the usage for the invocation | 2 |
+
+`--json` prints one `team.register` document instead: `project`, `session`, the seat name as
+`seat`, the pane as `pane`, the working lines the run printed as `notes`, and the closing line as
+`action_summary`; `dry_run` is `false` and `status` says what the run did — `ready` (the record
+was written) or `already` (the pane already held it ready). On `--dry-run` the document carries
+`dry_run: true`, `status: "dry-run"`, `action_summary: "dry run: nothing was run"`, and a `plan`
+with one step — `{ "step": "register", "seat": <seat>, "detail": <the line the real run would
+print>, "prefix": "+" }`. A refusal under `--json` prints the `team.error` document on stdout —
+its `id` is the contract row for that refusal (`register.caller`, `register.no-seat`,
+`register.cli`, …) — and nothing on stderr.
 
 ## Refusals
 

@@ -42,9 +42,10 @@ describe('the session-doubt refusal on paper', () => {
   });
 
   test('the row quotes the refusal the command prints, placeholder for placeholder', () => {
-    // add.ts builds the line from a template on its own stderr call; <name> in the row is its
-    // one interpolation.
-    const template = clauseIn(ADD_SRC, /out\.stderr\(`team add: \$\{plainText\(`\$\{built\.name\}: ([^`]+)`/);
+    // add.ts builds the sentence as the `add.session-doubt` refusal's own message; the plain
+    // line puts `team add: ` in front of it, and <name> in the row is the message's one
+    // interpolation.
+    const template = clauseIn(ADD_SRC, /id: 'add\.session-doubt',\s+message: `\$\{built\.name\}: ([^`]+)`/);
     expect(`team add: <name>: ${template}`, 'the row and the command parted').toBe(
       'team add: <name>: its pane holds a process this record cannot tie to the launch',
     );

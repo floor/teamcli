@@ -357,7 +357,7 @@ const COMMANDS: Case[] = [
   {
     name: 'add',
     run: (caller, argv = [], options) => call((io) => runAdd(['probe-seat', ...argv], io, addSources()), caller, options),
-    refusal: (who) => `team add: only the owner or a standing grant (delegate) runs it; this call is ${who}\n`,
+    refusal: (who) => `team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is ${who}\n`,
     noPane: (name) => `team add: ${NO_PANE(name)}\n`,
     operatorAdmitted: false,
     seatAdmitted: false,

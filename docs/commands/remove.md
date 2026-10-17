@@ -8,7 +8,7 @@ unless its owner abandons it.
 
 ## Synopsis
 
-    team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]
+    team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]
 
 ## Flags
 
@@ -18,6 +18,7 @@ unless its owner abandons it.
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--json` | — | one `team.remove` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -59,6 +60,15 @@ pane's agent renamed so it no longer answers the seat's name.
 | a caller other than the owner took the seat out with its pane left running | `removed <name> (its pane <pane> was left running; nothing was typed; it now reads as <name>-left)` | 0 |
 | the run was refused, or the seat was left behind | `team remove: <reason>`, and the file is not edited | 1 |
 | the invocation, the team file or the state can't be read, or the edit would not validate | `team remove: <problem>` and the usage | 2 |
+
+`--json` prints one `team.remove` document instead: `project`, `session`, the seat name as
+`seat`, the working lines the stop printed as `notes`, and the closing line as `action_summary`;
+`dry_run` is `false` and `status` says what the run did — `removed`, `kept` (`--keep`),
+`temporary` (a temporary seat) or `swapped` (a lead seat stopped for `team add`). A refusal under
+`--json` prints the `team.error` document on stdout — its `id` is the contract row for that
+refusal (`remove.caller`, `remove.busy`, `remove.edit`, …) — and nothing on stderr; a stop that
+could not be completed is `remove.stop-failed` (`remove.no-launch` when the call cannot reach
+herdr at all).
 
 ## Example
 
