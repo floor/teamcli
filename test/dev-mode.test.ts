@@ -296,7 +296,9 @@ test('team down refuses an unplaced caller, and the same call stops the team whe
   expect(stoppedCode).toBe(0);
   expect(stoppedIo.err).toContain('team down: warning:');
   expect(stoppedIo.err).toContain(placement);
-  expect(stoppedIo.err).not.toContain('team down: only the owner, the orchestrator or the operator stops the team');
+  // The refusal form, not the warning's: dev mode speaks the sentence as a warning, never as a
+  // refusal — the needle is built from `placement`, so a re-worded sentence keeps the tooth.
+  expect(stoppedIo.err).not.toContain(`team down: ${placement}`);
   expect(didStop.n).toBe(1);
   expect(durableBytes(stopped.home)).toBe(stoppedBefore);
   expect(durableBytes(stopped.home)).not.toContain('grant.json');

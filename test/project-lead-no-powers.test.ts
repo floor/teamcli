@@ -307,7 +307,7 @@ describe("a project lead over another team of its project", () => {
     const io = testIo(here.b.root, leadA);
     const code = await runDown([], io, idleSources(here.home));
     expect(code).toBe(1);
-    expect(io.err).toBe('team down: only the owner, the orchestrator or the operator stops the team; this call is lead-a\n');
+    expect(io.err).toBe('team down: only the owner or `leads` stops the team; this call is lead-a\n');
     expect(io.out).toBe('');
   });
 
