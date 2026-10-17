@@ -36,10 +36,11 @@ accounts:
 ```
 
 A flat list is one unnamed entity and reads exactly as before. A keyed account a team's seat spends
-that belongs to another entity is borrowed: the team's row under the account's line names the
-entity — `  beacon    weekly  left 70%  …  pace 1.2%/h  (borrowed from globex)` — the way the
-`(pool)` suffix rides the account's own line. The account still counts once, under the team that
-spends it, so the header count does not change. A team file's `entity:` names the team's own
+that belongs to another entity is borrowed: the team's row for that account names the entity —
+`  openai  beacon  weekly  left 70%  …  pace 1.2%/h  (borrowed from globex)` — in the same
+parenthesised tail the `(pool)` suffix and the watch clause sit in. The account still counts once,
+under the team that spends it, so the closing summary count does not change. A team file's
+`entity:` names the team's own
 entity; a file that names none borrows every keyed account its seats spend.
 
 These accounts appear even outside a project, with no teams or budgets configured. A team's `budgets.accounts` entry of the same name supplies
@@ -62,7 +63,7 @@ no screen parser and no recorded figure say `not readable from a CLI screen`.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the report printed, whatever its figures, and whether or not this folder holds a project | the header (`usage on this machine, 1 team, 2 labs, 1 account`), then one block per lab and its team rows; in the restricted view — every caller but the owner at a terminal — a caller outside every project also reads shared machine subscriptions | 0 |
+| the report printed, whatever its figures, and whether or not this folder holds a project | the account table headed `ACCOUNT  WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE`, then one line per account with no screen reading and per lab with no account declared, the caller's own team rows, the quota view, one `SEAT  CLI  ACCOUNT` table per team, the collapsed notes, and the closing summary line (`usage on this machine, 1 team, 2 labs, 1 account`); in the restricted view — every caller but the owner at a terminal — a caller outside every project also reads shared machine subscriptions | 0 |
 | the invocation can't be read, or the stores folder can't be read | `team usage: <problem>`, with the usage for the invocation; the stores folder alone gets `team usage: the store folder cannot be read: the owner reads the reason` for every caller but the owner, who reads the read's own message, the folder among it | 2 |
 
 ## Example
@@ -128,11 +129,10 @@ the report is the restricted view:
 
 ```console
 $ team usage ; echo "exit $?"
-usage on this machine, 1 team, 2 labs, 1 account
-
+ACCOUNT  WINDOW   LEFT  USED  RESETS  RESERVE  READ            SOURCE  STATE
+openai   session  40%   60%   in 44m  -        -  read 2m ago  check   fresh  pace not known
 anthropic  not known: no account declared; declare it in ~/.config/team/accounts.yaml
-openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known
-  beacon    session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known
+  openai  beacon  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known
 
 quota
   openai  unknown
@@ -141,7 +141,10 @@ quota
 advice: no readings yet: no seat status line and no CLI usage command has answered
 
 beacon
+  SEAT           CLI          ACCOUNT
   claude-keeper  claude-code  anthropic
+
+usage on this machine, 1 team, 2 labs, 1 account
 exit 0
 ```
 
@@ -152,8 +155,8 @@ row, the same account prints its windows, margin and state there.
 
 ## The quota view
 
-After the account blocks, `team usage` prints `quota`: one block per lab and per account, and one
-advice line.
+After the account table and its per-account lines, `team usage` prints `quota`: one block per lab
+and per account, and one advice line.
 
     quota
       anthropic  ok

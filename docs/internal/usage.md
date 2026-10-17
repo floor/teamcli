@@ -35,9 +35,9 @@ entity. Two entities listing one name: the first entry in the file owns it, and 
 unnamed entry carries is owned by nobody, so it is never borrowed. The borrowing rule is one
 line: a team's seat spends an account, the map gives that account to an entity other than the
 team's own `entity:` (a file naming none borrows every keyed account its seats spend), and the
-team's row under the account's line ends `  (borrowed from <entity>)`. The same clause rides the
+team's row for that account ends `  (borrowed from <entity>)`. The same clause rides the
 seat's spend-account row. It is display only, in both views: the account is counted once, under
-the team that spends it, and the header count is unchanged. Nothing else moves — a borrowed
+the team that spends it, and the closing summary count is unchanged. Nothing else moves — a borrowed
 name prints a fact both the owner and a restricted caller already read, the account from the
 machine's own file and the entity from the owner's own config.
 
@@ -131,7 +131,7 @@ The live readers are observable only, and none opens a credential, key or CLI se
   ("Remaining" is the left percentage);
 - quota screens: the profile's own rate-limit classifier first, then the phrases `quota reached`,
   `out of usage`, `usage limit reached`, and the CLI's 429/403 rejection. A wall is never given an
-  invented percentage; the reset words it printed ride the account line.
+  invented percentage; the reset words it printed ride the account's table row.
 
 An unreadable pane or an unanswered usage command is one counted note (`1 seat pane could not be
 read`, `a CLI usage command did not answer`) however many seats hit it. The restricted view reads

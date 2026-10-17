@@ -14,8 +14,12 @@ import {
 } from '../information/usage.ts';
 import { realQuotaObservations, type QuotaLive } from '../information/quota-observe.ts';
 import type { Command, Io } from '../io.ts';
+import { writeJson, writeJsonError } from '../output/index.ts';
 
-export const USAGE = 'Usage: team usage [--json] [--all]\n';
+export const USAGE = `Usage: team usage [--json] [--all]
+
+Exits 0 when the report is printed, 2 when the invocation or store folder can't be read.
+`;
 
 /** The sentence a run outside any project contributes as its note: it names no git and no flag
  *  this command does not have, and it is a note with exit 0, not a refusal. */
@@ -60,12 +64,18 @@ export default usage;
  */
 export async function runUsage(argv: string[], io: Io, sources: UsageSources): Promise<number> {
   const args = readArgs(argv, [], ['json', 'all']);
+  const json = args.flags.has('json');
   if (args.error || args.rest.length) {
-    io.stderr(`team usage: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
+    const problem = args.error ?? `unexpected "${args.rest[0]}"`;
+    if (json) {
+      // The structured face: the refusal row's own id, stderr empty, the exit unchanged.
+      writeJsonError(io, 'usage.invocation', problem, null);
+    } else {
+      io.stderr(`team usage: ${problem}\n${USAGE}`);
+    }
     // exit: usage.invocation
     return 2;
   }
-  const json = args.flags.has('json');
   // `--all`: every team's seat breakdown under the full view; the report says in one note why a
   // caller the view does not widen still reads only their own team's.
   const allTeams = args.flags.has('all');
@@ -94,14 +104,25 @@ export async function runUsage(argv: string[], io: Io, sources: UsageSources): P
     // The stores folder itself could not be read: the one refusal beside the invocation (§ 2.4).
     // Its message carries the folder, which is this machine's own derivation, so only the owner
     // reads it; every other caller reads the fixed sentence with the reason left to the owner.
-    io.stderr(restricted
-      ? 'team usage: the store folder cannot be read: the owner reads the reason\n'
-      : `team usage: ${error.message}\n`);
+    const problem = restricted
+      ? 'the store folder cannot be read: the owner reads the reason'
+      : error.message;
+    if (json) {
+      writeJsonError(io, 'usage.store', problem, null);
+    } else {
+      io.stderr(`team usage: ${problem}\n`);
+    }
     // exit: usage.store
     return 2;
   }
   const report = reportOf(machine, view, now.getTime(), mineNotes, allTeams, sources.observe === undefined ? null : sources.observe(machine, view, now.getTime()));
-  io.stdout(json ? `${JSON.stringify(report, null, 2)}\n` : reportText(report));
+  if (json) {
+    // The shared envelope: `schema: { name: 'team.usage', version: 1 }` first, then the report's
+    // own keys unchanged — one document, registered under `schema/usage.schema.json`.
+    writeJson(io, 'team.usage', report);
+  } else {
+    io.stdout(reportText(report));
+  }
   // exit: usage.block
   return 0;
 }

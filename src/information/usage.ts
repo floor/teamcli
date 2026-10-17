@@ -16,6 +16,7 @@ import { TEAM_FILE } from '../file/load.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile, defaultBudgets } from '../file/validate.ts';
 import type { Io } from '../io.ts';
+import { collapseNotes, renderTable } from '../output/index.ts';
 import { machineAccountsByEntityOf, machineAccountsOf, ownerEntityOf, payingAccountOf, payingPoolOf } from './machine-accounts.ts';
 import { readMachineReadings, type MachineReading } from './machine-readings.ts';
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
@@ -1391,12 +1392,19 @@ function spendEntryOf(account: MachineAccount & { kind: 'spend' }, view: UsageVi
  * same fact said per team, so the line does not repeat under it. The full view differs only in
  * what the report carries, never here: one renderer, one shape.
  */
+/** The nine headers the output contract names for this command's machine table (§ 1.1, the
+ *  `usage` row). */
+const USAGE_HEADERS = ['ACCOUNT', 'WINDOW', 'LEFT', 'USED', 'RESETS', 'RESERVE', 'READ', 'SOURCE', 'STATE'] as const;
+
 export function reportText(report: UsageReport): string {
   const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-  const lines = [
-    `usage on this machine, ${count(report.counts.teams, 'team')}, ${count(report.counts.labs, 'lab')}, ${count(report.counts.accounts, 'account')}`,
-    '',
-  ];
+  // The machine reading is one headed table (§ 1.3), top-level and first: the contract's nine
+  // columns in its order, one row per account+window. Everything a row cannot hold as a cell —
+  // its per-team rows and its why-lines — follows as list lines in the same account order, and a
+  // lab's declaration line follows its lab's rows. The counts sentence closes the report as its
+  // summary line.
+  const rows: string[][] = [];
+  const extras: string[] = [];
   for (const lab of report.labs) {
     let at = 0;
     while (at < lab.accounts.length) {
@@ -1405,19 +1413,19 @@ export function reportText(report: UsageReport): string {
       let end = at;
       while (end < lab.accounts.length && lab.accounts[end]?.account === first.account) end += 1;
       for (const entry of lab.accounts.slice(at, end)) {
+        rows.push(accountCells(entry, report));
         if (entry.kind === 'spend') {
-          lines.push(spendText(entry, report));
-          for (const row of entry.teams) lines.push(spendRowText(row));
+          for (const row of entry.teams) extras.push(spendRowText(entry.account, row));
         } else {
-          lines.push(subscriptionText(entry, report));
-          for (const row of entry.teams) lines.push(teamRowText(row));
+          for (const row of entry.teams) extras.push(teamRowText(row));
         }
       }
       // A not-readable account's `no pattern can read this account` why is the same fact the
-      // machine line above it just said, machine-wide; every other why still prints.
-      const unreadable = first !== undefined && first.kind === 'subscription' && !first.readable;
+      // machine row above it just said, machine-wide; every other why still prints, named by its
+      // account now that the line no longer sits directly under it.
+      const unreadable = first.kind === 'subscription' && !first.readable;
       for (const why of report.unknown.filter((one) => one.account === first.account && !(unreadable && one.why === WHY_WORDS['no-pattern']))) {
-        lines.push(`  (${why.scope === 'another' ? 'another team' : why.scope}: ${why.why})`);
+        extras.push(`  ${first.account}  (${why.scope === 'another' ? 'another team' : why.scope}: ${why.why})`);
       }
       at = end;
     }
@@ -1425,22 +1433,28 @@ export function reportText(report: UsageReport): string {
       // One line per lab with no account declared, in the owner's words: the file it points at
       // is where the declaration belongs. The quota block stays silent for such a lab, so the
       // line appears once.
-      lines.push(`${lab.lab}  not known: no account declared; declare it in ${report.quota.accountsFile}`);
+      extras.push(`${lab.lab}  not known: no account declared; declare it in ${report.quota.accountsFile}`);
     } else if (lab.others !== undefined) {
-      lines.push(`${lab.lab}: ${lab.others} other account${lab.others === 1 ? '' : 's'}`);
+      extras.push(`${lab.lab}: ${lab.others} other account${lab.others === 1 ? '' : 's'}`);
     }
   }
+  const lines = [...renderTable({ headers: USAGE_HEADERS, rows, indent: '' }), ...extras];
   // The actionable view: per lab and per account the window figures, margin, state, seats and the
-  // one advice line, then the existing account lines (provenance, borrowing, per-team rows). One
-  // blank separates it from whatever precedes it — a machine with no lab at all has the header's
-  // own blank already, and the block must not open on a second one.
-  if (lines[lines.length - 1] !== '') lines.push('');
+  // one advice line, after the machine rows. One blank separates the two blocks; a report with no
+  // machine row at all has nothing above the quota block to separate from.
+  if (lines.length > 0) lines.push('');
   lines.push(...quotaText(report.quota));
   for (const block of report.teams) {
     lines.push('', block.team);
-    for (const seat of block.seats) lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}${seat.pool ? ` (${seat.pool})` : ''}`);
+    lines.push(...renderTable({
+      headers: ['SEAT', 'CLI', 'ACCOUNT'],
+      rows: block.seats.map((seat) => [seat.seat, seat.cli, `${seat.account}${seat.pool ? ` (${seat.pool})` : ''}`]),
+    }));
   }
-  for (const note of report.notes) lines.push(`note: ${noteText(note)}`);
+  // A reason repeated is one note with its count (§ 2.2), never the same line twice.
+  for (const note of collapseNotes(report.notes.map(noteText))) lines.push(`note: ${note}`);
+  lines.push('');
+  lines.push(`usage on this machine, ${count(report.counts.teams, 'team')}, ${count(report.counts.labs, 'lab')}, ${count(report.counts.accounts, 'account')}`);
   return `${lines.join('\n')}\n`;
 }
 
@@ -1451,38 +1465,39 @@ function paceWord(pace: number | null): string {
   return pace === null ? 'pace not known' : `pace ${pace.toFixed(1)}%/h`;
 }
 
-function subscriptionText(entry: ReportAccount & { kind: 'subscription' }, report: UsageReport): string {
-  if (entry.pool) entry = { ...entry, account: `${entry.account} (${entry.pool})` };
+/** The nine cells of one machine table row: the account, its window, the two percentages, when it
+ *  resets, its reserve clause, where the figure was read, from which source, and the state with
+ *  the pace word and the watch clause beside it. The pace element is omitted on a restricted row
+ *  whose newest reading is another team's — the one row whose pace is withheld (§ 3.3): nothing
+ *  stands in its place, since `pace not known` would read as a failed computation where the
+ *  figure is real and withheld. Every other row keeps its word, in either view. */
+function accountCells(entry: ReportAccount, report: UsageReport): string[] {
+  const account = entry.kind === 'subscription' && entry.pool ? `${entry.account} (${entry.pool})` : entry.account;
+  if (entry.kind === 'spend') {
+    const m = entry.machine;
+    if (m.state === 'unknown' || m.amount === null || m.currency === null || m.age === null) {
+      return [account, 'spend', '-', '-', '-', '-', '-', '-', 'unknown'];
+    }
+    const read = m.other
+      ? m.team === undefined
+        ? `read by another team, ${m.age} ago`
+        : `read by ${m.team}, ${m.age} ago`
+      : `read ${m.age} ago`;
+    return [account, 'spend', `${money(m.amount)} ${m.currency}`, '-', '-', '-', read, 'check', m.state];
+  }
   const m = entry.machine;
   if (m.state === 'unknown' || m.left === null || m.used === null) {
     // An account no CLI screen can expose a figure for says so, machine-wide: `unknown` reads as
     // a figure not yet seen, and this account cannot be seen at all.
-    if (!entry.readable) return `${entry.account}  not readable from a CLI screen`;
-    return [entry.account, m.window, 'unknown'].filter((part) => part).join('  ');
+    return [account, m.window ?? '-', '-', '-', '-', '-', '-', '-', entry.readable ? 'unknown' : 'not readable from a CLI screen'];
   }
-  const reset = m.resetsIn === null ? 'resets unknown' : `resets in ${m.resetsIn}`;
+  const reset = m.resetsIn === null ? 'unknown' : `in ${m.resetsIn}`;
   const from = m.source === 'status_line' ? 'status line' : m.source === 'check' ? 'check' : 'unknown source';
   const source = m.fallback ? `${from} (fallback)` : from;
-  const state = m.inside && m.reserve !== null ? `${m.state}, inside reserve ${m.reserve}%` : m.state;
-  // The pace element is omitted on a restricted line whose newest reading is another team's — the
-  // one line whose pace is withheld (§ 3.3): nothing stands in its place, since `pace not known`
-  // would read as a failed computation where the figure is real and withheld. Every other line
-  // keeps its word, in either view.
-  const pace = m.other && report.view === 'restricted' ? '' : `  ${paceWord(m.pace)}`;
-  return `${entry.account}  ${m.window}  left ${m.left}%  used ${m.used}%  ${reset}  ${provenanceOf(m, report)}  ${source}  ${state}${pace}${watchOf(m, report)}`;
-}
-
-function spendText(entry: ReportAccount & { kind: 'spend' }, report: UsageReport): string {
-  const m = entry.machine;
-  if (m.state === 'unknown' || m.amount === null || m.currency === null || m.age === null) {
-    return [entry.account, 'spend', 'unknown'].filter((part) => part).join('  ');
-  }
-  const read = m.other
-    ? m.team === undefined
-      ? `read by another team, ${m.age} ago`
-      : `read by ${m.team}, ${m.age} ago`
-    : `read ${m.age} ago`;
-  return `${entry.account}  spend  ${money(m.amount)} ${m.currency} left  ${read}  check  ${m.state}`;
+  const reserve = m.inside && m.reserve !== null ? `inside reserve ${m.reserve}%` : '-';
+  const pace = m.other && report.view === 'restricted' ? '' : paceWord(m.pace);
+  const state = `${m.state}  ${pace}${watchOf(m, report)}`.trimEnd();
+  return [account, m.window ?? '-', `${m.left}%`, `${m.used}%`, reset, reserve, provenanceOf(m, report), source, state];
 }
 
 /** How a machine line says where its figure came from: the caller's own reading prints as its own
@@ -1502,12 +1517,15 @@ function watchOf(m: ReportMachine, report: UsageReport): string {
   return `  (no watch is recording for ${who})`;
 }
 
+/** A team's own row, below the machine table: the account it reads first now that the row no
+ *  longer sits under the account's own line, then the team, then the figure the team's reading
+ *  holds. */
 function teamRowText(row: ReportTeamRow): string {
-  return `  ${row.team}  ${budgetLine(row.row).slice(row.row.account.length)}  ${paceWord(row.row.pace)}${borrowedClause(row.borrowedFrom)}`;
+  return `  ${row.row.account}  ${row.team}  ${budgetLine(row.row).slice(row.row.account.length + 2)}  ${paceWord(row.row.pace)}${borrowedClause(row.borrowedFrom)}`;
 }
 
-function spendRowText(row: ReportSpendRow): string {
-  return `  ${row.team}  spend  ${money(row.reading.amount)} ${row.reading.currency} left  read ${row.reading.age} ago  check  ${row.reading.state}${borrowedClause(row.borrowedFrom)}`;
+function spendRowText(account: string, row: ReportSpendRow): string {
+  return `  ${account}  ${row.team}  spend  ${money(row.reading.amount)} ${row.reading.currency} left  read ${row.reading.age} ago  check  ${row.reading.state}${borrowedClause(row.borrowedFrom)}`;
 }
 
 /** The borrowing clause a team's row carries: the owning entity, in the parenthesised tail the

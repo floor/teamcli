@@ -73,9 +73,9 @@ test('a watch persists a Grok zero without team budgets; usage counts machine su
   const usage = testIo(root, { kind: 'owner' });
   expect(await runUsage([], usage, { home, now: () => new Date(NOW + 120000) })).toBe(0);
   expect(usage.out).toContain('2 accounts');
-  expect(usage.out).toContain('xai  weekly  left 0%  used 100%  resets unknown');
+  expect(usage.out).toMatch(/xai\s+weekly\s+0%\s+100%\s+unknown/);
   expect(usage.out).toContain('2m ago');
-  expect(usage.out).toContain('google-antigravity  not readable from a CLI screen');
+  expect(usage.out).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+not readable from a CLI screen/);
   expect(usage.out).toContain('lead  grok  xai');
   // The seat's own vendor forms a lab with no account under it, and says so; the machine's
   // readings are counted, so the "nothing is counted" sentence never prints.
@@ -97,7 +97,7 @@ test('machine subscriptions and a persisted reading remain visible outside any t
   expect(machine.counts).toEqual({ teams: 0, labs: 2, accounts: 2 });
   const report = reportOf(machine, view, NOW, []);
   expect(report.teams).toEqual([]);
-  expect(reportText(report)).toContain('xai  weekly  left 0%');
+  expect(reportText(report)).toMatch(/xai\s+weekly\s+0%/);
 });
 
 test('the entity form of the machine list counts the same figures, the zero among them', () => {
@@ -111,8 +111,8 @@ test('the entity form of the machine list counts the same figures, the zero amon
   expect(machine.machineAccounts).toEqual(['google-antigravity', 'xai']);
   expect(machine.counts).toEqual({ teams: 0, labs: 2, accounts: 2 });
   const text = reportText(reportOf(machine, view, NOW, []));
-  expect(text).toContain('xai  weekly  left 0%  used 100%  resets unknown');
-  expect(text).toContain('google-antigravity  not readable from a CLI screen');
+  expect(text).toMatch(/xai\s+weekly\s+0%\s+100%\s+unknown/);
+  expect(text).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+not readable from a CLI screen/);
   expect(text).not.toContain('nothing is counted');
 });
 
@@ -127,8 +127,8 @@ test('machine updates merge accounts and pools, reject older updates, and refres
   expect(readings.find((one) => one.pool === 'claude-gpt')?.resetsAt).toBe(NOW + 3601000);
   const view = { full: true, mine: null };
   const text = reportText(reportOf(machineUsage(home, NOW + 60000, view), view, NOW + 60000, []));
-  expect(text).toContain('google-antigravity (gemini)  weekly  left 10%');
-  expect(text).toContain('google-antigravity (claude-gpt)  weekly  left 80%');
+  expect(text).toMatch(/google-antigravity \(gemini\)\s+weekly\s+10%/);
+  expect(text).toMatch(/google-antigravity \(claude-gpt\)\s+weekly\s+80%/);
   expect(payingPoolOf({ cli: 'agy', launch: 'agy', vendor: 'anthropic', model: 'Gemini 3.1' })).toBe('gemini');
   expect(payingPoolOf({ cli: 'antigravity', launch: 'agy', vendor: 'google', model: 'Claude Opus' })).toBe('claude-gpt');
 });

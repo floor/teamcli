@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/usage.schema.json",
+  "title": "team usage --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "at",
+    "view",
+    "mine",
+    "counts",
+    "labs",
+    "quota",
+    "unknown",
+    "notes",
+    "teams"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.usage"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "view": {
+      "type": "string",
+      "enum": [
+        "full",
+        "restricted"
+      ]
+    },
+    "mine": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "teams",
+        "labs",
+        "accounts"
+      ],
+      "properties": {
+        "teams": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "labs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "accounts": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "labs": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "quota": {
+      "type": "object"
+    },
+    "unknown": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "teams": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}
