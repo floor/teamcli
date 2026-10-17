@@ -32,7 +32,7 @@ import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { emptySession, liveHold, readState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
-import { seatModel } from '../status/statusline.ts';
+import { modelDiffers, seatModel } from '../status/statusline.ts';
 import type { Standing } from '../store/store.ts';
 import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
@@ -280,7 +280,9 @@ function signingDifferences(team: TeamFile, state: SessionState, live: Live, roo
     const record = findAgent(home, { team: teamId, seat: seat.name });
     if (!record) continue;
     const { model, version } = record.signing;
-    if (running.model === model && running.version === version) continue;
+    // The comparison is the file's own (`modelDiffers`): a name in another word order, or a
+    // version spelled inside the record's model name, is the model the pane runs.
+    if (!modelDiffers(running, { model, version })) continue;
     // The record's own words, unless the file still declares exactly what the record signs: then
     // the seat's display spelling is the record's, the spelling every other line gives it.
     const signs = seat.model === model && seat.version === version ? declaredModel(seat) : `${model} ${version}`;
