@@ -213,6 +213,24 @@ describe('registering an unnamed pane with --pane', () => {
     expect(readAgents(w.home)).toHaveLength(0);
   });
 
+  test('is refused when herdr already names the pane as another agent', async () => {
+    const w = world();
+    const calls: string[] = [];
+    const r = await register(w, ['lead', '--pane', 'w2:p2'], {
+      agents: () => [{ ...agent('worker'), pane: 'w2:p2' }],
+      foreground: () => ['claude'],
+      ...named(calls),
+    });
+
+    // `--pane` adopts a pane herdr never named: one it already answers to as another agent is
+    // that agent's, and adopting it would put a second name on a running pane.
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('pane w2:p2 is named worker in session "acme"');
+    expect(r.err).toContain('--pane names a pane herdr never named, nothing was registered');
+    expect(calls).toEqual([]);
+    expect(written(w)).toEqual(NOTHING);
+  });
+
   test('records the pane anyway when herdr does not take the rename, and says so', async () => {
     const w = world();
     const r = await register(w, ['lead', '--pane', 'w2:p2'], {

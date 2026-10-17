@@ -7,7 +7,8 @@
 // `up`), the same reading of herdr and the pane's screen, and the state and registry writes a
 // launch of it would have made. `--pane <id>` names the pane outright — for one herdr never
 // named, a seat started before this team managed the session: the pane is verified the same way,
-// named as the seat through herdr (the rename a launch runs), and recorded the same way.
+// named as the seat through herdr (the rename a launch runs), and recorded the same way. A pane
+// herdr already names as another agent is refused, never renamed and adopted.
 //
 // What it does not write is what only a launch can know: the state's `model`, `version`,
 // `effort` and `launch_line` are "what this launch declared", and a pane started by hand
@@ -237,6 +238,14 @@ function paneTakenRefused(out: Io, pane: string, other: string, session: string)
   return 1;
 }
 
+function paneNamedRefused(out: Io, pane: string, other: string, session: string): number {
+  out.stderr(
+    `team register: pane ${plainLine(pane)} is named ${plainLine(other)} in session "${plainLine(session)}"; --pane names a pane herdr never named, nothing was registered\n`,
+  );
+  // exit: register.pane-named
+  return 1;
+}
+
 function noCliRefused(out: Io, name: string, pane: string): number {
   out.stderr(
     `team register: ${plainLine(name)}: pane ${plainLine(pane)} holds no process in front of its shell; nothing was registered\n`,
@@ -410,6 +419,13 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   if (paneArg !== undefined) {
     pane = paneArg;
     listed = agents.find((agent) => agent.pane === paneArg);
+    // `--pane` is for a pane herdr never named. One herdr already answers to as another agent
+    // is that agent's: adopting it would put a second name on a running agent's pane, and the
+    // seat's record would point `send` at a process that is someone else's. A pane herdr names
+    // as this seat, or lists with no name at all, is no adoption of another's.
+    if (listed !== undefined && listed.name !== null && listed.name !== name) {
+      return paneNamedRefused(out, pane, listed.name, session);
+    }
   } else {
     listed = agents.find((agent) => agent.name === name);
     const namedCount = agents.filter((agent) => agent.name === name).length;
@@ -417,72 +433,22 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     if (namedCount > 1) return ambiguousRefused(out, name, session, namedCount);
     pane = listed.pane;
   }
-  // A pane is one seat's: the pane `--pane` names must not be one another seat of this session's
-  // record already holds. The seat's own record is judged below, as a named run's is.
-  if (paneArg !== undefined) {
-    const other = Object.entries(recorded.seats).find(([seat, state]) => seat !== name && state.pane === paneArg);
-    if (other !== undefined) return paneTakenRefused(out, paneArg, other[0], session);
-  }
+  // A pane is one seat's: the pane this run records — named by `--pane`, or the one herdr names
+  // the seat on — must not be one another seat of this session's record already holds. A pane
+  // herdr renamed to this seat, but recorded for another, would otherwise be held twice.
+  const holder = Object.entries(recorded.seats).find(([seat, state]) => seat !== name && state.pane === pane);
+  if (holder !== undefined) return paneTakenRefused(out, pane, holder[0], session);
 
-  // Already recorded on this pane, and ready: the seat is not relaunched and the pane is not
-  // read for a screen. The record a launch writes is written again from the file as it now
-  // stands — the signing, the roster, the team's project pointers and the address — so the
-  // repair `team check` names lands where the seat stands, and a file that gained `in_project`
-  // or a new signing since the launch reaches the registry. The session's own record is left
-  // exactly as it is. A record that names another pane — or no pane at all, a launch this
-  // command did not finish — is not overwritten from here: that is the owner's `team down`,
-  // then `team up`.
-  if (held !== undefined && held.pane === pane && held.stage === 'ready') {
-    // One more repair from the same run, and a dry run paints nothing for it either: the seat's
-    // two sidebar lines are re-applied from the file, so a label or display that drifted is put
-    // back where the seat stands.
-    // The record this path can still owe is the launch's own write from the file as it now
-    // stands — the roster line among the rest. Where the registry holds a record of the team,
-    // the permission bridge (`src/permissions/who.ts`) reads that roster as the record of who
-    // its seats are: a seat the roster does not list has no record there whatever the approved
-    // file declares, and every gate wired to the bridge refuses it what the file says it holds.
-    // The line goes in exactly as a launch writes it, the signing and the project pointers
-    // included. A team the registry holds no record of is left alone: the bridge reads the
-    // file's own declaration then, and nothing is owed.
-    const roster = rosterOf(sources.home, root);
-    const unlisted = roster !== null && !roster.some((line) => line.seat === name);
-    let refreshed = false;
-    let wroteRoster = false;
-    if (!dry) {
-      relabel(out, sources, session, seat, pane, listed?.workspace, name);
-      if (roster !== null) {
-        const refreshedAt = sources.now();
-        const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev }, seat, pane, held.id);
-        if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
-        else {
-          refreshed = true;
-          wroteRoster = unlisted;
-          // The address, re-read the way a launch reads it, on the id the write above returned.
-          const address = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, pane, session);
-          if (address.note) logLine(dir, 'register', callerLabel(walked), address.note, refreshedAt);
-          logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${held.id ?? wrote.id} — pane ${pane}`, refreshedAt);
-          if (wroteRoster) logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${pane}`, refreshedAt);
-        }
-      }
-    }
-    const ended = `already registered — pane ${plainLine(pane)}`;
-    if (wroteRoster) out.stdout(`${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written\n`);
-    else if (unlisted && dry) out.stdout(`${plainLine(name)}: ${ended}; the team registry's roster would be written\n`);
-    else if (roster === null) out.stdout(`${plainLine(name)}: ${ended}; nothing was written\n`);
-    else if (dry || refreshed) out.stdout(`${plainLine(name)}: ${ended}; the record ${dry ? 'would be' : 'was'} refreshed from the file, nothing relaunched\n`);
-    else out.stdout(`${plainLine(name)}: ${ended}; nothing was written\n`);
-    // exit: register.already
-    return 0;
-  }
+  // A record that names another pane — or no pane at all, a launch this command did not finish —
+  // is not overwritten from here: that is the owner's `team down`, then `team up`.
   if (held !== undefined && held.pane !== pane) {
     return recordedRefused(out, name, pane, held.pane);
   }
 
   // What the pane is: a process in front of the pane's own shell that the seat's CLI profile
-  // names — the file's `cli` is the authority, and herdr's argv0 the reading — and a screen the
-  // seat's profile reads as the seat at its prompt. A dialog, a CLI that has exited, another
-  // CLI in front, or a reading this version does not recognise is not a seat to record;
-  // neither is a shell behind a name herdr still lists for it.
+  // names — the file's `cli` is the authority, and herdr's argv0 the reading. Read on every
+  // path, the already-recorded one included: a pane whose CLI has exited or been replaced is
+  // not the seat to record, whatever its record says it is.
   const procs = sources.processInfo(session, pane);
   // `--pane` names a pane another session's window holds just as well: herdr knowing nothing of
   // it in this one is the reading that says so, and is its own refusal.
@@ -498,6 +464,61 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   if (!reportedLiveAgent(live, profile.processNames)) {
     return cliRefused(out, name, pane, seat.cli);
   }
+
+  // Already recorded on this pane, and ready: the seat is not relaunched and its screen is not
+  // read. The record a launch writes is written again from the file as it now stands — the
+  // signing, the roster, the team's project pointers and the address — so the repair `team
+  // check` names lands where the seat stands, and a file that gained `in_project` or a new
+  // signing since the launch reaches the registry. The session's own record is left exactly as
+  // it is.
+  if (held !== undefined && held.pane === pane && held.stage === 'ready') {
+    // One more repair from the same run, and a dry run paints nothing for it either: the seat's
+    // two sidebar lines are re-applied from the file, so a label or display that drifted is put
+    // back where the seat stands.
+    // The record this path can still owe is the launch's own write from the file as it now
+    // stands — the roster line among the rest. Where the registry holds a record of the team,
+    // the permission bridge (`src/permissions/who.ts`) reads that roster as the record of who
+    // its seats are: a seat the roster does not list has no record there whatever the approved
+    // file declares, and every gate wired to the bridge refuses it what the file says it holds.
+    // The line goes in exactly as a launch writes it, the signing and the project pointers
+    // included. A team the registry holds no record of is written here too — the team record,
+    // the seat's agent record and its roster line, exactly what a launch writes — so a team
+    // started before this version kept registry records is repaired the same way, and the
+    // bridge and `team check` read the same team for it as for any other.
+    const roster = rosterOf(sources.home, root);
+    const unlisted = roster === null || !roster.some((line) => line.seat === name);
+    let refreshed = false;
+    let wroteRoster = false;
+    if (!dry) {
+      const refreshedAt = sources.now();
+      relabel(out, sources, session, seat, pane, listed?.workspace, name);
+      // The audit lines a delegated and a granted act write, the same ones the launch path
+      // writes below: this path is that act too, and its early return must not skip them.
+      if (delegated !== null) logDelegated(dir, delegated, 'up', refreshedAt, 'register');
+      if (grantedSeat !== null) logGranted(dir, grantedSeat, 'up', refreshedAt, 'register');
+      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session, devMode: dev }, seat, pane, held.id);
+      if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
+      else {
+        refreshed = true;
+        wroteRoster = unlisted;
+        // The address, re-read the way a launch reads it, on the id the write above returned.
+        const address = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, pane, session);
+        if (address.note) logLine(dir, 'register', callerLabel(walked), address.note, refreshedAt);
+        logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${held.id ?? wrote.id} — pane ${pane}`, refreshedAt);
+        if (wroteRoster) logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${pane}`, refreshedAt);
+      }
+    }
+    const ended = `already registered — pane ${plainLine(pane)}`;
+    if (wroteRoster) out.stdout(`${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written\n`);
+    else if (unlisted && dry) out.stdout(`${plainLine(name)}: ${ended}; the team registry's roster would be written\n`);
+    else if (dry || refreshed) out.stdout(`${plainLine(name)}: ${ended}; the record ${dry ? 'would be' : 'was'} refreshed from the file, nothing relaunched\n`);
+    else out.stdout(`${plainLine(name)}: ${ended}; nothing was written\n`);
+    // exit: register.already
+    return 0;
+  }
+
+  // The screen: the seat at its prompt. A dialog, or a reading this version does not recognise,
+  // is not a seat to record; the already path above does not read it.
   const text = sources.paneText(session, pane) ?? undefined;
   const screen = sources.screen ? sources.screen(seat.cli, text) : readScreen(seat.cli, text);
   if (screen.kind !== 'idle' && screen.kind !== 'working') {

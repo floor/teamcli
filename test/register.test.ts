@@ -11,10 +11,13 @@
 //     taken is on the pane herdr named;
 // (c) registers herdr does not place as that seat are refused, and nothing at all is written:
 //     no agent of the name in the session, two agents of the name, a pane holding a shell, a
-//     pane whose foreground process is not the one the file's `cli` names, and a screen the
-//     file-cli's reader does not know;
+//     pane whose foreground process is not the one the file's `cli` names, a screen the
+//     file-cli's reader does not know, and a pane another seat's record already holds, whether
+//     `--pane` named it or herdr did;
 // (d) the run is repeatable: the second run says `already registered` and writes the registry
-//     record again from the file, without reading the pane again, and `--dry-run` writes nothing.
+//     record again from the file, re-reading the pane's live CLI — a pane whose CLI exited or
+//     was replaced is refused, never re-recorded as running — while its screen is not read
+//     again; `--dry-run` writes nothing.
 // Fake herdr throughout, a temporary home and a pinned caller: no live session is read.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -27,7 +30,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { AGENT_ID_PATTERN, findAgent, readAgents } from '../src/registry/agents.ts';
 import { readTeams, teamIdOf } from '../src/registry/teams.ts';
 import { defaultSocketsDir } from '../src/send/address.ts';
-import { LOG_FILE, readState, SEAT_ID_PATTERN, STATE_FILE } from '../src/state.ts';
+import { emptySession, LOG_FILE, readState, SEAT_ID_PATTERN, STATE_FILE, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T21:00:00Z');
@@ -242,22 +245,48 @@ describe('a running seat', () => {
     }
   });
 
-  test('registered twice: the second run refreshes the record without reading the pane again', async () => {
+  test('registered twice: the second run refreshes the record, re-reads the CLI and not the screen', async () => {
     const w = world();
     expect((await register(w, ['lead'])).code).toBe(0);
     const before = readState(w.dir).sessions.acme?.seats.lead;
 
     const second = await register(w, ['lead'], {
-      processInfo: () => {
-        throw new Error('the pane must not be read again');
+      paneText: () => {
+        throw new Error('the screen must not be read again');
       },
     });
 
     expect(second.code).toBe(0);
     expect(second.out).toContain('lead: already registered — pane w1:p1; the record was refreshed from the file, nothing relaunched');
-    expect(second.led).toEqual(['session acme', 'agents acme']);
+    // The pane is re-read for the process in front of its shell and the CLI it runs — a pane
+    // whose CLI left is not the seat — and not for its screen: the dialog wait is not repeated.
+    expect(second.led).toEqual(['session acme', 'agents acme', 'processes acme w1:p1', 'foreground acme w1:p1']);
     expect(readState(w.dir).sessions.acme?.seats.lead).toEqual(before);
     expect(readAgents(w.home)).toHaveLength(1);
+  });
+
+  test('a pane whose CLI exited is refused, not re-recorded as running', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+    const state = readFileSync(join(w.dir, STATE_FILE), 'utf8');
+
+    const second = await register(w, ['lead'], { processInfo: () => ({ shell: 400, foreground: [] }) });
+
+    expect(second.code).toBe(1);
+    expect(second.err).toContain('lead: pane w1:p1 holds no process in front of its shell; nothing was registered');
+    // The ready record stands exactly as the launch wrote it: nothing was refreshed.
+    expect(readFileSync(join(w.dir, STATE_FILE), 'utf8')).toBe(state);
+  });
+
+  test('a pane whose CLI was replaced is refused, not re-recorded as the seat', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+
+    const second = await register(w, ['lead'], { foreground: () => ['codex'] });
+
+    expect(second.code).toBe(1);
+    expect(second.err).toContain('lead: pane w1:p1 holds no `claude-code` process; nothing was registered');
+    expect(readState(w.dir).sessions.acme?.seats.lead?.stage).toBe('ready');
   });
 
   test('--dry-run verifies the pane the same way and writes nothing', async () => {
@@ -297,6 +326,24 @@ describe('a pane herdr does not place as that seat', () => {
     expect(r.code).toBe(1);
     expect(r.err).toContain('holds no process in front of its shell; nothing was registered');
     expect(written(w)).toEqual(NOTHING);
+  });
+});
+
+describe('a pane another seat of the session holds', () => {
+  test('is refused on a run without --pane: one pane is one seat\'s', async () => {
+    const w = world();
+    // Herdr answers to `lead` on the pane `worker`'s record still holds — a pane renamed in
+    // herdr while the old record stayed. Recording it here would hold one pane for two seats.
+    updateState(w.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: PANE };
+    });
+
+    const r = await register(w, ['lead']);
+
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("pane w1:p1 is worker's in session \"acme\"; nothing was registered");
+    expect(readState(w.dir).sessions.acme?.seats.lead).toBeUndefined();
+    expect(readAgents(w.home)).toHaveLength(0);
   });
 });
 
