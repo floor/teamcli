@@ -16,7 +16,7 @@ active time, and pane.
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
 | `--all` | — | include the seats whose STATUS reads `stopped`; without it those rows are dropped, and every other state is listed either way |
 | `--watch` | — | refresh the table every 2 seconds until interrupted |
-| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`), each seat carrying its own reading as `state` and `state_source`, and `blind: true` or `dev_mode: true` where they apply |
+| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`), each seat carrying its own reading as `state` and `state_source`, and `blind: true` where it applies |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Columns
@@ -24,7 +24,7 @@ active time, and pane.
 | Column | Meaning |
 | --- | --- |
 | SEAT | the seat name |
-| ID | the stable seat handle (`seat_<12 hex>`), or `-` before first launch; `(dev)` after the handle says the registration that wrote the record ran in dev mode |
+| ID | the stable seat handle (`seat_<12 hex>`), or `-` before first launch |
 | ROLE | the seat's role (`temporary` when no declared seat matches) |
 | CLI | the CLI profile (`claude-code`, `codex`, `cursor`, `antigravity`, `grok`) |
 | MODEL | the live model reading or declared display |
@@ -120,8 +120,7 @@ exit 0
 
 `--json` prints the same registry as one document: each seat's `status` is the comparison's
 phrase about the record, and its own reading — the table's `STATE` and `SOURCE` — rides beside it
-as `state` and `state_source`, with `blind: true` only where it applies and `dev_mode: true`
-where the registration that wrote the record ran in dev mode:
+as `state` and `state_source`, with `blind: true` only where it applies:
 
 ```console
 $ team seats --json ; echo "exit $?"
