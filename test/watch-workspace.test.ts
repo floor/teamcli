@@ -15,6 +15,7 @@ import { runTeamCheck } from '../src/check/team.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
+import { beatWatch, placedWatch } from '../src/watch/pane.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { testIo } from './helpers.ts';
@@ -337,5 +338,97 @@ describe('`team check` and the heartbeat', () => {
     const { code, out } = check(NOW);
     expect(code).toBe(1);
     expect(out).toContain(`difference: no watch has run for this session\n  repair: team watch --session ${SESSION}`);
+  });
+});
+
+// The review of the workspace hand-over: its four edges. A lone run aimed at another session
+// must not make a workspace in that session or write this team's state there; the pane's own
+// first pass must read the file the hand-over recorded, though herdr names no pane to it; that
+// pass must keep the pane and workspace the hand-over recorded before any pid was written; and
+// a typing refused after the workspace was made must close it and unset the record.
+describe('the hand-over edges', () => {
+  test('a lone run aimed at another session makes no workspace there and writes no watch', async () => {
+    place();
+    const creates: { session: string; cwd: string; label: string }[] = [];
+    const runs: { pane: string; command: string }[] = [];
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runWatch(['--session', 'other', ...FILE], io, watchSources({
+      ...handingOver(runs),
+      createWorkspace: (session, cwd, label) => {
+        creates.push({ session, cwd, label });
+        return { pane: 'w9:p1', workspace: 'w9' };
+      },
+    }));
+    expect(code, io.out + io.err).toBe(0);
+    expect(creates).toEqual([]);
+    expect(runs).toEqual([]);
+    expect(state().sessions.other?.watch).toBeUndefined();
+    // It reads and reports here instead, naming the foreign session.
+    expect(io.out).toContain('the session "other" is not this file\'s "acme-web": its readings are not saved');
+  });
+
+  test('the pane\'s own first pass reads the recorded file, though the walk cannot place it', async () => {
+    place();
+    updateState(join(root, '.agents'), (held) => {
+      (held.sessions[SESSION] ??= emptySession()).watchdog = { file: '.agents/team.yaml', pane: 'w9:p1' };
+    });
+    record({ heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9' });
+    const io = testIo(root, { kind: 'unplaced', reason: 'it runs in a herdr pane without an agent' });
+    // The pass's own write is read inside the wait that follows it: a watch that stops clears its
+    // record in the loop's finally.
+    let during: ReturnType<typeof readState>['sessions'][string]['watch'];
+    const code = await runWatch(['--session', SESSION], io, watchSources({
+      pid: 4242,
+      ownPane: () => 'gone',
+      wait: async () => {
+        during = state().sessions[SESSION]?.watch;
+        return false;
+      },
+    }));
+    expect(code, io.err + io.out).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain(`watching the session "${SESSION}"`);
+    // The first pass records its pid and keeps the pane and workspace the hand-over recorded.
+    expect(during).toEqual({
+      pid: 4242, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9',
+    });
+  });
+
+  for (const [said, ownPane] of [
+    ['herdr says the pane is gone', () => 'gone' as const],
+    ['herdr cannot say', () => null],
+  ] as const) {
+    test(`a first pass where ${said} keeps the recorded pane and workspace`, () => {
+      place();
+      record({ heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9' });
+      const found = placedWatch(join(root, '.agents'), SESSION, 4242, ownPane);
+      expect(found).toBe('keep');
+      beatWatch(join(root, '.agents'), SESSION, 4242, NOW.toISOString(), 'keep');
+      expect(state().sessions[SESSION]?.watch).toEqual({
+        pid: 4242, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9',
+      });
+    });
+  }
+
+  test('a refused typing closes the workspace it made and unsets the file record', async () => {
+    place();
+    // A file a flagless watch would not read: the hand-over records it for the pane.
+    const other = join(root, '.agents/other.yaml');
+    writeFileSync(other, EXAMPLE);
+    const closed: { session: string; workspace: string }[] = [];
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runWatch(['--file', '.agents/other.yaml'], io, watchSources({
+      ...handingOver(),
+      paneRun: () => false,
+      closeWorkspace: (session, workspace) => {
+        closed.push({ session, workspace });
+        return true;
+      },
+    }));
+    expect(code, io.err + io.out).toBe(1);
+    expect(io.err).toBe('team watch: the watch did not start in its workspace\n');
+    expect(closed).toEqual([{ session: SESSION, workspace: 'w9' }]);
+    expect(state().sessions[SESSION]?.watchdog).toBeUndefined();
+    expect(state().sessions[SESSION]?.watch).toBeUndefined();
   });
 });

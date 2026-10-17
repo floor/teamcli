@@ -11,7 +11,7 @@ import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, typeText, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, typeText, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState } from '../state.ts';
@@ -94,6 +94,8 @@ export type WatchSources = {
   createWorkspace?(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   /** Types the watch's command into its pane. False when herdr refused. */
   paneRun?(session: string, pane: string, command: string): boolean;
+  /** Closes a workspace a failed start made. Absent in a test with no workspaces. */
+  closeWorkspace?(session: string, workspace: string): boolean;
   /** The command a watch pane runs: the one `up` starts. Defaults to `up`'s own. */
   watchCommand?(session: string): string;
 };
@@ -131,6 +133,7 @@ export const realWatchSources: WatchSources = {
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, session === 'default' ? undefined : session),
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, session === 'default' ? undefined : session),
   paneRun: (session, pane, command) => paneRun(pane, command, session === 'default' ? undefined : session),
+  closeWorkspace: (session, workspace) => workspaceClose(workspace, session === 'default' ? undefined : session),
   watchCommand,
 };
 
@@ -153,6 +156,13 @@ function watchdogGrant(
   const watchPid = readState(cwd).sessions[name]?.watch?.pid;
   if (watchPid === process.pid) return { file: recorded.file };
   if (watchPid === undefined && !recorded.pane) return { wait: true };
+  // The hand-over window: the file and the pane are recorded, and the watch's first pass — the
+  // command typed into that pane — has not written its pid yet. Its own call can read as
+  // unplaced when herdr names no pane to it; a caller the walk provably places elsewhere is
+  // still refused while the record is fresh.
+  const elsewhere = caller.kind === 'owner' || caller.kind === 'owner-no-tty' || caller.kind === 'seat'
+    || (caller.kind === 'pane' && caller.pane !== recorded.pane);
+  if (watchPid === undefined && recorded.pane && !elsewhere) return { file: recorded.file };
   return {
     refuse: `only the watch this session records may read the file up recorded; this call is ${describeCaller(caller)}`,
   };
@@ -281,7 +291,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // An owner who asked to watch without nudges or notices keeps this terminal — those flags are
   // the owner's, and the pane's own `team watch` cannot carry them — and so does a build with no
   // workspace to make (a test's own sources), which runs the watch here as one always did.
-  if (isOwner(placed) && !args.flags.has('no-nudge') && !args.flags.has('no-notify')
+  // The hand-over is the file's own session only: a lone run aimed at another session (anyone
+  // may watch one) would otherwise make the workspace in that session and write this team's
+  // state before the foreign-session reading is even said. It reads and reports here instead.
+  if (isOwner(placed) && session === first.team.session && !args.flags.has('no-nudge') && !args.flags.has('no-notify')
     && sources.createWorkspace && sources.paneRun) {
     const label = watchLabel(first.team.project);
     const made = sources.createWorkspace(session, first.root, label);
@@ -301,6 +314,15 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         io.stdout(`team watch: the watch runs in its own workspace (${label}, pane ${made.pane})\n`);
         // exit: watch.started
         return 0;
+      }
+      // The workspace was made and the typing refused: nothing runs in it. Close it and unset
+      // the file's record, so the state says what is true — no workspace and no watch.
+      sources.closeWorkspace?.(session, made.workspace);
+      if (file !== undefined) {
+        updateState(dir, (state) => {
+          const current = state.sessions[session];
+          if (current) delete current.watchdog;
+        });
       }
     }
     io.stderr('team watch: the watch did not start in its workspace\n');
