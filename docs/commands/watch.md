@@ -453,35 +453,6 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-The live edit disables the check immediately. The owner can also record the change:
-
-```console
-$ team approve ; echo "exit $?"
-team approve: warning, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-./.agents/team.yaml: against the copy approved on 2026-10-04T09:00:00.000Z:
-
-  + 10: watch:
-  + 11:   interval: 120s
-  + 12:   checks:
-  + 13:     memory: off
-  + 14:
-
-Needs a new approval: `watch.checks` changed.
-Ceilings this approval fixes: 4 seats at most, 2 temporary.
-Seats: 2 (claude-keeper, claude-beacon).
-approval #2 for this project; the last one was on 2026-10-04; key fe21ef6293de.
-Owner-authorization fingerprint: 056248e0763543ab3fed6f7d26c49a46c7188868d50cec2ae241ce1376813df8
-Approved. The record is in ~/.config/team/beacon-<hash>; signed with key fe21ef6293de; check the rest with `team doctor`.
-exit 0
-```
-
-```console machine=tight
-$ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
-exit 0
-```
-
 `up` leaves a watch running as a background process, so a second one refuses rather than reading the same
 session twice:
 

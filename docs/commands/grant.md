@@ -12,8 +12,8 @@ identity, an agent id for a seat or a team id for `@team`.
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run]
 
 In the first form `<seat>` must name the file's orchestrator. The grant uses the file's session.
-`--scope` is a nonempty comma-separated list of distinct words: `up`, `down`, `approve`, `init`,
-`reload`, `swap`. These words retain their existing admission checks and limits.
+`--scope` is a nonempty comma-separated list of distinct words: `up`, `down`, `init`, `reload`,
+`swap`. These words retain their existing admission checks and limits.
 
 In the second form the capability list is comma-separated, from the closed vocabulary `write`,
 `read`, `review`, `gate`, `merge`, `deploy`, `act-as`, `use-broker`; the record stores it sorted
