@@ -13,13 +13,17 @@ the process is the one the seat's CLI profile names — the file's `cli` is the 
 `argv0` for the pane (or the agent name herdr reports for it) the reading — and that the screen is
 the seat at its prompt — `idle` or `working`. A
 dialog, a CLI that has exited, another CLI in front, or a reading this version does not recognise
-is not a seat to record. Nothing is typed into the pane, and no workspace is created, closed or
-renamed.
+is not a seat to record. Nothing is typed into the pane, and no workspace is created or closed.
+The seat's two sidebar lines are written the way `up` and `add` write them after a launch: the
+workspace's label (`workspaceLabel`) and the pane's display line (`displayAgent`), re-applied from
+the file so a label or display that drifted is put back where the seat stands.
 
 `--pane <id>` is for a pane herdr never named — a seat started before this team managed the
 session. The pane is held to the same reading, named as the seat herdr would have named it at
-launch (the rename a launch runs, through herdr), and the record is written for it. Without the
-flag, the seat's name finds the pane herdr already answers to.
+launch (the rename a launch runs, through herdr), and the record is written for it. A pane herdr
+already names — as this seat, or as another agent — is not one `--pane` adopts: the seat's own
+name is recorded the same way without the flag, and a pane herdr names as another agent is
+refused. Without the flag, the seat's name finds the pane herdr already answers to.
 
 What it does not write is what only a launch knows: the state's `model`, `version`, `effort` and
 `launch_line` are what a launch declared, and a pane started by hand declares nothing this run can
@@ -52,14 +56,16 @@ directory, and the registry's agent and roster for the seat, the address a cross
 reaches it at included: the pane's live session socket, read and recorded the way a launch records
 it. A record that names another pane, or
 no pane at all, is never overwritten from here: stopping the team and starting it again is the
-owner's own act. On a seat the pane already holds ready, the run is the repair: the registry
-record — the signing, the roster, the address and the team's project pointers — is written again
-from the file, and the session's own record is left exactly as it is.
+owner's own act. On a seat the pane already holds ready, the run is the repair: the pane's live
+CLI is verified again — a pane whose CLI exited or was replaced is refused, never re-recorded as
+running — and the registry record — the signing, the roster, the address and the team's project
+pointers — is written again from the file, and the session's own record is left exactly as it is.
 
-A team the registry holds no record of is left alone — the bridge reads the file's own declaration
-then — and the run says nothing was written. Where the registry holds a record of the team and its
-roster does not list the seat, the roster line is written, exactly as a launch writes it, and the
-run says so. The roster is the seat's identity for the permission bridge
+A team the registry holds no record of — a team started before this version kept registry
+records — is written by the repair too: the team record, the seat's agent record and its roster
+line, exactly as a launch writes them, and the run says so. Where the registry holds a record of
+the team and its roster does not list the seat, the roster line is written, exactly as a launch
+writes it, and the run says so. The roster is the seat's identity for the permission bridge
 (`src/permissions/who.ts`): a seat the roster does not list has no record there whatever the file
 declares, and every gate wired to the bridge refuses it what the file says it holds.
 
@@ -110,7 +116,8 @@ declares, and every gate wired to the bridge refuses it what the file says it ho
 | `team register: <name>: pane <pane> holds no process in front of its shell; nothing was registered` | 1 |
 | `team register: <name>: pane <pane> holds no \`<cli>\` process; nothing was registered` | 1 |
 | `team register: <name>: its pane is not the seat at its prompt (<reading>); nothing was registered` | 1 |
-| `team register: pane <pane> is <other seat>'s in session "<session>"; nothing was registered` — `--pane` named a pane another seat's record holds | 1 |
+| `team register: pane <pane> is named <other agent> in session "<session>"; --pane names a pane herdr never named, nothing was registered` — `--pane` named a pane herdr already names as another agent | 1 |
+| `team register: pane <pane> is <other seat>'s in session "<session>"; nothing was registered` — the pane this run would record is one another seat's record already holds | 1 |
 | `team register: no pane <pane> in session "<session>"; nothing was registered` — `--pane` named a pane this run can read no process for | 1 |
 
 ## Example

@@ -3826,6 +3826,15 @@ scene('register.pane-taken', async (place) => {
   });
   return show(await registered(place, ['lead', '--pane', 'w2:p2'], owner, { agents: () => [] }), "pane w2:p2 is worker's in session");
 });
+scene('register.pane-named', async (place) => {
+  write(place, TEAM);
+  return show(
+    await registered(place, ['lead', '--pane', 'w2:p2'], owner, {
+      agents: () => [{ ...agent('worker'), pane: 'w2:p2' }],
+    }),
+    'pane w2:p2 is named worker in session',
+  );
+});
 scene('register.ready', async (place) => {
   write(place, TEAM);
   return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'registered — pane w1:p1; nothing was launched');

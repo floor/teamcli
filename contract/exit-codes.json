@@ -2027,6 +2027,13 @@
     {
       "code": 1,
       "command": "register",
+      "id": "register.pane-named",
+      "meaning": "--pane named a pane herdr already names as another agent",
+      "trigger": "team register worker --pane w2:p2"
+    },
+    {
+      "code": 1,
+      "command": "register",
       "id": "register.pane-taken",
       "meaning": "another seat of the session holds that pane",
       "trigger": "team register worker --pane w2:p2"

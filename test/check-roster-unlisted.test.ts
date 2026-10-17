@@ -274,14 +274,21 @@ describe('the repair the check names writes the roster line', () => {
     expect(readFileSync(teamsFile(w.home), 'utf8')).toBe(before);
   });
 
-  test('a team the registry holds no record of: nothing is written, no record is made', async () => {
+  test('a team the registry holds no record of: the team and the agent record are written', async () => {
     const w = world();
     ready(w);
     const ran = await register(w, ['lead']);
     expect(ran.code).toBe(0);
-    expect(ran.out).toContain('lead: already registered — pane w1:p1; nothing was written');
-    // The bridge reads the file's own declaration for a team with no record: nothing is owed,
-    // and an adoption does not make one.
-    expect(existsSync(teamsFile(w.home))).toBe(false);
+    expect(ran.out).toContain("lead: already registered — pane w1:p1; the team registry's roster did not list it, and was written");
+    // A team started before the registry kept a record is repaired to the shape a launch
+    // writes: the team, the seat's agent record and its roster line — so the bridge and
+    // `team check` read the same team here as for any other.
+    const id = teamIdOf(w.root);
+    const found = findAgent(w.home, { team: id, seat: 'lead' });
+    expect(found).not.toBeNull();
+    expect(getTeam(w.home, id)?.roster).toEqual([
+      { agent: found!.id, seat: 'lead', role: 'coordinator', leads: true },
+    ]);
+    expect(existsSync(teamsFile(w.home))).toBe(true);
   });
 });

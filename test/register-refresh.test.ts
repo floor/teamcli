@@ -9,12 +9,13 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
+import type { Caller } from '../src/caller.ts';
 import { setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { findAgent, readAgents, updateAgent } from '../src/registry/agents.ts';
 import { get as getProject, projectIdOf, readProjects } from '../src/registry/projects.ts';
 import { getTeam, setRoster, teamIdOf, teamsFile } from '../src/registry/teams.ts';
-import { readState, STATE_FILE } from '../src/state.ts';
+import { LOG_FILE, readState, STATE_FILE } from '../src/state.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T09:00:00Z');
@@ -91,8 +92,13 @@ function sources(w: World, over: Partial<RegisterSources> = {}): RegisterSources
   };
 }
 
-async function register(w: World, argv: string[], over: Partial<RegisterSources> = {}): Promise<{ code: number; out: string; err: string }> {
-  const io = testIo(w.root, OWNER);
+async function register(
+  w: World,
+  argv: string[],
+  over: Partial<RegisterSources> = {},
+  caller: Caller = OWNER,
+): Promise<{ code: number; out: string; err: string }> {
+  const io = testIo(w.root, caller);
   const code = await runRegister(argv, io, sources(w, over));
   return { code, out: io.out, err: io.err };
 }
@@ -194,5 +200,50 @@ describe('registering a seat the pane already holds ready', () => {
     expect(readFileSync(join(w.dir, STATE_FILE), 'utf8')).toBe(state);
     expect(readFileSync(teamsFile(w.home), 'utf8')).toBe(teams);
     expect(readAgents(w.home)).toEqual(agents);
+  });
+
+  test('a delegated run on the already path writes the delegate line', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+    // The gate `up` runs is the one register runs; the file gains the section it reads, and the
+    // gate itself is stood in as passed for the calling seat.
+    writeFileSync(join(w.root, '.agents', 'team.yaml'), `${teamYaml(w)}delegates:\n  - pane: main/w2:p2\n    commands: [up]\n`);
+    const worker: Caller = { kind: 'seat', name: 'worker', pane: 'w2:p2', session: 'acme' };
+
+    const second = await register(
+      w,
+      ['lead'],
+      { delegateGate: () => ({ kind: 'passed', pane: 'main/w2:p2' }) },
+      worker,
+    );
+
+    expect(second.code).toBe(0);
+    expect(second.out).toContain('lead: already registered — pane w1:p1');
+    // The audit line the launch path writes for the same act, and the already path used to
+    // skip: a delegated record write is named as delegated whichever path writes it.
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('delegate [delegate] main/w2:p2 up: register');
+  });
+
+  test('a granted run on the already path writes the grant line', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+    // The file's grant names the lead seat for `up`: register's second fallback, stood in as
+    // passed for the calling seat.
+    writeFileSync(
+      join(w.root, '.agents', 'team.yaml'),
+      `${teamYaml(w)}grant:\n  session: acme\n  seat: lead\n  scope:\n    - up\n`,
+    );
+    const worker: Caller = { kind: 'seat', name: 'worker', pane: 'w2:p2', session: 'acme' };
+
+    const second = await register(
+      w,
+      ['lead'],
+      { grantGate: () => ({ kind: 'passed', grant: { session: 'acme', seat: 'lead', scope: ['up'] } }) },
+      worker,
+    );
+
+    expect(second.code).toBe(0);
+    expect(second.out).toContain('lead: already registered — pane w1:p1');
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('grant [grant] lead up: register');
   });
 });
