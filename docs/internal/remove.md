@@ -53,7 +53,7 @@ would not validate is refused before the seat is stopped, so a broken file never
 
 ## Who may run it
 
-The owner, the orchestrator's seat and the operator's seat. The seat is that name's, in a session
+The owner and the orchestrator's seat. The seat is that name's, in a session
 this project's state records — the file's session, or one the state records the caller's pane in —
 on the pane the state records for that name in that session: a seat of another session, or a pane
 merely renamed to the orchestrator's or the operator's name, is refused — and so is a seat the state
