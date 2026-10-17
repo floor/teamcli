@@ -562,8 +562,8 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | `session beacon is stopped` — herdr lists it stopped and this team's state does not record it, so `up` does not clear it |
 | `session <session> is stopped and did not clear` — herdr lists it stopped, this team's state records it, and the clear did not happen |
 | ``session beacon has 2 agents this file's state doesn't record: `up` never touches a running team`` — an agent on a pane no record names, or on a pane this state records for a seat at another stage: a seat at `named` or `ready` whose pane now holds a foreign agent is refused here, with the whole team. An agent on the pane this state records for a seat left at `launched` — the run stopped after its pane was made and before its rename — is not refused: it is the run's own half-finished seat, and this run finishes it, the idle wait and the rename like any launched seat |
-| ``the file is legacy: migrate trust to absolute paths including the lobby ~/.config/team/lobby: ...`` — followed by the whole `trust:` block to paste: every entry the next `up` requires, one line saying which key of the file each entry comes from, and, for an entry a rule of `trust` refuses, one line naming the key that forces it |
-| ``the lobby ~/.config/team/lobby: <check>`` — gate check failed (symbolic link, permissions, mode, a file a shipped CLI reads at start, inside git repo) |
+| ``the file is legacy: migrate trust to absolute paths including the lobby <lobby>: ...`` — `<lobby>` is the team's lobby, `~/.config/team/lobby` when the defaults apply — followed by the whole `trust:` block to paste: every entry the next `up` requires, one line saying which key of the file each entry comes from, and, for an entry a rule of `trust` refuses, one line naming the key that forces it |
+| ``the lobby <lobby>: <check>`` — the team's lobby; gate check failed (symbolic link, permissions, mode, a file a shipped CLI reads at start, inside git repo) |
 | ``the lobby <path>: failed to create <component>: <code>`` — the run had to make an absent lobby, and the make itself failed at `<component>`: a component that cannot be written, or one another process took first. The read-only check above found the lobby missing and made nothing; the make runs under the run lock, after a delegated run's audit line and before any seat's own effect, and the run stops here (exit 1) |
 | ``seat beacon-qa would start in live, inside the protected checkout live; a seat that isn't `mode: shared` never starts in one`` — the folder the file gives it, or its lobby, is a protected checkout |
 | ``another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share: this run stopped before its first step, and a delegated run gets the same line. The line names no command, because the lock is shared and its token records only a pid. `--dry-run` takes no lock and never shows it |
@@ -594,7 +594,7 @@ coordinator: claude-keeper
 operator: claude-keeper
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobby      # the team's lobby; the default when the file sets none
   - ~/Code/beacon
 
 workspace:
@@ -701,7 +701,7 @@ coordinator: claude-keeper
 operator: claude-keeper
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobby      # the team's lobby; the default when the file sets none
   - ~/Code/beacon
 
 limits:

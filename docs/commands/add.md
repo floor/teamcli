@@ -180,9 +180,9 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | `team add: workspace.base is required to read a merged end` / `team add: "<branch>" is not a branch name` / `team add: branch <branch> doesn't exist` | 1 |
 | `team add: no worktree named "<task>" is recorded` | 1 |
 | `team add: worktree <task> has a failed setup; team worktree remove <task>` | 1 |
-| ``team add: the file is legacy: migrate trust to absolute paths including the lobby ~/.config/team/lobby: ...`` | 1 |
-| ``team add: trust: must list the lobby ~/.config/team/lobby`` | 1 |
-| ``team add: the lobby ~/.config/team/lobby: <check>`` | 1 |
+| ``team add: the file is legacy: migrate trust to absolute paths including the lobby <lobby>: ...`` | 1 |
+| ``team add: trust: must list the lobby <lobby>`` | 1 |
+| ``team add: the lobby <lobby>: <check>`` | 1 |
 | `team add: refused: the lobby is not trusted for <cli>: run <cli> in <lobby> and accept the folder` — the CLI's own record for the lobby can't be written, so the seat would open that folder untrusted; `grok` and `cursor` seats are told their own flag instead (`run grok --trust in <lobby>`, `run cursor-agent --trust in <lobby>`) | 1 |
 | ``team add: seat beacon-qa would start in live, inside the protected checkout live; a seat that isn't `mode: shared` never starts in one`` | 1 |
 | `team add: the file changed while add was checking; nothing was written` | 1 |
@@ -190,6 +190,10 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | a `MISS` finding from [team doctor](doctor.md), the seat's own launch line among them | 1 |
 | ``team add: another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share; the line names no command, because the lock is shared. The lock is taken before this run's first effect and released at its end; `--dry-run` takes no lock and never shows it | 1 |
 | ``team add: another session-mutating run may be holding session <session>, and its lock cannot be read; if no run is using it, delete <state dir>/seat-locks/<session>/.run`` — the lock file does not read as a token, so its holder is unknown and only the owner clears it; the line names the file | 1 |
+
+`<lobby>` in the rows above is the team's lobby: the file's `lobby:` when it sets one, else the
+lobby the registry recorded for the session, else `<home>/.config/team/lobbies/<entity>` when the
+file names `entity:`, else the default `~/.config/team/lobby`.
 
 The ceilings are read from the approval's record, never from the file: a seat that would put the
 session past `limits.seats`, past `limits.temporary` for a temporary seat, or past a
@@ -210,7 +214,7 @@ coordinator: claude-keeper
 operator: claude-keeper
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobby      # the team's lobby; the default when the file sets none
   - ~/Code/beacon
 
 workspace:
@@ -348,6 +352,9 @@ $ team add claude-beacon ; echo "exit $?"
 team add: refused: the lobby is not trusted for claude: run claude in ~/.config/team/lobby and accept the folder
 exit 1
 ```
+
+The path above is the default lobby; a team that sets `lobby:`, or whose session already recorded
+another lobby, sees that lobby's path in the same place.
 
 The line names the repair the seat's own CLI needs: a `grok` or `cursor` seat is told `run grok
 --trust in <lobby>`, or `run cursor-agent --trust in <lobby>`. A `--dry-run` reports it as
