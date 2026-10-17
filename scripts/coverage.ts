@@ -17,6 +17,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseVersion, profileFor } from '../src/profiles/profile.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const fixtures = join(root, 'test', 'fixtures');
@@ -28,17 +29,69 @@ type Manifest = { screens: ScreenCase[] };
 
 /** The kinds a screen is read as; the matrix's second axis. */
 const KINDS = ['idle', 'working', 'unsent', 'permission', 'question', 'exit question', 'trust', 'vendor notice', 'provider error', 'rate limit', 'unknown'] as const;
-type Kind = (typeof KINDS)[number];
+export type Kind = (typeof KINDS)[number];
 
 export type Provenance = 'capture' | 'constructed' | 'undocumented';
 export type Cell = { real: number; constructed: number; undocumented: number };
+/** What one version folder of one CLI holds, kind by kind, beside the range the profile claims. */
+export type VersionEntry = {
+  tested: { from: string; to: string } | null;
+  byVersion: Record<string, Record<Kind, Cell>>;
+};
 export type Matrix = {
   clis: string[];
   cells: Record<string, Record<Kind, Cell>>;
+  versions: Record<string, VersionEntry>;
   notProduced: Record<string, Record<string, string>>;
   fixtures: { file: string; cli: string; kind: Kind; provenance: Provenance }[];
   problems: string[];
 };
+
+/** The baseline set every version folder at or after `tested.to` owes: a real capture of each
+ *  file, or a `## Not produced` bullet in that folder's README naming the kind. The exit screen
+ *  is classified `unknown`, so a folder that never sees the shell back says `unknown`. */
+const BASELINE: readonly [file: string, kind: Kind][] = [
+  ['trust.txt', 'trust'],
+  ['idle.txt', 'idle'],
+  ['unsent.txt', 'unsent'],
+  ['working.txt', 'working'],
+  ['question.txt', 'question'],
+  ['permission.txt', 'permission'],
+  ['exit.txt', 'unknown'],
+];
+
+/** Versions compared as numbers, missing parts as zero. */
+function orderOf(left: readonly number[], right: readonly number[]): number {
+  for (let index = 0; index < Math.max(left.length, right.length); index++) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return Math.sign(difference);
+  }
+  return 0;
+}
+
+/** The tested range each shipped CLI's profile declares, for the CLIs the manifest lists. */
+function shippedProfilesOf(fixturesDir: string): Record<string, { from: string; to: string }> {
+  const manifest = JSON.parse(readFileSync(join(fixturesDir, 'conformance.json'), 'utf8')) as Manifest;
+  const out: Record<string, { from: string; to: string }> = {};
+  for (const cli of new Set(manifest.screens.map((screen) => screen.cli))) {
+    const tested = profileFor(cli)?.tested;
+    if (tested !== undefined) out[cli] = tested;
+  }
+  return out;
+}
+
+/** The version folder a manifest file sits in (`<cli>/<version>/<name>.txt`), or null. */
+function versionOf(file: string, cli: string): string | null {
+  const parts = file.split('/');
+  if (parts.length < 3 || parts[0] !== cli) return null;
+  const version = parts[1] ?? '';
+  return parseVersion(version) === null ? null : version;
+}
+
+/** A fresh kind-by-kind cell map. */
+function emptyCells(): Record<Kind, Cell> {
+  return Object.fromEntries(KINDS.map((kind) => [kind, { real: 0, constructed: 0, undocumented: 0 }])) as Record<Kind, Cell>;
+}
 
 /** The `.txt` file names a piece of README text mentions, backticked or bare. */
 function namesOf(text: string): string[] {
@@ -54,8 +107,9 @@ type SectionKind = 'default' | 'constructed' | 'notProduced';
 
 /** What one README says: the files its captured sections list, the files its Constructed sections
  *  list, and the kinds it says were not produced. Headings alone type a section; names are read
- *  from bullets alone, so prose never decides anything. */
-function readOf(readme: string): {
+ *  from bullets alone, so prose never decides anything. Exported so the refresh script can ask a
+ *  folder's README which kinds it already accounts for. */
+export function readOf(readme: string): {
   captured: Map<string, string>;
   constructed: Map<string, string>;
   notProduced: Map<Kind, string>;
@@ -79,7 +133,7 @@ function readOf(readme: string): {
       const names = colon === -1 ? namesOf(text).slice(0, 1) : namesOf(text.slice(0, colon));
       for (const name of names) if (!constructed.has(name)) constructed.set(name, heading);
     }
-    if (kind === 'notProduced' && /not produced/i.test(text)) {
+    if (bullet && kind === 'notProduced' && /not produced/i.test(text)) {
       // A Not-produced bullet names the kind it is about (backticked or bare, before the
       // colon) and says why; the reason is the first clause after "not produced".
       const colon = text.indexOf(':');
@@ -143,13 +197,20 @@ function readFor(file: string, fixturesDir: string): ReturnType<typeof readOf> {
   return read;
 }
 
-/** The whole matrix, from the manifest's stated provenance and the READMEs' headings. */
-export function coverageOf(fixturesDir: string = fixtures): Matrix {
+/** The whole matrix, from the manifest's stated provenance and the READMEs' headings. The
+ *  `profiles` argument is the claimed tested range per CLI; it defaults to the shipped profiles,
+ *  and a caller testing a scratch fixtures tree passes its own map (or `{}`). */
+export function coverageOf(
+  fixturesDir: string = fixtures,
+  profiles: Record<string, { from: string; to: string }> = shippedProfilesOf(fixturesDir),
+): Matrix {
   const manifest = JSON.parse(readFileSync(join(fixturesDir, 'conformance.json'), 'utf8')) as Manifest;
   const clis = [...new Set(manifest.screens.map((screen) => screen.cli))].sort();
   const cells: Record<string, Record<Kind, Cell>> = {};
+  const versions: Record<string, VersionEntry> = {};
   for (const cli of clis) {
-    cells[cli] = Object.fromEntries(KINDS.map((kind) => [kind, { real: 0, constructed: 0, undocumented: 0 }])) as Record<Kind, Cell>;
+    cells[cli] = emptyCells();
+    versions[cli] = { tested: profiles[cli] ?? null, byVersion: {} };
   }
   const cellOf = (cli: string, kind: Kind): Cell => {
     const cell = cells[cli]?.[kind];
@@ -184,12 +245,54 @@ export function coverageOf(fixturesDir: string = fixtures): Matrix {
       provenance = 'undocumented';
     }
     cellOf(screen.cli, kind)[provenance === 'capture' ? 'real' : provenance]++;
+    const version = versionOf(screen.file, screen.cli);
+    if (version !== null) {
+      const byVersion = versions[screen.cli]?.byVersion;
+      if (byVersion === undefined) throw new Error(`${screen.file}: no version entry for ${screen.cli}`);
+      byVersion[version] ??= emptyCells();
+      byVersion[version][kind][provenance === 'capture' ? 'real' : provenance]++;
+    }
     listed.push({ file: screen.file, cli: screen.cli, kind, provenance });
     const cliReasons = reasons.get(screen.cli) ?? {};
     for (const [notKind, reason] of read.notProduced) {
       if (cliReasons[notKind] === undefined) cliReasons[notKind] = reason;
     }
     reasons.set(screen.cli, cliReasons);
+  }
+  // The per-version gates. The folder the profile claims as `tested.to` must exist and hold a
+  // real capture, so a bumped range cannot pass on older folders' work. Every version folder at
+  // or after `tested.to` owes the baseline set — a real capture of each file, or a Not-produced
+  // bullet naming its kind in that folder's own README. Folders older than the range are
+  // history: they stay, and they are not judged.
+  const captured = new Set(listed.filter((one) => one.provenance === 'capture').map((one) => one.file));
+  for (const [cli, tested] of Object.entries(profiles)) {
+    // A profile with no manifest entries still owes its tested.to folder: the entry is made
+    // here rather than skipped, so a newly shipped CLI cannot pass before its first capture.
+    const entry = versions[cli] ?? { tested, byVersion: {} };
+    const to = tested.to;
+    const folder = `${cli}/${to}`;
+    if (!existsSync(join(fixturesDir, cli, to, 'README.md'))) {
+      problems.push(`${cli}: profile tested.to is ${to} but test/fixtures/${folder}/README.md is missing`);
+    }
+    const toCells = entry.byVersion[to];
+    const toReal = toCells === undefined ? 0 : KINDS.reduce((sum, kind) => sum + toCells[kind].real, 0);
+    if (toReal === 0) {
+      problems.push(`${cli}: profile tested.to is ${to} but test/fixtures/${folder}/ has no captures`);
+    }
+    const toVersion = parseVersion(to);
+    for (const version of Object.keys(entry.byVersion)) {
+      const versionNumbers = parseVersion(version);
+      if (toVersion === null || versionNumbers === null || orderOf(versionNumbers, toVersion) < 0) continue;
+      const readmeFile = join(fixturesDir, cli, version, 'README.md');
+      const read = existsSync(readmeFile)
+        ? readOf(readFileSync(readmeFile, 'utf8'))
+        : { notProduced: new Map<Kind, string>() };
+      for (const [file, kind] of BASELINE) {
+        if (captured.has(`${cli}/${version}/${file}`)) continue;
+        if (read.notProduced.has(kind)) continue;
+        problems.push(`${cli}/${version}: no real capture of ${file} (${kind}) and test/fixtures/${cli}/${version}/README.md does not list \`${kind}\` under ## Not produced`);
+      }
+    }
   }
   const notProduced: Record<string, Record<string, string>> = {};
   for (const cli of clis) {
@@ -202,13 +305,16 @@ export function coverageOf(fixturesDir: string = fixtures): Matrix {
     notProduced[cli] = entry;
   }
   const byFile = (a: { file: string }, b: { file: string }) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0);
-  return { clis, cells, notProduced, fixtures: listed.sort(byFile), problems };
+  return { clis, cells, versions, notProduced, fixtures: listed.sort(byFile), problems };
 }
 
 /** The checked-in document, byte for byte: sorted, no dates, no paths but the fixtures' own. */
-export function documentOf(fixturesDir: string = fixtures): string {
-  const { clis, cells, notProduced, fixtures } = coverageOf(fixturesDir);
-  return `${JSON.stringify({ kind: 'capture-coverage', clis, kinds: KINDS, cells, notProduced, fixtures }, null, 2)}\n`;
+export function documentOf(
+  fixturesDir: string = fixtures,
+  profiles?: Record<string, { from: string; to: string }>,
+): string {
+  const { clis, cells, versions, notProduced, fixtures } = coverageOf(fixturesDir, profiles);
+  return `${JSON.stringify({ kind: 'capture-coverage', clis, kinds: KINDS, cells, versions, notProduced, fixtures }, null, 2)}\n`;
 }
 
 /** The registered captures the trust-answer path may act on, keyed `<cli> <file>` — the whole
