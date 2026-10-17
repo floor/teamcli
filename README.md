@@ -161,6 +161,12 @@ budgets:                      # the owner's: reserve or floor per account, marks
   project — one team per project, and `team check` refuses a second. The project's record then
   carries the lead: the agent of the seat this file's `leads: true` marks as the team's lead,
   re-resolved on every launch, so a mark that moves in the file moves the record with it.
+- `entity` names the entity this team belongs to: the level above its project that a setting, the
+  lobby's `<entity>` folder and a lead pair's reach are read from, and the name that makes two
+  teams one entity's when both files carry it.
+- `lobby` names the folder every seat except a lead starts in: the file's own `lobby:` wins over
+  the lobby the registry recorded for the session and over the defaults, and setting it records
+  that lobby for the session. The `workspace.mode` bullet below states the whole resolution order.
 - `coordinator` and `operator` name seats: the coordinator dispatches work, the operator receives
   the watch's reports and nudges. `leads: true` on a seat is the same lead, spelled on the seat
   the way `coordinator:` names it. `assistant: true` marks a seat as its entity's assistant — the
