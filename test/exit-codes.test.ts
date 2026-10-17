@@ -2259,7 +2259,7 @@ scene('worktree.created', async (place) => {
 });
 scene('worktree.listed', async (place) => {
   approve(place, worktreeText());
-  return show(await worktree(place, ['list']), '0 open, limit');
+  return show(await worktree(place, ['list']), '0 worktree(s)');
 });
 scene('worktree.remove-task', async (place) => {
   approve(place, worktreeText());
