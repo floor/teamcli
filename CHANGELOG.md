@@ -34,10 +34,10 @@ commands read them.
   or `refused`. A plain send gives the seat the body whole in a mode-0600 drop file and types one
   short trigger line naming it — the body is never typed, and never split — for every seat,
   Claude Code's included: a socket write to a busy session can land at its held-message dialog,
-  where the box is blocked. `--wait` to a Claude Code seat takes that socket instead: one frame
-  on the address its session answers at, the reply listener standing before it, 120 seconds
-  unless `--timeout` says otherwise — a frame the receiving session holds at its held-message
-  dialog is `held (socket)`, and nothing was sent — and `--wait` is refused for any other seat.
+  where the box is blocked, so no path opens a cross-session socket at all. `--wait`, which would
+  ride one, is refused for every seat — a Claude Code seat's refusal names the native leg
+  (`team route` and the caller's own `SendMessage`) that will carry a waited send, and any other
+  seat gets its own reason — and nothing is written.
   `--json`, `--file`, `--dry-run` and `--list` round it out. The native channel is the sender's
   own half: `team route <seat>` answers the address a delivery from the sender's cross-session
   tool uses — the recipient's agent id, session, CLI and pane, and its socket — and

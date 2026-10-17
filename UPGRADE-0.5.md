@@ -47,8 +47,10 @@ stay the owner's, from a terminal outside herdr.
 whole to a mode-0600 drop file and types one
 short trigger line — for every seat, Claude Code's included; the body is never typed and never
 split. Every run ends in one word: `delivered`, `answered`, `held`, `not-submitted`, `timeout`,
-`unreachable` or `refused`. `--wait` to a Claude Code seat writes one frame on its cross-session
-socket and brings the reply back; `--wait` to any other seat is refused and nothing is written.
+`unreachable` or `refused`. No path opens a cross-session socket in this build: `--wait` is
+refused for every seat and nothing is written — a Claude Code seat's refusal names the native leg
+(`team route` and the caller's own `SendMessage`) that will carry a waited send, and any other seat
+gets its own reason.
 
 A delivery can also be the sender's own, through the native channel:
 [`team route <seat>`](https://github.com/floor/teamcli/blob/main/docs/commands/route.md) answers
