@@ -29,7 +29,7 @@ function namesOf(items: readonly YamlNode[]): string[] {
 }
 
 /** The machine's accounts keyed by entity, in the file's own order: the `accounts:` map form,
- *  one entry per key whose value is a list of account names (`radiooooo: [anthropic-max]`).
+ *  one entry per key whose value is a list of account names (`northwind: [anthropic-max]`).
  *  Two older shapes keep reading exactly as they did: a flat `accounts:` sequence is one unnamed
  *  entity (`entity: null`), and a map entry whose value is no list keeps the older reading — the
  *  key is itself an account name, unnamed. A file that is absent, does not parse, or carries no
