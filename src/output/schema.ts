@@ -697,10 +697,23 @@ export const RELEASE_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team tempo` (`schema/tempo.schema.json`). */
+export const TEMPO_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.tempo',
+  fileName: 'tempo.schema.json',
+  title: 'team tempo --json output',
+  statuses: ['set', 'same'],
+  required: ['project', 'session', 'value'],
+  properties: {
+    value: { type: ['string', 'null'] },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
+  TEMPO_OUTPUT_SCHEMA,
   SEATS_OUTPUT_SCHEMA,
   PROJECTS_OUTPUT_SCHEMA,
   DOCTOR_OUTPUT_SCHEMA,
