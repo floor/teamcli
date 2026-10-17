@@ -68,6 +68,9 @@ import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerRun } from '../registry/sync.ts';
+import { findAgent } from '../registry/agents.ts';
+import { teamIdOf } from '../registry/teams.ts';
+import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
@@ -600,9 +603,26 @@ function denyUp(out: { stderr(text: string): void }): number {
   return 1;
 }
 
+/** The sentence a caller the run does not admit is refused with. One spelling, so the bare
+ *  `deny` a real run answers with, the warning dev mode folds it into, and the `! up would
+ *  refuse:` line a dry run prints are the same words. */
+function placementRefusal(caller: Caller): string {
+  return `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+}
+
+/** The one command that unblocks a run this caller cannot start: the owner's own, in this folder,
+ *  from a terminal outside herdr. The flags the caller named are kept, spelled the way the plan
+ *  spells a word, so the printed line is a command that runs. */
+function ownerUpRun(values: { file?: string; session?: string }): string {
+  const words = ['team up'];
+  if (values.file !== undefined) words.push('--file', shellQuote(values.file));
+  if (values.session !== undefined) words.push('--session', shellQuote(values.session));
+  return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+}
+
 /** Pulls the dev-mode warnings out of `refusals` and joins them into the one line. */
 function devWarningLine(refusals: string[], standing: Standing, caller: Caller): string {
-  const placement = `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+  const placement = placementRefusal(caller);
   const kept: string[] = [];
   const warnings: string[] = [];
   for (const line of refusals) {
@@ -700,8 +720,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     return 1;
   }
   // Dev mode does not return here: the file is mounted, and the same sentence is a warning below.
+  // One return answers both runs: a real one with the bare word, a dry one never denied but told
+  // the reason and the owner's own command. Either way the flagged file stays unread, so the dry
+  // run prints no plan for it.
   if (!mayLaunchSeats(walked) && aimed && verdict === null && grantRefusal === null && !dev) {
-    out.stderr('deny\n');
+    if (dry) {
+      out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}\n`);
+      out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
+    } else {
+      out.stderr('deny\n');
+    }
     // exit: up.not-owner
     return 1;
   }
@@ -783,9 +811,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   if (detached !== undefined && !createGranted) {
     refusals.push(detached);
   } else if (!named) {
-    // Dev mode mounts and says the placement as a warning. Anyone else is denied.
-    if (!dev) return denyUp(out);
-    refusals.push(`only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
+    // Dev mode mounts and says the placement as a warning; a dry run says it beside the plan it
+    // would refuse. Anyone else is denied, and the bare word is the whole answer.
+    if (!dev && !dry) return denyUp(out);
+    refusals.push(placementRefusal(caller));
   }
   // The live file is the record. A verified copy that no longer matches is not a refusal.
   // A legacy or refused record still is: its text is the case, and dev mode warns instead.
@@ -1115,7 +1144,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // The same cause can reach the list twice — the gate and `doctor` both read the
     // approval — so a refusal is said once. A refusal leaves through the real run's
     // return below, so the status and the exit id are that refusal's; the words stay these.
-    for (const refusal of [...new Set(refusals)]) out.stdout(`! up would refuse: ${plainText(refusal)}\n`);
+    const said = [...new Set(refusals)];
+    for (const refusal of said) out.stdout(`! up would refuse: ${plainText(refusal)}\n`);
+    // A caller the run does not admit is the one refusal with a command of its own behind it:
+    // nothing in the file changes it, the owner's run does. So the dry run names that command.
+    if (said.includes(placementRefusal(caller))) {
+      out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
+    }
     out.stdout(plainText(formatPlan(buildPlan())));
   }
   if (refusals.length) {
@@ -1537,6 +1572,17 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         ...(afterwards[seat.name]?.id ? { handle: afterwards[seat.name]?.id } : {}),
       })),
     )) logLine(dir, 'up', callerLabel(caller), note, now());
+    // The address: a claude-code seat this run left ready records the socket its session answers
+    // at, so a later send reaches it without re-reading herdr. A pane herdr cannot read leaves
+    // whatever the record holds; the note, if any, is a log line like the registry's own.
+    for (const seat of team.seats) {
+      const held = afterwards[seat.name];
+      if (seat.cli !== 'claude-code' || held?.stage !== 'ready' || !held.pane) continue;
+      const agent = findAgent(sources.home, { team: teamIdOf(root), seat: seat.name });
+      if (!agent) continue;
+      const refreshed = refreshAgentAddress(sources.home, agent.id, held.pane, session);
+      if (refreshed.note) logLine(dir, 'up', callerLabel(caller), refreshed.note, now());
+    }
     const pending = team.seats.filter((seat) => {
       if (seat.stopped || !profileFor(seat.cli)) return false;
       return afterwards[seat.name]?.stage !== 'ready';

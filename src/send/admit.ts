@@ -44,14 +44,25 @@ export type SendGrantRecord = { name: string; from: string; to: string; expires:
  */
 export type SendSeat = { seat: string; team: string; role?: string };
 
-/** Either side of a send: the registry's own record, or a resolved seat. */
-export type SendSide = Agent | SendSeat;
+/**
+ * A sender the registry holds no record for yet: the seat the live team file declares, placed by
+ * herdr. Admission judges it by the declared seat's own name, team and role, so the rules that
+ * stay inside that team reach it — the one case the bootstrap loop needs — and the header says the
+ * record is missing, so a receiver reads why the agent id is absent. It is never granted: a grant
+ * names a record's identity, and this sender has none yet.
+ */
+export type DeclaredSender = SendSeat & { declared: true };
+
+/** Either side of a send: the registry's own record, or a resolved seat — a declared one when
+ *  the sender has no record yet. */
+export type SendSide = Agent | SendSeat | DeclaredSender;
 
 /** The rules, in the order they are asked. Named once, so a refusal, a caller that has no
  *  identity to judge by, and the docs all read alike. */
 export const RULE_SUMMARY = [
   'the owner',
   'an orchestrator to another orchestrator',
+  "an orchestrator or operator to a seat of its own team",
   "an assistant seat to its entity's coordinator",
   "a seat to its own team's orchestrator",
   'an owner-signed grant naming send',
@@ -72,10 +83,15 @@ export function admitSend(caller: SendSide | 'owner', target: SendSide, teams: A
   const targetOrchestrator = orchestratorSeat(targetTeam);
 
   // An orchestrator writes to an orchestrator, in any team: the pair that carries work between
-  // teams. The design admits no other orchestrator-to-seat reach — a seat of the caller's own
-  // team included — so nothing here names one.
+  // teams.
   if (seatOf(caller) === orchestratorSeat(callerTeam) && seatOf(target) === targetOrchestrator) {
     return { ok: true, rule: 'an orchestrator to another orchestrator' };
+  }
+  // The team's own leads brief its seats: the orchestrator, or the operator, to any seat of the
+  // same team. Never across teams: another team's seats are reached through its orchestrator.
+  const leadsOwnTeam = seatOf(caller) === orchestratorSeat(callerTeam) || roleOf(caller, callerTeam) === 'operator';
+  if (callerTeam !== undefined && targetTeam === callerTeam && leadsOwnTeam) {
+    return { ok: true, rule: 'an orchestrator or operator to a seat of its own team' };
   }
   // An assistant writes to the coordinator of its own entity: the seat above the entity's teams.
   if (roleOf(caller, callerTeam) === 'assistant' && onMainCoordinator(target, callerTeam?.entity, teams)) {
@@ -164,6 +180,11 @@ function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
  */
 export function senderHeader(caller: SendSide | 'owner', rule: string): string {
   if (caller === 'owner') return `from the owner — admitted by: ${rule}\n`;
+  // A declared seat: the id the receiver would judge by is the one the registry has not written
+  // yet, so the header says whose seat it is instead of an id.
+  if ('declared' in caller && caller.declared) {
+    return `from the file's seat ${caller.seat} (no registry record yet) — admitted by: ${rule}\n`;
+  }
   const id = 'reach' in caller ? caller.id : '';
   const name = 'reach' in caller ? caller.name : caller.seat;
   const who = id === '' ? `${name}, ${seatAt(caller)}` : `${id} (${name}, ${seatAt(caller)})`;
@@ -176,7 +197,7 @@ function seatOf(side: SendSide): string {
 }
 
 /** The team a side sits in. */
-function teamOf(side: SendSide): string {
+export function teamOf(side: SendSide): string {
   return 'reach' in side ? side.reach.team : side.team;
 }
 

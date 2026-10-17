@@ -45,6 +45,7 @@ import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
@@ -1136,6 +1137,11 @@ function hostOf(input: {
             readState(dir).sessions[session]?.seats[name]?.id,
           );
           if ('note' in made) logLine(dir, 'add', input.caller, made.note, input.now());
+          else {
+            // The address: the live session socket this launch answers at, recorded on the agent.
+            const refreshed = refreshAgentAddress(input.home, made.id, patch.pane, session);
+            if (refreshed.note) logLine(dir, 'add', input.caller, refreshed.note, input.now());
+          }
         }
       }
     },

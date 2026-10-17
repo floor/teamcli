@@ -77,14 +77,19 @@ The owner, from a terminal outside herdr. A run with no terminal is refused with
 `only the owner runs this, from a terminal outside herdr` and launches nothing. An admitted run
 that is not that owner — the grant, a delegate, the token — never reads stdin and never prompts,
 so every dialog is left for the owner (below). `--dry-run` is open to anyone: it reaches nothing and
-changes nothing, prints the refusals it would hit as `! up would refuse: …` above the plan.
+changes nothing, prints the refusals it would hit as `! up would refuse: …` above the plan. A caller
+the run does not admit — not the owner, no grant, no delegate, no token — is refused with the word
+`deny` alone on a real run: no reason, no plan, exit 1. Its `--dry-run` is never
+denied: the same `! up would refuse:` line carries the placement reason, `! to unblock:` carries the
+owner's own run of this folder, and the plan follows when no `--file` or `--session` kept the file
+unread — a flagged target is read on the real run's own terms, never to fill a plan.
 A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch). It returns before these real-run failures, and never takes their status:
 
-- `up.no-launch`, this call has no way to reach herdr (`src/commands/up.ts:712`)
-- `up.run-lock`, another run holds the session (`src/commands/up.ts:726`)
-- `up.lobby`, the lobby could not be created (`src/commands/up.ts:742`)
-- `up.clear`, a stopped session this team records did not clear (`src/commands/up.ts:758`)
-- `up.pending`, a seat left short of ready; `up.server`, the server did not start; `up.watch`, the watch did not start (`src/commands/up.ts:1110`)
+- `up.no-launch`, this call has no way to reach herdr (`src/commands/up.ts:1176`)
+- `up.run-lock`, another run holds the session (`src/commands/up.ts:1190`)
+- `up.lobby`, the lobby could not be created (`src/commands/up.ts:1212`)
+- `up.clear`, a stopped session this team records did not clear (`src/commands/up.ts:1228`)
+- `up.pending`, a seat left short of ready; `up.server`, the server did not start; `up.watch`, the watch did not start (`src/commands/up.ts:1579`)
 
 A pane of another session the approved file's `delegates` section names may run `up` when that
 entry's `commands` list names it. The ordinary rule above refuses such a caller first, and only

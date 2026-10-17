@@ -37,7 +37,7 @@ import { logLine } from '../log.ts';
 import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
-import { appendHistory } from './history.ts';
+import { appendHistory, type HistoryEntry } from './history.ts';
 import { bindPane, deliverTrigger } from './deliver.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
@@ -760,6 +760,8 @@ async function executeQueuedSend(
   const who = from === 'owner' ? 'owner' : from === team.orchestrator ? 'orchestrator' : 'seat';
   const body = request.body;
   const msgId = request.id ?? randomUUID();
+  // Send to outcome is measured from here: the daemon's own handling, not the requester's wait.
+  const startedAt = Date.now();
   const configured = team.seats.find((s) => s.name === seatName);
   if (!configured) {
     const names = team.seats.map((s) => s.name);
@@ -802,6 +804,7 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason };
   }
@@ -817,6 +820,7 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
   }
@@ -863,27 +867,35 @@ async function executeQueuedSend(
     };
   }
 
-  const recordHeld = (detail: string): DaemonSendResponse => {
-    appendHistory(team.project, root, host.home, {
+  const recordHeld = (detail: string, via?: 'typed'): DaemonSendResponse => {
+    const entry: HistoryEntry = {
       ts: host.now().toISOString(),
       from,
       to: seatName,
       body,
       id: msgId,
       outcome: 'held',
-    });
+      ms: Date.now() - startedAt,
+    };
+    // The path is named only once the trigger had been typed, never for a refusal before it.
+    if (via !== undefined) entry.via = via;
+    appendHistory(team.project, root, host.home, entry);
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail, drop_path: dropPath };
   };
 
-  const recordUnreachable = (detail: string): DaemonSendResponse => {
-    appendHistory(team.project, root, host.home, {
+  const recordUnreachable = (detail: string, via?: 'typed'): DaemonSendResponse => {
+    const entry: HistoryEntry = {
       ts: host.now().toISOString(),
       from,
       to: seatName,
       body,
       id: msgId,
       outcome: 'unreachable',
-    });
+      ms: Date.now() - startedAt,
+    };
+    // The path is named only once the trigger had been typed, never for a refusal before it.
+    if (via !== undefined) entry.via = via;
+    appendHistory(team.project, root, host.home, entry);
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail, drop_path: dropPath };
   };
 
@@ -953,9 +965,9 @@ async function executeQueuedSend(
     // typed, and `delivered` only once the trigger has left the box and the seat is working.
     const result = await deliverTrigger(bindPane(host.native, team.session), pane, trigger, configured.cli);
     const where = `the drop file is at ${dropPath}`;
-    if (result.dialog !== undefined) return recordHeld(`the screen reads ${result.dialog}; ${where}`);
-    if (result.outcome === 'held') return recordHeld(`${result.reason ?? 'the composer holds text'}; ${where}`);
-    if (result.outcome === 'unreachable') return recordUnreachable(`${result.reason ?? 'the seat was not reached'}; ${where}`);
+    if (result.dialog !== undefined) return recordHeld(`the screen reads ${result.dialog}; ${where}`, 'typed');
+    if (result.outcome === 'held') return recordHeld(`${result.reason ?? 'the composer holds text'}; ${where}`, 'typed');
+    if (result.outcome === 'unreachable') return recordUnreachable(`${result.reason ?? 'the seat was not reached'}; ${where}`, 'typed');
     if (result.outcome === 'not-submitted') {
       appendHistory(team.project, root, host.home, {
         ts: host.now().toISOString(),
@@ -964,6 +976,8 @@ async function executeQueuedSend(
         body,
         id: msgId,
         outcome: 'not-submitted',
+        ms: Date.now() - startedAt,
+        via: 'typed',
       });
       return {
         v: 1,
@@ -993,6 +1007,8 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'delivered',
+      ms: Date.now() - startedAt,
+      via: 'typed',
     });
     return {
       v: 1,
@@ -1025,6 +1041,8 @@ async function executeSocketSend(
   host: DaemonHost,
   alive: (pid: number) => boolean,
 ): Promise<DaemonSendResponse> {
+  // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.
+  const startedAt = Date.now();
   const frame = `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;
   if (frame.length > FRAME_LIMIT) {
     return {
@@ -1049,6 +1067,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason };
   }
@@ -1062,6 +1081,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: "the pane's processes could not be read" };
   }
@@ -1075,6 +1095,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'unreachable',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
   }
@@ -1097,6 +1118,7 @@ async function executeSocketSend(
       body,
       id: msgId,
       outcome: 'held',
+      ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail };
   }
@@ -1117,6 +1139,8 @@ async function executeSocketSend(
           body,
           id: msgId,
           outcome: 'unreachable',
+          ms: Date.now() - startedAt,
+          via: 'socket',
         });
         return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: taken.reason };
       }
@@ -1132,6 +1156,8 @@ async function executeSocketSend(
           body,
           id: msgId,
           outcome: 'answered',
+          ms: Date.now() - startedAt,
+          via: 'socket',
         });
         return { v: 1, ok: true, id: msgId, seat: seatName, outcome: 'answered', reply: read.reply, reply_id: read.msg_id };
       }
@@ -1143,6 +1169,8 @@ async function executeSocketSend(
         body,
         id: msgId,
         outcome: 'timeout',
+        ms: Date.now() - startedAt,
+        via: 'socket',
       });
       return {
         v: 1,

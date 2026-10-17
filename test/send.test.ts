@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { dropMessage, sawSubmission, triggerLine, TRIGGER_MAX, type NativePane } from '../src/send/native.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../src/send/uds.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
@@ -126,8 +127,8 @@ function quietNative(): NativePane {
 }
 
 /** The agent record `up` writes for a launched seat: the id admission names in the drop file's
- *  header, and the reach its rules read. */
-function registerSeat(seat: string, role: string, pane = 'w1:p1'): void {
+ *  header, and the reach its rules read. The id is returned so a team record can roster it. */
+function registerSeat(seat: string, role: string, pane = 'w1:p1', team = 'acme'): string {
   const id = `agt_${Buffer.from(seat).toString('hex').slice(0, 12).padEnd(12, '0')}`;
   const file = join(base, 'home', '.config', 'team', 'agents', `${id}.yaml`);
   mkdirSync(dirname(file), { recursive: true });
@@ -145,7 +146,7 @@ function registerSeat(seat: string, role: string, pane = 'w1:p1'): void {
       'launcher: null',
       'launch: "claude"',
       'reach:',
-      '  team: "acme"',
+      `  team: "${team}"`,
       `  seat: "${seat}"`,
       '  session: "acme"',
       `  pane: "${pane}"`,
@@ -160,6 +161,7 @@ function registerSeat(seat: string, role: string, pane = 'w1:p1'): void {
       '',
     ].join('\n'),
   );
+  return id;
 }
 
 function record(dir: string, seat: string, pane: string): void {
@@ -168,10 +170,29 @@ function record(dir: string, seat: string, pane: string): void {
   });
 }
 
+/** The team's registry record, and the target seat's agent record on the id the registry keys the
+ *  team by, as `up` writes both: a plain-seat spec resolves through the registry, so the send
+ *  rides the resolved-target path while the sender's own record is still missing. */
+function registerTarget(root: string, seat: string, role: string, pane = 'w1:p1'): void {
+  const home = join(base, 'home');
+  const id = teamIdOf(root);
+  const agent = registerSeat(seat, role, pane, id);
+  upsertTeam(home, id, {
+    project: 'acme',
+    entity: 'acme',
+    session: 'acme',
+    root,
+    lobby: lobbyDir(home),
+    roster: [{ agent, seat, role }],
+    lifecycle: 'running',
+    by: 'test',
+  });
+}
+
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
 describe('team send: delivered', () => {
-  test('a Claude Code seat is delivered by the drop file when herdr reports working', async () => {
+  test('a Claude Code seat with no socket falls back to the drop file when herdr reports working', async () => {
     const { root, dir, sockets } = world();
     const pane = scripted(['idle', 'working']);
     const host = fake(sockets, { native: pane });
@@ -181,7 +202,9 @@ describe('team send: delivered', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('lead: delivered\n');
+    // The fixture's sockets folder holds no socket file, so the default (socket) path is
+    // unavailable and the typed trigger carries it; the outcome names that and the reason.
+    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
     expect(host.frames).toEqual([]);
     expect(pane.typed.length).toBe(1);
     expect(pane.typed[0]).not.toContain('hello world');
@@ -219,7 +242,7 @@ describe('team send: delivered', () => {
     const code = await runSend(['lead', 'a note'], io, fake(sockets, { native: scripted(['idle', 'working']) }));
 
     expect(code).toBe(0);
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
       `from agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')} (lead, lead@acme) — admitted by: an orchestrator to another orchestrator\n\na note`,
@@ -236,10 +259,28 @@ describe('team send: delivered', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
       `from agt_${Buffer.from('helper').toString('hex').padEnd(12, '0')} (helper, helper@acme) — admitted by: a seat to its own team's orchestrator\n\na note`,
+    );
+  });
+
+  test('a seat the file declares, with no agent record yet, is judged as that seat — and the header says so', async () => {
+    // The bootstrap: herdr placed this caller on the pane the live file declares for the seat, so
+    // the own-team rules judge it as that seat before any record exists for it.
+    const { root, dir, sockets } = world();
+    record(dir, 'helper', 'w2:p1');
+    const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+
+    const code = await runSend(['lead', 'a note'], io, fake(sockets, { native: scripted(['idle', 'working']) }));
+
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
+      "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\na note",
     );
   });
 });
@@ -274,16 +315,54 @@ describe('team send: refused', () => {
     expect(host.frames).toEqual([]);
   });
 
-  test('a seat of the team with no agent record may not send: there is no identity to admit by', async () => {
+  test('a caller with neither an agent record nor a seat in the file is refused, and the refusal names the command that records it', async () => {
     const { root, dir, sockets } = world();
-    record(dir, 'helper', 'w2:p1');
+    record(dir, 'drifter', 'w9:p9');
     const host = fake(sockets);
-    const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+    const io = testIo(root, { kind: 'seat', name: 'drifter', pane: 'w9:p9', session: 'acme' });
 
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('helper: no agent record on this machine, so no rule admits the send');
+    expect(io.err).toContain('drifter: no agent record on this machine, so no rule admits the send');
+    expect(io.err).toContain('`team up` registers a seat it leaves standing');
+    // The file declares no seat "drifter", so `register` is not named: it reads the same file and
+    // would refuse a name the file does not hold.
+    expect(io.err).not.toContain('`team register');
+    expect(host.frames).toEqual([]);
+  });
+
+  test('a record-less seat on another pane is refused when the target has a registry record', async () => {
+    // The declared judgement asks placement whatever the spec resolved to: the state records
+    // helper on w2:p1, and this call is on w9:p9.
+    const { root, dir, sockets } = world();
+    registerTarget(root, 'lead', 'coordinator');
+    record(dir, 'helper', 'w2:p1');
+    const host = fake(sockets);
+    const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w9:p9', session: 'acme' });
+
+    const code = await runSend(['lead', 'a note'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain('the state records pane w2:p1 for seat helper in this session, not the pane this call is on');
+    expect(host.frames).toEqual([]);
+  });
+
+  test('a record-less seat placed in another session is refused', async () => {
+    // The seat is judged where it stands: the pane matches, but the call is not placed in the
+    // session the seat is judged in, so the caller is not that seat.
+    const { root, dir, sockets } = world();
+    registerTarget(root, 'lead', 'coordinator');
+    record(dir, 'helper', 'w2:p1');
+    const host = fake(sockets);
+    const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'elsewhere' });
+
+    const code = await runSend(['lead', 'a note'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain('seat helper stands in session acme, and this call is not placed in it');
     expect(host.frames).toEqual([]);
   });
 
@@ -956,7 +1035,7 @@ describe('team send: native drop', () => {
     expect(JSON.parse(json.out)).toEqual({ seat: 'lead', status: 'dry-run', exit: 0, ids: { sent: null, reply: null } });
     const claude = owner(root);
     expect(await runSend(['lead', 'hello', '--dry-run'], claude, fake(sockets))).toBe(0);
-    expect(claude.out).toBe('lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written\n');
+    expect(claude.out).toBe('lead: dry-run: claude-code via its cross-session socket, falling back to a 0600 drop file and one trigger line; nothing was written\n');
     const waited = owner(root);
     expect(await runSend(['lead', 'hello', '--wait', '--dry-run'], waited, fake(sockets))).toBe(0);
     expect(waited.out).toBe('lead: dry-run: claude-code via the cross-session socket; nothing was sent\n');
@@ -1021,7 +1100,7 @@ describe('team send: native drop', () => {
     const io = owner(root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('lead: delivered\n');
+    expect(io.out).toMatch(/^lead: delivered \(typed, socket .+\)\n$/);
   });
 });
 

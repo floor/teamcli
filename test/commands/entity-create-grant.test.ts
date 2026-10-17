@@ -14,14 +14,14 @@ import type { Terminal } from '../../src/launch/terminal.ts';
 import { readState } from '../../src/state.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-16T10:00:00Z');
 const FUTURE = '2026-12-31T23:59:59Z';
 const PAST = '2026-10-16T09:59:59Z';
 const EXACT_NOW = '2026-10-16T10:00:00Z';
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const AMPLE: Machine = {
   loadPerCore: 0.2,
   memoryFree: 80,
@@ -252,7 +252,9 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       };
       mkdirSync(sendHost.socketsDir, { recursive: true });
       expect(await runSend(['builder-1', 'first brief'], sendIo, sendHost)).toBe(0);
-      expect(sendIo.out).toContain('builder-1: delivered\n');
+      // No socket file under the host's sockets folder: the typed trigger is the fallback, and
+      // the outcome names that path and the socket's reason.
+      expect(sendIo.out).toMatch(/builder-1: delivered \(typed, socket .+\)/);
 
       // 2. Under ~/Documents/radio/archive: also admitted by the same radiooooo grant.
       const archive = join(sb.radioDocs, 'archive');
