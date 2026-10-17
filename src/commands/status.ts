@@ -9,6 +9,7 @@ import { budgetLine, budgetTable, type BudgetRow } from '../budgets/table.ts';
 import { recall } from '../budgets/readings.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import type { DelegateSources } from '../delegate.ts';
+import { devModeActive } from '../dev_mode.ts';
 import { currentTeam } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
@@ -352,14 +353,28 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   for (const held of procs) {
     comparison.notes.push(`proc ${held.name}: ${held.by} since ${held.at}${held.pid !== undefined ? `, pid ${held.pid}` : ''}`);
   }
+  // Dev mode is the local override, read from the caller's place: under it the approval and
+  // overrides rows fold into quiet notes — a team running so does not take the owner step they
+  // name — and the policy, not the variable, decides once a value governs.
+  const record = approvalAndOverrideRows(
+    standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null,
+    overrides,
+    devModeActive(io, {
+      ...(sources.home !== undefined ? { home: sources.home } : {}),
+      entity: team.entity ?? null,
+      team,
+      root,
+      now,
+    }),
+  );
+  comparison.notes.push(...record.notes);
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),
     // `approve` is gone: a machine that never approved this file is the ordinary case now, not a
     // difference, and the reading exits 0 for it. A legacy record and one the verification refused
-    // still say what they are.
-    ...approvalCaseRow(standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null),
-    ...overrideDrift(overrides),
+    // still say what they are — as rows, or under dev mode as the quiet notes above.
+    ...record.differences,
     // The file's own rules files, only once a record exists for a launch to have written them.
     ...rulesFileDifferences(standing, team, root, sources.home),
     // A seat whose reading is blind — unknown past the blind threshold — counts as
@@ -442,6 +457,25 @@ export function overrideDrift(report: OverrideForce): Difference[] {
 export function approvalCaseRow(reason: string | null): Difference[] {
   if (reason === null) return [];
   return [{ what: reason, repair: APPROVAL_REPAIR, approval: true, owner: true }];
+}
+
+// The two state rows as one reading, for `team status` and `team check` alike. Under dev mode —
+// the local override, read from the effective policy once a value governs — they fold into quiet
+// notes: a team running so does not take the owner step they name, and the reading still says
+// what it set aside. The override report's own problems are never folded: a file that will not
+// parse is not a comparison dev mode can waive.
+export function approvalAndOverrideRows(
+  reason: string | null,
+  report: OverrideForce,
+  quiet: boolean,
+): { differences: Difference[]; notes: string[] } {
+  if (!quiet) return { differences: [...approvalCaseRow(reason), ...overrideDrift(report)], notes: [] };
+  const notes: string[] = [];
+  if (reason !== null) notes.push(`${reason}; dev mode does not compare it`);
+  if (report.differences.length > 0) {
+    notes.push(`${report.differences.length} override difference(s); dev mode does not compare them`);
+  }
+  return { differences: overrideDrift({ ...report, differences: [] }), notes };
 }
 
 

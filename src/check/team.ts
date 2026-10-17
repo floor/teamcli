@@ -15,8 +15,9 @@ import { join, isAbsolute, relative } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { blindDifferences } from '../commands/seats.ts';
-import { approvalCaseRow, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
+import { approvalAndOverrideRows, emptyOverrides, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
+import { devModeActive } from '../dev_mode.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
@@ -252,10 +253,28 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
   // at all: the setting is one record, never a file key and never a stale approval.
   const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team), undefined, dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()));
+  // Dev mode is the local override, read from the caller's place: under it the approval and
+  // overrides state rows fold into quiet notes, and a seat recorded under it is counted rather
+  // than named seat by seat — `team seats` keeps the mark, and `team status --all --json` keeps
+  // the field. Outside dev mode every row stands. The effective policy, not the variable, decides
+  // once a value governs.
+  const quiet = devModeActive(io, {
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+    entity: team.entity,
+    team,
+    root,
+    now: sources.now(),
+  });
+  const record = approvalAndOverrideRows(
+    standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null,
+    overrides,
+    quiet,
+  );
+  const provenance = devModeDifferences(team, root, sources.home, quiet);
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...signingDifferences(team, state, live, root, sources.home),
-    ...devModeDifferences(team, root, sources.home),
+    ...provenance.differences,
     ...attentionDifferences(team, state, live),
     ...labelDifferences(team, state, live),
     ...rosterDifferences(team, state, live, root, sources.home),
@@ -263,10 +282,10 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...deliveryOrderDifferences(team, root, sources.home),
     ...policyChecked.differences,
     ...protectedCheckouts(team, root, { branch: sources.branch }),
-    // The same row `status` prints: a legacy record or one the verification refused still says what
-    // it is; a machine that never approved the file is the ordinary file now, and nothing to repair.
-    ...approvalCaseRow(standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null),
-    ...overrideDrift(overrides),
+    // The same rows `status` prints: a legacy record or one the verification refused still says
+    // what it is; a machine that never approved the file is the ordinary file now, and nothing to
+    // repair. Under dev mode both fold into the quiet notes above.
+    ...record.differences,
     ...rulesFileDifferences(standing, team, root, sources.home),
     ...staleDifferences(stale),
     // A blind seat — unknown past the blind threshold — counts as not working, and is
@@ -298,6 +317,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...lobbyNotes(team, root, sources.home, session),
     ...policyChecked.notes,
     ...unknownStatusNotes(team, state, live),
+    ...record.notes,
+    ...provenance.notes,
   ]);
   if (args.json) {
     writeJson(io, 'team.check', {
@@ -452,19 +473,31 @@ function dropStale(dir: string, session: string, stale: Stale): string[] {
  * folded — a clean launch of the seat does it too. A seat the file no longer names, and one whose
  * record the registry holds none for, is not this finding's.
  */
-function devModeDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
-  if (home === undefined) return [];
+function devModeDifferences(
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+  quiet: boolean,
+): { differences: Difference[]; notes: string[] } {
+  if (home === undefined) return { differences: [], notes: [] };
   const out: Difference[] = [];
+  let marked = 0;
   const teamId = teamIdOf(root);
   for (const seat of team.seats) {
     const record = findAgent(home, { team: teamId, seat: seat.name });
     if (record?.provenance.dev_mode !== true) continue;
+    // Under dev mode the mark is the expected record, not a finding: one quiet note counts the
+    // seats instead of one row per seat.
+    if (quiet) {
+      marked += 1;
+      continue;
+    }
     out.push({
       what: `${seat.name}: registered by an agent, not by the owner`,
       repair: `re-record the seat with the caller gate in force (team register ${seat.name})`,
     });
   }
-  return out;
+  return { differences: out, notes: marked > 0 ? [`${marked} seat(s) recorded under dev mode`] : [] };
 }
 
 /**

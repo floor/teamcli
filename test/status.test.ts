@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { saveReadings, saveSpendReadings, type Seen } from '../src/budgets/readings.ts';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runStatus } from '../src/commands/status.ts';
 import type { StatusSources } from '../src/commands/status.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Seat, TeamFile } from '../src/file/types.ts';
 import { rulesOf } from '../src/launch/rules.ts';
 import { rulesFileHash, rulesFilePathOf, writeRulesFile } from '../src/launch/rules-file.ts';
+import { overridesPath } from '../src/profiles/overrides.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Standing } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
@@ -1321,5 +1323,87 @@ describe('the rules files of message seats', () => {
     const wide = await status();
     expect(wide.out).toContain('codex-acme: its rules file has mode 0644, not 0600');
     expect(wide.code).toBe(1);
+  });
+});
+
+describe('dev mode: the approval and override state lines are quiet notes', () => {
+  // A home, because the overrides live in the approval store and the policy chain is signed
+  // there: no home is a test that stands in for no store at all, and neither is read.
+  let home: string;
+  beforeEach(() => {
+    home = join(dir, 'home');
+    mkdirSync(join(home, '.config', 'team'), { recursive: true, mode: 0o700 });
+    sources.home = home;
+  });
+  afterEach(() => {
+    delete sources.home;
+  });
+
+  /** The chain value the quiet count reads: a signed team-level `dev-mode`, the shape `team
+   *  policy set` writes. Once it governs, `TEAMCLI_DEV_MODE` is ignored — the variable alone is
+   *  not the reading. */
+  function setDevMode(value: 'on' | 'off'): void {
+    const written = writePolicySet(home, { level: 'team', target: dir, teamRoot: dir, name: 'dev-mode', value }, { now: NOW });
+    if (!written.ok) throw new Error(written.why);
+  }
+
+  async function statusDev() {
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runStatus(['--file', file], io, sources);
+    return { code, out: io.out, err: io.err };
+  }
+
+  test('a refused record is one quiet note under a governing on, and no repair waits on an approval', async () => {
+    // One seat not running: a `team add` repair `orderAndAnnotateDifferences` would mark
+    // `(after: …)` while the refused record stands.
+    live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme') };
+    standing = { kind: 'refused', why: REFUSED_WHY };
+
+    const forced = await status();
+    expect(forced.out).toContain(`difference: ${REFUSED_WHY}`);
+    expect(forced.out).toContain('  repair: the live file is what the commands read');
+    expect(forced.out).toContain('repair: team add deepseek-acme (after: the live file is what the commands read)');
+
+    setDevMode('on');
+    const dev = await statusDev();
+    expect(dev.out).toContain(`note: ${REFUSED_WHY}; dev mode does not compare it`);
+    expect(dev.out).not.toContain(`difference: ${REFUSED_WHY}`);
+    // No approval row, so nothing waits on one: the annotation goes with it.
+    expect(dev.out).toContain('repair: team add deepseek-acme\n');
+    expect(dev.out).not.toContain('(after: the live file is what the commands read)');
+  });
+
+  test('overrides drift is one counted note under dev mode, and its rows are not differences', async () => {
+    const parsed = validateTeamFile(example);
+    if (!parsed.ok) throw new Error('the example fixture does not validate');
+    const path = overridesPath(parsed.team.project, dir, home);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, `format: 1
+profiles:
+  claude-code:
+    screen:
+      permission:
+        - any: ['Owner dialog']
+`);
+
+    const forced = await status();
+    expect(forced.out).toContain('difference: the overrides differ from the approved copy: `overrides` changed');
+    expect(forced.out).toContain('  who: the owner');
+
+    setDevMode('on');
+    const dev = await statusDev();
+    expect(dev.out).toContain('note: 1 override difference(s); dev mode does not compare them');
+    expect(dev.out).not.toContain('difference: the overrides differ from the approved copy');
+  });
+
+  test('a governing off retires the variable: the state row stays a difference under TEAMCLI_DEV_MODE=1', async () => {
+    standing = { kind: 'refused', why: REFUSED_WHY };
+    setDevMode('off');
+    const io = testIo(dir, { kind: 'owner' });
+    io.env.TEAMCLI_DEV_MODE = '1';
+    const code = await runStatus(['--file', file], io, sources);
+    expect(io.out).toContain(`difference: ${REFUSED_WHY}`);
+    expect(io.out).not.toContain('dev mode does not compare it');
+    expect(code).toBe(1);
   });
 });

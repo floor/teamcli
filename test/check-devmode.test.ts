@@ -13,6 +13,7 @@ import { runTeamCheck } from '../src/check/team.ts';
 import { realSeatsSources, runSeats } from '../src/commands/seats.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { readAgents, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { updateState } from '../src/state.ts';
@@ -128,6 +129,28 @@ function check(root: string, home: string | undefined, session: Live = live()): 
   return { code, out: `${io.out}${io.err}` };
 }
 
+/** The signed team-level value the quiet count reads: once a value governs, the variable is
+ *  ignored — the reading is the policy's, not `TEAMCLI_DEV_MODE`'s. */
+function setDevMode(home: string, root: string, value: 'on' | 'off'): void {
+  const written = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'dev-mode', value }, { now: NOW });
+  if (!written.ok) throw new Error(written.why);
+}
+
+/** The check with an environment of its own: the variable's compat path is a scene, and a
+ *  governing policy's is another. */
+function checkWithEnv(root: string, home: string | undefined, env: Record<string, string>): { code: number; out: string } {
+  const io = testIo(root, { kind: 'owner' });
+  io.env = { ...env };
+  const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+    live: () => live(),
+    branch: () => 'main',
+    standing: (at) => approvalStanding(at, home ?? join(root, 'nowhere')),
+    now: () => NOW,
+    ...(home === undefined ? {} : { home }),
+  });
+  return { code, out: `${io.out}${io.err}` };
+}
+
 /** The registry as it stands on disk: every agent file's bytes, for the scene that proves the
  *  check read it and wrote nothing. */
 function registryOnDisk(home: string): Record<string, string> {
@@ -149,6 +172,53 @@ describe('the dev-mode mark on a record', () => {
     expect(code).toBe(1);
     // The record is the finding's evidence, read only: the check writes nothing.
     expect(registryOnDisk(home)).toEqual(before);
+  });
+
+  test('before any policy the variable still quiets the reading', () => {
+    const { root, home } = place();
+    record(home, root, { by: DEV_CALLER, dev: true });
+    const { code, out } = checkWithEnv(root, home, { TEAMCLI_DEV_MODE: '1' });
+    expect(out).toContain('note: 1 seat(s) recorded under dev mode');
+    expect(out).not.toContain('registered by an agent, not by the owner');
+    expect(code).toBe(0);
+  });
+
+  test('under a governing on policy the marked seats are one quiet note, not a difference each', () => {
+    const { root, home } = place();
+    record(home, root, { by: DEV_CALLER, dev: true });
+    setDevMode(home, root, 'on');
+    // The variable is not set: the policy alone quiets the reading.
+    const { code, out } = check(root, home);
+    expect(out).toContain('note: 1 seat(s) recorded under dev mode');
+    expect(out).not.toContain('registered by an agent, not by the owner');
+    expect(code).toBe(0);
+  });
+
+  test('a governing off retires the variable: the mark stays a difference under TEAMCLI_DEV_MODE=1', () => {
+    const { root, home } = place();
+    record(home, root, { by: DEV_CALLER, dev: true });
+    setDevMode(home, root, 'off');
+    const { code, out } = checkWithEnv(root, home, { TEAMCLI_DEV_MODE: '1' });
+    expect(out).toContain('difference: lead: registered by an agent, not by the owner');
+    expect(out).not.toContain('seat(s) recorded under dev mode');
+    expect(code).toBe(1);
+  });
+
+  test('under a governing on policy a refused record is a quiet note in the check too', () => {
+    const { root, home } = place();
+    setDevMode(home, root, 'on');
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+      live: () => live(),
+      branch: () => 'main',
+      standing: () => ({ kind: 'refused', why: 'the record is signed, but its key is missing' }),
+      now: () => NOW,
+      home,
+    });
+    const out = `${io.out}${io.err}`;
+    expect(out).toContain('note: the record is signed, but its key is missing; dev mode does not compare it');
+    expect(out).not.toContain('difference: the record is signed, but its key is missing');
+    expect(code).toBe(0);
   });
 
   test('a record a run in force wrote is no finding at all', () => {
