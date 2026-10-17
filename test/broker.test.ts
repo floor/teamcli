@@ -482,6 +482,11 @@ const checked = validateTeamFile(readFileSync(join(root, '.agents', 'team.yaml')
 if (!checked.ok) { writeSync(2, 'the fixture team file does not validate\\n'); process.exit(2); }
 writeSync(1, 'ready\\n');
 while (!existsSync(go)) await new Promise((tick) => setTimeout(tick, 1));
+// The stalled-broker stub: a start path that sits this long before it answers, standing in for
+// a broker that regressed. Only the scene proving a stalled release fails sets it; a round
+// never counts it as broker work, it is the broker's work made slow.
+const stallMs = Number(process.env.DS_SLOW_STALL_MS || '0');
+if (stallMs > 0) await new Promise((tick) => setTimeout(tick, stallMs));
 const t0 = Date.now();
 const result = await srv.startBroker({
   root,
@@ -568,6 +573,58 @@ async function claimSelftest(candidate: string): Promise<{ ok: boolean; line: st
   kid.kill();
   await kid.exited;
   return { ok: false, line: 'no selftest line' };
+}
+
+/** The claim pin's rounds: the pre-registered 413 (ceil(ln 0.01 / ln(1 − p̂)) on the pooled
+ *  1.111%/round) — never resized after seeing a result. */
+const CLAIM_ROUNDS = 413;
+/** The pin's own budget floor, from CI's ≈0.23 s/round pace. */
+const CLAIM_STEP_FLOOR_MS = 10_000;
+const CLAIM_RUN_FLOOR_MS = 300_000;
+const CLAIM_RUN_CAP_MS = 2_400_000;
+/** The outcomes step is fixed, never scaled: released together on a dead start's lock, the six
+ *  starts' whole release path measured 130–260 ms at load 9–14, so ten seconds is two orders of
+ *  magnitude of headroom — and a broker that regressed must fail it, not inherit a budget its
+ *  own slowdown inflated. */
+const CLAIM_OUTCOMES_STEP_MS = 10_000;
+/** The cumulative outcomes wall the run may spend: 413 rounds × 2 s. The measured per-round
+ *  window is 130–260 ms even at load 9–14, so this catches a broker that stays just under the
+ *  per-round step round after round, without failing a merely loaded machine. */
+const CLAIM_OUTCOMES_TOTAL_MS = CLAIM_ROUNDS * 2_000;
+
+/** The budgets, computed from the BOOT pace alone — round start → every start's `ready`, plus
+ *  its reap — never from the release window where `startBroker` runs: a broker that slowed
+ *  would inflate a pace that included it and scale the very budget meant to catch it. The step
+ *  deadline is twice the boot pace (never under the pin's original ten seconds); the run budget
+ *  is twice the extrapolated 413-round total, floored at the pin's original five minutes and
+ *  capped at forty. */
+function claimBudgets(bootPaceMs: number): { stepMs: number; runBudgetMs: number } {
+  return {
+    stepMs: Math.max(CLAIM_STEP_FLOOR_MS, Math.ceil(bootPaceMs * 2)),
+    runBudgetMs: Math.min(CLAIM_RUN_CAP_MS, Math.max(CLAIM_RUN_FLOOR_MS, Math.ceil(bootPaceMs * CLAIM_ROUNDS * 2))),
+  };
+}
+
+/** One step of a round, bounded by its own budget: a step that runs out kills and reaps its
+ *  round's starts at once and fails naming the step and the budget it overran, never the child
+ *  it waited on. */
+async function withinStep<T>(label: string, roundKids: ClaimChild[], budgetMs: number, fn: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`the claim lane: step "${label}" outlived its ${budgetMs} ms budget; its starts were killed and reaped`)),
+      budgetMs,
+    );
+  });
+  try {
+    return await Promise.race([fn(), late]);
+  } catch (error) {
+    for (const kid of roundKids) kid.kill();
+    await Promise.all(roundKids.map((kid) => kid.exited));
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** While a writer holds inside its create, watch one path: every sighting of the file present
@@ -1289,8 +1346,10 @@ describe('the start protocol', () => {
     // itself on this runner (a canary import's own call must fire the wrap before any round is
     // scored); where no route arms, the tuples are pinned and the unlink event is unasserted,
     // loudly. The timeout is the pin's own: 413 rounds of six real processes, with the step
-    // and run budgets scaled from a warm-up's measured pace (on a loaded laptop the six child
-    // boots, not the broker, set that pace). Each round is a bounded step: its six starts are
+    // and run budgets scaled from a warm-up's measured BOOT pace (on a loaded laptop the six
+    // child boots, not the broker, set that pace; the release window is excluded so a
+    // regressed broker cannot inflate the budget meant to catch it) and the outcomes step
+    // fixed at ten seconds. Each round is a bounded step: its six starts are
     // killed and reaped before the next round begins, the live set may never pass the six a
     // round holds, and a step that outlives its budget tears its own round down at once and
     // fails naming the step. A run that cannot finish inside its budget stops with the round
@@ -1309,17 +1368,19 @@ describe('the start protocol', () => {
     const ROUND_SIZE = 6;
     // The pin's own measured wall is ≈0.23 s a round on CI (≈95 s all told). A loaded laptop
     // boots the six child starts far slower (measured here: ≈2.5–3.6 s a round at load ≈8–9),
-    // so the budgets come from the pace the run actually finds. The first rounds are a
-    // warm-up: after them the step deadline is twice the measured round pace (never under the
-    // pin's original ten seconds) and the run budget is twice the extrapolated total, between
-    // the pin's original five minutes and a forty-minute cap. A machine that cannot finish
-    // 413 rounds inside the cap still stops with the round and step named and every start
-    // reaped; what the budgets never do is let a slow machine pass as a broken broker.
+    // so the budgets come from the pace the run actually finds — the BOOT pace alone, round
+    // start to every start's `ready` plus its reap, never the release window where
+    // `startBroker` runs: a broker that regressed must not inflate the budget meant to catch
+    // it. The first ten rounds are a warm-up; after them the step deadline is twice the boot
+    // pace (never under the pin's original ten seconds), the run budget is twice the
+    // extrapolated total from that same pace (between the pin's original five minutes and a
+    // forty-minute cap), and the outcomes step stays a fixed ten seconds. A machine that
+    // cannot finish 413 rounds inside the cap still stops with the round and step named and
+    // every start reaped; what the budgets never do is let a slow machine pass as a broken
+    // broker.
     const WARMUP_ROUNDS = 10;
-    const RUN_BUDGET_FLOOR_MS = 300_000;
-    const RUN_BUDGET_CAP_MS = 2_400_000;
-    let stepMs = 10_000;
-    let runBudgetMs = RUN_BUDGET_FLOOR_MS;
+    let stepMs = CLAIM_STEP_FLOOR_MS;
+    let runBudgetMs = CLAIM_RUN_FLOOR_MS;
     const breaches: string[] = [];
     const live = new Set<ClaimChild>();
     /** A start joins the live set on spawn and leaves it when it is reaped. */
@@ -1327,26 +1388,6 @@ describe('the start protocol', () => {
       live.add(kid);
       void kid.exited.then(() => live.delete(kid));
       return kid;
-    };
-    /** One step of a round, bounded by its own budget: a step that runs out kills and reaps its
-     *  round's starts at once and fails naming the step, never the child it waited on. */
-    const within = async <T>(label: string, roundKids: ClaimChild[], fn: () => Promise<T>): Promise<T> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const late = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`the claim lane: step "${label}" outlived its ${stepMs} ms budget; its starts were killed and reaped`)),
-          stepMs,
-        );
-      });
-      try {
-        return await Promise.race([fn(), late]);
-      } catch (error) {
-        for (const kid of roundKids) kid.kill();
-        await Promise.all(roundKids.map((kid) => kid.exited));
-        throw error;
-      } finally {
-        clearTimeout(timer);
-      }
     };
     /** The round's own end: every start it made is killed and reaped before the next begins. */
     const reap = async (roundKids: ClaimChild[]): Promise<void> => {
@@ -1357,17 +1398,15 @@ describe('the start protocol', () => {
     let touched = 0;
     let broken = 0;
     let failure: unknown;
+    let warmupBootMs = 0;
+    let outcomesTotalMs = 0;
     const runStart = Date.now();
     try {
-      for (let round = 0; round < 413; round++) {
-        if (round === WARMUP_ROUNDS) {
-          const pace = (Date.now() - runStart) / WARMUP_ROUNDS;
-          stepMs = Math.max(10_000, Math.ceil(pace * 2));
-          runBudgetMs = Math.min(RUN_BUDGET_CAP_MS, Math.max(RUN_BUDGET_FLOOR_MS, Math.ceil(pace * 413 * 2)));
-        }
+      for (let round = 0; round < CLAIM_ROUNDS; round++) {
         if (Date.now() - runStart > runBudgetMs) {
           throw new Error(`the claim lane: the run outlived its ${runBudgetMs / 1000} s budget before round ${round} (step: start); its starts were killed and reaped`);
         }
+        const bootStart = Date.now();
         const roundRoot = join(base, `claimburst-${round}`);
         mkdirSync(join(roundRoot, '.agents'), { recursive: true });
         writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
@@ -1382,9 +1421,12 @@ describe('the start protocol', () => {
         if (live.size > ROUND_SIZE) {
           throw new Error(`the claim lane: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
         }
-        await within(`round ${round}: ready`, roundKids, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+        await withinStep(`round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+        const bootMs = Date.now() - bootStart;
         writeFileSync(go, 'go\n');
-        const outcomes = await within(`round ${round}: outcomes`, roundKids, () => Promise.all(roundKids.map((kid) => outcomeOf(kid, stepMs + 10_000))));
+        const outcomesStart = Date.now();
+        const outcomes = await withinStep(`round ${round}: outcomes`, roundKids, CLAIM_OUTCOMES_STEP_MS, () => Promise.all(roundKids.map((kid) => outcomeOf(kid, CLAIM_OUTCOMES_STEP_MS + 5_000))));
+        outcomesTotalMs += Date.now() - outcomesStart;
         const serving = outcomes.filter((outcome) => outcome.kind === 'serving' && !outcome.cleared);
         const busy = outcomes.filter((outcome) => outcome.kind === 'busy' && !outcome.cleared);
         if (serving.length !== 1 || busy.length !== 5) {
@@ -1399,7 +1441,10 @@ describe('the start protocol', () => {
             breaches.push(`round ${round}: UNLINK_LIVE ${item.path.replace(base, '…')} pid=${item.pid} me=${item.me} bytes="${String(item.bytes).trim()}"`);
           }
         }
+        const reapStart = Date.now();
         await reap(roundKids);
+        if (round < WARMUP_ROUNDS) warmupBootMs += bootMs + (Date.now() - reapStart);
+        if (round === WARMUP_ROUNDS - 1) ({ stepMs, runBudgetMs } = claimBudgets(warmupBootMs / WARMUP_ROUNDS));
       }
     } catch (error) {
       failure = error;
@@ -1414,16 +1459,71 @@ describe('the start protocol', () => {
       throw new Error(`the claim lane: ${leftBehind} start${leftBehind === 1 ? '' : 's'} still alive after teardown${failure === undefined ? '' : ` (the run had already failed: ${String(failure)})`}`);
     }
     if (failure !== undefined) throw failure;
+    // The release path's cumulative wall: a broker that stayed under the per-round step but far
+    // over its measured window would pass every round and fail here.
+    expect(outcomesTotalMs).toBeLessThanOrEqual(CLAIM_OUTCOMES_TOTAL_MS);
     if (route === undefined) {
       console.log(`the claim-lane pin: no detector route fired here (${selftestLog.join(' | ')}) — the tuples are pinned, the unlink event is unasserted on this runner`);
       expect(breaches).toEqual([]);
       return;
     }
     expect(broken).toBe(0);
-    expect(touched).toBeGreaterThanOrEqual(413);
+    expect(touched).toBeGreaterThanOrEqual(CLAIM_ROUNDS);
     expect(breaches).toEqual([]);
     expect(events).toBe(0);
   }, 3_000_000);
+
+  test('the claim lane, a stalled broker: a release stalled past the fixed outcomes step fails, and the boot pace never scales that step', async () => {
+    // The regression the budgets must not hide: a broker whose start path slows down. The pin
+    // measures its budgets from the BOOT pace (round start → every start's `ready`, plus reap)
+    // and holds the outcomes step fixed at ten seconds — the release path measured 130–260 ms
+    // at load 9–14 — so a stalled release fails the step instead of inflating a budget scaled
+    // from it. This scene stubs exactly that: six real starts on the dead-lock shape, released
+    // together, each sitting STALL_MS before it answers. The step must fail at ten seconds
+    // naming itself, and the budgets from this round's boot pace must stay far under the
+    // stall — proof the slower release never entered them.
+    project();
+    record();
+    const STALL_MS = 12_000;
+    const roundRoot = join(base, 'claimstall-0');
+    mkdirSync(join(roundRoot, '.agents'), { recursive: true });
+    writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
+    const at = brokerSocket(roundRoot);
+    const dead = spawnSync(process.execPath, ['-e', '']);
+    if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
+    writeFileSync(`${at}.lock`, `${dead.pid}\n`);
+    const go = join(base, 'claimstall-go');
+    const kids = Array.from({ length: 6 }, () =>
+      spawnClaimKid(['run', roundRoot, go, join(import.meta.dir, '..')], { DS_SLOW_STALL_MS: String(STALL_MS) }),
+    );
+    try {
+      const bootStart = Date.now();
+      await Promise.all(kids.map((kid) => readyOf(kid, 60_000)));
+      const bootPaceMs = Date.now() - bootStart;
+      const budgets = claimBudgets(bootPaceMs);
+      // The pace the budgets are taken from is the boot alone, and it sits under the stall; the
+      // old whole-round pace included the release by construction, so it would have measured at
+      // least the stall and doubled it into the step — the regression scaling its own budget.
+      expect(bootPaceMs).toBeLessThan(STALL_MS);
+      expect(budgets.stepMs).toBeLessThan(STALL_MS);
+      writeFileSync(go, 'go\n');
+      const releaseStart = Date.now();
+      const failure = await withinStep('round stall: outcomes', kids, CLAIM_OUTCOMES_STEP_MS, () =>
+        Promise.all(kids.map((kid) => outcomeOf(kid, CLAIM_OUTCOMES_STEP_MS + 5_000))),
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const elapsed = Date.now() - releaseStart;
+      expect(failure).toBeInstanceOf(Error);
+      expect(String((failure as Error).message)).toContain(`step "round stall: outcomes" outlived its ${CLAIM_OUTCOMES_STEP_MS} ms budget`);
+      expect(elapsed).toBeGreaterThanOrEqual(CLAIM_OUTCOMES_STEP_MS);
+      expect(elapsed).toBeLessThan(CLAIM_OUTCOMES_STEP_MS + 5_000);
+    } finally {
+      for (const kid of kids) kid.kill();
+      await Promise.all(kids.map((kid) => kid.exited));
+    }
+  }, 120_000);
 
   test('a start that waits out the lock deadline refuses with the one line and touches nothing', async () => {
     // A live holder — a real start, held pre-listen for a minute — keeps the lock past every
