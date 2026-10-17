@@ -35,7 +35,7 @@ These stay, with their sentences and exit ids: a bad invocation, a file that doe
 
 `team approve` is deleted: the command module, its row in `src/cli.ts`, `contract/cli.json`, `docs/commands/approve.md`, and the reference pages that list it. `writeApproval` (`src/store/store.ts`) is what writes `approval.json` and `approved.yaml`. After this change nothing calls it. `recordSeatDigestOf` is not called from `add` or `remove`. Existing store files are left on disk and are not a gate. `list` may still open an old `approval.json` to name a project; that read decides nothing.
 
-`up`, `add`, `remove`, and `down` work with no record. `add` and `remove` edit the live file only. `down` keeps the caller rule it has (owner, orchestrator, operator, delegate, or the live grant) and does not say `deny`. `delegateGate` and `grantGate` drop the standing, approved-copy, and drift steps. Membership and prohibited flags stay. No command gains a grant check it does not already have. The owner-token match is dropped with the fingerprint it compared; there is no replacement token.
+`up`, `add`, `remove`, and `down` work with no record. `add` and `remove` edit the live file only. `down` keeps the caller rule it has (the owner, the map's `leads`, a delegate, or the live grant) and does not say `deny`. `delegateGate` and `grantGate` drop the standing, approved-copy, and drift steps. Membership and prohibited flags stay. No command gains a grant check it does not already have. The owner-token match is dropped with the fingerprint it compared; there is no replacement token.
 
 Every other reader stops refusing because a record is missing, and stops telling anyone to run the deleted command. Where it acted on the approved copy, it acts on the live file:
 
