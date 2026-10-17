@@ -36,10 +36,10 @@ of the SHA-256 of the root's real path, so two stores of one root are one team:
 
 | Field | Meaning |
 | --- | --- |
-| `project`, `entity` | the team's own name — today's `project:` key in the team file, not the project it sits in — and the entity it belongs to, the entity whose lobby the team lives in |
+| `project`, `entity` | the team's own name — today's `project:` key in the team file, not the project it sits in — and the entity it belongs to, which seeds the team's lobby at registration |
 | `project_id` | the project the team sits in, by project ID, or `null`: a team no project names is its own project; written from the team file's `in_project` |
 | `session` | the herdr session |
-| `root`, `lobby` | the checkout, and the lobby folder |
+| `root`, `lobby` | the checkout, and the lobby folder — recorded at registration and kept: editing the file's `entity` never moves a registered team's lobby, and an explicit `lobby:` in the file re-records it |
 | `roster` | one `{agent, seat, role}` per seat, and the capabilities on the seats that hold them: `leads: true` on the one seat the team file marks as its lead, `assistant: true` on the one it marks as its entity's assistant — readable without a role name; an absent field means the seat is not known to hold the capability, so a record written before the fields reads unchanged |
 | `lifecycle` | `defined`, `running`, `stopped` or `archived` |
 | `provenance` | including when the record was last updated |
