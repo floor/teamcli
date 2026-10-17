@@ -1189,11 +1189,11 @@ describe('team up, live', () => {
     );
     expect(code).toBe(0);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
-    // The state records no process for it, so the detail carries the note main added: how to
-    // relaunch it. It is the coordinator, so the repair is the whole team's.
+    // The state records no process for it, so the detail names the one per-seat register run
+    // that records it — the coordinator's own seat included, and nothing relaunched.
     expect(io.err).toContain(
-      '  already ready; left as it is; a relaunch records its process: ' +
-        'team down, then team up (to restart the whole team)\n',
+      '  already ready; left as it is; its process was never recorded: ' +
+        'run team register claude-coordinator-acme to record it, nothing relaunched\n',
     );
     expect(made.creates).toEqual(['deepseek-acme-2 · implementer', watchLabel('acme-web')]);
     expect(made.renames).toContain('deepseek-acme');
@@ -1240,7 +1240,7 @@ describe('team up, live', () => {
     expect(io.err).toContain(
       '  its pane runs no CLI and its process was never recorded (team down --abandon, then team up)\n',
     );
-    expect(io.err).not.toContain('a relaunch records its process');
+    expect(io.err).not.toContain('its process was never recorded: run team register');
     expect(io.out).not.toContain('team up (it resumes the launch)');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude opus 5.5');
@@ -1285,7 +1285,7 @@ describe('team up, live', () => {
     expect(io.err).toContain(
       '  its screen runs Claude Fable 5.1; the file says Claude Opus 5.5; its process was never recorded (team down --abandon, then team up)\n',
     );
-    expect(io.err).not.toContain('a relaunch records its process');
+    expect(io.err).not.toContain('its process was never recorded: run team register');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude opus 5.5');
   });

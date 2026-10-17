@@ -2514,8 +2514,8 @@ describe('the upgrade from 0.2.1', () => {
     expect(run.code).toBe(0);
     expect(run.out).toContain('worker: ready\n');
     expect(run.err).toContain(
-      '  already ready; left as it is; a relaunch records its process: '
-        + 'team remove worker --keep, then team add worker (or team down, then team up, for the whole team)\n',
+      '  already ready; left as it is; its process was never recorded: '
+        + 'run team register worker to record it, nothing relaunched\n',
     );
   });
 
@@ -2716,7 +2716,7 @@ describe('the upgrade from 0.2.1', () => {
     });
     expect(docOldAfter.out).toContain('ok    the old lobby ../worktrees/acme/.lobby: may be removed\n');
 
-    // 4. up's skip line: coordinator and operator name only team down/up; ordinary names both
+    // 4. up's skip line: every seat, the lead's own included, names the one per-seat register run
     updateState(dir, (st) => {
       st.sessions['acme'] = {
         seats: {
@@ -2740,13 +2740,14 @@ describe('the upgrade from 0.2.1', () => {
     expect(upRun.out).toContain('lead: ready\n');
     expect(upRun.out).toContain('worker: ready\n');
     expect(upRun.out).toContain('opSeat: ready\n');
-    // The words main's skip line carried are each record's stderr detail now, in seat order:
-    // the coordinator and the operator name only the whole-team repair; an ordinary name both.
+    // Every record, the lead's own included, names the one per-seat register run: recording the
+    // identity where the seat stands, never a whole-team restart for one seat's bookkeeping.
     expect(upRun.err).toContain(
-      '  already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)\n'
-        + '  already ready; left as it is; a relaunch records its process: team remove worker --keep, then team add worker (or team down, then team up, for the whole team)\n'
-        + '  already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)\n',
+      '  already ready; left as it is; its process was never recorded: run team register lead to record it, nothing relaunched\n'
+        + '  already ready; left as it is; its process was never recorded: run team register worker to record it, nothing relaunched\n'
+        + '  already ready; left as it is; its process was never recorded: run team register opSeat to record it, nothing relaunched\n',
     );
+    expect(upRun.err).not.toContain('to restart the whole team');
     expect(upRun.err).not.toContain('team remove lead --keep');
     expect(upRun.err).not.toContain('team remove opSeat --keep');
 

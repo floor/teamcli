@@ -135,13 +135,15 @@ A seat already ready is left as it is, and the words it was left with are the de
 record. Before that skip, when the seat has a pane and a workspace, the plan renames the workspace
 to the file's title and reports the file's display line. A dry run prints both; a real run does
 them and still does not type into the pane or launch the seat again. A ready seat the state records without its process identity, or with a start outside the
-team's lobby, is left as it is too — only a relaunch repairs either — and its detail says so:
-`  already ready; left as it is; a relaunch records its process: team remove <seat> --keep, then
-team add <seat> (or team down, then team up, for the whole team)`, or the same words saying `a
-relaunch moves it into the lobby`. For a seat the file names as orchestrator or operator, the detail
-offers only `team down, then team up (to restart the whole team)`; and a lead whose process the
-state records, started in the project folder itself, is left with no relaunch note at all — the
-project folder is home for a lead too.
+team's lobby, is left as it is too. The identity is recorded where the seat stands, without a
+relaunch: `  already ready; left as it is; its process was never recorded: run team register <seat>
+to record it, nothing relaunched` — for the lead's own seat too. A seat recorded with a process but
+started outside the team's lobby is repaired by a relaunch, and its detail says so: `  already
+ready; left as it is; a relaunch moves it into the lobby: team remove <seat> --keep, then team add
+<seat> (or team down, then team up, for the whole team)`, or for a seat the file names as
+orchestrator or operator, `team down, then team up (to restart the whole team)`; and a lead whose
+process the state records, started in the project folder itself, is left with no relaunch note at
+all — the project folder is home for a lead too.
 
 A ready seat whose recorded process is still in its pane, and that pane is still named as the
 seat, is read once while the plan is built. The model is taken the way `status` takes it. When
@@ -658,10 +660,10 @@ the watch this session has never had:
 $ team up --dry-run ; echo "exit $?"
 + herdr --session beacon workspace rename w1 coordinator
 + herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
-  skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
+  skip claude-keeper: already ready; left as it is; its process was never recorded: run team register claude-keeper to record it, nothing relaunched
 + herdr --session beacon workspace rename w2 implementer
 + herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
-  skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
+  skip claude-beacon: already ready; left as it is; its process was never recorded: run team register claude-beacon to record it, nothing relaunched
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 + herdr --session beacon workspace create --cwd . --label 'Watch · beacon' --no-focus
 + herdr --session beacon pane run <pane of Watch · beacon> 'team watch --session beacon'
@@ -675,9 +677,9 @@ The same command for real runs exactly that:
 ```console
 $ team up ; echo "exit $?"
 claude-keeper: ready
-  already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
+  already ready; left as it is; its process was never recorded: run team register claude-keeper to record it, nothing relaunched
 claude-beacon: ready
-  already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
+  already ready; left as it is; its process was never recorded: run team register claude-beacon to record it, nothing relaunched
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 watch: started
 exit 0
@@ -756,10 +758,10 @@ seats:
 $ team up --dry-run ; echo "exit $?"
 + herdr --session beacon workspace rename w1 coordinator
 + herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
-  skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
+  skip claude-keeper: already ready; left as it is; its process was never recorded: run team register claude-keeper to record it, nothing relaunched
 + herdr --session beacon workspace rename w2 implementer
 + herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
-  skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
+  skip claude-beacon: already ready; left as it is; its process was never recorded: run team register claude-beacon to record it, nothing relaunched
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 dry run: nothing was run
 exit 0

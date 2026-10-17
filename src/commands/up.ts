@@ -566,7 +566,10 @@ function restartNote(
   session: string,
 ): { restartNote: string } | Record<string, never> {
   const fix = relaunchRepair(team, name, 'plain');
-  if (!recorded.launched) return { restartNote: `a relaunch records its process: ${fix}` };
+  // The identity a launch predating the record could not write is `team register`'s to write:
+  // the seat is ready on its pane, and recording it is one per-seat command — never a
+  // whole-team restart for one seat's bookkeeping, and a lead runs it for its own seat too.
+  if (!recorded.launched) return { restartNote: `its process was never recorded: run team register ${name} to record it, nothing relaunched` };
   // A running lead is at home in the lobby or in the project. Either recording is left as it
   // is. Every other seat still outside the lobby is told how to move.
   if (recorded.start_cwd && recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {

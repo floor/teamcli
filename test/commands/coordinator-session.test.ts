@@ -1062,22 +1062,21 @@ describe('up over the v0.2.1 state', () => {
     expect(code).toBe(0);
     // One final record per seat: a seat that was already ready is `ready`, and the words the
     // skip line carried are the detail under the record, on stderr. The 0.2.1 state records no
-    // process identity, so each detail names the relaunch that records it; the seat itself is
-    // still left exactly as it is. What this test is about — nothing is started, closed or
-    // renamed — is the state and `counts` below.
+    // process identity, so each detail names the one per-seat register run that records it; the
+    // seat itself is still left exactly as it is. What this test is about — nothing is started,
+    // closed or renamed — is the state and `counts` below.
     expect(io.out).toBe(
       `${COORDINATOR}: ready\n` +
         `${OPERATOR}: ready\n` +
         `${SEAT}: ready\n`,
     );
     expect(io.err).toBe(
-      '  already ready; left as it is; a relaunch records its process: ' +
-        'team down, then team up (to restart the whole team)\n' +
-        '  already ready; left as it is; a relaunch records its process: ' +
-        'team down, then team up (to restart the whole team)\n' +
-        '  already ready; left as it is; a relaunch records its process: ' +
-        `team remove ${SEAT} --keep, then team add ${SEAT} ` +
-        '(or team down, then team up, for the whole team)\n',
+      '  already ready; left as it is; its process was never recorded: ' +
+        `run team register ${COORDINATOR} to record it, nothing relaunched\n` +
+        '  already ready; left as it is; its process was never recorded: ' +
+        `run team register ${OPERATOR} to record it, nothing relaunched\n` +
+        '  already ready; left as it is; its process was never recorded: ' +
+        `run team register ${SEAT} to record it, nothing relaunched\n`,
     );
     expect(counts).toEqual({ starts: 0, creates: 0, runs: 0, renames: 0, closes: 0 });
     expect(readFileSync(stateFile, 'utf8')).toBe(`${JSON.stringify(STATE_021, null, 2)}\n`);
