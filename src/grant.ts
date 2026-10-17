@@ -5,17 +5,13 @@ import { approvedFingerprints, notInForce } from './approve/approval.ts';
 import { compare, describe, fingerprints } from './approve/fingerprint.ts';
 import { anotherPaneRefusal, callerAncestors, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf } from './caller.ts';
 import { ORDINARY_SECTIONS } from './delegate.ts';
+import { declaredRoots } from './entities.ts';
 import { loadTeamFile } from './file/load.ts';
 import type { GrantScope, LoadResult } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
 import { approvalStanding, type Standing } from './store/store.ts';
 import { parseYaml, toValue } from './yaml.ts';
-
-/** Known entity roots when a create-grant record names an entity and omits `paths`. */
-export const ENTITY_PATHS: Readonly<Record<string, readonly string[]>> = {
-  radiooooo: ['~/Code/radiooooo', '~/Documents/radio'],
-};
 
 /**
  * A standing create-grant outside any team file (`~/.config/team/grants/`), naming the agent
@@ -82,16 +78,17 @@ export function readGrantRecords(home: string = homedir()): { stem: string; reco
 /**
  * Reads valid entity create-grant records from `~/.config/team/grants/`. Symbolic links and
  * malformed records are skipped; expiry and path containment are checked when a command asks.
+ * A record covers the paths it names itself, or — when it names an entity and omits them — the
+ * roots that entity declares under `~/.config/team/entities.yaml`. A record that names an
+ * entity with declared roots may narrow them, never widen them: a path outside them is refused
+ * ({@link createGrantPathProblem}), and a record left covering nothing is skipped as an empty
+ * one is.
  */
 export function readEntityCreateGrants(home: string = homedir()): EntityCreateGrant[] {
   const out: EntityCreateGrant[] = [];
-  for (const { stem, record } of readGrantRecords(home)) {
-    const entity =
-      typeof record.entity === 'string' && record.entity.trim() !== ''
-        ? record.entity.trim()
-        : ENTITY_PATHS[stem] !== undefined
-          ? stem
-          : null;
+  const rootsByName = declaredRoots(home);
+  for (const { record } of readGrantRecords(home)) {
+    const entity = typeof record.entity === 'string' && record.entity.trim() !== '' ? record.entity.trim() : null;
     const rawAgent =
       typeof record.agent === 'string'
         ? record.agent.trim()
@@ -115,8 +112,14 @@ export function readEntityCreateGrants(home: string = homedir()): EntityCreateGr
       paths = (record.paths as string[]).map((item) => item.trim());
     } else if (typeof record.path === 'string' && record.path.trim() !== '') {
       paths = [record.path.trim()];
-    } else if (entity !== null && ENTITY_PATHS[entity] !== undefined) {
-      paths = [...ENTITY_PATHS[entity]!];
+    } else if (entity !== null) {
+      paths = [...(rootsByName.get(entity) ?? [])];
+    }
+    if (entity !== null) {
+      const declared = rootsByName.get(entity);
+      if (declared !== undefined) {
+        paths = paths.filter((path) => createGrantPathProblem(path, declared, home, entity) === null);
+      }
     }
     if (paths.length === 0) continue;
     const rawExpires = record.expires ?? record.expiry ?? record.expires_at ?? record.expiresAt;
@@ -197,6 +200,36 @@ function walkRealDirectories(fromDir: string, toDir: string): boolean {
     }
   }
   return true;
+}
+
+/**
+ * Why a create-grant path is refused, or null when it is admitted. A record that names an
+ * entity with declared roots may cover those roots and paths under them, never a path beside
+ * them: this is the sentence the reader drops a path with. The comparison is lexical and
+ * expands a leading `~` against `home`; the symlink-free walk still runs when a command asks
+ * whether a caller is admitted (`pathUnderGranted`).
+ */
+export function createGrantPathProblem(
+  path: string,
+  roots: readonly string[],
+  home: string,
+  entity: string,
+): string | null {
+  if (path.trim() === '') return 'the path is empty';
+  if (!path.startsWith('/') && !path.startsWith('~/')) {
+    return `the path "${path}" is neither absolute nor under ~, so ${entity}'s declared roots cannot cover it`;
+  }
+  if (UNSAFE_PATH_CHARS.test(path) || hasDotTraversal(path)) {
+    return `the path "${path}" has a . or .. segment or a pattern character, which ${entity}'s declared roots never cover`;
+  }
+  const homeResolved = resolve(home);
+  const expanded = resolve(path.replace(/^~(?=$|\/)/, homeResolved));
+  for (const root of roots) {
+    if (!root.startsWith('/') && !root.startsWith('~/')) continue;
+    if (UNSAFE_PATH_CHARS.test(root) || hasDotTraversal(root)) continue;
+    if (isSameOrInside(resolve(root.replace(/^~(?=$|\/)/, homeResolved)), expanded)) return null;
+  }
+  return `the path "${path}" is outside ${entity}'s declared roots`;
 }
 
 function pathUnderGranted(grantedRaw: string, root: string, cwd: string, home: string): boolean {
