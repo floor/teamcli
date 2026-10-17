@@ -287,7 +287,7 @@ describe('the project lead changes nothing outside its own team', () => {
   test('remove refuses the project lead on another team of its project', async () => {
     const io = leadIo(bravoRoot);
     const code = await runRemove(['helper'], io, removeSources());
-    expect(io.err).toBe('team remove: only the owner, the orchestrator or the operator runs it; this call is lead\n');
+    expect(io.err).toBe('team remove: only the owner or `leads` removes a seat; this call is lead\n');
     expect(code).toBe(1);
   });
 

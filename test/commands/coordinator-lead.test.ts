@@ -196,20 +196,24 @@ describe('a lead written role: coordinator', () => {
     expect(add.out).toContain('only the owner, the orchestrator or the operator');
     const remove = testIo(root, worker);
     expect(await runRemove(['worker'], remove, removeSources(home, []))).toBe(1);
-    expect(remove.err).toContain('only the owner, the orchestrator or the operator');
+    expect(remove.err).toContain('only the owner or `leads` removes a seat');
     rmSync(base, { recursive: true, force: true });
   });
 
-  test('the operator may remove another seat, and only the owner removes the operator', async () => {
+  test('the lead may remove another seat, and only the owner removes the orchestrator or the operator', async () => {
     const { base, root, home } = place();
     approve(teamYaml(false), root, home);
     record(root, { coordinator: coordinator.pane, operator: operator.pane, worker: worker.pane });
     const agents: HerdrAgent[] = [
       { name: 'worker', agent: 'claude', pane: worker.pane, workspace: 'worker-ws', status: 'idle', cwd: null },
     ];
+    const byCoordinator = testIo(root, coordinator);
+    expect(await runRemove(['worker'], byCoordinator, removeSources(home, agents)), `${byCoordinator.out}${byCoordinator.err}`).toBe(0);
+    expect(byCoordinator.out).toContain('removed worker');
+    // The operator is not a lead: the map's `remove` row refuses it, and the sentence says so.
     const byOperator = testIo(root, operator);
-    expect(await runRemove(['worker'], byOperator, removeSources(home, agents)), `${byOperator.out}${byOperator.err}`).toBe(0);
-    expect(byOperator.out).toContain('removed worker');
+    expect(await runRemove(['worker'], byOperator, removeSources(home, []))).toBe(1);
+    expect(byOperator.err).toBe('team remove: only the owner or `leads` removes a seat; this call is operator\n');
     const leadRemovesOperator = testIo(root, coordinator);
     expect(await runRemove(['operator'], leadRemovesOperator, removeSources(home, []))).toBe(1);
     expect(leadRemovesOperator.err).toBe(

@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { recordSeatDigestOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
+import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
@@ -203,12 +204,18 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // file's session first, then a session the state records this caller's pane in (`team up
   // --session <other>`) — never one a non-owner chose. The refusal names the caller's own
   // placement, exactly as main described it.
+  // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
+  // speak: owner or `leads` for this team, decided from records — the registry roster's line
+  // where it stands, the file's own declaration where the registry holds no record of the team,
+  // and the standing's pane proof for a seat the map admits.
+  const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, sources.home ?? homedir(), 'remove', at, sources.now);
   const judged = args.values.session !== undefined
     ? { ...judgeCallerOf(io, args.values.session === 'default' ? undefined : args.values.session), session: args.values.session }
-    : judgeCallerIn(io, dir, team);
+    : judgeCallerIn(io, dir, team, verdictOf);
   const { caller, shown } = judged;
   const session = judged.session;
-  const verdict = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
+  const verdict = verdictOf(caller, standingOf(dir, session, caller));
   // The delegate branch, tried only when the ordinary rule just refused and the file names a
   // delegate at all: with no `delegates` section every refusal below stays exactly today's, and
   // the gate is never asked. A refused verdict takes the ordinary refusal's place; a passed one
@@ -255,7 +262,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   if (verdict.kind === 'refused' && delegatePane === null && !createGranted) {
-    io.stderr(`team remove: only the owner, the orchestrator or the operator runs it; this call is ${describeCaller(shown)}\n`);
+    io.stderr(`team remove: only the owner or \`leads\` removes a seat; this call is ${describeCaller(shown)}\n`);
     // exit: remove.caller
     return 1;
   }
