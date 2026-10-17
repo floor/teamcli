@@ -33,13 +33,15 @@ the file's own declaration then. A seat no source has heard from past the blind 
 and it counts as not working`, repaired with the owner's look at the pane.
 
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
-an older file named and this one dropped — and a record for a session herdr no longer runs are
-both named: `<seat>: a state seat not in the file claims pane <pane>` (its pane named when the
-record expects one) and `the state records the session "<name>", and herdr does not run it`. The
-file is the truth: neither record is ever guessed back into the file, and the one repair is
-`team check --repair`, the owner's own write, which drops exactly those records from the state. A
-record for a temporary seat is never one of these — [`team add`](add.md) `--temporary` never
-writes a temporary seat into the file, and its record is the only place it exists.
+an older file named and this one dropped — and a session the file does not name with no seat of
+the team in it are both named: `<seat>: a state seat not in the file claims pane <pane>` (its pane
+named when the record expects one) and `the state records the session "<name>", and no seat of the
+team is in it`. The file is the truth: neither record is ever guessed back into the file, and the
+one repair is `team check --repair`, the owner's own write, which drops exactly those records from
+the state. A record for a temporary seat is never one of these — [`team add`](add.md) `--temporary`
+never writes a temporary seat into the file, and its record is the only place it exists. Herdr is
+not read for either: a pane herdr no longer lists is still a pane the state claims, and a session
+herdr runs is still a leftover when no seat of the team is in it.
 
 ## Synopsis
 
@@ -51,7 +53,7 @@ writes a temporary seat into the file, and its record is the only place it exist
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
-| `--repair` | — | drop the state's leftovers: a record for a seat the file no longer declares, and one for a session herdr no longer runs; the owner's alone |
+| `--repair` | — | drop the state's leftovers: a record for a seat the file no longer declares, and a session with no seat of the team in it; the owner's alone |
 
 ## Who may run it
 
