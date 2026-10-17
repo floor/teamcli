@@ -747,7 +747,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   let rule: ReturnType<typeof gateVerdict> | null = null;
   if (gate !== null) {
     const gateDir = dirname(gate.path);
-    const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+    const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
       gateVerdict(who, gate.team, gate.root, sources.home ?? homedir(), 'up', at, sources.now);
     judged = judgeCallerIn(io, gateDir, gate.team, verdictOf);
     rule = verdictOf(judged.caller, standingOf(gateDir, judged.session, judged.caller));

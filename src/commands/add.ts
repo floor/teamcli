@@ -251,7 +251,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // speak: the `add` row is the owner's alone in 0.5.0, so every seat is refused here whatever
   // pane it sits on, and the delegate gate below is the one standing grant that opens a seat's
   // run. The map's own rows are the judge; a caller it refuses is refused before any standing.
-  const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, sources.home, 'add', at, sources.now);
   const mayChange = verdictOf(caller, standingOf(dir, session, caller));
   // A create-grant the record holds for this loaded root is the run's admission: the ordinary

@@ -208,7 +208,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // speak: owner or `leads` for this team, decided from records — the registry roster's line
   // where it stands, the file's own declaration where the registry holds no record of the team,
   // and the standing's pane proof for a seat the map admits.
-  const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, sources.home ?? homedir(), 'remove', at, sources.now);
   const judged = args.values.session !== undefined
     ? { ...judgeCallerOf(io, args.values.session === 'default' ? undefined : args.values.session), session: args.values.session }

@@ -15,8 +15,10 @@
 // outside the envelope — never a union, so a team grant (an envelope, not a source) gives no
 // seat a capability its role does not hold, and a seat grant can only narrow, never widen, the
 // envelope. A seat resolves within the envelope of the team it belongs to, and never another
-// team's. Nothing here resolves by a role's name, in any language: the name is recorded in the
-// answers, and the bundle's capability words decide.
+// team's, and every grant is read within its scope: a capability row whose target lies outside
+// a seat grant's scope, or outside the envelope's, is refused under `outside-scope`. Nothing
+// here resolves by a role's name, in any language: the name is recorded in the answers, and the
+// bundle's capability words decide.
 //
 // The records are grants.ts's: `grants` is the active set — the fresh read every gate makes —
 // and its `covers` decides whose grant a record is (a seat grant by the agent id, a team grant
@@ -25,6 +27,7 @@
 // whose gates live elsewhere — the send admission and the pane-authority gate — and this
 // resolver admits no one to either; their wiring asks its own gate. This module decides only:
 // it reads no file, runs nothing, and the same inputs always give the same answer.
+import { sep } from 'node:path';
 import { activeGrants, covers, type GrantRecord } from './grants.ts';
 import { COMMAND_GATES, isCapability, type Capability, type Gate } from './map.ts';
 
@@ -61,15 +64,23 @@ export type PermissionRule =
   | 'role-bundle'
   // deny
   | 'no-record'
+  | 'unreadable'
+  | 'unplaced'
   | 'not-in-map'
   | 'owner-only'
   | 'owner-or-leads'
   | 'owner-or-own-team'
   | 'absent'
   | 'outside-envelope'
+  | 'outside-scope'
   | 'other-team'
   | 'admission'
   | 'pane-authority';
+
+/** Where the command would act: the team's root, and the path within it where the command names
+ *  one. A capability row reads it against every grant's `scope` — a grant is used within its
+ *  scope, and the target, never a grant's own word, decides whether it applies. */
+export type PermissionTarget = { root: string; path?: string };
 
 /** The answer: the effect, the rule it stands on, and the words a report or refusal says.
  *  Every deny's `why` names its rule. */
@@ -83,13 +94,15 @@ export type PermissionDecision = {
  * Whether `caller` may run `command` toward `team`, decided from the active grant records:
  * gated rows by the map's gate, capability rows by the own-list ∩ envelope intersection.
  * `grants` is the active set — `activeGrants(home, now)`, read fresh at every gate, with the
- * revoked and expired left out; `covers` decides which records are the caller's.
+ * revoked and expired left out; `covers` decides which records are the caller's, and `at` is
+ * the target a capability row reads every scope against.
  */
 export function resolvePermission(
   caller: CallerRecord | null,
   team: { id: string },
   command: string,
   grants: readonly GrantRecord[],
+  at: PermissionTarget,
 ): PermissionDecision {
   const gate = COMMAND_GATES[command];
   if (gate === undefined) {
@@ -143,12 +156,23 @@ export function resolvePermission(
         why: `\`${command}\` admits the owner or the seat's own team: ${caller.seat} belongs to ${caller.team}, not ${team.id}`,
       };
     case 'seat-record':
+      // The row admits a registry record, and the file's own declaration is not one: the
+      // fallback record the bridge builds for an unregistered team carries no agent id, so no
+      // read surface admits it (the file fallback judges the file's `leads` rows and comms
+      // admission alone).
+      if (caller.agent === '') {
+        return {
+          effect: 'deny',
+          rule: 'no-record',
+          why: `\`${command}\` admits any seat a registry record stands for: ${caller.seat} has none — the file's own declaration is not a registry record`,
+        };
+      }
       return { effect: 'allow', rule: 'record', why: `${caller.seat}'s registry record stands: ${gate.why}` };
     case 'admission':
     case 'pane-authority':
       return { effect: 'deny', rule: gate.kind, why: gate.why };
     case 'capability':
-      return resolveCapability(caller, team, command, grants);
+      return resolveCapability(caller, team, command, grants, at);
   }
 }
 
@@ -159,23 +183,28 @@ export function resolveFromHome(
   caller: CallerRecord | null,
   team: { id: string },
   command: string,
-  now: Date = new Date(),
+  now: Date,
+  at: PermissionTarget,
 ): PermissionDecision {
-  return resolvePermission(caller, team, command, activeGrants(home, now));
+  return resolvePermission(caller, team, command, activeGrants(home, now), at);
 }
 
 /**
  * One capability row: the seat's own list — its role's resolved bundle plus its own seat-level
- * grants — intersected with the team envelope. The seat must belong to the team asked about;
- * a seat grant admits under `seat-grant` (the most specific admitting rule, recorded over the
- * bundle when both stand), the bundle under `role-bundle`, and the envelope admits nothing by
- * itself. Not named at all is `absent`; named but outside the envelope is `outside-envelope`.
+ * grants — intersected with the team envelope, and the whole read against the target: a grant
+ * is used within its scope, so a seat grant that names the capability but not the target's
+ * path refuses under `outside-scope`, and so does a team envelope whose scope does not hold
+ * it. The seat must belong to the team asked about; a seat grant admits under `seat-grant`
+ * (the most specific admitting rule, recorded over the bundle when both stand), the bundle
+ * under `role-bundle`, and the envelope admits nothing by itself. Not named at all is
+ * `absent`; named but outside the envelope is `outside-envelope`.
  */
 function resolveCapability(
   caller: Extract<CallerRecord, { kind: 'seat' }>,
   team: { id: string },
   command: string,
   grants: readonly GrantRecord[],
+  at: PermissionTarget,
 ): PermissionDecision {
   const capability = isCapability(command) ? command : null;
   if (capability === null) {
@@ -190,36 +219,54 @@ function resolveCapability(
       why: `\`${capability}\` resolves within a seat's own team's envelope: ${caller.seat} belongs to ${caller.team}, not ${team.id}`,
     };
   }
-  const named = grants
-    .filter((grant) => grant.kind === 'seat' && covers(grant, { agentId: caller.agent }) && grant.capabilities.includes(capability))
-    .map((grant) => grant.name)
-    .sort();
+  const where = at.path ?? at.root;
+  const namedGrants = grants.filter(
+    (grant) => grant.kind === 'seat' && covers(grant, { agentId: caller.agent }) && grant.capabilities.includes(capability),
+  );
+  const named = namedGrants.map((grant) => grant.name).sort();
   const namedByGrant = named.map((name) => `\`${name}\``).join(', ');
   const held = caller.bundle.includes(capability);
-  const enveloped = grants.some(
+  const envelopes = grants.filter(
     (grant) => grant.kind === 'team' && covers(grant, { teamId: team.id }) && grant.capabilities.includes(capability),
   );
+  const enveloped = envelopes.length > 0;
   if (named.length > 0 || held) {
-    if (enveloped) {
-      return named.length > 0
-        ? {
-            effect: 'allow',
-            rule: 'seat-grant',
-            why: `seat grant ${namedByGrant} names \`${capability}\` for ${caller.seat}, and team ${team.id}'s envelope carries it`,
-          }
-        : {
-            effect: 'allow',
-            rule: 'role-bundle',
-            why: `\`${caller.role}\`'s resolved bundle names \`${capability}\` for ${caller.seat}, and team ${team.id}'s envelope carries it`,
-          };
+    if (!enveloped) {
+      return {
+        effect: 'deny',
+        rule: 'outside-envelope',
+        why: `\`${capability}\` is named for ${caller.seat}${
+          named.length > 0 ? ` by seat grant ${namedByGrant}` : ` by \`${caller.role}\`'s resolved bundle`
+        }, but team ${team.id}'s envelope does not carry it: effective authority is the own list intersected with the envelope, never a union`,
+      };
     }
-    return {
-      effect: 'deny',
-      rule: 'outside-envelope',
-      why: `\`${capability}\` is named for ${caller.seat}${
-        named.length > 0 ? ` by seat grant ${namedByGrant}` : ` by \`${caller.role}\`'s resolved bundle`
-      }, but team ${team.id}'s envelope does not carry it: effective authority is the own list intersected with the envelope, never a union`,
-    };
+    if (named.length > 0 && !namedGrants.some((grant) => within(grant.scope, where))) {
+      return {
+        effect: 'deny',
+        rule: 'outside-scope',
+        why: `\`${capability}\` is named for ${caller.seat} by seat grant ${namedByGrant}, and not within its scope: ${where} is outside ${scopesOf(namedGrants)} — a grant is used within its scope`,
+      };
+    }
+    if (!envelopes.some((grant) => within(grant.scope, where))) {
+      return {
+        effect: 'deny',
+        rule: 'outside-scope',
+        why: `\`${capability}\` is named for ${caller.seat}${
+          named.length > 0 ? ` by seat grant ${namedByGrant}` : ` by \`${caller.role}\`'s resolved bundle`
+        }, and team ${team.id}'s envelope ${scopesOf(envelopes)} does not hold ${where}: a grant is used within its scope`,
+      };
+    }
+    return named.length > 0
+      ? {
+          effect: 'allow',
+          rule: 'seat-grant',
+          why: `seat grant ${namedByGrant} names \`${capability}\` for ${caller.seat} within its scope, and team ${team.id}'s envelope carries it`,
+        }
+      : {
+          effect: 'allow',
+          rule: 'role-bundle',
+          why: `\`${caller.role}\`'s resolved bundle names \`${capability}\` for ${caller.seat}, and team ${team.id}'s envelope carries it within its scope`,
+        };
   }
   if (enveloped) {
     return {
@@ -233,6 +280,22 @@ function resolveCapability(
     rule: 'absent',
     why: `nothing names \`${capability}\` for ${caller.seat} — \`${caller.role}\`'s resolved bundle does not, no live seat grant does, and team ${team.id}'s envelope does not carry it — and absent is deny`,
   };
+}
+
+/** Whether a path is inside one of a record's scope paths, the same containment a grant's
+ *  write checks: the path itself, or below it. An empty scope holds nothing, so the read
+ *  fails closed. */
+function within(scope: readonly string[], path: string): boolean {
+  return scope.some((parent) => {
+    const root = parent.endsWith(sep) ? parent.slice(0, -1) : parent;
+    return path === root || path.startsWith(`${root}${sep}`);
+  });
+}
+
+/** The scope paths of the records named, for a refusal's words. */
+function scopesOf(grants: readonly GrantRecord[]): string {
+  const paths = [...new Set(grants.flatMap((grant) => grant.scope))].sort();
+  return paths.length > 0 ? paths.join(', ') : 'an empty scope';
 }
 
 /** What a gate asks for, said for a caller with no record: the refusal must name the rule. */

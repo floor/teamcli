@@ -558,7 +558,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // speak: owner or `leads` for this team, decided from records — the registry roster's line
   // where it stands, the file's own declaration where the registry holds no record of the team,
   // and the standing's pane proof for a seat the map admits.
-  const verdictOf = (who: Caller, at?: SeatStanding): ReturnType<typeof gateVerdict> =>
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, sources.home ?? homedir(), 'down', at, sources.now);
   const judged = branching()
     ? { caller: callerOf(io), session: team.session }

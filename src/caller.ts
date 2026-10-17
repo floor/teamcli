@@ -5,7 +5,7 @@ import type { TeamFile } from './file/types.ts';
 import { agentList, paneRootPid } from './herdr.ts';
 import type { HerdrAgent } from './herdr.ts';
 import type { Io } from './io.ts';
-import { readState } from './state.ts';
+import { readState, type SeatState } from './state.ts';
 import { CLI_PROCESSES, processNameMatches } from './clis.ts';
 
 // Who runs this command, placed by its parent processes, never by its environment. This guards
@@ -140,22 +140,32 @@ export function mayLaunchSeats(caller: Caller): boolean {
  * the state tells that seat apart from a renamed shell, so the check fails closed. The refusal is
  * `noPaneRefusal` — the cause, and the repair that truly records a pane.
  */
-export type SeatStanding = { session: string; recordedPane?: string };
+export type SeatStanding = { session: string; recordedPane?: string; stage?: SeatState['stage'] };
 
-/** The pane the state records for a seat in a session, or undefined. A state that can't be read
- *  records no pane: a caller check must never become a stack trace. */
-export function recordedPaneOf(dir: string, session: string, name: string): string | undefined {
+/** The seat record the state holds for a name in a session, or undefined. A state that can't be
+ *  read records none: a caller check must never become a stack trace. */
+function recordedSeatOf(dir: string, session: string, name: string): Pick<SeatState, 'pane' | 'stage'> | undefined {
   try {
-    return readState(dir).sessions[session]?.seats[name]?.pane;
+    return readState(dir).sessions[session]?.seats[name];
   } catch {
     return undefined;
   }
 }
 
-/** The standing to judge `caller` by: the session this command asks about, and the pane the state
- *  records for the seat the caller claims to be. */
+/** The pane the state records for a seat in a session, or undefined. A state that can't be read
+ *  records no pane: a caller check must never become a stack trace. */
+export function recordedPaneOf(dir: string, session: string, name: string): string | undefined {
+  return recordedSeatOf(dir, session, name)?.pane;
+}
+
+/** The standing to judge `caller` by: the session this command asks about, and the seat record the
+ *  state holds for the name the caller claims — its pane, and the stage it reached. A seat the
+ *  state does not record is `stage: undefined`, which no map gate admits: a seat acts where it is
+ *  live and ready. */
 export function standingOf(dir: string, session: string, caller: Caller): SeatStanding {
-  return { session, recordedPane: caller.kind === 'seat' ? recordedPaneOf(dir, session, caller.name) : undefined };
+  if (caller.kind !== 'seat') return { session, recordedPane: undefined };
+  const held = recordedSeatOf(dir, session, caller.name);
+  return { session, recordedPane: held?.pane, stage: held?.stage };
 }
 
 /**
@@ -175,20 +185,20 @@ export type CallerVerdict =
 /** Whether the caller is the seat `name`: in the session judged (a caller placed in another
  *  session is a seat of that other session, not of this one), and on the pane the state records
  *  for it. A state that records no pane refuses it, and so does one that records another pane.
- *  Without a standing the name alone decides, exactly as before. */
-export function callerVerdict(caller: Caller, name: string, at?: SeatStanding): CallerVerdict {
+ *  The standing is mandatory: the name alone proves no placement, so no caller of this kind is
+ *  admitted without one. */
+export function callerVerdict(caller: Caller, name: string, at: SeatStanding): CallerVerdict {
   if (caller.kind !== 'seat' || caller.name !== name) return { kind: 'refused' };
-  if (!at) return { kind: 'ok' };
-  // Once a standing is asked for, a caller that carries no session is refused: nothing in it
-  // shows it stood in the session judged. Every placement `placeCaller` makes for a command
-  // records the session it asked about, so production callers always carry one; this covers a
-  // caller built by hand, which must name its session to be read as a seat.
+  // A caller that carries no session is refused: nothing in it shows it stood in the session
+  // judged. Every placement `placeCaller` makes for a command records the session it asked
+  // about, so production callers always carry one; this covers a caller built by hand, which
+  // must name its session to be read as a seat.
   if (caller.session !== at.session) return { kind: 'refused' };
   if (at.recordedPane === undefined) return { kind: 'no-pane', name };
   return caller.pane === at.recordedPane ? { kind: 'ok' } : { kind: 'another-pane', name, recordedPane: at.recordedPane };
 }
 
-export function callerStanding(caller: Caller, name: string, at?: SeatStanding): boolean {
+export function callerStanding(caller: Caller, name: string, at: SeatStanding): boolean {
   return callerVerdict(caller, name, at).kind === 'ok';
 }
 
@@ -261,23 +271,22 @@ export function sessionOwnerRefusal(walked: Caller): string {
 }
 
 // The owner, or the orchestrator's or the operator's seat: who may change a running team —
-// by the name rule this walk grew on. The commands wired to the map decide by the resolver
-// instead (src/permissions/who.ts's `gateVerdict`), each on its own row: `up`, `down`,
-// `restart`, `remove` and `register`; `add` wires its row in its own change. `hold` and
-// `worktree list / new / remove` still ask this, and it stays the shape they and every
-// `CallerVerdict` branch on. Those are the names the file resolved (`coordinator:` or
-// `leads: true`, and `operator:`), not the seat's role, so a lead written
-// `role: coordinator` is admitted when its name is that lead. The no-pane and another-pane
-// verdicts name the seat, so a command's refusal can say which seat the state lost, or which
-// pane it holds that the caller is not on.
-export function mayChangeTeamVerdict(caller: Caller, team: Pick<TeamFile, 'orchestrator' | 'operator'>, at?: SeatStanding): CallerVerdict {
+// by the name rule this walk grew on. The six commands that wire the map (`up`, `down`,
+// `restart`, `add`, `remove`, `register`) decide by the resolver instead
+// (src/permissions/who.ts's `gateVerdict`); `hold` and `worktree list / new / remove` still
+// ask this, and it stays the shape they and every `CallerVerdict` branch on. Those are the
+// names the file resolved (`coordinator:` or `leads: true`, and `operator:`), not the seat's
+// role, so a lead written `role: coordinator` is admitted when its name is that lead. The
+// no-pane and another-pane verdicts name the seat, so a command's refusal can say which seat
+// the state lost, or which pane it holds that the caller is not on.
+export function mayChangeTeamVerdict(caller: Caller, team: Pick<TeamFile, 'orchestrator' | 'operator'>, at: SeatStanding): CallerVerdict {
   if (caller.kind === 'owner') return { kind: 'ok' };
   const asOrchestrator = callerVerdict(caller, team.orchestrator, at);
   return asOrchestrator.kind === 'refused' ? callerVerdict(caller, team.operator, at) : asOrchestrator;
 }
 
 // The same question, as a boolean, for callers that need no reason.
-export function mayChangeTeam(caller: Caller, team: Pick<TeamFile, 'orchestrator' | 'operator'>, at?: SeatStanding): boolean {
+export function mayChangeTeam(caller: Caller, team: Pick<TeamFile, 'orchestrator' | 'operator'>, at: SeatStanding): boolean {
   return mayChangeTeamVerdict(caller, team, at).kind === 'ok';
 }
 
@@ -317,7 +326,7 @@ export function judgeCallerIn(
   // What `stands in this session` means. The default is the name rule this search grew on
   // (`hold`, `worktree list / new / remove`); the commands wiring the map pass their own
   // resolver-based verdict, so a session the caller stands in is one the map admits it in.
-  verdictOf: (caller: Caller, at?: SeatStanding) => CallerVerdict = (caller, at) => mayChangeTeamVerdict(caller, team, at),
+  verdictOf: (caller: Caller, at: SeatStanding) => CallerVerdict = (caller, at) => mayChangeTeamVerdict(caller, team, at),
 ): { caller: Caller; shown: Caller; session: string } {
   const placedIn = (session: string): { caller: Caller; shown: Caller; session: string; verdict: CallerVerdict } => {
     const { caller, shown } = judgeCallerOf(io, session === 'default' ? undefined : session);
