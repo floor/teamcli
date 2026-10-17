@@ -727,6 +727,20 @@ export const REMOVE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** Published `--json` output schema for `team register` (`schema/register.schema.json`). */
+export const REGISTER_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.register',
+  fileName: 'register.schema.json',
+  title: 'team register --json output',
+  statuses: ['ready', 'already', 'dry-run'],
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    pane: { type: ['string', 'null'] },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -748,6 +762,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   DOWN_OUTPUT_SCHEMA,
   UP_OUTPUT_SCHEMA,
   REMOVE_OUTPUT_SCHEMA,
+  REGISTER_OUTPUT_SCHEMA,
 ];
 
 

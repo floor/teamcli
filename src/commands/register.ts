@@ -33,6 +33,7 @@ import { launchedIdentity } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
+import { refuse, writeJson } from '../output/index.ts';
 import { gateVerdict, rosterOf } from '../permissions/who.ts';
 import { profileFor } from '../profiles/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
@@ -41,7 +42,10 @@ import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
-export const USAGE = `Usage: team register <seat> [--session <name>] [--pane <id>] [--dry-run]\n`;
+export const USAGE = `Usage: team register <seat> [--session <name>] [--pane <id>] [--dry-run] [--json]
+
+Exits 0 when the seat is registered (or already recorded, or on --dry-run), 1 when registration is refused, 2 when the invocation or team file can't be read.
+`;
 
 /**
  * The reads a test replaces. Each one left out is the real read: herdr's state for a session,
@@ -97,26 +101,28 @@ const realSources: RegisterSources = {
 export const register: Command = (argv, io) => runRegister(argv, io, realSources);
 export default register;
 
-function usage(out: Io, message: string): number {
-  out.stderr(`team register: ${plainText(message)}\n${USAGE}`);
+function usage(out: Io, json: boolean, message: string): number {
+  refuse(out, json, 'register', { id: 'register.usage', message, repair: null, code: 2, usage: USAGE });
   // exit: register.usage
   return 2;
 }
 
-function configuration(out: Io, message: string): number {
-  out.stderr(`team register: ${plainText(message)}\n`);
+function configuration(out: Io, json: boolean, message: string): number {
+  refuse(out, json, 'register', { id: 'register.file', message, repair: null, code: 2 });
   // exit: register.file
   return 2;
 }
 
-function detachedExit(out: Io, message: string): number {
-  out.stderr(`team register: ${plainText(message)}\n`);
+function detachedExit(out: Io, json: boolean, message: string): number {
+  refuse(out, json, 'register', { id: 'register.detached', message, repair: null, code: 1 });
   // exit: register.detached
   return 1;
 }
 
-function callerRefused(out: Io, message: string, dry = false, unblock?: string): number {
-  if (dry) {
+function callerRefused(out: Io, json: boolean, message: string, dry = false, unblock?: string): number {
+  if (json) {
+    refuse(out, true, 'register', { id: 'register.caller', message, repair: null, code: 1 });
+  } else if (dry) {
     // A dry run is never denied bare: what would refuse it is said as what it is, and the
     // command that unblocks it is named beside it — `up`'s own dry words.
     out.stdout(`! register would refuse: ${plainText(message)}\n`);
@@ -128,20 +134,25 @@ function callerRefused(out: Io, message: string, dry = false, unblock?: string):
   return 1;
 }
 
-function delegateRefused(out: Io, message: string): number {
-  out.stderr(`team register: ${plainText(message)}\n`);
+function delegateRefused(out: Io, json: boolean, message: string): number {
+  refuse(out, json, 'register', { id: 'register.delegate', message, repair: null, code: 1 });
   // exit: register.delegate
   return 1;
 }
 
-function grantRefused(out: Io, message: string): number {
-  out.stderr(`team register: ${plainText(message)}\n`);
+function grantRefused(out: Io, json: boolean, message: string): number {
+  refuse(out, json, 'register', { id: 'register.grant', message, repair: null, code: 1 });
   // exit: register.grant
   return 1;
 }
 
-function grantFlagRefused(out: Io): number {
-  out.stderr("team register: --session is the owner's; the granted seat cannot use it\n");
+function grantFlagRefused(out: Io, json: boolean): number {
+  refuse(out, json, 'register', {
+    id: 'register.grant-flag',
+    message: "--session is the owner's; the granted seat cannot use it",
+    repair: null,
+    code: 1,
+  });
   // exit: register.grant-flag
   return 1;
 }
@@ -152,9 +163,11 @@ function notOwnerLine(caller: Caller): string {
   return `only the owner or a seat of this team registers a running seat; this call is ${plainLine(describeCaller(caller))}`;
 }
 
-function notOwnerRefused(out: Io, caller: Caller, dry = false, unblock?: string): number {
+function notOwnerRefused(out: Io, json: boolean, caller: Caller, dry = false, unblock?: string): number {
   const line = notOwnerLine(caller);
-  if (dry) {
+  if (json) {
+    refuse(out, true, 'register', { id: 'register.not-owner', message: line, repair: null, code: 1 });
+  } else if (dry) {
     out.stdout(`! register would refuse: ${plainText(line)}\n`);
     if (unblock !== undefined) out.stdout(`! to unblock: ${plainText(unblock)}\n`);
   } else {
@@ -164,111 +177,158 @@ function notOwnerRefused(out: Io, caller: Caller, dry = false, unblock?: string)
   return 1;
 }
 
-function unknownRefused(out: Io, name: string): number {
-  out.stderr(`team register: the file has no seat ${JSON.stringify(name)}\n`);
+function unknownRefused(out: Io, json: boolean, name: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.no-seat',
+    message: `the file has no seat ${JSON.stringify(name)}`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.no-seat
   return 1;
 }
 
-function stoppedRefused(out: Io, name: string): number {
-  out.stderr(`team register: ${plainLine(name)} is stopped in this file; the owner clears \`stopped\` and starts the team\n`);
+function stoppedRefused(out: Io, json: boolean, name: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.stopped',
+    message: `${plainLine(name)} is stopped in this file; the owner clears \`stopped\` and starts the team`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.stopped
   return 1;
 }
 
-function noProfileRefused(out: Io, message: string): number {
-  out.stderr(`team register: ${plainText(message)}\n`);
+function noProfileRefused(out: Io, json: boolean, message: string): number {
+  refuse(out, json, 'register', { id: 'register.no-profile', message, repair: null, code: 1 });
   // exit: register.no-profile
   return 1;
 }
 
-function herdrRefused(out: Io): number {
-  out.stderr("team register: herdr doesn't answer\n");
+function herdrRefused(out: Io, json: boolean): number {
+  refuse(out, json, 'register', { id: 'register.herdr', message: "herdr doesn't answer", repair: null, code: 1 });
   // exit: register.herdr
   return 1;
 }
 
-function noSessionRefused(out: Io, session: string): number {
-  out.stderr(`team register: session "${plainLine(session)}" is not running; run team up first\n`);
+function noSessionRefused(out: Io, json: boolean, session: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.no-session',
+    message: `session "${plainLine(session)}" is not running; run team up first`,
+    repair: 'team up',
+    code: 1,
+  });
   // exit: register.no-session
   return 1;
 }
 
-function teamFileRefused(out: Io, session: string, file: string): number {
-  out.stderr(
-    `team register: session "${plainLine(session)}" was launched from ${plainLine(file)}; a seat is registered into its own team's session\n`,
-  );
+function teamFileRefused(out: Io, json: boolean, session: string, file: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.session-file',
+    message: `session "${plainLine(session)}" was launched from ${plainLine(file)}; a seat is registered into its own team's session`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.session-file
   return 1;
 }
 
-function noAgentRefused(out: Io, name: string, session: string): number {
-  out.stderr(
-    `team register: no agent named ${plainLine(name)} is running in session "${plainLine(session)}"; nothing was registered\n`,
-  );
+function noAgentRefused(out: Io, json: boolean, name: string, session: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.no-agent',
+    message: `no agent named ${plainLine(name)} is running in session "${plainLine(session)}"; nothing was registered`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.no-agent
   return 1;
 }
 
-function ambiguousRefused(out: Io, name: string, session: string, count: number): number {
-  out.stderr(
-    `team register: session "${plainLine(session)}" has ${count} agents named ${plainLine(name)}; registering one would guess\n`,
-  );
+function ambiguousRefused(out: Io, json: boolean, name: string, session: string, count: number): number {
+  refuse(out, json, 'register', {
+    id: 'register.many-agents',
+    message: `session "${plainLine(session)}" has ${count} agents named ${plainLine(name)}; registering one would guess`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.many-agents
   return 1;
 }
 
-function recordedRefused(out: Io, name: string, pane: string, recordedPane: string | undefined): number {
+function recordedRefused(out: Io, json: boolean, name: string, pane: string, recordedPane: string | undefined): number {
   const on = recordedPane === undefined ? 'no pane' : `pane ${plainLine(recordedPane)}`;
-  out.stderr(
-    `team register: ${plainLine(name)} is already recorded on ${on}, not on ${plainLine(pane)}; the owner stops the team and starts it again (\`team down\`, then \`team up\`)\n`,
-  );
+  refuse(out, json, 'register', {
+    id: 'register.recorded',
+    message: `${plainLine(name)} is already recorded on ${on}, not on ${plainLine(pane)}; the owner stops the team and starts it again (\`team down\`, then \`team up\`)`,
+    repair: 'the owner runs `team down`, then `team up`',
+    code: 1,
+  });
   // exit: register.recorded
   return 1;
 }
 
-function noPaneRefused(out: Io, pane: string, session: string): number {
-  out.stderr(`team register: no pane ${plainLine(pane)} in session "${plainLine(session)}"; nothing was registered\n`);
+function noPaneRefused(out: Io, json: boolean, pane: string, session: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.no-pane',
+    message: `no pane ${plainLine(pane)} in session "${plainLine(session)}"; nothing was registered`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.no-pane
   return 1;
 }
 
-function paneTakenRefused(out: Io, pane: string, other: string, session: string): number {
-  out.stderr(
-    `team register: pane ${plainLine(pane)} is ${plainLine(other)}'s in session "${plainLine(session)}"; nothing was registered\n`,
-  );
+function paneTakenRefused(out: Io, json: boolean, pane: string, other: string, session: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.pane-taken',
+    message: `pane ${plainLine(pane)} is ${plainLine(other)}'s in session "${plainLine(session)}"; nothing was registered`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.pane-taken
   return 1;
 }
 
-function paneNamedRefused(out: Io, pane: string, other: string, session: string): number {
-  out.stderr(
-    `team register: pane ${plainLine(pane)} is named ${plainLine(other)} in session "${plainLine(session)}"; --pane names a pane herdr never named, nothing was registered\n`,
-  );
+function paneNamedRefused(out: Io, json: boolean, pane: string, other: string, session: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.pane-named',
+    message: `pane ${plainLine(pane)} is named ${plainLine(other)} in session "${plainLine(session)}"; --pane names a pane herdr never named, nothing was registered`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.pane-named
   return 1;
 }
 
-function noCliRefused(out: Io, name: string, pane: string): number {
-  out.stderr(
-    `team register: ${plainLine(name)}: pane ${plainLine(pane)} holds no process in front of its shell; nothing was registered\n`,
-  );
+function noCliRefused(out: Io, json: boolean, name: string, pane: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.no-cli',
+    message: `${plainLine(name)}: pane ${plainLine(pane)} holds no process in front of its shell; nothing was registered`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.no-cli
   return 1;
 }
 
-function cliRefused(out: Io, name: string, pane: string, cli: string): number {
-  out.stderr(
-    `team register: ${plainLine(name)}: pane ${plainLine(pane)} holds no \`${plainLine(cli)}\` process; nothing was registered\n`,
-  );
+function cliRefused(out: Io, json: boolean, name: string, pane: string, cli: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.cli',
+    message: `${plainLine(name)}: pane ${plainLine(pane)} holds no \`${plainLine(cli)}\` process; nothing was registered`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.cli
   return 1;
 }
 
-function screenRefused(out: Io, name: string, kind: string): number {
-  out.stderr(
-    `team register: ${plainLine(name)}: its pane is not the seat at its prompt (${plainLine(kind)}); nothing was registered\n`,
-  );
+function screenRefused(out: Io, json: boolean, name: string, kind: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.screen',
+    message: `${plainLine(name)}: its pane is not the seat at its prompt (${plainLine(kind)}); nothing was registered`,
+    repair: null,
+    code: 1,
+  });
   // exit: register.screen
   return 1;
 }
@@ -286,11 +346,22 @@ function sameFile(a: string, b: string): boolean {
 }
 
 export async function runRegister(argv: string[], io: Io, sources: RegisterSources = realSources): Promise<number> {
-  const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'pane'], ['dry-run']);
-  if (args.error) return usage(out, args.error);
+  // `--json` is read off the raw argv before the parser: an invocation the parser refuses still
+  // owes the `team.error` document rather than the plain usage line. (The shared helper lands
+  // with the output-contract branch; this command switches to it then.)
+  const wantsJson = argv.includes('--json');
+  const jsonNotes: string[] = [];
+  const collect = (text: string): void => {
+    for (const line of text.split('\n')) if (line !== '') jsonNotes.push(plainLine(line));
+  };
+  // Under `--json` the command's own lines are notes for the document: nothing but the one
+  // document reaches stdout, and stderr stays empty.
+  const out = cleanedIo(wantsJson ? { ...io, stdout: collect, stderr: collect } : io);
+  const args = readArgs(argv, ['session', 'pane'], ['dry-run', 'json']);
+  const json = wantsJson || args.flags.has('json');
+  if (args.error) return usage(io, json, args.error);
   if (args.rest.length !== 1) {
-    return usage(out, args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : 'a seat name is required');
+    return usage(io, json, args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : 'a seat name is required');
   }
   const name = args.rest[0] ?? '';
   const dry = args.flags.has('dry-run');
@@ -318,7 +389,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     const said = loaded.errors
       .map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}`)
       .join('\n');
-    return configuration(out, said);
+    return configuration(io, json, said);
   }
   const { team, root, path } = loaded;
   const dir = dirname(path);
@@ -327,7 +398,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // create-grant, the carve-out `up` and `add` honour. Every other run without a terminal is
   // refused here, before a session or a pane is read.
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
-  if (detached !== undefined && !createGranted) return detachedExit(out, detached);
+  if (detached !== undefined && !createGranted) return detachedExit(io, json, detached);
 
   // `--session` picks the herdr session the pane is verified in: where the record it writes will
   // point `send`, `watch` and `down`. It is the owner's, and the aim is refused before the map is
@@ -338,14 +409,14 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // ordinary one.
   if (args.values.session !== undefined && !mayLaunchSeats(walked) && !createGranted) {
     const said = team.grant !== null ? (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home }) : null;
-    if (said?.kind === 'passed') return grantFlagRefused(out);
+    if (said?.kind === 'passed') return grantFlagRefused(io, json);
     const line = sessionOwnerRefusal(walked);
     if (dev) {
       warning.push(line);
       // The audit line the fold owes, written where the gate is used: the refusal's words, on
       // a real run. A dry run decides nothing and writes none.
       if (!dry) logDevMode(dir, 'register', callerLabel(walked), `warning: ${line}`, sources.now());
-    } else return callerRefused(out, line, dry, unblock(args.values));
+    } else return callerRefused(io, json, line, dry, unblock(args.values));
   }
 
   // The caller rule is the map's row (`owner-or-own-team`): the owner, or a seat this team's
@@ -387,8 +458,8 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const grantedSeat = grantSaid?.kind === 'passed' ? grantSaid.grant.seat : null;
   // The map's admission, the create-granted runner, a passed delegation, or the granted seat.
   const named = ordinaryAdmitted || delegated !== null || createGranted || grantedSeat !== null;
-  if (!named && grantSaid?.kind === 'refused') return grantRefused(out, grantSaid.text);
-  if (!named && verdict?.kind === 'refused') return delegateRefused(out, verdict.text);
+  if (!named && grantSaid?.kind === 'refused') return grantRefused(io, json, grantSaid.text);
+  if (!named && verdict?.kind === 'refused') return delegateRefused(io, json, verdict.text);
   if (!named) {
     // The caller gate, the one dev mode lifts; a dry run keeps it as the refusal it is, with
     // the owner's own command beside it. The grant's and the delegate's own refusals stay
@@ -397,25 +468,26 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     if (dev) {
       warning.push(line);
       if (!dry) logDevMode(dir, 'register', callerLabel(walked), `warning: ${line}`, sources.now());
-    } else return notOwnerRefused(out, caller, dry, unblock(args.values));
+    } else return notOwnerRefused(io, json, caller, dry, unblock(args.values));
   }
   if (warning.length > 0) {
     const line = [...new Set(warning)].join('; ');
-    if (dry) out.stdout(`! warning: ${plainText(line)}\n`);
+    if (json) out.stderr(`warning: ${plainText(line)}\n`);
+    else if (dry) out.stdout(`! warning: ${plainText(line)}\n`);
     else out.stderr(`team register: warning: ${plainText(line)}\n`);
   }
 
   const session = args.values.session ?? team.session;
   if (session === 'default') {
-    return callerRefused(out, 'session can\'t be "default", herdr\'s own session');
+    return callerRefused(io, json, 'session can\'t be "default", herdr\'s own session');
   }
 
   const seat = team.seats.find((item) => item.name === name);
-  if (!seat) return unknownRefused(out, name);
-  if (seat.stopped) return stoppedRefused(out, name);
+  if (!seat) return unknownRefused(io, json, name);
+  if (seat.stopped) return stoppedRefused(io, json, name);
   const profile = profileFor(seat.cli);
   if (!profile) {
-    return noProfileRefused(out, `no launch profile for \`${plainLine(seat.cli)}\` in this version`);
+    return noProfileRefused(io, json, `no launch profile for \`${plainLine(seat.cli)}\` in this version`);
   }
 
   // The session's own record, read before herdr is asked. The file a session was launched from
@@ -424,15 +496,15 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const recorded = readState(dir).sessions[session] ?? emptySession();
   const launchedFrom = recorded.launched_file;
   if (launchedFrom !== undefined && !sameFile(launchedFrom, path)) {
-    return teamFileRefused(out, session, launchedFrom);
+    return teamFileRefused(io, json, session, launchedFrom);
   }
   const held = recorded.seats[name];
 
   const liveState = sources.sessionState(session);
-  if (liveState === null) return herdrRefused(out);
-  if (liveState !== 'running') return noSessionRefused(out, session);
+  if (liveState === null) return herdrRefused(io, json);
+  if (liveState !== 'running') return noSessionRefused(io, json, session);
   const agents = sources.agents(session);
-  if (agents === null) return herdrRefused(out);
+  if (agents === null) return herdrRefused(io, json);
 
   // The pane the run records, and what herdr lists on it: the agent herdr answers to the seat's
   // name, or the pane `--pane` names outright — one herdr never named, a seat started before
@@ -448,13 +520,13 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // seat's record would point `send` at a process that is someone else's. A pane herdr names
     // as this seat, or lists with no name at all, is no adoption of another's.
     if (listed !== undefined && listed.name !== null && listed.name !== name) {
-      return paneNamedRefused(out, pane, listed.name, session);
+      return paneNamedRefused(io, json, pane, listed.name, session);
     }
   } else {
     listed = agents.find((agent) => agent.name === name);
     const namedCount = agents.filter((agent) => agent.name === name).length;
-    if (listed === undefined) return noAgentRefused(out, name, session);
-    if (namedCount > 1) return ambiguousRefused(out, name, session, namedCount);
+    if (listed === undefined) return noAgentRefused(io, json, name, session);
+    if (namedCount > 1) return ambiguousRefused(io, json, name, session, namedCount);
     pane = listed.pane;
   }
   // A pane is one seat's: the pane this run records — named by `--pane`, or the one herdr names
@@ -467,12 +539,12 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const holder = Object.entries(recorded.seats).find(
     ([seat, state]) => seat !== name && state.pane === pane && seatOfFile(seat, state, declared),
   );
-  if (holder !== undefined) return paneTakenRefused(out, pane, holder[0], session);
+  if (holder !== undefined) return paneTakenRefused(io, json, pane, holder[0], session);
 
   // A record that names another pane — or no pane at all, a launch this command did not finish —
   // is not overwritten from here: that is the owner's `team down`, then `team up`.
   if (held !== undefined && held.pane !== pane) {
-    return recordedRefused(out, name, pane, held.pane);
+    return recordedRefused(io, json, name, pane, held.pane);
   }
 
   // What the pane is: a process in front of the pane's own shell that the seat's CLI profile
@@ -482,9 +554,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const procs = sources.processInfo(session, pane);
   // `--pane` names a pane another session's window holds just as well: herdr knowing nothing of
   // it in this one is the reading that says so, and is its own refusal.
-  if (procs === null && paneArg !== undefined) return noPaneRefused(out, pane, session);
+  if (procs === null && paneArg !== undefined) return noPaneRefused(io, json, pane, session);
   const identity = launchedIdentity(procs);
-  if (identity === null) return noCliRefused(out, name, pane);
+  if (identity === null) return noCliRefused(io, json, name, pane);
   // The pane's own CLI, in the seat's profile's terms: the foreground argv0s where the caller
   // reads them, else the agent name herdr reports for that pane. A pane standing in front of
   // another agent is not this seat, and is not recorded.
@@ -492,7 +564,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     ? sources.foreground(session, pane)
     : listed === undefined || listed.agent === null ? null : [listed.agent];
   if (!reportedLiveAgent(live, profile.processNames)) {
-    return cliRefused(out, name, pane, seat.cli);
+    return cliRefused(io, json, name, pane, seat.cli);
   }
 
   // Already recorded on this pane, and ready: the seat is not relaunched and its screen is not
@@ -539,10 +611,28 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       }
     }
     const ended = `already registered — pane ${plainLine(pane)}`;
-    if (wroteRoster) out.stdout(`${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written\n`);
-    else if (unlisted && dry) out.stdout(`${plainLine(name)}: ${ended}; the team registry's roster would be written\n`);
-    else if (dry || refreshed) out.stdout(`${plainLine(name)}: ${ended}; the record ${dry ? 'would be' : 'was'} refreshed from the file, nothing relaunched\n`);
-    else out.stdout(`${plainLine(name)}: ${ended}; nothing was written\n`);
+    const line = wroteRoster
+      ? `${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written`
+      : unlisted && dry
+        ? `${plainLine(name)}: ${ended}; the team registry's roster would be written`
+        : dry || refreshed
+          ? `${plainLine(name)}: ${ended}; the record ${dry ? 'would be' : 'was'} refreshed from the file, nothing relaunched`
+          : `${plainLine(name)}: ${ended}; nothing was written`;
+    if (json) {
+      writeJson(io, 'team.register', {
+        format: 1,
+        dry_run: dry,
+        status: 'already',
+        action_summary: line,
+        project: team.project,
+        session,
+        seat: name,
+        pane,
+        notes: jsonNotes,
+      });
+    } else {
+      out.stdout(`${line}\n`);
+    }
     // exit: register.already
     return 0;
   }
@@ -552,15 +642,36 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const text = sources.paneText(session, pane) ?? undefined;
   const screen = sources.screen ? sources.screen(seat.cli, text) : readScreen(seat.cli, text);
   if (screen.kind !== 'idle' && screen.kind !== 'working') {
-    return screenRefused(out, name, screen.kind);
+    return screenRefused(io, json, name, screen.kind);
   }
 
   if (dry) {
-    out.stdout(
+    const would =
       paneArg === undefined
-        ? `${plainLine(name)}: would register — pane ${plainLine(pane)}; nothing would be launched\n`
-        : `${plainLine(name)}: would register — pane ${plainLine(pane)}; the pane would be named ${plainLine(name)} and recorded, nothing would be launched\n`,
-    );
+        ? `${plainLine(name)}: would register — pane ${plainLine(pane)}; nothing would be launched`
+        : `${plainLine(name)}: would register — pane ${plainLine(pane)}; the pane would be named ${plainLine(name)} and recorded, nothing would be launched`;
+    if (json) {
+      // The plan's one step is this command's own line: what the real run would print for the
+      // same pane, its `--pane` rename included.
+      const detail =
+        paneArg === undefined
+          ? `${plainLine(name)}: registered — pane ${plainLine(pane)}; nothing was launched`
+          : `${plainLine(name)}: registered — pane ${plainLine(pane)}; the pane was named ${plainLine(name)}, nothing was launched`;
+      writeJson(io, 'team.register', {
+        format: 1,
+        dry_run: true,
+        status: 'dry-run',
+        action_summary: 'dry run: nothing was run',
+        project: team.project,
+        session,
+        seat: name,
+        pane,
+        plan: [{ step: 'register', seat: name, detail, prefix: '+' }],
+        notes: jsonNotes,
+      });
+    } else {
+      out.stdout(`${would}\n`);
+    }
     // exit: register.dry-run
     return 0;
   }
@@ -622,13 +733,27 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   if (delegated !== null) logDelegated(dir, delegated, 'up', now, 'register');
   if (grantedSeat !== null) logGranted(dir, grantedSeat, 'up', now, 'register');
   logLine(dir, 'register', callerLabel(walked), `${name}: registered ${id} — pane ${pane}`, now);
-  out.stdout(
+  const registered =
     paneArg === undefined
-      ? `${plainLine(name)}: registered — pane ${plainLine(pane)}; nothing was launched\n`
+      ? `${plainLine(name)}: registered — pane ${plainLine(pane)}; nothing was launched`
       : `${plainLine(name)}: registered — pane ${plainLine(pane)}; ${
         renamed ? `the pane was named ${plainLine(name)}` : 'herdr did not take the name'
-      }, nothing was launched\n`,
-  );
+      }, nothing was launched`;
+  if (json) {
+    writeJson(io, 'team.register', {
+      format: 1,
+      dry_run: false,
+      status: 'ready',
+      action_summary: registered,
+      project: team.project,
+      session,
+      seat: name,
+      pane,
+      notes: jsonNotes,
+    });
+  } else {
+    out.stdout(`${registered}\n`);
+  }
   // exit: register.ready
   return 0;
 }

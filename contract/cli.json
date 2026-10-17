@@ -1241,6 +1241,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--pane",
           "repeatable": false,
           "takesValue": true
@@ -1269,7 +1275,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team register <seat> [--session <name>] [--pane <id>] [--dry-run]"
+        "team register <seat> [--session <name>] [--pane <id>] [--dry-run] [--json]"
       ]
     },
     {
