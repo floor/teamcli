@@ -12,6 +12,7 @@ import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { upsertProject } from '../src/registry/projects.ts';
+import { historyPath } from '../src/send/history.ts';
 import { dropMessage, sawSubmission, triggerLine, TRIGGER_MAX, type NativePane } from '../src/send/native.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../src/send/uds.ts';
 import { readReply } from '../src/send/reply.ts';
@@ -971,6 +972,37 @@ describe('team send: native drop', () => {
     const waited = owner(root);
     expect(await runSend(['lead', 'hello', '--wait', '--dry-run'], waited, fake(sockets))).toBe(0);
     expect(waited.out).toBe('lead: dry-run: claude-code --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
+  });
+
+  test('a seat the file marks stopped is refused before anything is written, and plans once un-stopped', async () => {
+    const { root, dir, sockets } = world();
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('  - role: reviewer', '  - role: reviewer\n    stopped: true'));
+    const { host, pane } = nativeHost(sockets, ['idle', 'working']);
+
+    for (const argv of [['native', 'hello', '--dry-run'], ['native', 'hello']]) {
+      const io = owner(root);
+      expect(await runSend(argv, io, host)).toBe(1);
+      expect(io.err).toBe('team send: native: unreachable: native is stopped\n');
+      expect(io.out).toBe('');
+    }
+    const json = owner(root);
+    expect(await runSend(['native', 'hello', '--json'], json, host)).toBe(1);
+    expect(JSON.parse(json.out)).toEqual({ seat: 'native', status: 'stopped', exit: 1, error: 'native is stopped', ids: { sent: null, reply: null } });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+    expect(existsSync(join(dir, 'send-drops'))).toBe(false);
+    expect(existsSync(historyPath('acme', root, host.home))).toBe(false);
+
+    // The same seat, not stopped: the dry run plans, and the real send writes its drop file.
+    writeFileSync(file, teamFile(root, lobbyDir(host.home)));
+    const plans = owner(root);
+    expect(await runSend(['native', 'hello', '--dry-run'], plans, fake(sockets))).toBe(0);
+    expect(plans.out).toBe('native: dry-run: codex via a 0600 drop file and one trigger line; nothing was written\n');
+    const sent = owner(root);
+    expect(await runSend(['native', 'hello'], sent, host)).toBe(0);
+    expect(sent.out).toBe('native: delivered\n');
+    expect(existsSync(join(dir, 'send-drops'))).toBe(true);
   });
 
   test('a pane that rejects the trigger is unreachable and the file remains', async () => {

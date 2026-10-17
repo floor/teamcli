@@ -95,6 +95,13 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   if (!admission.ok) return refused(io, dir, who, admission.why, host, report);
 
   const recipient = resolved.agent;
+  // A seat the receiving team file marks `stopped: true` has no address to hand out: no route
+  // is planned, nothing is recorded, and the answer names the seat's own state rather than the
+  // pane herdr no longer shows. The file is the caller's own for a same-team route, and the
+  // receiving team's for a cross-team one.
+  const receiving = resolved.team.root === root ? loaded : loadTeamFile(resolved.team.root, { home: host.home });
+  const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === recipient.reach.seat) : undefined;
+  if (declared?.stopped === true) return refused(io, dir, who, `${recipient.reach.seat} is stopped`, host, report);
   // The placement the answer is built on: herdr's live reading of the seat, never the record's
   // pane. A pane reused by another seat is not this seat's address, and is never read for one.
   const placement = livePlacement(host, recipient);

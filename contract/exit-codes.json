@@ -2902,6 +2902,13 @@
     {
       "code": 1,
       "command": "send",
+      "id": "send.stopped",
+      "meaning": "the seat is stopped in the team file",
+      "trigger": "team send worker hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
       "id": "send.timeout",
       "meaning": "sent on the socket, but no reply within the window",
       "trigger": "team send worker hello --wait --timeout 10"
