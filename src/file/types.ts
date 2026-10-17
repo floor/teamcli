@@ -2,7 +2,7 @@ export type Problem = { line: number; message: string };
 
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
-import type { DeliveryLeg } from '../settings/inherit.ts';
+import type { DeliveryLeg, LivenessThresholds } from '../settings/inherit.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
 /**
@@ -115,6 +115,13 @@ export type Seat = {
    * or would add a leg, is settled when a send resolves the chain (`src/settings/inherit.ts`).
    */
   deliveryOrder?: DeliveryLeg[];
+  /**
+   * The seat's own word on the liveness defaults, when the file writes one: the idle-to-lead and
+   * idle-to-owner windows its reports run by, and the blind window its state is read by. Absent
+   * otherwise, so a file that writes none keeps the digest it had. Like every other field, a word
+   * written here is part of the seat's digest — writing one is a change the owner approves.
+   */
+  liveness?: Partial<LivenessThresholds>;
   // The entry's `name` and `count` as written, and this seat's place in it (1 for the first).
   declared: string;
   count: number;

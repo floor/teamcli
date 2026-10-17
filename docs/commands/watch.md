@@ -173,25 +173,32 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<account> is unknown while <seat> runs on it` | nothing counts for an account whose seats are running |
 
 The idle and blind windows are liveness defaults, and they are settings in the inheritance —
-machine, then entity, project, team, seat:
+machine, then entity, project, team, seat. Every level has a file surface of its own:
 
-| Threshold | Team file | Shipped |
-| --- | --- | --- |
-| idle to the lead | `watch.idle_first` | 5m |
-| idle to the owner | `watch.idle_owner` | 15m |
-| unknown to blind | `watch.blind_after` | 5m |
+| Threshold | Machine `settings.yaml` | Entity and project records | Team file | Shipped |
+| --- | --- | --- | --- | --- |
+| idle to the lead | `liveness.idle_lead_seconds` | `liveness.idle_lead_seconds` | `watch.idle_first` | 5m |
+| idle to the owner | `liveness.idle_owner_seconds` | `liveness.idle_owner_seconds` | `watch.idle_owner` | 15m |
+| unknown to blind | `liveness.blind_after_seconds` | `liveness.blind_after_seconds` | `watch.blind_after` | 5m |
 
-A project record declares them under `liveness`, and the levels above it in their own settings. A
-lower level may tighten one — a shorter window — and never loosen it — a longer one — unless the
-level above allows it, which no level does today. A word that would loosen one is set aside, the
-value in force stands, and the watch says the rule once per setting, as a line of its own (never a
-report and never a nudge):
+The machine's file is `~/.config/team/settings.yaml`; an entity declares its word in its
+`entities.yaml` entry, a project in its record in `projects.yaml`, and a seat in its own team-file
+entry under `liveness`. A lower level may tighten one — a shorter window — and never loosen it — a
+longer one — unless the level above allows it. The blind window is the one the project may open
+again once something closed it; every level inside may close it again. A word that would loosen
+one is set aside, the value in force stands, and the watch says the rule once per setting, as a
+line of its own (never a report and never a nudge):
 
     liveness_idle_lead_seconds: the team declared 10m, longer than the 5m in force — a liveness threshold may be tightened, never loosened, unless the level above allows it
 
+A reader is silent about a file it cannot read, or a `liveness` map with an unknown key or a value
+that is not a positive number of seconds: that word is no word at all, and the value in force
+stands.
+
 The blind window is the one `team status` and `team check` read as `unknown (blind)`.
-`watch.idle_repeat` repeats the lead's line only: the owner is told once per idle period. `tempo`
-does not scale `idle_owner` or `blind_after`.
+`watch.idle_repeat` repeats the lead's line only: the owner is told once per idle period.
+`tempo` does not scale `idle_owner` or `blind_after`; it scales the idle window after the
+tighten-only check, so `relaxed` lengthens the resolved window and is never read as a loosening.
 
 Each report is addressed to the owner or to the operator. The operator's is what the nudge stands
 for, and `--no-notify` can drop its desktop notification. The owner's — a permission prompt, a
@@ -451,7 +458,8 @@ repeat interval (such as `idle_repeat: 20m`), repeating every 20 minutes while t
 quiet. The defaults themselves are the liveness windows: five minutes to the lead
 (`watch.idle_first`), fifteen to the owner (`watch.idle_owner`), five to blind
 (`watch.blind_after`). A team may tighten each one; a longer word is set aside with the rule
-named once, and a project may tighten them in its own record.
+named once. A project may tighten them in its own record — and, for the blind window alone, open
+it again — and the machine and the team's entity declare their own words above it.
 
 A check the team doesn't want is turned off in `watch.checks`. Edits to that list take effect
 on the next pass. The machine below sits at 8% free memory, and the live file turns that

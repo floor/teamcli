@@ -142,8 +142,8 @@ and open nothing: the target is the file the caller's own place finds.
   own, never the state. A process the comparison calls `restored, not launched by team` is
   untrusted: neither its screen nor herdr's word for it is read, and the reading is TeamCLI's own
   records or nothing — `unknown`, blind by its trace's age. A seat blind — `unknown` past the
-  blind threshold, 5m shipped, tightened by a project or a team and never loosened — counts as
-  not working:
+  blind threshold, 5m shipped, tightened by every level and opened again only by a project —
+  counts as not working:
   one difference, the owner's, `<seat>: unknown for over 5m — blind, and it counts as not working`,
   repaired with the owner's look at the pane;
 - the agent registry (`<home>/.config/team/agents/`), one read of each seat's record for the

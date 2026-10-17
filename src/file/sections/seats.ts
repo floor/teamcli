@@ -2,7 +2,7 @@ import { isAbsolute } from 'node:path';
 import { CLIS } from '../../clis.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
-import { DELIVERY_LEGS } from '../../settings/inherit.ts';
+import { DELIVERY_LEGS, LIVENESS_KEYS, type LivenessThresholds } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
@@ -60,6 +60,16 @@ export const seats: Section = {
           items: { enum: DELIVERY_LEGS },
           $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and never adds a leg, which the walk settles',
         },
+        liveness: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            idle_lead_seconds: { type: 'number', exclusiveMinimum: 0, $comment: 'how long this seat may sit idle before its lead is told; tighter, never looser' },
+            idle_owner_seconds: { type: 'number', exclusiveMinimum: 0, $comment: 'how long after that its owner is told, once per idle period; tighter, never looser' },
+            blind_after_seconds: { type: 'number', exclusiveMinimum: 0, $comment: 'how long this seat may read unknown before it is blind; a project may open it, and this seat closes it for itself' },
+          },
+          $comment: 'the seat\'s own word on the liveness defaults, in seconds; it tightens a window the chain above set, and is set aside where it would loosen one',
+        },
         mode: { enum: MODES },
         parked: { type: 'boolean' },
         stopped: { type: 'boolean' },
@@ -106,7 +116,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'reach', 'delivery_order',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'reach', 'delivery_order', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -166,6 +176,10 @@ function readSeats(
     // seat like `effort`, so it is part of the seat's digest and omitted when the file omits the
     // key — every file that writes none keeps the digest it had.
     const deliveryOrder = readDeliveryOrder(fields.get('delivery_order'), `${at}: delivery_order`, check);
+    // The seat's own word on the liveness defaults. A field of the built seat like `effort`, so
+    // it is part of the seat's digest and omitted when the file omits the key — every file that
+    // writes none keeps the digest it had.
+    const liveness = readLiveness(fields.get('liveness'), at, check);
     // The written label, or the lowercase model and version, stays on the seat: `seatDigest`
     // hashes `label`, and a file the owner approved keeps its key. `labelWritten` is not hashed: it only
     // records that the file wrote the field, so `workspaceLabel` can tell the two apart.
@@ -191,6 +205,8 @@ function readSeats(
         ...(effort ? { effort } : {}),
         // Omitted when the file declares no order, for the same reason.
         ...(deliveryOrder ? { deliveryOrder } : {}),
+        // Omitted when the file writes no liveness word, for the same reason.
+        ...(liveness ? { liveness } : {}),
         // Omitted when the file marks no assistant, so every file that writes none keeps its digest.
         ...(assistant && count <= 1 ? { assistant: true as const } : {}),
         ...(modelFrom ? { modelFrom } : {}),
@@ -227,6 +243,35 @@ export function workspaceLabel(seat: { name: string; role: string; label: string
 /** Line 2's display_agent: the display, a space, then the effort, or `default` when the file sets none. Herdr writes the status word and ` · ` in front of this text. */
 export function displayAgent(seat: { display: string; effort?: string }): string {
   return `${seat.display} ${seat.effort || 'default'}`;
+}
+
+/** A seat's `liveness:` map, checked: only the three thresholds, each a positive number of
+ *  seconds. Any other key, or a value that is not one, fails the file at the field's line, and
+ *  the map declares nothing — no partial word is taken from a map that did not read. */
+function readLiveness(entry: YamlEntry | undefined, at: string, check: Check): Partial<LivenessThresholds> | undefined {
+  if (!entry) return undefined;
+  const node = entry.value;
+  if (node.kind !== 'map') {
+    check.fail(node.line, `${at}: liveness must be a map of thresholds`);
+    return undefined;
+  }
+  const out: Partial<LivenessThresholds> = {};
+  let bad = false;
+  for (const field of node.entries) {
+    if (!(LIVENESS_KEYS as readonly string[]).includes(field.key)) {
+      check.fail(field.line, `${at}: liveness has no threshold "${field.key}"; the keys are ${LIVENESS_KEYS.join(', ')}`);
+      bad = true;
+      continue;
+    }
+    const value = field.value;
+    if (value.kind !== 'scalar' || typeof value.value !== 'number' || !Number.isFinite(value.value) || value.value <= 0) {
+      check.fail(value.line, `${at}: liveness "${field.key}" must be a positive number of seconds`);
+      bad = true;
+      continue;
+    }
+    out[field.key as keyof LivenessThresholds] = value.value;
+  }
+  return bad || Object.keys(out).length === 0 ? undefined : out;
 }
 
 function readEffort(

@@ -4,8 +4,9 @@ import { minutes, type Report, type SeatCheck } from '../check.ts';
 // duration counts from the last moment it was seen working. A seat never seen working was already
 // idle when the watch started: it is reported that way, with no duration from another source.
 //
-// Two liveness defaults drive it. At `liveness.idle_lead_seconds` the lead is told; at
-// `liveness.idle_owner_seconds` the owner is told, once per idle period. The lead's report is
+// Two liveness defaults drive it. At the seat's own `idle_lead_seconds` the lead is told; at
+// its `idle_owner_seconds` the owner is told, once per idle period (both resolved from the
+// chain for this seat in the pass's one `stateThresholds` call). The lead's report is
 // repeated every `watch.idle_repeat` when that is set; the owner's is not — it is an escalation,
 // not a reminder. A seat that works, or shows a prompt, starts a new period and reports again.
 // The leads and parked seats are reported on, but their idle time is not the team's: skipped.
@@ -26,12 +27,12 @@ export const idle: SeatCheck = {
       ? `${seat.name} has been idle since the watch started`
       : `${seat.name} has been idle for ${minutes(since)} minutes`;
     const reports: Report[] = [];
-    if (since >= ctx.liveness.idle_lead_seconds * 1000
+    if (since >= seat.liveness.idle_lead_seconds * 1000
       && (mine.lead === undefined || (ctx.watch.idleRepeat !== undefined && ctx.now - mine.lead >= ctx.watch.idleRepeat * 1000))) {
       mine.lead = ctx.now;
       reports.push({ key: `idle:${seat.name}`, text: line, to: 'operator' });
     }
-    if (since >= ctx.liveness.idle_owner_seconds * 1000 && mine.owner === undefined) {
+    if (since >= seat.liveness.idle_owner_seconds * 1000 && mine.owner === undefined) {
       mine.owner = ctx.now;
       reports.push({ key: `idle-owner:${seat.name}`, text: `${line} — reported to the owner`, to: 'owner' });
     }

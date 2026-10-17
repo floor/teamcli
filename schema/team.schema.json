@@ -537,6 +537,28 @@
             },
             "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and never adds a leg, which the walk settles"
           },
+          "liveness": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "idle_lead_seconds": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "$comment": "how long this seat may sit idle before its lead is told; tighter, never looser"
+              },
+              "idle_owner_seconds": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "$comment": "how long after that its owner is told, once per idle period; tighter, never looser"
+              },
+              "blind_after_seconds": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "$comment": "how long this seat may read unknown before it is blind; a project may open it, and this seat closes it for itself"
+              }
+            },
+            "$comment": "the seat's own word on the liveness defaults, in seconds; it tightens a window the chain above set, and is set aside where it would loosen one"
+          },
           "mode": {
             "enum": [
               "worktree",

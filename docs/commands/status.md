@@ -27,8 +27,9 @@ or `team down, then team up` for a lead — when its screen names a model the fi
 or its launch line starts a launcher; a pane it can say nothing about is repaired by looking at
 it. Nothing either report says starts a seat.
 
-A seat no source has heard from past the blind threshold — five minutes shipped, and every level
-may tighten it, never loosen it — counts as not working, in the check and
+A seat no source has heard from past the blind threshold — five minutes shipped, tightened by the
+machine, an entity, a project, the team or the seat, and opened again only by a project — counts
+as not working, in the check and
 in the status alike: the run adds the owner's difference `<seat>: unknown for over <threshold> —
 blind, and it counts as not working`, repaired with the owner's look at the pane, and
 [`team seats`](seats.md) prints the reading itself as `unknown (blind)` beside the source it was

@@ -84,6 +84,10 @@ export type SeatObservation = {
   // The model the seat's screen shows it running, when it has a file seat and the screen says.
   model: { model: string; version: string } | null;
   history: SeatHistory;
+  // The liveness defaults as this seat's own chain resolves them — the levels above the team and
+  // the seat's own word, resolved in the one `stateThresholds` call the pass makes for it. The
+  // idle check reports at these windows, and every seat is handed its own answer.
+  liveness: LivenessThresholds;
 };
 
 // Everything a team check may read about the team it is handed, built after the seat loop.
@@ -117,10 +121,6 @@ export type CheckContext = {
   now: number;
   // The `watch` section in force: the thresholds the checks report against.
   watch: TeamFile['watch'];
-  // The liveness defaults as the chain in force resolves them: the idle-to-lead and
-  // idle-to-owner windows the idle check reports against, and the blind window it carries
-  // for the readers that name it.
-  liveness: LivenessThresholds;
   // The `budgets` section in force: the accounts, marks and thresholds the checks read against.
   budgets: TeamFile['budgets'];
   // The report-once rule. The key goes into this pass's active set; the report comes back the

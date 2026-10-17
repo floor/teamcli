@@ -28,7 +28,8 @@ too, repaired with the same `team register <seat>`: where the registry holds a r
 its roster is the record of who its seats are for the permission bridge, and a seat the roster does
 not list has none. A team the registry holds no record of is not this difference — the bridge reads
 the file's own declaration then. A seat no source has heard from past the blind threshold — five
-minutes shipped, and every level may tighten it, never loosen it — reads
+minutes shipped, tightened through the inheritance's levels and opened again only by a project —
+reads
 `unknown (blind)` in
 [`team seats`](seats.md) and counts as not working: `<seat>: unknown for over <threshold> — blind,
 and it counts as not working`, repaired with the owner's look at the pane.

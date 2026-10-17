@@ -1,13 +1,13 @@
-// Settings (Layer 3): one value per seat, inherited entity → project → team → seat. A level below
-// may tighten a setting freely — closing is always legal — and may loosen it only where the
-// setting itself allows that level to, so a project can open what an entity left closed, while a
-// team inside it keeps the power to close the door again for itself. Phase 0b ships the mechanism
-// and its first setting, `seats_cross_teams`; the rest follow.
+// Settings (Layer 3): one value per seat, inherited machine → entity → project → team → seat. A
+// level below may tighten a setting freely — closing is always legal — and may loosen it only
+// where the setting itself allows that level to, so a project can open what an entity left
+// closed, while a team inside it keeps the power to close the door again for itself. Phase 0b
+// ships the mechanism and its first setting, `seats_cross_teams`; the rest follow.
 
-export type SettingLevel = 'entity' | 'project' | 'team' | 'seat';
+export type SettingLevel = 'machine' | 'entity' | 'project' | 'team' | 'seat';
 
 /** The inheritance order, outermost first. */
-export const SETTING_LEVELS: readonly SettingLevel[] = ['entity', 'project', 'team', 'seat'];
+export const SETTING_LEVELS: readonly SettingLevel[] = ['machine', 'entity', 'project', 'team', 'seat'];
 
 /** One level's word on a setting: the level that holds it, and the value it declares. */
 export type Declaration = { level: SettingLevel; value: boolean };
@@ -154,37 +154,70 @@ export function numberDeclarationsOf(declared: Partial<Record<SettingLevel, numb
 /**
  * How long a seat may read unknown before it counts as not working — the reading `status` and
  * `check` flag `blind`. It is one of the liveness defaults, so it is declared once and read by
- * both groups below; a longer window tolerates more, so the permissive side is 'higher'. No
- * level may loosen it: a project may tighten it, never lengthen it.
+ * both groups below; a longer window tolerates more, so the permissive side is 'higher'. The
+ * project may open it — the same level `seats_cross_teams` allows — and every level inside a
+ * project may close it again. No other level may lengthen it.
  */
 const BLIND_AFTER_SECONDS: NumberSettingSpec = {
   name: 'state_blind_after_seconds',
+  fallback: 300,
+  permissive: 'higher',
+  looseningLevels: ['project'],
+};
+
+/**
+ * How long an idle seat waits before its lead is told. It is one of the liveness defaults and
+ * never lengthens: every level may tighten it, and a longer word is set aside where the
+ * thresholds resolve.
+ */
+const IDLE_LEAD_SECONDS: NumberSettingSpec = {
+  name: 'liveness_idle_lead_seconds',
   fallback: 300,
   permissive: 'higher',
   looseningLevels: [],
 };
 
 /**
- * The three thresholds the seat-state reading runs by: how fresh a TeamCLI trace must
- * be for the seat to read as working, how long a seat may read unknown before it counts as
- * not working — the reading `status` and `check` flag `blind` — and how long the CLI's own
- * `working` word outranks the screen outright. Past the last one, a screen that still reads
- * — a prompt showing again after an interrupted turn — answers instead; a screen it cannot
- * read leaves the hook to answer for the day. A longer window tolerates more, so the permissive
- * side is 'higher'; the project may open the trace and hook windows, the same level
- * `seats_cross_teams` allows, while the blind threshold is liveness and only ever tightens.
- * Declared per seat as a partial set, each field inherited on its own.
+ * How long after that the seat's owner is told, once per idle period. Like the lead's window it
+ * only ever tightens: an owner is escalated to no later for a longer word.
  */
-export type StateThresholds = { trace_window_seconds: number; blind_after_seconds: number; hook_working_seconds: number };
+const IDLE_OWNER_SECONDS: NumberSettingSpec = {
+  name: 'liveness_idle_owner_seconds',
+  fallback: 900,
+  permissive: 'higher',
+  looseningLevels: [],
+};
+
+/**
+ * The thresholds a seat's state is read by, and the two idle windows the watch reports on:
+ * how fresh a TeamCLI trace must be for the seat to read as working; how long a seat may read
+ * unknown before it counts as not working (`status` and `check` flag it `blind`); how long the
+ * CLI's own `working` word outranks the screen outright; and the two idle windows. Past the hook
+ * threshold a screen that still reads — a prompt showing again after an interrupted turn —
+ * answers instead; a screen it cannot read leaves the hook to answer for the day. A longer window
+ * tolerates more, so the permissive side is 'higher' on all five. The project may open the trace,
+ * hook and blind windows, the same level `seats_cross_teams` allows; the two idle windows only
+ * ever tighten. Declared per level as a partial set, each field inherited on its own. Every
+ * reader takes this set through `stateThresholds` below — there is no second view of them.
+ */
+export type StateThresholds = {
+  idle_lead_seconds: number;
+  idle_owner_seconds: number;
+  blind_after_seconds: number;
+  trace_window_seconds: number;
+  hook_working_seconds: number;
+};
 
 export const STATE_THRESHOLDS: { [K in keyof StateThresholds]: NumberSettingSpec } = {
+  idle_lead_seconds: IDLE_LEAD_SECONDS,
+  idle_owner_seconds: IDLE_OWNER_SECONDS,
+  blind_after_seconds: BLIND_AFTER_SECONDS,
   trace_window_seconds: {
     name: 'state_trace_window_seconds',
     fallback: 120,
     permissive: 'higher',
     looseningLevels: ['project'],
   },
-  blind_after_seconds: BLIND_AFTER_SECONDS,
   hook_working_seconds: {
     name: 'state_hook_working_seconds',
     fallback: 120,
@@ -193,45 +226,32 @@ export const STATE_THRESHOLDS: { [K in keyof StateThresholds]: NumberSettingSpec
   },
 };
 
+/** The three liveness defaults, in the order a report names them: the idle-to-lead, idle-to-owner
+ *  and blind windows. They ship at 5 minutes, 15 minutes and 5 minutes. */
+export type LivenessThresholds = Pick<StateThresholds, 'idle_lead_seconds' | 'idle_owner_seconds' | 'blind_after_seconds'>;
+
+/** The liveness keys, in the order the writers emit them. */
+export const LIVENESS_KEYS = ['idle_lead_seconds', 'idle_owner_seconds', 'blind_after_seconds'] as const;
+
 /** The values when nothing declares any — the same fallbacks the specs carry. */
 export const DEFAULT_STATE_THRESHOLDS: StateThresholds = {
-  trace_window_seconds: STATE_THRESHOLDS.trace_window_seconds.fallback,
+  idle_lead_seconds: STATE_THRESHOLDS.idle_lead_seconds.fallback,
+  idle_owner_seconds: STATE_THRESHOLDS.idle_owner_seconds.fallback,
   blind_after_seconds: STATE_THRESHOLDS.blind_after_seconds.fallback,
+  trace_window_seconds: STATE_THRESHOLDS.trace_window_seconds.fallback,
   hook_working_seconds: STATE_THRESHOLDS.hook_working_seconds.fallback,
 };
 
-/**
- * The three liveness defaults: an idle seat is reported to its lead this long after it went
- * quiet, reported to the owner this long after that, and a seat that no source has heard from
- * this long reads blind. They ship at 5 minutes, 15 minutes and 5 minutes. A longer threshold
- * tolerates more, so the permissive side is 'higher' — and no level may take it: a project, a
- * team and a seat may each tighten a liveness default, never loosen it, unless the level above
- * allows it, which none of these three does.
- */
-export type LivenessThresholds = { idle_lead_seconds: number; idle_owner_seconds: number; blind_after_seconds: number };
+export const DEFAULT_LIVENESS_THRESHOLDS: LivenessThresholds = livenessOf(DEFAULT_STATE_THRESHOLDS);
 
-export const LIVENESS_THRESHOLDS: { [K in keyof LivenessThresholds]: NumberSettingSpec } = {
-  idle_lead_seconds: {
-    name: 'liveness_idle_lead_seconds',
-    fallback: 300,
-    permissive: 'higher',
-    looseningLevels: [],
-  },
-  idle_owner_seconds: {
-    name: 'liveness_idle_owner_seconds',
-    fallback: 900,
-    permissive: 'higher',
-    looseningLevels: [],
-  },
-  blind_after_seconds: BLIND_AFTER_SECONDS,
-};
-
-/** The values when nothing declares any — the same fallbacks the specs carry. */
-export const DEFAULT_LIVENESS_THRESHOLDS: LivenessThresholds = {
-  idle_lead_seconds: LIVENESS_THRESHOLDS.idle_lead_seconds.fallback,
-  idle_owner_seconds: LIVENESS_THRESHOLDS.idle_owner_seconds.fallback,
-  blind_after_seconds: LIVENESS_THRESHOLDS.blind_after_seconds.fallback,
-};
+/** The three liveness windows in a resolved set, handed to the watch's checks. */
+export function livenessOf(thresholds: StateThresholds): LivenessThresholds {
+  return {
+    idle_lead_seconds: thresholds.idle_lead_seconds,
+    idle_owner_seconds: thresholds.idle_owner_seconds,
+    blind_after_seconds: thresholds.blind_after_seconds,
+  };
+}
 
 /** One declaration set aside, in the words a report names it by. */
 export type ThresholdRefusal = {
@@ -243,8 +263,6 @@ export type ThresholdRefusal = {
   text: string;
 };
 
-export type LivenessResolution = { thresholds: LivenessThresholds; refused: ThresholdRefusal[] };
-
 /** A threshold said the way a report says it: 90s, 5m, 2h. */
 export function sayThreshold(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -255,8 +273,9 @@ export function sayThreshold(seconds: number): string {
 /** The rule a refused liveness word broke, as the report says it. */
 export const LIVENESS_RULE = 'a liveness threshold may be tightened, never loosened, unless the level above allows it';
 
-function declarationsFor<K extends keyof LivenessThresholds>(
-  declared: Partial<Record<SettingLevel, Partial<LivenessThresholds> | undefined>>,
+/** The words one chain holds, one level at a time, for one threshold. */
+function thresholdDeclarations<K extends keyof StateThresholds>(
+  declared: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>,
   name: K,
 ): NumberDeclaration[] {
   const out: NumberDeclaration[] = [];
@@ -267,35 +286,33 @@ function declarationsFor<K extends keyof LivenessThresholds>(
   return out;
 }
 
-/** The one call the state reading makes: the chain in, every threshold out. */
+/**
+ * The one call the state reading makes — and the one the watch makes: the chain in, every
+ * threshold out, each resolved on its own through the inheritance rule. A word that would
+ * loosen a threshold no level allows is set aside here, the value in force standing; `status`,
+ * `check` and the watch name those words through `thresholdRefusals`.
+ */
 export function stateThresholds(declared: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>): StateThresholds {
-  const said = (name: keyof StateThresholds): NumberDeclaration[] => {
-    const out: NumberDeclaration[] = [];
-    for (const level of SETTING_LEVELS) {
-      const value = declared[level]?.[name];
-      if (value !== undefined) out.push({ level, value });
-    }
-    return out;
-  };
   return {
-    trace_window_seconds: resolveNumberSetting(STATE_THRESHOLDS.trace_window_seconds, said('trace_window_seconds')).value,
-    blind_after_seconds: resolveNumberSetting(STATE_THRESHOLDS.blind_after_seconds, said('blind_after_seconds')).value,
-    hook_working_seconds: resolveNumberSetting(STATE_THRESHOLDS.hook_working_seconds, said('hook_working_seconds')).value,
+    idle_lead_seconds: resolveNumberSetting(STATE_THRESHOLDS.idle_lead_seconds, thresholdDeclarations(declared, 'idle_lead_seconds')).value,
+    idle_owner_seconds: resolveNumberSetting(STATE_THRESHOLDS.idle_owner_seconds, thresholdDeclarations(declared, 'idle_owner_seconds')).value,
+    blind_after_seconds: resolveNumberSetting(STATE_THRESHOLDS.blind_after_seconds, thresholdDeclarations(declared, 'blind_after_seconds')).value,
+    trace_window_seconds: resolveNumberSetting(STATE_THRESHOLDS.trace_window_seconds, thresholdDeclarations(declared, 'trace_window_seconds')).value,
+    hook_working_seconds: resolveNumberSetting(STATE_THRESHOLDS.hook_working_seconds, thresholdDeclarations(declared, 'hook_working_seconds')).value,
   };
 }
 
 /**
- * The one call the watch makes: the chain in, the three liveness values out, plus every word it
- * set aside, each with the rule it broke. A looser word changes nothing — the value in force
- * stands — so a project that declares a longer idle window sends its seats no later report.
+ * Every liveness word the chain set aside, each with the rule it broke. The values themselves
+ * come from the same `stateThresholds` call the reading makes, so a report never disagrees with
+ * the number in force: a looser word changes nothing, and a project may only open a window the
+ * setting allows that level to open.
  */
-export function livenessThresholds(declared: Partial<Record<SettingLevel, Partial<LivenessThresholds> | undefined>>): LivenessResolution {
-  const thresholds = {} as LivenessThresholds;
+export function thresholdRefusals(declared: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>): ThresholdRefusal[] {
   const refused: ThresholdRefusal[] = [];
-  for (const setting of ['idle_lead_seconds', 'idle_owner_seconds', 'blind_after_seconds'] as const) {
-    const spec = LIVENESS_THRESHOLDS[setting];
-    const resolution = resolveNumberSetting(spec, declarationsFor(declared, setting));
-    thresholds[setting] = resolution.value;
+  for (const setting of LIVENESS_KEYS) {
+    const spec = STATE_THRESHOLDS[setting];
+    const resolution = resolveNumberSetting(spec, thresholdDeclarations(declared, setting));
     for (const word of resolution.refused) {
       refused.push({
         setting,
@@ -306,7 +323,7 @@ export function livenessThresholds(declared: Partial<Record<SettingLevel, Partia
       });
     }
   }
-  return { thresholds, refused };
+  return refused;
 }
 
 /**

@@ -160,6 +160,44 @@ describe('delivery_order', () => {
   });
 });
 
+// `liveness` is a seat's own word on the three liveness windows: each a positive number of
+// seconds, under the same inheritance the watch's reports read. Omitted, the seat carries no
+// field and its digest is the one it had; writing one is an edit the owner re-approves.
+describe('liveness', () => {
+  const LEAD_LAUNCH = '    launch: claude --model claude-opus-5-5\n';
+
+  test('an omitted map reads no field, and a written one reads the windows it names', () => {
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error('the fixture does not validate');
+    expect('liveness' in (checked.team.seats[0] as object)).toBe(false);
+    const written = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    liveness:\n      idle_lead_seconds: 60\n      blind_after_seconds: 120\n`));
+    if (!written.ok) throw new Error('the liveness fixture does not validate');
+    expect(written.team.seats[0]?.liveness).toEqual({ idle_lead_seconds: 60, blind_after_seconds: 120 });
+  });
+
+  test('a map that is not one, an unknown key and a value that is not seconds are refused under the seat', () => {
+    const cases = [
+      {
+        text: `${LEAD_LAUNCH}    liveness: soon\n`,
+        message: 'seat "lead": liveness must be a map of thresholds',
+      },
+      {
+        text: `${LEAD_LAUNCH}    liveness:\n      idle_first: 60\n`,
+        message: 'seat "lead": liveness has no threshold "idle_first"; the keys are idle_lead_seconds, idle_owner_seconds, blind_after_seconds',
+      },
+      {
+        text: `${LEAD_LAUNCH}    liveness:\n      blind_after_seconds: 0\n`,
+        message: 'seat "lead": liveness "blind_after_seconds" must be a positive number of seconds',
+      },
+    ];
+    for (const one of cases) {
+      const checked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, one.text));
+      expect(checked.ok).toBe(false);
+      if (!checked.ok) expect(checked.errors.map((error) => error.message)).toEqual([one.message]);
+    }
+  });
+});
+
 // An approval record written by main's code today (test/fixtures/approval-main.json, its
 // fingerprints taken with main's own reader) still verifies the same file on this branch: the
 // modules produce the digests main's monolith does. The record carries its own copy of the

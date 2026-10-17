@@ -13,7 +13,8 @@ import {
   type Standing,
 } from '../store/store.ts';
 import { applyTempo, type Tempo } from '../file/sections/tempo.ts';
-import { compare, describe, fingerprints, legacyLabelDigests, legacySeatDigests, legacyWatchDigest, OWNER_SECTIONS, type Fingerprints } from './fingerprint.ts';
+import { parseYaml } from '../yaml.ts';
+import { compare, describe, fingerprints, legacyLabelDigests, legacySeatDigests, legacyWatchDigests, OWNER_SECTIONS, type Fingerprints } from './fingerprint.ts';
 
 /** The launch ceilings declared in the file. An approval also stores a snapshot of them. */
 export function ceilingsOf(team: TeamFile): Ceilings {
@@ -89,9 +90,13 @@ export function approvedFingerprints(record: ApprovalRecord): Fingerprints {
     const omitted = fingerprints({ ...checked.team, tempo: 'normal' }).sections.tempo;
     if (omitted !== undefined) sections = { ...sections, tempo: omitted };
   }
-  if (checked.ok && checked.team.watch.idleRepeat === undefined) {
-    const legacy = legacyWatchDigest(checked.team);
-    if (legacy && stored.sections['watch'] === legacy) {
+  // A record written before `idle_owner` and `blind_after` joined `watch` — or before
+  // `idle_repeat` defaulted to off — carries a digest of the section as it read then. The
+  // arrival alone is not an edit: a stored digest in one of the earlier shapes is adopted as the
+  // current one, so a later edit is judged against the section as it reads now.
+  if (checked.ok) {
+    const legacy = legacyWatchDigests(checked.team, !wroteKey(record.file, 'watch', 'idle_first'));
+    if (stored.sections['watch'] !== undefined && legacy.includes(stored.sections['watch'])) {
       const currentWatch = fingerprints(checked.team).sections['watch'];
       if (currentWatch && sections['watch'] !== currentWatch) {
         sections = { ...sections, watch: currentWatch };
@@ -104,13 +109,29 @@ export function approvedFingerprints(record: ApprovalRecord): Fingerprints {
 }
 
 /**
+ * Whether the approved copy writes `section.key` at the top level. The parsed team cannot tell a
+ * default from a written value; the record's copy of the text can, and the digest a record
+ * stored was computed from that text.
+ */
+function wroteKey(text: string, section: string, key: string): boolean {
+  try {
+    const root = parseYaml(text);
+    if (root.kind !== 'map') return false;
+    const entry = root.entries.find((one) => one.key === section);
+    if (entry === undefined || entry.value.kind !== 'map') return false;
+    return entry.value.entries.some((one) => one.key === key);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * A record from before `parked` and `stopped` were in the digest, or from when
  * an omitted label was the seat's name, still names the seat as it was
  * approved, read from the stored copy. A digest already in the new shape is
  * left alone, so a later edit of the file is not adopted from a stale copy.
  * A copy that can't be read is left alone.
- */
-function adoptLegacyDigests(stored: Record<string, string>, team: TeamFile): Record<string, string> {
+ */function adoptLegacyDigests(stored: Record<string, string>, team: TeamFile): Record<string, string> {
   const current = fingerprints(team).seats;
   const legacyFlags = legacySeatDigests(team);
   const legacyLabels = legacyLabelDigests(team);

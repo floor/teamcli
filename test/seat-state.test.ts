@@ -81,7 +81,12 @@ describe('the reading, best source first', () => {
   });
 
   test('a caller may run the reading by its own thresholds', () => {
-    const limits = { trace_window_seconds: 600, blind_after_seconds: 600, hook_working_seconds: 600 };
+    const limits = {
+      ...DEFAULT_STATE_THRESHOLDS,
+      trace_window_seconds: 600,
+      blind_after_seconds: 600,
+      hook_working_seconds: 600,
+    };
     expect(seatState({ trace: ago(300) }, NOW, limits)).toEqual({ state: 'working', source: 'trace', blind: false });
     expect(seatState({ trace: ago(601) }, NOW, limits)).toEqual({ state: 'unknown', source: 'none', blind: true });
   });
@@ -141,30 +146,33 @@ describe('the gatherer the readers share', () => {
 describe('the thresholds are settings', () => {
   test('nothing declared keeps the shipped fallbacks', () => {
     expect(stateThresholds({})).toEqual(DEFAULT_STATE_THRESHOLDS);
-    // The blind window is a liveness default now: five minutes, and no level may lengthen it.
-    expect(DEFAULT_STATE_THRESHOLDS)
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 300, hook_working_seconds: 120 });
+    // The liveness windows ship at five to the lead, fifteen to the owner, five to blind.
+    expect(DEFAULT_STATE_THRESHOLDS).toEqual({
+      idle_lead_seconds: 300,
+      idle_owner_seconds: 900,
+      blind_after_seconds: 300,
+      trace_window_seconds: 120,
+      hook_working_seconds: 120,
+    });
   });
 
   test('a team may tighten any threshold freely, and the other fields are untouched', () => {
     expect(stateThresholds({ team: { blind_after_seconds: 120 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 120, hook_working_seconds: 120 });
+      .toEqual({ ...DEFAULT_STATE_THRESHOLDS, blind_after_seconds: 120 });
     expect(stateThresholds({ seat: { trace_window_seconds: 10, blind_after_seconds: 60 } }))
-      .toEqual({ trace_window_seconds: 10, blind_after_seconds: 60, hook_working_seconds: 120 });
+      .toEqual({ ...DEFAULT_STATE_THRESHOLDS, trace_window_seconds: 10, blind_after_seconds: 60 });
     // The hook's own window: a team may make the screen win sooner, never later.
     expect(stateThresholds({ team: { hook_working_seconds: 30 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 300, hook_working_seconds: 30 });
+      .toEqual({ ...DEFAULT_STATE_THRESHOLDS, hook_working_seconds: 30 });
   });
 
   test('a team may not loosen: the word is refused and the inherited value stands', () => {
-    expect(stateThresholds({ team: { blind_after_seconds: 7200 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 300, hook_working_seconds: 120 });
-    expect(stateThresholds({ team: { hook_working_seconds: 900 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 300, hook_working_seconds: 120 });
-    // The project may open the trace and hook windows, the same level `seats_cross_teams`
-    // allows — but the blind threshold is liveness, and only ever tightens.
+    expect(stateThresholds({ team: { blind_after_seconds: 7200 } })).toEqual(DEFAULT_STATE_THRESHOLDS);
+    expect(stateThresholds({ team: { hook_working_seconds: 900 } })).toEqual(DEFAULT_STATE_THRESHOLDS);
+    // The project may open the trace, hook and blind windows: the blind threshold is the one
+    // liveness setting whose level above may loosen it.
     expect(stateThresholds({ project: { blind_after_seconds: 7200, hook_working_seconds: 900 } }))
-      .toEqual({ trace_window_seconds: 120, blind_after_seconds: 300, hook_working_seconds: 900 });
+      .toEqual({ ...DEFAULT_STATE_THRESHOLDS, blind_after_seconds: 7200, hook_working_seconds: 900 });
   });
 
   test('the resolver the settings share reports what it set aside', () => {
