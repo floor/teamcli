@@ -367,6 +367,44 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(drop.text).toContain(BODY);
   });
 
+  test('a recorded pane another seat now holds is never typed into', async () => {
+    const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    // The record still names the pane builder-1 was launched on; herdr now lists the lead there
+    // and names no agent of builder-1's at all — the pane was reused after the record was
+    // written. The trigger must not go into the lead's box on the strength of the record.
+    const builder = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-reused' });
+    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: builder.id, seat: 'builder-1', role: 'builder', leads: false }]);
+    const leadPane = scripted(['idle', 'working']);
+    const host = sendHost(alpha, 'alpha', { lead: { pane: 'pane-reused', paneStatus: leadPane } });
+    const io = testIo(alpha.root, OWNER);
+
+    const code = await runSend([builder.id, BODY], io, host);
+
+    expect(code).toBe(1);
+    expect(io.err).toBe('team send: builder-1: unreachable: no live agent carries that name in the session\n');
+    expect(leadPane.typed).toEqual([]);
+    expect(leadPane.enters).toBe(0);
+    expect(existsSync(join(alpha.root, '.agents', 'send-drops'))).toBe(false);
+  });
+
+  test('a seat herdr lists on another pane is reached there, never at the pane the record carries', async () => {
+    const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const builder = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-old' });
+    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: builder.id, seat: 'builder-1', role: 'builder', leads: false }]);
+    const builderPane = scripted(['idle', 'working']);
+    const host = sendHost(alpha, 'alpha', { 'builder-1': { pane: 'pane-new', paneStatus: builderPane } });
+    const io = testIo(alpha.root, OWNER);
+
+    const code = await runSend([builder.id, BODY], io, host);
+
+    expect(code).toBe(0);
+    expect(builderPane.typed.length).toBe(1);
+    const typed = builderPane.typed[0] as Typed;
+    expect(typed.pane).toBe('pane-new');
+    const drop = dropOf(typed.text);
+    expect(drop.text).toContain(BODY);
+  });
+
   test('a seat whose own record is missing is judged as the file\'s seat: the own-team rules admit it', async () => {
     const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
     // The team record and the target exist; the caller's own seat has no record of its own — the
