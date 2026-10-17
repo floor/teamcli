@@ -26,7 +26,7 @@ import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import type { Agent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { contextLine, hasJsonFlag, renderDryRunPlan, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
+import { contextLine, displayPath, hasJsonFlag, renderDryRunPlan, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { resolveTarget } from '../send/resolve.ts';
 import { appendRoute, readRouteAddress, ROUTES_FILE, type RouteAddress, type RouteRecord } from '../send/routes.ts';
 import { storePath } from '../store/store.ts';
@@ -149,7 +149,7 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   if (args.flags.has('dry-run')) {
     const target = join(storePath(resolved.team.project, resolved.team.root, host.home), ROUTES_FILE);
     const plan: PlanStep[] = [{ step: 'record', seat: at.seat, detail: `append the route to ${target}`, prefix: '+' }];
-    return routeDry(io, context, at, address, native, admission.rule, plan, report);
+    return routeDry(io, context, at, address, native, admission.rule, plan, host.home, report);
   }
   const written = appendRoute(resolved.team.project, resolved.team.root, host.home, record);
   if (!written.ok) return unrecorded(io, dir, who, written.reason, host, report);
@@ -226,6 +226,7 @@ function routeDry(
   native: boolean,
   rule: string,
   plan: readonly PlanStep[],
+  home: string,
   report: Report,
 ): number {
   if (report.json) {
@@ -236,7 +237,7 @@ function routeDry(
   } else {
     io.stdout(`${contextLine(context.project, context.session)}\n`);
     answerLines(io, at, address, native, rule);
-    io.stdout(renderDryRunPlan(null, plan).map((line) => `${line}\n`).join(''));
+    io.stdout(renderDryRunPlan(null, plan).map((line) => `${displayPath(line, home)}\n`).join(''));
   }
   return 0; // exit: route.dry-run
 }
