@@ -77,11 +77,11 @@ row prints its roster under it, indented two spaces, one `seat`, `agent`, `role`
 seat, with no header of its own: `name`, `id`, `status`, `cli`, `model`, `pane`. A value herdr and
 the team file do not give is `-`, a status that cannot be read is `?`, and `status` is herdr's own
 word with two changes: a blocked seat is `waiting`, and a seat the file declares that herdr does not
-have is `stopped` — so every declared seat has a row. For a seat whose profile says herdr cannot
-report it (`herdr_status: unreliable`), the word is the seat's own screen instead: its idle table
-or a box holding text is `idle` (or `ready` once the seat is up), a running turn is `working`,
-every other screen the profile reads is `waiting`, and `?` is left for a screen it cannot read.
-A stopped session has no roster and no rows.
+have is `stopped` — so every declared seat has a row. A stopped session has no roster and no rows.
+For a seat whose profile says herdr cannot report it (`herdr_status: unreliable`), the word is the
+seat's own screen instead: its idle table or a box holding text is `idle` (or `ready` once the seat
+is up), a running turn is `working`, every other screen the profile reads is `waiting`, and `?` is
+left for a screen it cannot read.
 
 With `--seats`, `ACTIVITY` is that roster counted by readiness, an `idle` or `ready` seat counting
 as ready — `2 ready / 0 working / 0 waiting / 0 stopped` — and `--json` adds `roster` and
