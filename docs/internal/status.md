@@ -159,8 +159,8 @@ here.
 | Difference | Repair |
 | --- | --- |
 | `<seat> is in the file and is not running` | `team add <seat>` when something else runs, `the owner runs team up` when nothing does |
-| `<seat>: its pane runs no CLI (the CLI ended or the session was restored)` | `the owner runs team up` (it closes the pane without input and launches the seat fresh) |
-| `<seat>: the process in its pane is not the one team launched; nothing checks its model, account or rules` | `the owner runs team up` (it closes the pane without input and launches the seat fresh) |
+| `<seat>: its pane runs no CLI (the CLI ended or the session was restored)` | `team up` (it closes the pane without input and launches the seat fresh; the map admits the owner and the team's leads) |
+| `<seat>: the process in its pane is not the one team launched; nothing checks its model, account or rules` | `team up` (it closes the pane without input and launches the seat fresh; the map admits the owner and the team's leads) |
 | `<seat>: its pane holds a process this record cannot tie to the launch` | `look at the pane`. The row is `restored, not launched by team` and its model is `-`. A screen that names a model adds a note; it is not shown as the model running |
 | `<seat> runs <model> <version>; the file says <declared>; the process in its pane is not the one team launched` | `team remove <seat> --keep, then team add <seat>`. A lead is not removed: `team down, then team up` (to restart the whole team). The row stays `-`. `status` does not start the seat |
 | `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched` | the same restart. Said when the launch line starts a program other than the CLI's own binary, or the file says the launcher chooses the model, and the process is not the one `team` launched — including when the stored agent session is still the live one, in which case the row stays the running seat |
@@ -171,7 +171,7 @@ here.
 | `<seat>: unknown for over <threshold> — blind, and it counts as not working` | `the owner looks at the pane`. One per seat no source has heard from past the blind threshold — 5m shipped, declared as `state_blind_after_seconds`, tightened by every level and opened again only by a project — and the same reading [`team seats`](../commands/seats.md) prints as `unknown (blind)` beside its source |
 | `<seat>: waiting for owner (<classification>)` | `the owner runs team up` (it offers to open the pane, skip the seat or stop cleanly), or `team answer <seat> trust` when the classification is `trust` and a `dialogs.trust` grant is in force for this project's team id (read fresh on every run) |
 | `<seat>: trust sent; recovery required` | `the owner runs team up` |
-| `<seat>: its launch stopped at "<stage>"` | `the owner runs team up (it resumes the launch)` |
+| `<seat>: its launch stopped at "<stage>"` | `team up (it resumes the launch)` — the map admits the owner and the team's leads, so a lead repairs a relaunch that did not reach ready |
 | `<seat>: its rules were not delivered` | `team remove <seat> --keep`, then `team add <seat>` |
 | `<seat>: its rules file is missing` / `… is a symbolic link` / `… is not a regular file` / `… has mode 0644, not 0600` / `… is not owned by this user` / `… cannot be read` / `… differs from the team file's rules` | `team reload <seat>` — the seat's rules travel in a file in the project state folder, and it no longer holds the rules text the live file gives it; `status` never rewrites it |
 | `<seat> holds text in its input box that was never sent` | `the owner clears or sends it in the pane; team does not type into a box it can't verify` |

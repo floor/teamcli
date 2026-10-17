@@ -278,11 +278,14 @@ export function compare(
         });
       } else {
         if (recorded && recorded.stage !== 'ready' && !unidentifiedMismatch) {
+          // `team up` is the map's `owner-or-leads` row, so a lead runs this repair as well as the
+          // owner; the difference is not counted among the owner's. A relaunch that closed its
+          // seat and never reached ready leaves exactly this record, and the lead who watches the
+          // team is the one who repairs it.
           differences.push({
             what: `${seat.name}: its launch stopped at "${recorded.stage}"`,
-            repair: 'the owner runs team up (it resumes the launch)',
+            repair: 'team up (it resumes the launch)',
             needs: 'approve',
-            owner: true,
           });
         }
         if (isUnsent) {
@@ -600,9 +603,11 @@ function notLaunched(
       what: verdict === 'gone'
         ? `${seat.name}: its pane runs no CLI (the CLI ended or the session was restored)`
         : `${seat.name}: the process in its pane is not the one team launched; nothing checks its model, account or rules`,
-      repair: 'the owner runs team up',
+      // The same repair `up` makes: it closes the pane without typing and launches the seat
+      // fresh. Admitted by the map's `up` row for the owner and the team's leads alike, so it is
+      // not counted among the owner's.
+      repair: 'team up',
       needs: 'approve',
-      owner: true,
     },
     // A note, not a difference: it names what the screen shows and does not change the exit.
     ...(running

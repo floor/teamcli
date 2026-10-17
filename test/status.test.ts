@@ -338,7 +338,7 @@ describe('team status', () => {
     });
     live = { ...built(), agents: [...built().agents, agent('codex-acme-tmp-1', 'w6', 'working', 'codex')] };
     const { out } = await status();
-    expect(out).toContain('codex-acme: its launch stopped at "named"\n  repair: the owner runs team up (it resumes the launch)');
+    expect(out).toContain('codex-acme: its launch stopped at "named"\n  repair: team up (it resumes the launch)');
     expect(out).toContain('deepseek-acme: its rules were not delivered');
     expect(out).toContain('note: codex-acme-tmp-1 is temporary, until merged:fix/select-width');
     expect(out).toContain('codex-acme-tmp-2: a temporary seat is recorded and is not running');
@@ -707,13 +707,14 @@ describe('team status', () => {
     const upRun = await status();
     expect(upRun.out).toContain('repair: the owner runs team up');
 
-    // 3. the owner runs team up (it resumes the launch)
+    // 3. team up (it resumes the launch): the map's `up` row admits a lead, so no owner count
     live = built();
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ??= emptySession()).seats['codex-acme'] = { stage: 'launched' };
     });
     const resumeRun = await status();
-    expect(resumeRun.out).toContain('repair: the owner runs team up (it resumes the launch)');
+    expect(resumeRun.out).toContain('repair: team up (it resumes the launch)');
+    expect(resumeRun.out).not.toContain('for the owner');
 
     // 4. the owner switches it back: git -C <shown> switch <base>
     branch = 'fix/other';
@@ -777,7 +778,7 @@ describe('team status', () => {
     };
     const unknownRes = await status();
     expect(unknownRes.out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
-    expect(unknownRes.out).toContain('difference: codex-acme: its launch stopped at "named"\n  repair: the owner runs team up (it resumes the launch)');
+    expect(unknownRes.out).toContain('difference: codex-acme: its launch stopped at "named"\n  repair: team up (it resumes the launch)');
     expect(unknownRes.out).not.toContain('unsent text');
     expect(unknownRes.out).not.toContain('holds text in its input box that was never sent');
   });
@@ -904,7 +905,7 @@ describe('team status', () => {
 // A pane is its seat only while the process team launched is still in it. Each case records a
 // launch for codex-acme and hands the comparison one process-info reading for its pane.
 describe('a pane that no longer holds the process team launched', () => {
-  const GONE_REPAIR = '  repair: the owner runs team up\n';
+  const GONE_REPAIR = '  repair: team up\n';
 
   function recordCodex(patch: Record<string, unknown> = {}) {
     updateState(join(dir, '.agents'), (state) => {
@@ -929,7 +930,10 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(out).toContain(
       'difference: codex-acme: its pane runs no CLI (the CLI ended or the session was restored)\n' + GONE_REPAIR,
     );
-    expect(out).toContain('1 difference(s), 1 for the owner\n');
+    // `team up` admits a lead: the difference is one the lead repairs, not one counted for the
+    // owner.
+    expect(out).toContain('1 difference(s)\n');
+    expect(out).not.toContain('for the owner');
     const doc = JSON.parse((await status('--json')).out);
     // The comparison's own 'missing' is a certainty: the reading is done, from the process,
     // even while herdr still lists the agent in the pane.
