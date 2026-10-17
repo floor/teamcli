@@ -59,6 +59,7 @@ import { formatPlan, upPlan, type DownSeat, type UpSeat } from '../launch/plan.t
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
+import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
@@ -315,7 +316,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     // does without typing into it.
     const advice = inspected.unrecognised === undefined
       ? ''
-      : `${plainLine(name)}: screen: not recognised; herdr reports it ${plainLine(inspected.unrecognised)}; the workspace is closed without typing into it\n`;
+      : `${unreadAdvice(name, inspected.unrecognised)}\n`;
     const preview = upPlan({
       root,
       session,
@@ -355,7 +356,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       out.stdout(`${plainLine(name)}: turn: ${rechecked.where === 'working' ? 'mid-turn (working)' : `not working (${rechecked.where})`}\n`);
       out.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(declared.launch)}" in a new workspace without passing the old transcript\n`);
       if (rechecked.unrecognised !== undefined) {
-        out.stdout(`${plainLine(name)}: screen: not recognised; herdr reports it ${plainLine(rechecked.unrecognised)}; the workspace is closed without typing into it\n`);
+        out.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }
 
       const stopped = await stopRunning({
@@ -537,7 +538,7 @@ function inspectSeat(
   // herdr's own status is the last word on a seat whose screen the profile cannot read: one
   // herdr reports idle or done is restartable, and its workspace is closed without typing into
   // it. The unread screen is advice on the pre-close line, never a block.
-  if (where === 'unknown' && (agent.status === 'idle' || agent.status === 'done')) {
+  if (where === 'unknown' && unreadIdle(agent.status)) {
     return {
       kind: 'ok',
       agent,

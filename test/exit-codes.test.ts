@@ -3544,7 +3544,9 @@ scene('reload.launch', async (place) => {
 scene('reload.not-idle', async (place) => {
   write(place, RELOAD_FILE);
   recordReload(place, 'lead');
-  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ text: 'no prompt here' }) }), 'not at an idle prompt');
+  // An unread screen with herdr reporting neither work nor an idle seat: only herdr's idle or
+  // done word lets an unread screen close, so this stays the refusal.
+  return show(await reloaded(place, ['lead'], owner, { launch: reloadLaunch({ text: 'no prompt here', agents: [agent('lead', 'blocked')] }) }), 'not at an idle prompt');
 });
 scene('reload.not-running', async (place) => {
   write(place, TEAM);

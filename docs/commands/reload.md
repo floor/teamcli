@@ -9,12 +9,16 @@ one seat and does only that swap.
 
 The close happens at an idle prompt. A seat that is working, a seat whose input box holds
 unsent text, and a seat whose screen is not an idle prompt are left as they are: nothing is
-closed and nothing is launched. A seat whose launch record kept no model — one brought up
-before the record held one — still reloads: the model its screen shows is read first, the
-team file's declared model and effort stand when the screen names none, and the reading is
-said and recorded. A seat already running what that reading declares, whose rules file (when
-it takes its rules in one) holds the live text, is recorded in place with no close. The next
-launch that reaches an idle prompt writes the record, and a later reload can read it.
+closed and nothing is launched. A screen the profile cannot read is not an idle prompt
+either, except that herdr's own status is the last word on it: a seat herdr reports idle or
+done is closed without typing into it, and the line says the screen was not recognised and
+what herdr reports; one herdr reports working keeps the refusal. A seat whose launch record
+kept no model — one brought up before the record held one — still reloads: the model its
+screen shows is read first, the team file's declared model and effort stand when the screen
+names none, and the reading is said and recorded. A seat already running what that reading
+declares, whose rules file (when it takes its rules in one) holds the live text, is recorded
+in place with no close. The next launch that reaches an idle prompt writes the record, and a
+later reload can read it.
 
 A matching seat exits without closing anything and without a log line. A close that passes
 is logged at that moment, before the workspace is closed. The owner's line names the seat

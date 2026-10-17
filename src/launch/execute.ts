@@ -14,6 +14,7 @@ import {
   type WaitingReads,
 } from './pause.ts';
 import { plainPaneText } from './plain.ts';
+import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
@@ -1262,7 +1263,10 @@ export async function executePlan(
             refuse('holds unsent text; nothing closed');
             break;
           }
-          if (!((status === 'idle' || status === 'done') && kind === 'idle')) {
+          // herdr's own status is the last word on a screen the profile cannot read: one it
+          // reports idle or done is closed without typing into it, exactly as `reload` and
+          // `restart` read it before the close. A working seat was refused above.
+          if (!(unreadIdle(status) && (kind === 'idle' || kind === 'unknown'))) {
             refuse('is not at an idle prompt; nothing closed');
             break;
           }

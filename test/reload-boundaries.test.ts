@@ -1,11 +1,13 @@
 // `team reload` closes a drifted seat at an idle prompt and launches the file's line again. The
-// boundaries of that close: a dialog, a question or a shell is never closed over, and herdr's
-// idle word is not enough — the screen decides. The close re-reads herdr itself: a seat that
-// turned busy between the check and the close, or whose pane holds a process team did not
-// launch, closes nothing. A version drift is a model drift; an effort dropped from the file is a
-// drift that leaves no effort behind. A second reload after a successful one finds nothing to
-// do. Only the seat named closes — a drifted lead beside it keeps running — and the relaunch
-// runs the file's current launch line.
+// boundaries of that close: a dialog or a question is never closed over, and a screen the
+// profile can read as mid-turn is refused even when herdr calls the seat idle. A screen the
+// profile cannot read is closed without typing when herdr reports the seat idle or done, and
+// refused when herdr reports a turn. The close re-reads herdr itself: a seat that turned busy
+// between the check and the close, or whose pane holds a process team did not launch, closes
+// nothing. A version drift is a model drift; an effort dropped from the file is a drift that
+// leaves no effort behind. A second reload after a successful one finds nothing to do. Only the
+// seat named closes — a drifted lead beside it keeps running — and the relaunch runs the file's
+// current launch line.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -213,14 +215,18 @@ describe('the screen the close demands', () => {
     }
   });
 
-  test('a shell prompt is never closed over', async () => {
+  test('an unread screen herdr reports idle is closed without typing, whatever it shows', async () => {
+    // A pane whose text matches no claude shape — a shell prompt, say — says nothing about the
+    // turn behind it. Herdr's own status is the last word: idle closes the workspace, and
+    // nothing is typed into the unrecognised screen. A pane whose CLI really exited is caught
+    // by the process re-read below, not by this text.
     remember('worker', 'low');
     const { sources, closed } = harness({ text: 'jvial@mac acme % ' });
     const io = testIo(root, OWNER);
     const code = await runReload(['worker'], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toContain('not at an idle prompt');
-    expect(closed).toEqual([]);
+    expect(code, io.out + io.err).toBe(0);
+    expect(io.out).toContain('team reload: worker: screen: not recognised; herdr reports it idle; the workspace is closed without typing into it');
+    expect(closed).toEqual(['worker-ws']);
   });
 
   test('herdr\'s idle word is not enough: a screen mid-turn refuses; done at an idle prompt closes', async () => {

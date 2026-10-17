@@ -43,6 +43,7 @@ import { upPlan } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
+import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
@@ -292,10 +293,16 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         // exit: reload.unsent
         return 1;
       }
-      if (!((listed.status === 'idle' || listed.status === 'done') && kind === 'idle')) {
+      // herdr's own status is the last word on a screen the profile cannot read: one it reports
+      // idle or done is closed without typing into it, and the advice says so. A working seat
+      // was refused above; anything else unread stays the refusal it was.
+      if (!(unreadIdle(listed.status) && (kind === 'idle' || kind === 'unknown'))) {
         out.stderr(`team reload: ${seat.name} is not at an idle prompt; nothing closed\n`);
         // exit: reload.not-idle
         return 1;
+      }
+      if (kind === 'unknown') {
+        out.stdout(`team reload: ${unreadAdvice(seat.name, listed.status)}\n`);
       }
     }
 
