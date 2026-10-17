@@ -258,7 +258,7 @@ check, and this build acts on what the commands below read.
 | `team init` | writes the skeleton `.agents/team.yaml` and adds it and its runtime files to `.git/info/exclude` | the owner |
 | `team commits check <ref>` | checks one commit or a `a..b` range against the signature rule, `--since <ref>` skipping history already checked; exit 1 when one is refused | anyone; read only |
 | `team pr check <file>` | checks a pull request's body against the signature rule (`-` reads stdin), needing no repository; exit 1 when it is refused | anyone; read only |
-| `team doctor` | checks this machine for what the file needs: herdr, each CLI, login, launch line, model, watch heartbeat; `--login` checks only CLI sign-ins | anyone; read only |
+| `team doctor` | checks this machine for what the file needs: herdr, each CLI, login, launch line, model, watch heartbeat; `--login` checks only CLI sign-ins, `--jules` only the Jules CLI's own steps | anyone; read only |
 | `team status` | prints the file's seats against the running session, each difference with its repair; `--json` outputs a stable JSON document (`format: 1`) for scripts; exit 1 when they differ | the owner, a seat of that team on its recorded pane, or a pane the approved file names; `--file` and `--session` are the owner's; read only |
 | `team list` | lists the herdr sessions on this machine, running ones by default; `--all` includes stopped sessions; `--json` prints a stable array, empty when there is nothing; an orphan session and an unreadable seat do not fail it | anyone, from any folder; read only |
 | `team up` / `team down` | starts / stops the session and its seats | `up`: the owner; `down`: the owner, the coordinator or the operator seat |
@@ -312,6 +312,10 @@ can never approve a widening of its own grant.
 `team doctor --login` checks read-only that each CLI in the file is signed in, using each profile's
 existing login check command (`cursor-agent status`, `agy models`, `codex login status`, `claude auth status`, `grok models`).
 It never answers prompts and performs no sign-in action.
+
+`team doctor --jules` checks read-only that the Jules CLI is installed, logged in with GitHub
+linked, and that this project's repository is connected to it. It never answers prompts and
+performs no sign-in action either.
 
 `team up`, `team down`, `team add`, `team remove`, `team worktree new` and `team worktree remove`
 run live. `team worktree list` prints the recorded worktrees and writes nothing. `up`, `down` and `add` take `--dry-run` to print every command they would run, and every
