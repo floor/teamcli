@@ -116,6 +116,51 @@ test('budgets.check_every refuses a zero pause too', () => {
   expect(clean.team.budgets.checkEvery).toBe(600);
 });
 
+// `delivery_order` is the word on how a send to the team's seats walks. The file's own key and a
+// seat's are read; the shape is checked here, and whether the word drops, reorders or would add
+// a leg is the resolver's question, so a valid seat word may name legs the file's own word
+// lacks. Omitted, the file reads null and the seat carries no field — the digests a file had.
+describe('delivery_order', () => {
+  const LEAD_LAUNCH = '    launch: claude --model claude-opus-5-5\n';
+
+  test('an omitted key reads null, and the seats carry no field', () => {
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error('the fixture does not validate');
+    expect(checked.team.deliveryOrder).toBeNull();
+    expect('deliveryOrder' in (checked.team.seats[0] as object)).toBe(false);
+  });
+
+  test('the file’s own word and a seat’s are read, in the order written', () => {
+    const checked = validateTeamFile(`${TEAM}delivery_order: [typed]\n`);
+    if (!checked.ok) throw new Error('the delivery-order fixture does not validate');
+    expect(checked.team.deliveryOrder).toEqual(['typed']);
+    const seated = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    delivery_order: [native, typed]\n`));
+    if (!seated.ok) throw new Error('the seat word fixture does not validate');
+    expect(seated.team.seats[0]?.deliveryOrder).toEqual(['native', 'typed']);
+    expect(seated.team.deliveryOrder).toBeNull();
+  });
+
+  test('a written key with no legs, an unknown leg and a repeated one are refused', () => {
+    const cases = [
+      { text: `${TEAM}delivery_order: []\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed' },
+      { text: `${TEAM}delivery_order:\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed' },
+      { text: `${TEAM}delivery_order: [telepathy]\n`, message: 'delivery_order "telepathy" must be one of: native, mcp-inbox, typed' },
+      { text: `${TEAM}delivery_order: [typed, typed]\n`, message: 'delivery_order names "typed" twice' },
+    ];
+    for (const one of cases) {
+      const checked = validateTeamFile(one.text);
+      expect(checked.ok).toBe(false);
+      if (!checked.ok) expect(checked.errors.map((error) => error.message)).toEqual([one.message]);
+    }
+  });
+
+  test('a seat’s word is refused under the seat’s name', () => {
+    const checked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    delivery_order: [typed, typed]\n`));
+    expect(checked.ok).toBe(false);
+    if (!checked.ok) expect(checked.errors.map((error) => error.message)).toEqual(['seat "lead": delivery_order names "typed" twice']);
+  });
+});
+
 // An approval record written by main's code today (test/fixtures/approval-main.json, its
 // fingerprints taken with main's own reader) still verifies the same file on this branch: the
 // modules produce the digests main's monolith does. The record carries its own copy of the

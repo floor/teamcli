@@ -20,6 +20,7 @@ import { budgets } from './budgets.ts';
 import { watch } from './watch.ts';
 import { watchChecks } from './watch-checks.ts';
 import { seats } from './seats.ts';
+import { deliveryOrder } from './delivery_order.ts';
 import { releases } from './releases.ts';
 import { delegates } from './delegate.ts';
 import { grant } from './grant.ts';
@@ -66,6 +67,10 @@ export const SECTIONS: readonly Section[] = [
   watch,
   watchChecks,
   seats,
+  // The file's word on how a send to its seats walks: non-owner and additive, so a file written
+  // before it keeps every digest and approval it had, and it changes no approval fingerprint.
+  // The seat-level word sits on a seat and is read by the seats section above.
+  deliveryOrder,
   releases,
   // The sections before `tasks` keep the relative order records were written with.
   tasks,

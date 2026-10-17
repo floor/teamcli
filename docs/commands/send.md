@@ -10,8 +10,11 @@ the history line names the channel the send went by and the legs that failed bef
 typed leg is terminal: the drop file and one trigger line, the only channel a send of this build
 can go by. A level of the receiving seat's own chain — entity, project, team, seat — may drop legs
 from the order or put the legs it keeps in a different order, and may never add one: a word
-naming a leg the order does not have, or naming one twice, is set aside and the order in force
-stands. This build carries no `mcp-inbox` leg and makes no socket write — a frame can land at a
+naming a leg the order in force does not have is set aside and the order in force stands. The
+words are read from the receiving seat's own files: the team file's `delivery_order` key and the
+seat's, and the registry project's record for the project the team sits in ([the team
+file](../team-file.md#delivery_order)). A team file that writes a word with no leg, an unknown
+leg, or a leg twice is refused when the file is read. This build carries no `mcp-inbox` leg and makes no socket write — a frame can land at a
 busy session's held-message dialog, where the box is blocked — so a walk that keeps `mcp-inbox`
 records it `unavailable`, and a Claude Code seat's walk records its `native` leg the same way.
 `--wait`, which rides that frame, is refused until the native leg ships. `delivered` means herdr reported the seat `working` — or `done` or `blocked`, and not

@@ -112,6 +112,50 @@ or out of the list, changes that key, because the word is part of the seat.
 
 Nothing in the launch line reads `effort`.
 
+`delivery_order` is optional on a seat: its own word on the order a send to it walks, described
+[below](#delivery_order).
+
+## `delivery_order`
+
+The order a send to this team's seats walks. It is not an owner section: writing or changing it
+changes nothing the owner approves, and a file that writes none keeps every approval it had.
+Omitted, the order is `native`, then `mcp-inbox`, then `typed`.
+
+```yaml
+delivery_order: [typed]
+```
+
+- The word is one or more of `native`, `mcp-inbox` and `typed`, each at most once, in the order
+  a send tries them. A written key with no legs is `delivery_order needs at least one leg:
+  native, mcp-inbox, typed` — the default order is the absence of the key. A word outside the
+  three is `delivery_order "<word>" must be one of: native, mcp-inbox, typed`; a repeated one is
+  `delivery_order names "<word>" twice`.
+- The receiving seat's chain is read outermost first: the entity, the project's registry record,
+  this file's key, then the seat's own key. No entity record carries an order in this build, so
+  that level is always silent; the project's word is `delivery_order` beside `teams` in
+  `projects.yaml`, written `[typed]` the same way. Each level may drop legs from the order in
+  force or put the legs it keeps in a different order, and may never add one: a word naming a
+  leg the order in force does not have is set aside, and the order in force stands. A word
+  equal to the order in force is no word at all.
+- A seat's word is written on the seat, and is part of the seat's digest — writing or changing
+  it needs a new approval, like every other field of the seat:
+
+  ```yaml
+  seats:
+    - role: implementer
+      name: helper
+      cli: claude-code
+      vendor: anthropic
+      model: Claude Sonnet
+      version: "5.5"
+      launch: claude --model claude-sonnet-5-5
+      delivery_order: [typed]
+  ```
+
+- What a walk does with each leg — a leg takes the send or is recorded as a failure and the next
+  one is tried — is [team send](commands/send.md)'s. A `--wait` send needs the native leg first,
+  so an order that leads elsewhere refuses the wait.
+
 ## `grant`
 
 Records the grant the owner gives the orchestrator's seat. It is an owner section: adding,

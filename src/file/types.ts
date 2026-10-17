@@ -2,6 +2,7 @@ export type Problem = { line: number; message: string };
 
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
+import type { DeliveryLeg } from '../settings/inherit.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
 /** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation.
@@ -100,6 +101,13 @@ export type Seat = {
   assistant?: true;
   /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
   reach?: SeatReach;
+  /**
+   * The seat's own word on the delivery order, when the file writes one: the legs a send to this
+   * seat may walk, in order. Absent otherwise, so a file that writes none keeps the digest it
+   * had. Only the word's shape is settled here; whether it drops or reorders the order in force,
+   * or would add a leg, is settled when a send resolves the chain (`src/settings/inherit.ts`).
+   */
+  deliveryOrder?: DeliveryLeg[];
   // The entry's `name` and `count` as written, and this seat's place in it (1 for the first).
   declared: string;
   count: number;
@@ -131,6 +139,12 @@ export type TeamFile = {
   /** The lead's seat, however the file spelled it: the `coordinator:` key or `leads: true`. */
   orchestrator: string;
   operator: string;
+  /**
+   * The file's own word on the delivery order, or null when it writes none: the order a send to
+   * any of its seats walks when the seat and the levels above say nothing. Non-owner and
+   * additive — it changes no approval fingerprint, so a file written before it keeps its digests.
+   */
+  deliveryOrder: DeliveryLeg[] | null;
   tools: Record<string, Record<string, string>>;
   identity: {
     signature: {
