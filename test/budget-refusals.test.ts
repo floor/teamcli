@@ -25,6 +25,12 @@ const TAIL = 'openai weekly left 5%, inside its 10% reserve, changed 1m ago; acc
 const WHY = `refused: ${TAIL}`;
 /** Line 1 of the lead, its written label. The worker's written label is `worker`. */
 const TITLE = 'lead';
+// The watch's own workspace, which every live `up` starts after the seats.
+const WATCH = 'Watch · acme';
+/** The labels a live run creates: the seats it mounted, then the watch's workspace. */
+function mounted(...seats: string[]): string[] {
+  return [...seats, WATCH];
+}
 
 const BASE = `format: 1
 project: acme
@@ -246,7 +252,7 @@ describe('a stored reading refuses one seat', () => {
     expect(live.out).toContain(`worker: left out: ${WHY}\n`);
     expect(live.out).toContain('lead: ready\n');
     expect(live.out).not.toContain('worker: ready');
-    expect(live.labels).toEqual([TITLE]);
+    expect(live.labels).toEqual(mounted(TITLE));
   });
 
   test('a stale reading with its reset still ahead keeps refusing', async () => {
@@ -368,7 +374,7 @@ describe('a stored reading refuses one seat', () => {
     expect(live.err).toContain(`worker: ${TAIL}\n`);
     expect(live.out).not.toContain('refused');
     expect(live.out).toContain('worker: ready\n');
-    expect(live.labels).toEqual([TITLE]);
+    expect(live.labels).toEqual(mounted(TITLE));
 
     remember('launched');
     const blocked = world();
@@ -396,7 +402,7 @@ describe('a stored reading refuses one seat', () => {
     expect(live.code).toBe(0);
     expect(live.err).toContain('worker: openai is unknown\n');
     expect(live.out).toContain('worker: ready\n');
-    expect(live.labels).toEqual([TITLE, 'worker']);
+    expect(live.labels).toEqual(mounted(TITLE, 'worker'));
   });
 
   test('the tightest window is the one named', () => {
@@ -473,7 +479,7 @@ describe('a spend floor refuses one seat', () => {
     expect(live.code).toBe(1);
     expect(live.out).toContain(`worker: left out: ${SPEND_WHY}\n`);
     expect(live.out).toContain('lead: ready\n');
-    expect(live.labels).toEqual([TITLE]);
+    expect(live.labels).toEqual(mounted(TITLE));
   });
 
   test('exactly at the floor refuses; above it launches', async () => {
@@ -485,7 +491,7 @@ describe('a spend floor refuses one seat', () => {
     storeSpend([spend('openai', 8)]);
     const above = await up([], world());
     expect(above.code).toBe(0);
-    expect(above.labels).toEqual([TITLE, 'worker']);
+    expect(above.labels).toEqual(mounted(TITLE, 'worker'));
     expect(above.out).not.toContain('refused');
     expect(above.out).not.toContain('is unknown');
   });
@@ -525,7 +531,7 @@ describe('a spend floor refuses one seat', () => {
     storeSpend([spend('openai', 5.0001)]);
     const above = await up([], world());
     expect(above.code).toBe(0);
-    expect(above.labels).toEqual([TITLE, 'worker']);
+    expect(above.labels).toEqual(mounted(TITLE, 'worker'));
     expect(above.out).not.toContain('refused');
   });
 
@@ -542,7 +548,7 @@ describe('a spend floor refuses one seat', () => {
     const live = await up([], world());
     expect(live.code).toBe(0);
     expect(live.err).toContain('worker: openai is unknown\n');
-    expect(live.labels).toEqual([TITLE, 'worker']);
+    expect(live.labels).toEqual(mounted(TITLE, 'worker'));
   });
 
   test('no reading at all reads unknown', async () => {
@@ -558,7 +564,7 @@ describe('a spend floor refuses one seat', () => {
     expect(dry.out).toContain('openai is unknown; would launch');
     const live = await up([], world());
     expect(live.code).toBe(0);
-    expect(live.labels).toEqual([TITLE, 'worker']);
+    expect(live.labels).toEqual(mounted(TITLE, 'worker'));
   });
 
   test('add refuses the same seat before launching it', async () => {
@@ -619,7 +625,7 @@ describe('a subscription check reading refuses one seat', () => {
     expect(live.code).toBe(1);
     expect(live.out).toContain(`worker: left out: ${CHECK_WHY}\n`);
     expect(live.out).toContain('lead: ready\n');
-    expect(live.labels).toEqual([TITLE]);
+    expect(live.labels).toEqual(mounted(TITLE));
 
     const refused = await add(['worker'], world());
     expect(refused.code).toBe(1);
@@ -631,7 +637,7 @@ describe('a subscription check reading refuses one seat', () => {
     store([reading('anthropic', 80), reading('openai', 4), checkReading('openai', 80)]);
     const live = await up([], world());
     expect(live.code).toBe(0);
-    expect(live.labels).toEqual([TITLE, 'worker']);
+    expect(live.labels).toEqual(mounted(TITLE, 'worker'));
     expect(live.out).not.toContain('refused');
     expect(live.out).not.toContain('is unknown');
   });
@@ -646,7 +652,7 @@ describe('a subscription check reading refuses one seat', () => {
     expect(dry.out).toContain('openai is unknown; would launch');
     const live = await up([], world());
     expect(live.code).toBe(0);
-    expect(live.labels).toEqual([TITLE, 'worker']);
+    expect(live.labels).toEqual(mounted(TITLE, 'worker'));
 
     // § 3: a lower source is used when the higher one is stale — the screen's own figure decides.
     store([reading('anthropic', 80), checkReading('openai', 50, old), reading('openai', 4)]);
@@ -670,13 +676,14 @@ describe('a subscription check reading refuses one seat', () => {
     const live = await up([], world());
     expect(live.code).toBe(1);
     expect(live.out).toContain('worker: left out: refused: openai weekly left 5%, inside its 10% reserve, read 31m ago; accounts with room: anthropic\n');
-    expect(live.labels).toEqual([TITLE]);
+    expect(live.labels).toEqual(mounted(TITLE));
 
     // A fresh lower source still wins: the status line's own figure clears the account.
     store([reading('anthropic', 80), checkReading('openai', 5, old), reading('openai', 50)]);
     const cleared = await up([], world());
     expect(cleared.code).toBe(0);
     expect(cleared.out).not.toContain('refused');
+    // The first run's watch is still recorded for the session: this run starts no second.
     expect(cleared.labels).toEqual([TITLE, 'worker']);
   });
 
@@ -828,7 +835,7 @@ describe('two accounts on one vendor', () => {
     expect(live.out).toContain('work: left out: refused: openai-work weekly left 5%, inside its 10% reserve, changed 1m ago; accounts with room: anthropic, openai-home\n');
     expect(live.out).toContain('lead: ready\n');
     expect(live.out).toContain('home: ready\n');
-    expect(live.labels).toEqual([TITLE, 'home']);
+    expect(live.labels).toEqual(mounted(TITLE, 'home'));
   });
 });
 
@@ -844,7 +851,7 @@ describe('a live edit to the budgets', () => {
     expect(dry.out).toContain('--label worker');
     const live = await up([], world());
     expect(live.code).toBe(0);
-    expect(live.labels).toEqual([TITLE, 'worker']);
+    expect(live.labels).toEqual(mounted(TITLE, 'worker'));
     expect(live.out).not.toContain('left out: refused');
   });
 
@@ -853,6 +860,7 @@ describe('a live edit to the budgets', () => {
     writeTeamYaml(WEAKER);
     const live = await add(['worker'], world());
     expect(live.code).toBe(0);
+    // The session's watch is already running: `add` creates the seat's workspace only.
     expect(live.labels).toEqual(['worker']);
     expect(live.err).not.toContain('team approve');
   });

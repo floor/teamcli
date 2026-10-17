@@ -259,6 +259,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // running leaves the state file as it was. An allowed run remembers once that check has
   // passed, before the loop. The loop's own read remembers again when the file changes.
   const standing = sources.standing(first.root);
+  // The hand-over's freshness check above is the first pass's read too: the loop takes this
+  // snapshot for pass one, and reads the store itself from the second pass on. A pass is one
+  // read, not two — the first pass has already had it.
+  let standingThisPass: Standing | undefined = standing;
   const other = readState(dir).sessions[session]?.watch;
   // A record with a pane and no pid yet is the hand-over `up` — or the owner's own run — made:
   // the command typed into that pane is the watch this call is. Only a caller the walk provably
@@ -360,8 +364,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       const team = current.ok ? current.team : first.team;
       const root = current.ok ? current.root : first.root;
       // The one read of the approval store for the whole pass: the record's case, the values in
-      // force and the checks below all derive from it.
-      const standing = sources.standing(root);
+      // force and the checks below all derive from it. The first pass takes the snapshot the
+      // hand-over check already read; every later pass reads again.
+      const standing = standingThisPass ?? sources.standing(root);
+      standingThisPass = undefined;
       const overrides: OverrideForce = sources.home
         ? overridesInForceOf(standing, team.project, root, sources.home)
         : { profiles: [], differences: [], problems: [] };
