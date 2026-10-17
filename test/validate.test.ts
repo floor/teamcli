@@ -445,6 +445,48 @@ describe('names and labels after count is expanded', () => {
   });
 });
 
+describe('seat numbers', () => {
+  const numbered = (name: string, role = 'builder'): string => `  - role: ${role}
+    name: ${name}
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    launch: team-deepseek
+`;
+
+  test('builder-1 and builder-01 in one team are one number: refused at the second name', () => {
+    expect(errors(minimal + numbered('builder-1') + numbered('builder-01')).join('\n'))
+      .toMatch(/two seats have the same role and number: "builder-1" on line \d+ and "builder-01" here \(the number is written with and without leading zeros\)/);
+  });
+
+  test('another width is the same number too: 1, 01 and 001 clash among themselves', () => {
+    expect(errors(minimal + numbered('builder-1') + numbered('builder-001')).join('\n'))
+      .toContain('two seats have the same role and number: "builder-1"');
+    expect(errors(minimal + numbered('builder-01') + numbered('builder-001')).join('\n'))
+      .toContain('two seats have the same role and number: "builder-01"');
+  });
+
+  test('the same number under another role is another seat: it is not a clash', () => {
+    expect(errors(minimal + numbered('builder-1') + numbered('builder-01', 'tester'))).toEqual([]);
+  });
+
+  test('different numbers never clash, and a mix of widths still loads', () => {
+    expect(errors(minimal + numbered('builder-1') + numbered('builder-02'))).toEqual([]);
+    expect(valid(minimal + numbered('builder-2') + numbered('builder-9') + numbered('builder-10') + numbered('builder-100')).team.seats.map((seat) => seat.name))
+      .toEqual(['lead', 'builder-2', 'builder-9', 'builder-10', 'builder-100']);
+  });
+
+  test('a name with no number stays distinct from the seat of number 1', () => {
+    expect(errors(minimal + numbered('builder') + numbered('builder-1'))).toEqual([]);
+  });
+
+  test('a temporary name clashes with its own zero-padded spelling', () => {
+    expect(errors(minimal + numbered('worker-tmp-1') + numbered('worker-tmp-01')).join('\n'))
+      .toContain('two seats have the same role and number: "worker-tmp-1"');
+  });
+});
+
 describe('the worktree path', () => {
   const worktrees = (path: string, trust: string) =>
     change(minimal, 'mode: shared', `mode: worktree\n  base: main\n  path: ${path}`) + `trust:\n  - .\n  - ${trust}\n`;

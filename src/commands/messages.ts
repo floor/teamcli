@@ -22,6 +22,7 @@ import {
   writeJsonError,
   type OutputDifference,
 } from '../output/index.ts';
+import { compareSeatNames } from '../seat-names.ts';
 import { writeAtomic } from '../state.ts';
 import {
   messageKeyOf,
@@ -151,7 +152,9 @@ function candidates(root: string): Candidate[] {
   const dir = join(root, '.agents', 'messages');
   if (!isDir(dir)) return [];
   const out: Candidate[] = [];
-  for (const seat of readdirSync(dir).sort()) {
+  // Seat directories in the seats' own order, not the filesystem's string order: builder-9
+  // before builder-10 before builder-100. Message ids inside a seat keep their code-unit sort.
+  for (const seat of readdirSync(dir).sort(compareSeatNames)) {
     if (!NAME.test(seat)) continue;
     const seatDir = join(dir, seat);
     if (!isDir(seatDir)) continue;

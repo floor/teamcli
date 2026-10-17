@@ -124,6 +124,12 @@ and a file that writes none keeps every approval it had. The name is shown in `t
 `team status --all` (the `NICKNAME` column, and the `nickname` field of their JSON) and in
 `team send --list`.
 
+A name's trailing digits are its number, read as a number rather than as text: `builder-9` sorts
+before `builder-10` and `builder-100`, and the next free one is the next integer. Two seats of one
+role whose names carry one number at different widths — `builder-1` and `builder-01` — are one seat
+written twice, and the file is refused when it loads; `team add` and `team register` refuse it too,
+because they load the file first.
+
 `delivery_order` is optional on a seat: its own word on the order a send to it walks, described
 [below](#delivery_order).
 

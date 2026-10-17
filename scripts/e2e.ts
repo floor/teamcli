@@ -352,24 +352,24 @@ async function stepAddTemporary(ctx: Context): Promise<boolean> {
   );
   show(io);
   step.check(code === 0, `add exits 0 (it exited ${code})`);
-  const record = seatRecord(ctx, 'fake-work-tmp-1');
-  step.check(record?.stage === 'ready', 'the state records fake-work-tmp-1 ready');
+  const record = seatRecord(ctx, 'fake-work-tmp-01');
+  step.check(record?.stage === 'ready', 'the state records fake-work-tmp-01 ready');
   step.check(
     record?.temporary?.like === 'fake-work' && record?.temporary?.until === 'result:result.md',
     'the state records it temporary, like fake-work, until result:result.md',
   );
   step.check(
-    logHas(ctx, 'add [owner] fake-work-tmp-1: ready'),
-    'the log holds: add [owner] fake-work-tmp-1: ready',
+    logHas(ctx, 'add [owner] fake-work-tmp-01: ready'),
+    'the log holds: add [owner] fake-work-tmp-01: ready',
   );
-  const agent = (agentList(SESSION) ?? []).find((candidate) => candidate.name === 'fake-work-tmp-1');
+  const agent = (agentList(SESSION) ?? []).find((candidate) => candidate.name === 'fake-work-tmp-01');
   step.check(agent !== undefined, 'herdr lists it under its name');
   step.check(
     agent !== undefined && readScreen('claude-code', paneRead(agent.pane, 12, SESSION) ?? undefined).kind === 'idle',
     'its pane draws the idle prompt',
   );
   step.check(
-    (workspaceList(SESSION) ?? []).some((workspace) => workspace.label === 'fake-work-tmp-1'),
+    (workspaceList(SESSION) ?? []).some((workspace) => workspace.label === 'fake-work-tmp-01'),
     'its workspace carries its name',
   );
   return step.ok;
@@ -377,17 +377,17 @@ async function stepAddTemporary(ctx: Context): Promise<boolean> {
 
 async function stepRemove(ctx: Context): Promise<boolean> {
   const step = ctx.checks.begin('4. remove: the temporary seat');
-  const log = seatLog(ctx, 'fake-work-tmp-1'); // Its pane, read before the record goes.
+  const log = seatLog(ctx, 'fake-work-tmp-01'); // Its pane, read before the record goes.
   const io = ownerIo(ctx.project);
-  const code = await runRemove(['fake-work-tmp-1', '--file', ctx.file], io, removeReal);
+  const code = await runRemove(['fake-work-tmp-01', '--file', ctx.file], io, removeReal);
   show(io);
   step.check(code === 0, `remove exits 0 (it exited ${code})`);
-  step.check(io.out.includes('removed temporary fake-work-tmp-1'), 'remove says what it removed');
-  step.check(logHas(ctx, 'remove [owner] removed temporary fake-work-tmp-1'), 'the log holds the removal');
-  step.check(logHas(ctx, 'remove [owner] fake-work-tmp-1: stopped'), 'the log holds the seat leaving its pane');
-  step.check(seatRecord(ctx, 'fake-work-tmp-1') === undefined, 'the state no longer records it');
+  step.check(io.out.includes('removed temporary fake-work-tmp-01'), 'remove says what it removed');
+  step.check(logHas(ctx, 'remove [owner] removed temporary fake-work-tmp-01'), 'the log holds the removal');
+  step.check(logHas(ctx, 'remove [owner] fake-work-tmp-01: stopped'), 'the log holds the seat leaving its pane');
+  step.check(seatRecord(ctx, 'fake-work-tmp-01') === undefined, 'the state no longer records it');
   step.check(
-    (agentList(SESSION) ?? []).every((agent) => agent.name !== 'fake-work-tmp-1'),
+    (agentList(SESSION) ?? []).every((agent) => agent.name !== 'fake-work-tmp-01'),
     'herdr no longer lists it',
   );
   step.check(

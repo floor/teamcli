@@ -16,6 +16,7 @@ import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
+import { nextFreeSeatNumber } from '../seat-names.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, seatIsStopped } from '../file/lines.ts';
@@ -1079,11 +1080,16 @@ function temporarySeat(
   };
 }
 
+/**
+ * The temporary seat's name: the like seat's own name, `-tmp`, and the next free seat number in
+ * the numbering's width and separator — `worker-tmp-01` at the default, which is the value this
+ * call passes until the `seat-numbering` setting resolves one. The number is read as a number, so
+ * a `worker-tmp-1` minted by an older build still holds 1 and the next name is `worker-tmp-02`; a
+ * name already running in the session or listed by herdr holds its number too.
+ */
 function temporaryName(like: string, team: TeamFile, state: SessionState, agents: readonly HerdrAgent[]): string {
   const used = new Set([...team.seats.map((seat) => seat.name), ...Object.keys(state.seats), ...agents.map((agent) => agent.name ?? '')]);
-  let n = 1;
-  while (used.has(`${like}-tmp-${n}`)) n++;
-  return `${like}-tmp-${n}`;
+  return nextFreeSeatNumber(`${like}-tmp`, used);
 }
 
 function parseUntil(value: string): Until | null {

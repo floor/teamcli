@@ -291,6 +291,30 @@ describe('resolveTarget by plain seat', () => {
     expect(target.pane).toBe('pane-builder');
   });
 
+  test('mixed widths in one team each resolve to their own seat: builder-9, builder-10, builder-100', () => {
+    const names = ['builder-9', 'builder-10', 'builder-100'];
+    const w = world('alpha', 'alpha', 'lead', [
+      seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'),
+      ...names.map((name) => seatBlock('builder', name, 'claude-code', 'deepseek')),
+    ]);
+    const id = teamIdOf(w.root);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: id, seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builders = names.map((name) =>
+      agent(w.home, { name, role: 'builder', cli: 'claude-code', team: id, seat: name, session: 'alpha', pane: `pane-${name}` }));
+    team(w.home, id, 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
+      ...builders.map((builder) => ({ agent: builder.id, seat: builder.reach.seat, role: 'builder', leads: false })),
+    ]);
+
+    for (const [index, name] of names.entries()) {
+      const target = resolveTarget(w.home, name, { cwd: w.root });
+      if ('error' in target) throw new Error(`${name} did not resolve: ${target.error}`);
+      expect(target.agent.id).toBe(builders[index]!.id);
+      expect(target.agent.reach.seat).toBe(name);
+      expect(target.pane).toBe(`pane-${name}`);
+    }
+  });
+
   test('a team with no registry record, and a seat nobody holds, each refuse', () => {
     const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
     expect(resolveTarget(w.home, 'lead', { cwd: w.root })).toEqual({ error: 'lead: this team has no registry record yet' });

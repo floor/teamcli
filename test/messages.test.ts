@@ -269,6 +269,21 @@ difference: lead/m1 does not verify: the record is not a message
     expect(existsSync(receiptFile(found, 'lead', 'm1'))).toBe(false);
   });
 
+  test('seats print in seat order: builder-2, builder-9, builder-10, builder-100', async () => {
+    project();
+    // Planted in a deliberately wrong order: the filesystem's string order would print
+    // builder-100 and builder-10 before builder-2 and builder-9.
+    for (const seat of ['builder-100', 'builder-10', 'builder-2', 'builder-9', 'builder']) {
+      plantMessage(home, root, seat, 'm1', payload({ to: seat, body: `body from ${seat}` }));
+    }
+    const result = await run();
+    expect(result.code).toBe(0);
+    expect(result.err).toBe('');
+    expect(result.out).toBe(
+      ['builder', 'builder-2', 'builder-9', 'builder-10', 'builder-100'].map((seat) => `body from ${seat}\n`).join(''),
+    );
+  });
+
   test('a waiting record and no message key shows nothing and creates no key', async () => {
     project();
     const found = findRoot(root);

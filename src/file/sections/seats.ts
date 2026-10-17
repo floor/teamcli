@@ -6,6 +6,7 @@ import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, type LivenessThreshold
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
+import { seatNumberOf } from '../../seat-names.ts';
 import type { Check } from '../check.ts';
 import type { Mode, Seat, SeatReach } from '../types.ts';
 import type { LeadMark, Section } from './section.ts';
@@ -239,6 +240,7 @@ function readSeats(
     }
   }
   reportCollisions(seats, 'name', check);
+  reportNumberClashes(seats, check);
   reportNicknames(seats, check);
   reportReach(seats, check);
   // Refused at the second mark's line, the one that makes it more than one — the lead's own
@@ -366,6 +368,29 @@ function reportCollisions(seats: DraftSeat[], field: 'name', check: Check): void
     else if (first.line !== seat.line || first.instance === seat.instance) {
       check.fail(seat.line, `two seats have the ${field} "${seat[field]}" (the other is on line ${first.line}${first.count > 1 || seat.count > 1 ? ', after count is expanded' : ''})`);
     }
+  }
+}
+
+/**
+ * Two names of one role that carry one number — `builder-1` and `builder-01` — are one seat
+ * written twice at two widths: the numbering points at one seat and an address would have to
+ * pick. Refused at the second name's line, so the file never loads, and `add` and `register`,
+ * which read the file first, refuse the same way. The exact duplicate name above is not repeated
+ * here. `builder` (a name with no number) and `builder-1` are distinct seats, as they always were.
+ */
+function reportNumberClashes(seats: DraftSeat[], check: Check): void {
+  const seen = new Map<string, { name: string; line: number }>();
+  for (const seat of seats) {
+    const number = seatNumberOf(seat.name);
+    if (number === null) continue;
+    const key = `${seat.role}\u0000${number.base}\u0000${String(number.number)}`;
+    const first = seen.get(key);
+    if (first === undefined) {
+      seen.set(key, { name: seat.name, line: seat.line });
+      continue;
+    }
+    if (first.name === seat.name) continue;
+    check.fail(seat.line, `two seats have the same role and number: "${first.name}" on line ${first.line} and "${seat.name}" here (the number is written with and without leading zeros)`);
   }
 }
 

@@ -84,7 +84,9 @@ that proceeds is attributed in the log before its effects, as
 | `--json` | one `team.add` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | the usage, and exit 0 |
 
-The temporary seat's name is the `--like` seat's, with `-tmp-<n>`: the first `n` that is free.
+The temporary seat's name is the `--like` seat's, with `-tmp-` and the next free seat number. Numbers
+are written at two digits by default (`worker-tmp-01`) and compared as numbers, so a name from an
+older width still holds its place: 9 is followed by 10, and 99 by 100.
 
 `--until` accepts one of two ends, and nothing else.
 
@@ -312,7 +314,7 @@ A temporary seat is not in the file at all. It is a copy of an approved seat —
 
 ```console
 $ team add --temporary --like claude-beacon --until result:notes/result.md ; echo "exit $?"
-claude-beacon-tmp-1: ready
+claude-beacon-tmp-01: ready
 exit 0
 ```
 

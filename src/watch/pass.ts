@@ -16,6 +16,7 @@ import { profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
 import { livenessOf, type LivenessThresholds, type SettingLevel, type StateThresholds } from '../settings/inherit.ts';
 import { stateThresholds, thresholdRefusals, type ThresholdRefusal } from '../settings/resolve.ts';
+import { compareSeatNames } from '../seat-names.ts';
 import { watchWords } from '../settings/declared.ts';
 import type { Tempo } from '../file/sections/tempo.ts';
 import type { SessionState } from '../state.ts';
@@ -547,7 +548,9 @@ export function pass({
         since: obs.history.lastWorking ?? obs.history.idleSince ?? now,
       });
     }
-    choices.sort((a, b) => a.since - b.since || a.seat.localeCompare(b.seat));
+    // The time the seat has been free is the key; a tie goes to the seat's own number, so
+    // builder-9 is nudged before builder-10, not after it.
+    choices.sort((a, b) => a.since - b.since || compareSeatNames(a.seat, b.seat));
     const chosen = choices[0];
     if (chosen) {
       nudge = {
