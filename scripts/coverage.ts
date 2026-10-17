@@ -142,7 +142,9 @@ export function readOf(readme: string): {
       const kinds = KINDS.filter((one) => lead.includes(`\`${one}\``) || new RegExp(`\\b${one}\\b`).test(plain));
       const tail = colon === -1 ? '' : text.slice(colon + 1).trim();
       const stripped = tail.replace(/^not produced\s*[:,—-]?\s*/i, '');
-      const cut = /[,;.—]/.exec(stripped);
+      // The reason is the first clause: a comma, semicolon, dash, or a sentence period. A dot
+      // inside a version (`2.1.302`) is not a sentence end and must stay in the reason.
+      const cut = /[,;—]|\.(?=\s|$)/.exec(stripped);
       const reason = (cut ? stripped.slice(0, cut.index) : stripped).trim() || 'reason not stated';
       for (const one of kinds) notProduced.set(one, reason);
     }

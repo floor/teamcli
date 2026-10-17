@@ -148,6 +148,15 @@ test('a profile whose tested.to folder has no captures fails by name', () => {
   expect(of.problems.some((problem) => problem.includes('tested.to is 2.1.299') && problem.includes('README.md is missing'))).toBe(true);
 });
 
+test('a Not produced reason keeps a version number whole', () => {
+  const dir = scratch({
+    'conformance.json': versioned([['claude-code/2.1.299/idle.txt', 'idle', 'capture']]),
+    'claude-code/2.1.299/README.md': '# New\n\n- `idle.txt`: the idle box.\n\n## Not produced\n\n- `unsent`: not produced, the installed binary 2.1.302 is newer than this folder, so it waits.\n',
+  });
+  const of = coverageOf(dir, {});
+  expect(of.notProduced['claude-code']?.unsent).toBe('the installed binary 2.1.302 is newer than this folder');
+});
+
 test('a profile with no manifest entries at all is not skipped by the tested.to gate', () => {
   const dir = scratch({
     'conformance.json': versioned([['claude-code/2.1.289/idle.txt', 'idle', 'capture']]),
