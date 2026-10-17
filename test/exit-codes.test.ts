@@ -3252,6 +3252,18 @@ scene('send.unreachable', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { agents: false })), 'unreachable');
 });
+scene('send.stopped', async (place) => {
+  write(place, TWO);
+  // The dry run reports the real run's refusal: the file marks the seat stopped, and no leg is
+  // walked. Nothing is written — no drop folder, no history — by either run.
+  const dry = await sent(place, ['worker', 'hello', '--dry-run'], owner, sendHost(place));
+  expect(dry.code).toBe(1);
+  expect(`${dry.err}${dry.out}`).toContain('worker: unreachable: worker is stopped');
+  const real = show(await sent(place, ['worker', 'hello'], owner, sendHost(place)), 'worker: unreachable: worker is stopped');
+  expect(existsSync(join(place.root, '.agents', 'send-drops'))).toBe(false);
+  expect(existsSync(historyPath('acme', place.root, place.home))).toBe(false);
+  return real;
+});
 scene('send.not-submitted', async (place) => {
   write(place, TEAM);
   // The trigger not being taken is the typed path's refusal: the seat is idle, so the send takes

@@ -420,6 +420,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
 | `send.not-submitted` | `send` | 1 | the trigger was typed and the seat never took it | `team send worker hello` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
+| `send.stopped` | `send` | 1 | the seat is stopped in the team file | `team send worker hello` |
 | `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
 | `send.configuration` | `send` | 2 | the team file can't be read | `team send worker hello --file missing.yaml` |

@@ -312,6 +312,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     };
   }
   report.seat = to.seat;
+  // A seat the receiving team file marks `stopped: true` is not addressed at all: no leg is
+  // walked, nothing is typed and nothing is written down. The dry run reports the real run's
+  // refusal, and the check stands above every other delivery refusal, since none of them can
+  // make a stopped seat take a message.
+  const receiving = to.cross ? loadTeamFile(to.root, { home: host.home }) : loaded;
+  const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
+  if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
   let body: string;
   if (file !== undefined) {
     try {
@@ -1358,6 +1365,21 @@ function unreachable(io: Io, dir: string, who: string, seat: string, reason: str
     io.stderr(`team send: ${seat}: unreachable: ${reason}\n`);
   }
   return 1; // exit: send.unreachable
+}
+
+/** The receiving team file marks the seat `stopped: true`: the seat is not addressed, so the
+ *  send is refused before a drop file, a leg or a history line exists. The line wears the
+ *  unreachable outcome's words, and its own exit id tells a stopped seat apart from a channel
+ *  that merely failed. Exit 1, always. */
+function stoppedSeat(io: Io, dir: string, who: string, seat: string, host: SendHost, report: Report): number {
+  const reason = `${seat} is stopped`;
+  logLine(dir, 'send', who, `${seat}: unreachable: ${reason}`, host.now());
+  if (report.json) {
+    io.stdout(document({ seat, status: 'stopped', exit: 1, error: reason, ids: { sent: report.sent, reply: null } }));
+  } else {
+    io.stderr(`team send: ${seat}: unreachable: ${reason}\n`);
+  }
+  return 1; // exit: send.stopped
 }
 
 function usage(io: Io, message: string, report: Report): number {

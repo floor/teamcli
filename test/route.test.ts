@@ -344,6 +344,28 @@ describe('route: the address the native channel answers', () => {
     expect(run.frames).toEqual([]);
   });
 
+  test('a seat the file marks stopped is refused, dry run and all, and no address is answered', async () => {
+    const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code'), seatBlock('implementer', 'helper', 'codex')]);
+    const id = teamIdOf(w.root);
+    socketAt(w.sockets, 9002);
+    const helper = agent(w.home, { name: 'helper', role: 'implementer', cli: 'codex', team: id, seat: 'helper', session: 'acme', pane: 'w1:p2' });
+    team(w.home, id, 'acme', 'acme', w.root, [{ agent: helper.id, seat: 'helper', role: 'implementer', leads: false }]);
+    place(w.root, 'acme', 'helper', 'w1:p2');
+    const file = join(w.root, '.agents', 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('  - role: implementer', '  - role: implementer\n    stopped: true'));
+    // herdr would name the seat on the pane its record carries: the refusal is the file's own.
+    const run = host(w, { agents: () => [{ name: 'helper', pane: 'w1:p2', cli: 'codex' }] });
+
+    for (const argv of [['helper'], ['helper', '--dry-run']]) {
+      const io = testIo(w.root, OWNER);
+      expect(await runRoute(argv, io, run)).toBe(1);
+      expect(io.out).toBe('');
+      expect(io.err).toBe('team route: refused: helper is stopped\n');
+    }
+    expect(existsSync(routesPath('acme', w.root, w.home))).toBe(false);
+    expect(run.frames).toEqual([]);
+  });
+
   test('a seat herdr names on another CLI is refused, and no address is answered', async () => {
     const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
     const id = teamIdOf(w.root);
