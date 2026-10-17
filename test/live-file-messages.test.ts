@@ -41,10 +41,12 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /an approved delegate swaps/, why: "the delegate grant's word: a delegate granted `swap` is an approved one" },
   // Seat membership in the file: the note names a pane the file does not carry.
   { literal: /^.*: its record is not an approved seat; left (?:running|as it is) \(the owner cleans it: team remove .*\)$/, why: "'approved' is the note's word for a seat of the file in force" },
-  // A sign-off, taken off in the file; the owner's `team up` is what reads it.
+  // A sign-off, taken off in the file; the owner's `team up` is what reads it. The repair line
+  // says the same act the message names.
   { literal: /is signed off; the owner approves the seat back and runs team up/, why: 'a sign-off is taken off in the file; the owner\'s `team up` reads it' },
+  { literal: /^the owner approves the seat back, then runs team up$/, why: 'the sign-off refusal\'s repair line: the owner\'s `team up` reads it' },
   // The restore path reads the record's stored copy — the only archive of a file on this machine.
-  { literal: /^team init: nothing to restore: no team file was approved for this folder on this machine\./, why: 'there is no stored copy to restore from' },
+  { literal: /^nothing to restore: no team file was approved for this folder on this machine(?:\. Run team init for a skeleton\.)?$/, why: 'there is no stored copy to restore from: the message and its terminal form' },
   { literal: /^restored the approved copy$/, why: "the file written is the record's own stored copy" },
   { literal: /^Restored \$\{TEAM_FILE\} from the copy you last approved on this machine\./, why: "the copy the record stored, restored onto disk" },
   { literal: /^# the command and its model options; no approval flags$/, why: 'a line of the skeleton `init` writes: it carries no approval flags' },
@@ -53,6 +55,11 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^APPROVED$/, why: "the `team list` §5 column: whether the live file loads and validates, not an approval record" },
   { literal: /^team approve$/, why: "part of a filter over the doctor's lines, never printed by these commands" },
   { literal: /^never approved$/, why: "part of a filter over the doctor's lines, never printed by these commands" },
+  // The output contract's refusal ids: the JSON envelope's `error.id` member, a key read and
+  // compared, never an approval-copy sentence. `down`'s grant gate keys its case on the grant's
+  // own `grant.approval`; the others name a standing that is not a verified copy.
+  { literal: /^down\.grant-approval$/, why: "down's grant gate refusal id, keyed on the grant's own approval case" },
+  { literal: /^(?:remove|up|worktree)\.never-approved$/, why: 'the refusal id for a standing that is not a verified copy: a key in the JSON envelope, never a sentence' },
 ];
 
 function sources(dir: string): string[] {
