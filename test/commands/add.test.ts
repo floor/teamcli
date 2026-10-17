@@ -1201,7 +1201,7 @@ const DELEGATES = `delegates:
 const DELEGATE_FILE = FILE + DELEGATES;
 const pilot = { kind: 'seat' as const, name: 'pilot', pane: 'w1:p1', session: 'main' };
 const passed = { kind: 'passed' as const, pane: 'main/w1:p1' };
-const EDIT_REFUSAL = 'team add: the approved delegate adds only a same-copy seat: the approved file\'s own stanza, hash for hash; a missing, stopped or changed seat is the owner\'s\n';
+const EDIT_REFUSAL = 'team add: the approved delegate adds only a same-copy seat: the live file\'s own stanza, hash for hash; a missing, stopped or changed seat is the owner\'s\n';
 // A gate that fails the test the moment it is asked where the run must not ask it: the ordinary
 // rule's own callers never reach the delegate branch, and neither does a file with no delegates.
 const THROWING_GATE: NonNullable<AddSources['delegateGate']> = () => {
@@ -1332,7 +1332,7 @@ describe('team add delegated', () => {
     // The map's `add` row is the owner's alone in 0.5.0: a seat of this team never reaches a
     // restoring add any more, whatever the file's `delegates` section says. The gate below is
     // the widest reading of a delegated run — a verdict that passed — and the add still refuses
-    // it, because the one seat a delegate may start is the approved file's own stanza and
+    // it, because the one seat a delegate may start is the live file's own stanza and
     // `worker` is stopped: starting it would edit the file. Nothing is written, signed or
     // started, and the run is not attributed to the delegate.
     approve(DELEGATE_FILE);

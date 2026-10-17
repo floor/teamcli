@@ -360,7 +360,7 @@ function labelDifferences(team: TeamFile, state: SessionState, live: Live): Diff
  * registry's record does not list in its roster. The roster line is the seat's identity for
  * the permission bridge (`src/permissions/who.ts`): where the registry holds a record of the
  * team, the roster is the record of who its seats are, and a seat it does not list has none —
- * every gate wired to the bridge refuses the seat what the approved file says it holds. A team
+ * every gate wired to the bridge refuses the seat what the live file says it holds. A team
  * the registry holds no record of is not this difference: the bridge reads the file's own
  * declaration then, and the seat is served. A seat still launching is not one either: the line
  * is written when the seat reaches ready, and `team register <seat>` writes it for a seat that
