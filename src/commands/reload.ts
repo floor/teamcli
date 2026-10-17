@@ -525,6 +525,13 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       // exit: reload.changed
       return 1;
     }
+    // The relaunch did not reach ready: the close happened and nothing took its place, so the
+    // registry records the seat as down. `stopped` keeps the same agent for the next launch and
+    // clears its pane; a record left `running` would describe a seat no pane holds.
+    if (sources.home) {
+      const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, seat.name, 'stopped');
+      if (ended) logLine(dir, 'reload', describeCaller(caller), ended.note, now());
+    }
     out.stderr(`team reload: the close happened and the new launch did not reach ready\n`);
     // exit: reload.launch
     return 1;

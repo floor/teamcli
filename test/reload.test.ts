@@ -10,6 +10,8 @@ import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { findAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
@@ -123,7 +125,7 @@ function logText(): string {
   }
 }
 
-function harness(options: { status?: string; text?: string; create?: boolean; present?: boolean } = {}): {
+function harness(options: { status?: string; text?: string; create?: boolean; present?: boolean; after?: string } = {}): {
   sources: ReloadSources;
   closed: string[];
   commands: string[];
@@ -147,8 +149,10 @@ function harness(options: { status?: string; text?: string; create?: boolean; pr
     },
     paneRun(_session, pane, command) {
       commands.push(command);
-      // The relaunched CLI draws its own model on the status row.
-      panes.set(pane, command.includes('sonnet') ? IDLE.replaceAll('Opus 5.5', 'Sonnet 5.5') : IDLE);
+      // The relaunched CLI draws its own model on the status row. `after` is the screen the new
+      // pane shows instead — one no profile reads, for a relaunch that never comes back.
+      if (options.after === undefined) panes.set(pane, command.includes('sonnet') ? IDLE.replaceAll('Opus 5.5', 'Sonnet 5.5') : IDLE);
+      else panes.set(pane, options.after);
       return true;
     },
     renameAgent: () => true,
@@ -258,6 +262,22 @@ describe('team reload', () => {
     const code = await runReload(['worker'], testIo(root, OWNER), { ...sources, version: () => null });
     expect(code).toBe(0);
     expect(closed).toEqual(['worker-ws']);
+  });
+
+  test('a relaunch that does not reach ready records the seat as stopped', async () => {
+    remember('worker', 'low');
+    // The new pane draws a screen no profile reads and herdr answers no status for it: the ready
+    // wait times out, and the seat is left at "launched".
+    const { sources, closed } = harness({ after: 'no prompt here' });
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect(code).toBe(1);
+    expect(closed).toEqual(['worker-ws']);
+    expect(io.err).toContain('the close happened and the new launch did not reach ready');
+    // The registry says down: the seat the run registered at its create step is stopped, and its
+    // pane is cleared, because the relaunch it was handed to never reached ready.
+    const record = findAgent(home, { team: teamIdOf(root), seat: 'worker' });
+    expect({ lifecycle: record?.lifecycle, pane: record?.reach.pane }).toEqual({ lifecycle: 'stopped', pane: null });
   });
 
   test('a working seat closes nothing and writes no log', async () => {
