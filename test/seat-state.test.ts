@@ -31,10 +31,14 @@ describe('the reading, best source first', () => {
       .toEqual({ state: 'done', source: 'process', blind: false });
   });
 
-  test("the CLI's own screen: working, idle, unsent is idle, and every other screen is blocked", () => {
+  test("the CLI's own screen: working, idle, an unsent composer blocked, and every other screen blocked", () => {
     expect(seatState({ screen: { kind: 'working' } }, NOW)).toEqual({ state: 'working', source: 'cli', blind: false });
     expect(seatState({ screen: { kind: 'idle' } }, NOW)).toEqual({ state: 'idle', source: 'cli', blind: false });
-    expect(seatState({ screen: { kind: 'unsent' } }, NOW)).toEqual({ state: 'idle', source: 'cli', blind: false });
+    // A composer holding unsent text cannot take a typed trigger until its owner clears or sends
+    // the line: the seat is blocked, and a fresh trace never hides it (the scene below).
+    expect(seatState({ screen: { kind: 'unsent' } }, NOW)).toEqual({ state: 'blocked', source: 'cli', blind: false });
+    expect(seatState({ screen: { kind: 'unsent' }, trace: ago(30) }, NOW))
+      .toEqual({ state: 'blocked', source: 'cli', blind: false });
     for (const screen of [
       { kind: 'permission' } as const,
       { kind: 'trust' } as const,
