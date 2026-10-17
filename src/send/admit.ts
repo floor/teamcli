@@ -10,13 +10,16 @@
 // project's own rules. Those rules are decided by the project record and by the `leads`
 // capability a seat holds, never by a role's name, which is each team's own word in any language.
 // A pair whose teams share no project keeps the team rules below unchanged: nothing here ever
-// crosses projects. And a record confers no right: registration, a lifecycle, a signing role —
+// crosses projects. The one cross-team reach is the entity's own leads — a lead writes to a lead
+// of its entity, and the entity's coordinator to every team lead of that entity — read from the
+// two team records' `entity` and the `leads` capability, never from a role's word, and refused
+// across entities. And a record confers no right: registration, a lifecycle, a signing role —
 // none of it admits anything by itself; every verdict is made from the pair's own relationships
 // and capabilities, and a send with a record on each side but no rule for the pair is refused
 // exactly as a pair the registry never knew.
 
 import type { Agent } from '../registry/agents.ts';
-import { seatsCrossTeams, type SettingLevel } from '../settings/inherit.ts';
+import { declarationsOf, resolveSetting, seatsCrossTeams, type SettingLevel, type SettingSpec } from '../settings/inherit.ts';
 
 /** What admission needs of a team: its identity and its roster. The team registry's own record
  *  is wider, and satisfies this shape as it stands. */
@@ -165,9 +168,15 @@ export function admitSend(
     }
   }
 
-  // An orchestrator writes to an orchestrator, in any team: the pair that carries work between
-  // teams.
-  if (seatOf(caller) === leadSeat(callerTeam) && seatOf(target) === targetOrchestrator) {
+  // Two leads write to each other: the pair that carries work between a team and the team above
+  // it. The team's lead is the `leads` capability — the entity's own coordinator is the lead of
+  // the team whose project is the entity, so this rule reaches it as any other team lead, which
+  // is the entity's coordinator to every team lead of the entity. The pair is one team's, or two
+  // teams of one entity; across entities it is refused, however the two seats are named.
+  if (
+    seatOf(caller) === leadSeat(callerTeam) && seatOf(target) === targetOrchestrator
+    && leadsMayWrite(callerTeamId, targetTeamId, callerTeam, targetTeam, context)
+  ) {
     return { ok: true, rule: 'an orchestrator to another orchestrator' };
   }
   // The team's own leads brief its seats: the orchestrator, or the operator, to any seat of the
@@ -313,6 +322,48 @@ function leadSeat(team: AdmitTeam | undefined): string | null {
  *  the file's lead. A role word named `operator` is no place at all. */
 function operatorSeat(team: AdmitTeam | undefined): string | null {
   return team?.operator ?? null;
+}
+
+/**
+ * Whether two leads may write to each other. Within one team, always: that pair is the team's own
+ * lead seat, and the own-team rules reach everything else. Across teams, only where both records
+ * name the same entity — the record's `entity` field, written from the team file's `entity:` key:
+ * it must be non-null and equal on both sides, so two teams that name no entity, or name
+ * different ones, are not one entity's, and cross-entity stays refused however the two lead seats
+ * are named. The asker's own chain may close the crossing through the `seats_cross_teams` word;
+ * with no word it stands, since this reach is the entity's own and the project setting's default,
+ * off, does not close it.
+ */
+function leadsMayWrite(
+  callerTeamId: string,
+  targetTeamId: string,
+  callerTeam: AdmitTeam | undefined,
+  targetTeam: AdmitTeam | undefined,
+  context: AdmitContext | undefined,
+): boolean {
+  if (callerTeam === undefined || targetTeam === undefined) return false;
+  if (callerTeamId === targetTeamId) return true;
+  const entity = callerTeam.entity;
+  if (entity === null || entity === undefined || entity !== targetTeam.entity) return false;
+  return leadsAcrossTeams(context?.crossTeams ?? {});
+}
+
+/**
+ * The leadership reach at the entity's edge, over the asker's own chain: open unless a level
+ * closes it. It is the same `seats_cross_teams` word the project setting reads, with this reach's
+ * own default — a lead pair of one entity is what carries work between a team and the team above
+ * it, so it stands until the seat's own chain says otherwise. Closing is legal at every level; the
+ * project may open it again, as the setting itself allows.
+ */
+const LEADS_ACROSS_TEAMS: SettingSpec = {
+  name: 'seats_cross_teams',
+  fallback: true,
+  permissive: true,
+  looseningLevels: ['project'],
+};
+
+function leadsAcrossTeams(declared: Partial<Record<SettingLevel, boolean | undefined>>): boolean {
+  return resolveSetting(LEADS_ACROSS_TEAMS, declarationsOf(declared)).value;
 }
 
 /** The entity's assistant, with the team it sits in: the seat holding the `assistant` capability
