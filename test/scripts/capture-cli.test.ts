@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'bun:test';
@@ -43,9 +43,13 @@ test('the workspace path is replaced in its plain, realpath and tilde forms, pad
   expect(plain).toContain('<workspace>');
   expect(plain).not.toContain(dir);
 
-  const real = workspaceForms(dir, home).find((form) => form !== dir);
+  // A temporary folder's realpath can be the folder itself (on Linux it is), so a symlink makes
+  // the two forms differ wherever the test runs.
+  const link = join(dir, 'linked');
+  symlinkSync(dir, link);
+  const real = workspaceForms(link, home).find((form) => form !== link);
   expect(real).toBeDefined();
-  expect(scrubCapture(`seen at ${real} here`, { workspaceDir: dir, homeDir: home })).toContain('<workspace>');
+  expect(scrubCapture(`seen at ${real} here`, { workspaceDir: link, homeDir: home })).toContain('<workspace>');
 
   // A workspace under the home folder also appears as `~/...` in banners.
   const underHome = `${home}/work/space`;
