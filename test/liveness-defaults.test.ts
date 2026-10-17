@@ -9,20 +9,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stateLimitsOf } from '../src/commands/seats.ts';
 import { applyTempo } from '../src/file/sections/tempo.ts';
+import { defaultWatch } from '../src/file/sections/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { upsertProject } from '../src/registry/projects.ts';
-import { watchWords } from '../src/settings/declared.ts';
+import { livenessMap, watchWords } from '../src/settings/declared.ts';
 import {
   DEFAULT_LIVENESS_THRESHOLDS,
   LIVENESS_RULE,
   livenessOf,
   sayThreshold,
-  stateThresholds,
-  thresholdRefusals,
 } from '../src/settings/inherit.ts';
+import { stateThresholds, thresholdRefusals } from '../src/settings/resolve.ts';
 import { emptySession } from '../src/state.ts';
+import { parseYaml } from '../src/yaml.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { newMemory, pass, type Report } from '../src/watch/pass.ts';
@@ -143,6 +144,51 @@ describe('the shipped liveness defaults', () => {
       expect(looser.thresholds.idle_owner_seconds).toBe(900);
       expect(looser.refused.map((word) => [word.level, word.value])).toEqual([[level, 1800]]);
     }
+  });
+
+  test('a word that is not whole seconds of at least one is invalid, never looser: it is set aside and the inherited value stands', () => {
+    const zero = resolve({ team: { idle_lead_seconds: 0 } });
+    expect(zero.thresholds.idle_lead_seconds).toBe(300);
+    expect(zero.refused.map((word) => word.text)).toEqual([
+      'liveness_idle_lead_seconds: the team declared 0s, which is less than one second; it is set aside',
+    ]);
+
+    const fraction = resolve({ team: { blind_after_seconds: 1.5 } });
+    expect(fraction.thresholds.blind_after_seconds).toBe(300);
+    expect(fraction.refused.map((word) => word.text)).toEqual([
+      'state_blind_after_seconds: the team declared 1.5s, which is not a whole number of seconds; it is set aside',
+    ]);
+
+    // 600.5 is not rounded into a misleading "10m": the line names the value as written.
+    const long = resolve({ project: { idle_owner_seconds: 600.5 } });
+    expect(long.thresholds.idle_owner_seconds).toBe(900);
+    expect(long.refused.map((word) => word.text)).toEqual([
+      'liveness_idle_owner_seconds: the project declared 600.5s, which is not a whole number of seconds; it is set aside',
+    ]);
+    expect(long.refused[0]?.text).not.toContain('longer than');
+    expect(long.refused[0]?.text).not.toContain('10m');
+  });
+
+  test('the loaders carry an invalid word to the resolver, so it is reported as invalid rather than dropped silently', () => {
+    // A machine or entity map: a fractional word is carried as the declaration it is.
+    const root = parseYaml('liveness:\n  blind_after_seconds: 1.5\n');
+    const map = root.kind === 'map' ? root.entries.find((entry) => entry.key === 'liveness')?.value : undefined;
+    const loaded = livenessMap(map);
+    expect(loaded).toEqual({ blind_after_seconds: 1.5 });
+    expect(stateThresholds({ machine: loaded }).blind_after_seconds).toBe(300);
+    expect(thresholdRefusals({ machine: loaded }).map((word) => word.text)).toEqual([
+      'state_blind_after_seconds: the machine declared 1.5s, which is not a whole number of seconds; it is set aside',
+    ]);
+
+    // The watch section: the same. Its words are the team's, and neither is a window.
+    const words = watchWords({ ...defaultWatch(), idleFirst: 0, blindAfter: 1.5 });
+    expect(words).toEqual({ idle_lead_seconds: 0, blind_after_seconds: 1.5 });
+    const fromWatch = resolve({ team: words });
+    expect(fromWatch.thresholds).toEqual(DEFAULT_LIVENESS_THRESHOLDS);
+    expect(fromWatch.refused.map((word) => word.text)).toEqual([
+      'liveness_idle_lead_seconds: the team declared 0s, which is less than one second; it is set aside',
+      'state_blind_after_seconds: the team declared 1.5s, which is not a whole number of seconds; it is set aside',
+    ]);
   });
 });
 
@@ -278,6 +324,14 @@ describe('the blind threshold is the same liveness default', () => {
     // No level inside may open it further: the team's three hours is set aside.
     const opened = valid(fileWith('watch:\n  blind_after: 3h\n'));
     expect(stateLimitsOf(opened, home, 'quiet-team').blind_after_seconds).toBe(7200);
+  });
+
+  test('a project record names whole seconds of at least one, and refuses anything else at the record', () => {
+    for (const bad of [0, 600.5]) {
+      expect(() => upsertProject(home, 'quiet-project', {
+        name: 'Quiet', teams: ['quiet-team'], liveness: { blind_after_seconds: bad }, at: '2026-10-17T00:00:02.000Z',
+      })).toThrow('liveness "blind_after_seconds" must be a whole number of seconds, at least 1');
+    }
   });
 
   test('the machine settings file is the widest surface, and it may tighten but not loosen', () => {

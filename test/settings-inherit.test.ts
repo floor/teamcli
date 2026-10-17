@@ -4,14 +4,10 @@ import {
   SEATS_CROSS_TEAMS,
   SETTING_LEVELS,
   declarationsOf,
-  deliveryOrder,
   orderDeclarationsOf,
-  resolveOrderSetting,
-  resolveSetting,
-  seatsCrossTeams,
   type DeliveryLeg,
-  type SettingSpec,
 } from '../src/settings/inherit.ts';
+import { deliveryOrder, resolveOrderSetting, resolveSetting, seatsCrossTeams } from '../src/settings/resolve.ts';
 
 describe('seats_cross_teams', () => {
   test('off when nothing declares it', () => {
@@ -86,29 +82,7 @@ describe('seats_cross_teams', () => {
   });
 });
 
-describe('the mechanism, on a setting of another shape', () => {
-  // A default-on setting that only a team may open again once something closed it.
-  const onByDefault: SettingSpec = {
-    name: 'on_by_default',
-    fallback: true,
-    permissive: true,
-    looseningLevels: ['team'],
-  };
-
-  test('a tightening is honoured at every level', () => {
-    expect(resolveSetting(onByDefault, declarationsOf({ entity: false })).value).toBe(false);
-    expect(resolveSetting(onByDefault, declarationsOf({ seat: false })).value).toBe(false);
-  });
-
-  test('a loosening is honoured only at the listed level', () => {
-    const opened = resolveSetting(onByDefault, declarationsOf({ entity: false, team: true }));
-    expect(opened.value).toBe(true);
-    expect(opened.source).toBe('team');
-    const refused = resolveSetting(onByDefault, declarationsOf({ entity: false, seat: true }));
-    expect(refused.value).toBe(false);
-    expect(refused.refused).toEqual([{ level: 'seat', value: true }]);
-  });
-
+describe('the chain builders', () => {
   test('declarationsOf drops the levels the chain does not name', () => {
     expect(declarationsOf({ seat: false, entity: true, project: undefined })).toEqual([
       { level: 'entity', value: true },

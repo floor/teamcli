@@ -187,7 +187,11 @@ describe('liveness', () => {
       },
       {
         text: `${LEAD_LAUNCH}    liveness:\n      blind_after_seconds: 0\n`,
-        message: 'seat "lead": liveness "blind_after_seconds" must be a positive number of seconds',
+        message: 'seat "lead": liveness "blind_after_seconds" must be a whole number of seconds, at least 1',
+      },
+      {
+        text: `${LEAD_LAUNCH}    liveness:\n      blind_after_seconds: 1.5\n`,
+        message: 'seat "lead": liveness "blind_after_seconds" must be a whole number of seconds, at least 1',
       },
     ];
     for (const one of cases) {

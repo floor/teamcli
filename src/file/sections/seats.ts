@@ -2,7 +2,7 @@ import { isAbsolute } from 'node:path';
 import { CLIS } from '../../clis.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
-import { DELIVERY_LEGS, LIVENESS_KEYS, type LivenessThresholds } from '../../settings/inherit.ts';
+import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, type LivenessThresholds } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
@@ -245,9 +245,10 @@ export function displayAgent(seat: { display: string; effort?: string }): string
   return `${seat.display} ${seat.effort || 'default'}`;
 }
 
-/** A seat's `liveness:` map, checked: only the three thresholds, each a positive number of
- *  seconds. Any other key, or a value that is not one, fails the file at the field's line, and
- *  the map declares nothing — no partial word is taken from a map that did not read. */
+/** A seat's `liveness:` map, checked: only the three thresholds, each a whole number of seconds,
+ *  at least one — the same rule the resolver judges every liveness word by. Any other key, or a
+ *  value that is not one, fails the file at the field's line, and the map declares nothing — no
+ *  partial word is taken from a map that did not read. */
 function readLiveness(entry: YamlEntry | undefined, at: string, check: Check): Partial<LivenessThresholds> | undefined {
   if (!entry) return undefined;
   const node = entry.value;
@@ -264,8 +265,8 @@ function readLiveness(entry: YamlEntry | undefined, at: string, check: Check): P
       continue;
     }
     const value = field.value;
-    if (value.kind !== 'scalar' || typeof value.value !== 'number' || !Number.isFinite(value.value) || value.value <= 0) {
-      check.fail(value.line, `${at}: liveness "${field.key}" must be a positive number of seconds`);
+    if (value.kind !== 'scalar' || typeof value.value !== 'number' || !isLivenessSeconds(value.value)) {
+      check.fail(value.line, `${at}: liveness "${field.key}" must be a whole number of seconds, at least 1`);
       bad = true;
       continue;
     }

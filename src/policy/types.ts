@@ -10,6 +10,8 @@ import {
   DEFAULT_STATE_THRESHOLDS,
   DELIVERY_LEGS,
   DELIVERY_ORDER,
+  parseSeatNumberingValue,
+  SEAT_NUMBERING_DEFAULT_VALUE,
   SEATS_CROSS_TEAMS,
   STATE_THRESHOLDS,
   type DeliveryLeg,
@@ -95,6 +97,7 @@ export const ADVISED_POLICY_NAMES = [
   'development-mode',
   'shared-checkout-hygiene',
   'pane-conduct',
+  'seat-numbering',
   'board',
   'review-terms',
 ] as const;
@@ -125,6 +128,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   delivery_order: 'delivery-order',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
+  seat_numbering: 'seat-numbering',
   pane_conduct: 'pane-conduct',
   review_terms: 'review-terms',
 };
@@ -333,6 +337,20 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseOnOff,
     // 'on' is tighter than 'off'.
     isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => !(higher === 'on' && lower === 'off'),
+  },
+  // How a seat's number is written at the front of its name: the width (1 to 4 digits, or `auto`
+  // for the smallest width that holds the team's largest number) and the separator, carried as one
+  // canonical string — `2-` for two digits and a hyphen, `auto.` for an automatic width and a dot.
+  // An advised format has nothing tighter to judge against, so a lower level chooses freely.
+  'seat-numbering': {
+    name: 'seat-numbering',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: SEAT_NUMBERING_DEFAULT_VALUE,
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseSeatNumberingValue,
+    isWithin: () => true,
   },
   'pane-conduct': {
     name: 'pane-conduct',

@@ -11,7 +11,7 @@
 
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DELIVERY_LEGS, type DeliveryLeg, type LivenessThresholds } from '../settings/inherit.ts';
+import { DELIVERY_LEGS, isLivenessSeconds, type DeliveryLeg, type LivenessThresholds } from '../settings/inherit.ts';
 import { writeAtomic } from '../state.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
@@ -49,7 +49,8 @@ export type ProjectRecord = {
 /** The keys `liveness` may carry, in the order the writer emits them. */
 const LIVENESS_KEYS = ['idle_lead_seconds', 'idle_owner_seconds', 'blind_after_seconds'] as const;
 
-/** One `liveness` map, checked: only the three keys, each a positive number of seconds. */
+/** One `liveness` map, checked: only the three keys, each a whole number of seconds, at least
+ *  one — the same rule the resolver judges every liveness word by. */
 function checkedLiveness(value: unknown, bad: (what: string) => never): Partial<LivenessThresholds> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) bad('"liveness" must be a map of thresholds');
   const out: Partial<LivenessThresholds> = {};
@@ -57,8 +58,8 @@ function checkedLiveness(value: unknown, bad: (what: string) => never): Partial<
     if (!(LIVENESS_KEYS as readonly string[]).includes(key)) {
       bad(`"liveness" has no threshold "${key}"; the keys are ${LIVENESS_KEYS.join(', ')}`);
     }
-    if (typeof held !== 'number' || !Number.isFinite(held) || held <= 0) {
-      bad(`liveness "${key}" must be a positive number of seconds`);
+    if (typeof held !== 'number' || !isLivenessSeconds(held)) {
+      bad(`liveness "${key}" must be a whole number of seconds, at least 1`);
     }
     out[key as keyof LivenessThresholds] = held;
   }

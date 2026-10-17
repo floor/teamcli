@@ -11,8 +11,10 @@ import { parseYaml, type YamlNode } from '../yaml.ts';
 import { LIVENESS_KEYS, type StateThresholds } from './inherit.ts';
 
 /** One `liveness:` map from a file, or undefined when the node is not one: only the three
- *  thresholds, each a positive finite number of seconds. A map with any other key or value
- *  declares nothing — no partial word is taken from a map that did not read. */
+ *  thresholds, each a number of seconds. A map with any other key or a value that is not a
+ *  number declares nothing — no partial word is taken from a map that did not read. A number
+ *  that is not a liveness word (a fraction, or zero) is carried as the declaration it is: the
+ *  resolver sets it aside and reports it as invalid, so no reader here judges it silently. */
 export function livenessMap(node: YamlNode | undefined): Partial<StateThresholds> | undefined {
   if (node === undefined || node.kind !== 'map') return undefined;
   const out: Partial<StateThresholds> = {};
@@ -20,7 +22,7 @@ export function livenessMap(node: YamlNode | undefined): Partial<StateThresholds
     if (!(LIVENESS_KEYS as readonly string[]).includes(entry.key)) return undefined;
     if (entry.value.kind !== 'scalar') return undefined;
     const value = entry.value.value;
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
+    if (typeof value !== 'number') return undefined;
     out[entry.key as keyof StateThresholds] = value;
   }
   return Object.keys(out).length > 0 ? out : undefined;
