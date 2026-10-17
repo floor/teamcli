@@ -28,11 +28,10 @@ owner included.
 The file decides who may do what, a grant cannot widen its own entry, and `--file` and `--session`
 stay the owner's, from a terminal outside herdr.
 
-- **`team add`** — the owner, a seat that leads (the orchestrator's or the operator's seat) for a
-  seat the file already declares, the file's approved delegate, or a caller a create-grant's
-  `runner` names. A non-copy add (a different seat stanza) is the owner's: an add that would write
-  the file — restoring a seat the file no longer holds, or clearing `stopped: true` — is refused
-  for everyone else.
+- **`team add`** — the owner, the file's approved delegate, or a caller a create-grant's `runner`
+  names. A delegate adds only a seat the file already declares, exactly as written; a different
+  stanza is the owner's: an add that would write the file — restoring a seat the file no longer
+  holds, or clearing `stopped: true` — is refused for everyone else.
 - **`team up`** — the owner; the orchestrator's seat when the file's `grant` lists `up`, and the
   file's approved delegate whose entry carries `up`.
 - **`team down`, `team restart` and `team remove`** — the owner, or the orchestrator's seat — and
