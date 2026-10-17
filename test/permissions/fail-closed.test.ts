@@ -157,14 +157,13 @@ describe('a caller no registry record stands for (b)', () => {
     }
   });
 
-  test('every seat-record gate refuses an unplaced caller: another pane, another session, not yet live', () => {
+  test('every seat-record gate refuses an unplaced caller: another pane, another session', () => {
     const { root, home, id } = world();
     register(root, home, [{ agent: AGENT, seat: 'worker', role: 'implementer' }]);
     const team = fileTeam(id);
     const scenes: [string, Caller, SeatStanding, string][] = [
       ['a pane the state does not record for the seat', seatCaller('worker', { pane: 'w9:p9' }), placement(), 'not the pane this call is on'],
       ['a caller of another session', seatCaller('worker', { session: 'other' }), placement(), 'not placed as worker in session acme'],
-      ['a seat the state records short of ready', seatCaller('worker'), placement({ stage: 'launched' }), 'not ready'],
     ];
     for (const command of SEAT_RECORDS) {
       for (const [label, caller, at, needle] of scenes) {
@@ -175,10 +174,13 @@ describe('a caller no registry record stands for (b)', () => {
         expect(gateVerdict(caller, team, root, home, command, at, () => NOW)).not.toEqual({ kind: 'ok' });
       }
     }
-    // The control: the same caller, placed where its record says and ready, is admitted by every
-    // one of the nine — the refusals above are the placement's, not the rows'.
+    // The control: the same caller, placed where its record says, is admitted by every one of
+    // the nine — the refusals above are the placement's, not the rows'. A stage short of ready
+    // is still the seat: the launcher owns the stage, the gate owns the pane and the session.
     for (const command of SEAT_RECORDS) {
       expect(resolveCaller(seatCaller('worker'), team, root, home, command, placement(), NOW))
+        .toMatchObject({ effect: 'allow', rule: 'record' });
+      expect(resolveCaller(seatCaller('worker'), team, root, home, command, placement({ stage: 'launched' }), NOW))
         .toMatchObject({ effect: 'allow', rule: 'record' });
     }
   });

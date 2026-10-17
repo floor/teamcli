@@ -145,9 +145,10 @@ export function resolveCaller(
 }
 
 /** An allowed seat's decision, held to its placement: the caller is the seat its record names,
- *  in the session judged, on the pane the state records for it, and that record is ready. A
- *  refused name or session, a missing pane, another pane and a seat not yet live each deny
- *  under `unplaced`, naming the repair where one exists. */
+ *  in the session judged, on the pane the state records for it. A refused name or session, a
+ *  missing pane and another pane each deny under `unplaced`, naming the repair where one
+ *  exists. The launch stage is the launcher's business, not the gate's: a seat the state
+ *  records `launched` is still that seat. */
 function placed(
   decision: PermissionDecision,
   caller: Caller,
@@ -164,13 +165,6 @@ function placed(
       effect: 'deny',
       rule: 'unplaced',
       why: `the caller is not placed as ${seat} in session ${at.session}: a seat acts where its own placement records it, never by its name alone`,
-    };
-  }
-  if (at.stage !== 'ready') {
-    return {
-      effect: 'deny',
-      rule: 'unplaced',
-      why: `the state records ${seat} as ${at.stage ?? 'unrecorded'}, not ready: a seat acts only where it is live and ready`,
     };
   }
   return decision;
@@ -190,8 +184,8 @@ function placed(
  * and takes no clock reading it never uses — a command's other readings stay where they were.
  *
  * The placement is mandatory: `at` carries the session judged and the seat's record there, and
- * an admitted seat that is not on its recorded pane, in that session, and ready is refused
- * before any command branches on it. A registry that cannot be read refuses every seat for the
+ * an admitted seat that is not on its recorded pane in that session is refused before any
+ * command branches on it. A registry that cannot be read refuses every seat for the
  * same reason the resolver does: closed, never the file's declaration.
  */
 export function gateVerdict(
@@ -212,9 +206,8 @@ export function gateVerdict(
   if (decision.effect === 'deny') return { kind: 'refused' };
   if (record !== null && record.kind === 'owner') return { kind: 'ok' };
   // A seat the map admits: the pane proof is the standing's, and the seat must sit where the
-  // state records it — in the session judged, on its recorded pane — and be ready. A seat with
-  // no record, another pane, or a stage short of ready is refused.
-  const verdict = callerVerdict(caller, (record as { seat: string }).seat, at);
-  if (verdict.kind !== 'ok') return verdict;
-  return at.stage === 'ready' ? { kind: 'ok' } : { kind: 'refused' };
+  // state records it — in the session judged, on its recorded pane. The verdict is the walk's
+  // own (`callerVerdict`), so the gate and the commands read a seat the same way; a caller
+  // recorded `launched` is still the seat. A seat with no record or another pane is refused.
+  return callerVerdict(caller, (record as { seat: string }).seat, at);
 }
