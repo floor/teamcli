@@ -1,8 +1,10 @@
 // The up page's `deny` answer, held to the binary that prints it. A caller the run does not
 // admit — not the owner, not the granted seat, not a named delegate — is answered with the one
-// word, and the page says so three ways: an admission row, an outcome row, two worked examples.
-// The pins hold each sentence to the page, and the promise itself to the command: a real run
-// and a `--dry-run` are answered alike, the named `--file` never read, no plan, nothing else.
+// word on a real run, and the page says so three ways: an admission row, an outcome row, two
+// worked examples. A dry run is never denied: it names the refusal, the owner's own command and
+// the plan. The pins hold each sentence to the page, and the promise itself to the command: the
+// word alone on a real run, the two lines a dry run answers with, the named `--file` never read
+// on either, no plan for it.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,7 +16,7 @@ import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
 const PAGE = '../docs/commands/up.md';
 const UP_SRC = '../src/commands/up.ts';
@@ -33,7 +35,7 @@ function raw(path: string): string {
 // owner's `team approve` leaves, a state that records the seats, and the real placement walk.
 // The deny answer is decided by that walk, never by a caller built by hand.
 const NOW = new Date('2026-10-14T09:00:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 type Pane = { pane: string; name: string; root: number };
 const LEAD = { pane: 'lead-pane', name: 'lead', root: 100 };
@@ -236,51 +238,72 @@ afterEach(() => {
 });
 
 describe('the deny answer on the up page', () => {
-  test('the admission table promises the one word, alike on a real run and a dry run', () => {
+  test('the admission table promises the one word on a real run, and the reason on a dry run', () => {
     const page = prose(PAGE);
     expect(page.includes('a caller the run admits'), 'up.md lost the admitted-caller row').toBe(true);
     expect(
       page.includes(
-        'a caller the run does not admit | a real run and a `--dry-run` are answered alike, with the one word `deny` on stderr and nothing on stdout — no reason, and no plan — and exit 1',
+        'a caller the run does not admit | a real run is answered with the one word `deny` on stderr and nothing on stdout — no reason, and no plan — and exit 1. A `--dry-run` is never denied: it prints `! up would refuse:` with that reason, `! to unblock:` with the owner\'s own run of this folder, and — when no flag kept the file unread — the plan, and exits 1',
       ),
       'up.md lost the deny row',
     ).toBe(true);
   });
 
-  test('the outcome table carries the bare word', () => {
+  test('the outcome table carries the bare word and the dry run\'s two lines', () => {
     expect(
-      prose(PAGE).includes('`deny`, and nothing else: no `team up:` prefix, no reason, no plan'),
+      prose(PAGE).includes('a real run: `deny`, and nothing else: no `team up:` prefix, no reason, no plan'),
       'up.md lost the outcome row',
     ).toBe(true);
     // The word the page promises is the command's own write: the one line, no prefix.
     expect(raw(UP_SRC).includes("out.stderr('deny\\n')"), 'up.ts no longer prints the bare word').toBe(true);
   });
 
-  test('the worked examples show both invocations answered alike', () => {
+  test('the worked example shows the real run answered, and the dry run answered with the reason', () => {
     const page = raw(PAGE);
     expect(page.includes('team up --file other.yaml ; echo "exit $?"\ndeny\nexit 1'), 'up.md lost the real-run example').toBe(true);
-    expect(page.includes('team up --dry-run --file other.yaml ; echo "exit $?"\ndeny\nexit 1'), 'up.md lost the dry-run example').toBe(true);
+    expect(
+      page.includes(
+        'team up --dry-run --file other.yaml ; echo "exit $?"\n' +
+          '! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it is run by an agent (claude) outside herdr)\n' +
+          '! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\nexit 1',
+      ),
+      'up.md lost the dry-run example',
+    ).toBe(true);
   });
 
-  test('a dry run by a caller the run does not admit is denied like a real run', async () => {
+  test('a dry run by a caller the run does not admit names the reason, the command and the plan', async () => {
     // The operator's seat, placed by the real walk on its own recorded pane: the run does not
-    // admit it. Every invocation the page names — bare, `--dry-run`, the worked examples'
-    // `--file` — is answered the same way, and nothing the launch could do ever happens.
+    // admit it. A real run — bare, or with the worked examples' `--file` — is answered with the
+    // word alone. A dry run is never denied: the reason, the one command that unblocks it, and,
+    // when the run had a file of its own to plan, the plan. Nothing the launch could do happens.
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, pilot: { pane: 'pilot-pane', workspace: 'pilot-ws' } });
     const { sources, trace } = upTrace();
-    const calls: string[][] = [
-      [],
-      ['--dry-run'],
-      ['--file', 'other.yaml'],
-      ['--dry-run', '--file', 'other.yaml'],
-    ];
-    for (const argv of calls) {
+    for (const argv of [[], ['--file', 'other.yaml']]) {
       const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);
       const code = await runUp(argv, io, sources);
       expect(code, `exit for [${argv.join(' ')}]`).toBe(1);
       expect(io.err, `stderr for [${argv.join(' ')}]`).toBe('deny\n');
       expect(io.out, `stdout for [${argv.join(' ')}]`).toBe('');
     }
+    const refusal =
+      '! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs in a herdr pane without an agent)\n';
+    const unblock = '! to unblock: the owner runs `team up';
+    for (const argv of [['--dry-run'], ['--dry-run', '--file', 'other.yaml']]) {
+      const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);
+      const code = await runUp(argv, io, sources);
+      expect(code, `exit for [${argv.join(' ')}]`).toBe(1);
+      expect(io.err, `stderr for [${argv.join(' ')}]`).toBe('');
+      expect(io.out, `stdout for [${argv.join(' ')}]`).toContain(refusal);
+      expect(io.out, `stdout for [${argv.join(' ')}]`).toContain(unblock);
+      expect(io.out, `stdout for [${argv.join(' ')}]`).toContain('dry run: nothing was run\n');
+      // The dry run says the refusal above the plan, and the plan is the run it would make.
+      expect(io.out.indexOf('! up would refuse:')).toBeLessThan(io.out.indexOf('dry run: nothing was run'));
+      expect(io.out, `stdout for [${argv.join(' ')}]`).toContain('+ ');
+    }
+    // The own file's dry run plans the run; the worked examples' `--file` never reads the flag.
+    const own = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);
+    await runUp(['--dry-run'], own, sources);
+    expect(own.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 });

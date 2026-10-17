@@ -183,7 +183,7 @@ describe('the send daemon\'s boundaries', () => {
 
     const history = readHistory('acme', world.root, world.home);
     expect(history.ok && history.entries).toEqual([
-      { ts: NOW.toISOString(), from: 'owner', to: 'helper', body: filed('you serve another session'), id: expect.any(String), outcome: 'unreachable' },
+      { ts: NOW.toISOString(), from: 'owner', to: 'helper', body: filed('you serve another session'), id: expect.any(String), outcome: 'unreachable', ms: expect.any(Number) },
     ]);
   });
 

@@ -187,7 +187,7 @@ describe('team send history log & team feed', () => {
     const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['body', 'from', 'id', 'outcome', 'to', 'ts']);
+    expect(Object.keys(parsed).sort()).toEqual(['body', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
     // The seat's send files the body under its header: the id admission admitted, and the rule.
     const seatHeader = 'from agt_68656c706572 (helper, helper@acme) — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
@@ -197,6 +197,8 @@ describe('team send history log & team feed', () => {
       body: `${seatHeader}${secret}`,
       id: sentDoc.ids.sent,
       outcome: 'delivered',
+      ms: 0,
+      via: 'typed',
     });
 
     // Team log in .agents/ keeps only byte counts, never the message body; lobbies stay empty.
@@ -208,7 +210,7 @@ describe('team send history log & team feed', () => {
     const feedIo = testIo(root);
     expect(await runFeed([], feedIo, { home })).toBe(0);
     expect(feedIo.out).toBe(
-      `15:30:00  helper -> lead  [delivered]  ${seatHeader.split('\n')[0]}\n          \n          ${secret}\n`,
+      `15:30:00  helper -> lead  [delivered] via typed in 0 ms  ${seatHeader.split('\n')[0]}\n          \n          ${secret}\n`,
     );
   });
 

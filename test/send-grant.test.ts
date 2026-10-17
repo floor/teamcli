@@ -240,14 +240,18 @@ describe('team send: the owner-signed grant on the command path', () => {
     expect(err()).toContain('no rule admits it');
   });
 
-  test('a caller the store holds no record for stays refused, grant or no grant', async () => {
+  test('a caller the store holds no record for is judged as the file\'s seat: its team\'s rules refuse it, grant or no grant', async () => {
     const { root, dir, sockets, home } = world();
-    // The placement is recorded (so the caller is placed) but no agent record is registered.
+    // The placement is recorded (so the caller is placed) but no agent record is registered: the
+    // live file's declared seat is the identity, a seat may not send to a fellow seat, and the
+    // store is never asked for a caller it holds no record of — the naming grant is not consulted.
     record(dir, 'helper', 'w2:p1');
     grantFile(home, 'helpers-to-reviewer', GRANT('helper@acme', 'native'));
     const { code, err } = helperSend(root, sockets);
     expect(await code).toBe(1);
-    expect(err()).toContain('no agent record on this machine');
+    expect(err()).toContain('may not send to native@');
+    expect(err()).toContain('no rule admits it');
+    expect(existsSync(join(dir, 'send-drops'))).toBe(false);
   });
 });
 

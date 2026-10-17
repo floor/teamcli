@@ -17,7 +17,7 @@ import { compare } from '../src/status/compare.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { claudeBox, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, testIo } from './helpers.ts';
 
 const SHARED = `format: 1
 project: acme
@@ -171,7 +171,7 @@ describe('a shared label', () => {
 
   test('the watch nudges the idle seat\'s pane, not the operator that shares its label', () => {
     const team = valid(SHARED);
-    const idle = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n`;
+    const idle = CLAUDE_IDLE;
     const live = {
       running: true,
       agents: [

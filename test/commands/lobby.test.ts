@@ -24,10 +24,10 @@ import { shippedStartupReads } from '../../src/profiles/index.ts';
 import { seatStart } from '../../src/worktree/place.ts';
 import { readState, updateState } from '../../src/state.ts';
 import { approvalStanding, LEGACY_LINE, storePath, writeApproval } from '../../src/store/store.ts';
-import { claudeBox, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const FILE = ['--file', '.agents/team.yaml'];
 const OWNER = { kind: 'owner' } as const;
 

@@ -1,9 +1,11 @@
 # team send
 
-Writes one message to one seat. A plain send writes the body whole to a drop file, mode 0600,
-by renaming a temporary file into place, and types one short trigger line that names that file.
-That is the path for every seat. The body is never typed, and it is never split across several
-writes. `delivered` means herdr reported the seat `working` — or `done` or `blocked`, and not
+Writes one message to one seat. A plain send to a Claude Code seat writes one frame on that
+session's cross-session socket, and nothing is typed; when no socket takes the frame, the send
+falls back to the drop-file path and the outcome line says so — `delivered (typed, socket
+<reason>)`. Every other seat takes that path from the start: the body is written whole to a drop
+file, mode 0600, by renaming a temporary file into place, and one short trigger line that names
+that file is typed. The body is never typed, and it is never split across several writes. `delivered` means herdr reported the seat `working` — or `done` or `blocked`, and not
 the status read before Enter — after that one line and Enter, or the transcript shows the drop
 being read (a CLI's status can lag while it works), the line had left the seat's input box, and
 the pane was not a dialog this command already classifies: question, permission, trust, vendor notice, provider error, or
@@ -14,8 +16,9 @@ spinner in the terminal title for codex, and the `esc to cancel` footer for agy.
 narrow enough to wrap the hint can submit while herdr stays idle; that run is `not-submitted`,
 not a silent success.
 
-`team send --wait` to a Claude Code seat writes one frame on the cross-session socket, because
-the reply listener needs that frame. A successful write says the frame was sent on the socket,
+`team send` to a Claude Code seat writes one frame on the cross-session socket — the address its
+session answers at — and `--wait` takes the same path to stand the reply listener the answer must
+arrive beside. A successful write says the frame was sent on the socket,
 not that it was delivered. The command opens a listener at its own `cc-socks/<pid>.sock` — the
 address the receiving session derives from the connection, the one it names as the message's
 `from` — before the frame is written, so an answer that comes at once finds it standing, and
@@ -55,9 +58,10 @@ usage error. `--timeout` is a whole number of seconds, 1 to 86,400, and is only 
 `--wait`; without it a wait runs 120 seconds. `--json` prints one result document instead of
 the lines — `{seat, status, exit, reply?, error?, ids}` — where `ids.sent` is the id of the
 message this command composed and `ids.reply` the reply frame's own, when there is one.
-`--dry-run` resolves the seat and names the channel. A plain dry run names the drop file. A
-dry run of `--wait` to a Claude Code seat names the socket. It writes no drop file and types
-nothing; it appends one line to `.agents/team.log`.
+`--dry-run` resolves the seat and names the channel the run would take — a Claude Code seat's
+cross-session socket, falling back to a drop file and one trigger line, and the drop file for
+every other seat. It writes no drop file and types nothing; it appends one line to
+`.agents/team.log`.
 
 ## Addressing
 
@@ -82,10 +86,12 @@ agents. A plain send writes `.agents/send-drops/<session>/<seat>/<id>` (the file
 types one trigger line into that seat's pane, reads the pane back before Enter to check the
 composer holds that line, and reads it again after Enter. `send-drops`, the session directory,
 and the seat directory are each mode 0700. This command never deletes a delivered drop file;
-the owner removes `.agents/send-drops` when those messages are no longer needed. `--wait` to a
-Claude Code seat reads the processes of the seat's pane and the socket file's presence in
-`cc-socks` instead of writing a drop file. The socket is the first of the pane's processes —
-the foreground processes first, then the shell — with a file at `<sockets dir>/<pid>.sock`.
+the owner removes `.agents/send-drops` when those messages are no longer needed. A send to a Claude Code seat reads the registry's recorded address while it is still live — its
+pid among the pane's, its socket present — and the processes of the seat's pane otherwise, with
+the socket file's presence in the sockets folder — this Mac's Claude Code can write its sockets
+to `/tmp/cc-socks` instead, so discovery reads that folder too — before any drop file is written. The socket is the first of the
+pane's processes — the foreground processes first, then the shell — with a file at
+`<sockets dir>/<pid>.sock`.
 The command holds the seat's lock (`<state dir>/seat-locks/<session>/<seat>`) around the write,
 so a launch of the same seat cannot act beside it and two sends cannot type into one pane at
 once; a `--wait` send holds it until the reply or the timeout, because the outstanding request
@@ -99,8 +105,11 @@ message.
 ## Who may send to whom
 
 Send is denied by default: a caller reaches exactly the targets below, and anything else is
-refused before the seat is looked up. A seat the registry holds no record for has no identity to
-admit by, and is refused; `up` and `add` register a seat when they first launch it. A run with no
+refused before the seat is looked up. A seat the registry holds no record for is judged as the
+seat the live file declares for it, so the rules above reach it by that seat's name and role — the
+bootstrap a seat herdr placed, before `up` or `add` first recorded it, still needs — and nothing
+else does: a target in another team, and an owner-signed grant, both wait for its record. `up` and
+`add` register a seat when they first launch it. A run with no
 terminal is refused before `--list` as well: `team send: only the owner runs this, from a terminal
 outside herdr`. For every other caller, `--list` prints the file's roster and sends nothing, so it
 needs no caller check.
@@ -136,7 +145,10 @@ those, or a symbolic link, is not a grant: the send is refused as if the folder 
 
 Every drop file opens with a header, written before the body: the sender's agent id, and the reach
 above or the grant that admitted the send. A seat's header names it — its agent id, its name and
-its seat; the owner's reads `from the owner`. A waited send's frame opens the same way, and so
+its seat; the owner's reads `from the owner`. A sender the registry holds no record for is spelled
+as the file's seat instead of an id — `from the file's seat <seat> (no registry record yet) —
+admitted by: <rule>` — so a receiver reads why the id is absent. A waited send's frame opens the
+same way, and so
 does the body the message history keeps. The receiver reads who sent a message and why that sender
 was let through; the drop record carries the sender's id from day one.
 
@@ -224,11 +236,11 @@ seats:
     launch: codex -m gpt-6-sol
 ```
 
-A plain send, Claude Code included, is a drop file and one trigger. `delivered` is herdr reporting the seat working:
+A plain send to a Claude Code seat goes over its cross-session socket, and nothing is typed. `delivered (socket)` means the socket took the message. When no socket is found or the socket refuses, the send falls back to a drop file and one trigger, and says so: `delivered (typed, socket <reason>)`.
 
 ```console
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
-claude-keeper: delivered
+claude-keeper: delivered (socket)
 exit 0
 ```
 

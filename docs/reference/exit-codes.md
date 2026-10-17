@@ -277,6 +277,29 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `proc.file-invalid` | `proc` | 2 | the team file can't be parsed | `team proc add build` |
 | `proc.invocation` | `proc` | 2 | the invocation can't be read | `team proc` |
 | `proc.not-yours` | `proc` | 2 | the caller may not read this team | `team proc list` |
+| `register.already` | `register` | 0 | the seat is already recorded on that pane | `team register worker` |
+| `register.dry-run` | `register` | 0 | the seat would be registered; nothing was written | `team register worker --dry-run` |
+| `register.ready` | `register` | 0 | the running seat's record was written | `team register worker` |
+| `register.caller` | `register` | 1 | --session is the owner's | `team register worker --session other` |
+| `register.cli` | `register` | 1 | the pane holds no process the seat's CLI profile names | `team register worker` |
+| `register.delegate` | `register` | 1 | the caller is not the approved delegate for up | `team register worker` |
+| `register.detached` | `register` | 1 | a run with no terminal | `team register worker` |
+| `register.grant` | `register` | 1 | the caller is not the seat the file's grant names for up | `team register worker` |
+| `register.grant-flag` | `register` | 1 | --session is the owner's for a granted seat | `team register worker --session other` |
+| `register.herdr` | `register` | 1 | herdr doesn't answer | `team register worker` |
+| `register.many-agents` | `register` | 1 | the session has more than one agent with that name | `team register worker` |
+| `register.no-agent` | `register` | 1 | no agent of that name is running in the session | `team register worker` |
+| `register.no-cli` | `register` | 1 | the pane holds no CLI in front of its shell | `team register worker` |
+| `register.no-profile` | `register` | 1 | the seat has no launch profile | `team register worker` |
+| `register.no-seat` | `register` | 1 | the file has no such seat | `team register missing` |
+| `register.no-session` | `register` | 1 | the herdr session is not running | `team register worker` |
+| `register.not-owner` | `register` | 1 | the caller is not the owner, a delegate this file names for up, or the seat its grant names | `team register worker` |
+| `register.recorded` | `register` | 1 | the state records another pane for that seat | `team register worker` |
+| `register.screen` | `register` | 1 | the pane is not the seat at its prompt | `team register worker` |
+| `register.session-file` | `register` | 1 | the session was launched from another team file | `team register worker --session other` |
+| `register.stopped` | `register` | 1 | the seat is stopped in the file | `team register worker` |
+| `register.file` | `register` | 2 | the team file can't be read or parsed, or not inside a git repository | `team register worker` |
+| `register.usage` | `register` | 2 | the invocation can't be read | `team register` |
 | `release.passed` | `release` | 0 | every check passed | `team release check material@3.0.2` |
 | `release.missing` | `release` | 1 | a check is missing | `team release check material@3.0.2` |
 | `release.unknown` | `release` | 2 | a check is unknown | `team release check material@3.0.2` |
@@ -499,6 +522,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.published` | `worktree` | 1 | the branch already exists on a remote | `team worktree new task --kind fix` |
 | `worktree.recorded` | `worktree` | 1 | the task is already recorded | `team worktree new task --kind fix` |
 | `worktree.recorded-elsewhere` | `worktree` | 1 | the task is recorded in another session | `team worktree new task --kind fix` |
+| `worktree.remove-branch` | `worktree` | 1 | the --branch given does not name the branch the worktree is on | `team worktree remove task --branch fix/other` |
 | `worktree.remove-failed` | `worktree` | 1 | the worktree was not removed | `team worktree remove task` |
 | `worktree.remove-task` | `worktree` | 1 | the task name is not a single segment | `team worktree remove ../task` |
 | `worktree.seat` | `worktree` | 1 | --seat names no declared seat | `team worktree new task --kind fix --seat missing` |
@@ -511,6 +535,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.trust` | `worktree` | 1 | the worktree is outside the file's trust paths | `team worktree new select-width --kind fix` |
 | `worktree.unpublished` | `worktree` | 1 | the worktree has commits on no remote branch | `team worktree remove task` |
 | `worktree.unreadable` | `worktree` | 1 | the worktree couldn't be read | `team worktree remove task` |
+| `worktree.branch-flags` | `worktree` | 2 | new and list take no --branch | `team worktree new task --branch fix/task` |
 | `worktree.extra` | `worktree` | 2 | an unexpected argument was given | `team worktree new task extra` |
 | `worktree.file` | `worktree` | 2 | the team file can't be read | `team worktree new task --file missing.yaml` |
 | `worktree.file-invalid` | `worktree` | 2 | the team file can't be parsed | `team worktree new task --file team.yaml` |
