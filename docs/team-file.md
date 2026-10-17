@@ -149,7 +149,7 @@ grant:
   file, `--file` is refused, and the first approval of a team stays the owner's. A roster
   edit that moves the derived ceiling — a file that declares no `limits` — stays the owner's too.
 - Any other key, including `path`, is an unknown field.
-- `team up` admits the orchestrator's seat when the approved grant lists `up`. The run is this
+- `team up` admits the orchestrator's seat when the file's `grant` lists `up`. The run is this
   folder's own file: `--session` and `--file` are refused, and the run does not relaunch or close
   the orchestrator's seat. `team down` admits that seat when the list includes `down`, and leaves
   the orchestrator's seat and the operator's seat running. `team reload <seat>` admits that
@@ -182,13 +182,9 @@ delegates:
   reaches a lead.
   Entry order and command order are part of the value the owner approves: a reorder is a change
   like any other.
-- `approve` is granted like the rest, under the gate's guard, and the guard is an allowlist:
-  a delegated approval admits the roster and `rules`, and refuses, fail-closed, every other
-  owner section — `delegates`, `budgets`, `limits`, identity, `trust`, the workspace, the
-  operator and orchestrator — and any section added later, so a delegate can never approve a
-  change to its own authority. A delegated approval of an ordinary change — the roster, a
-  launch line, a rule — passes, and the write records one audit line naming the pane and what
-  it sealed.
+- `approve` in `commands` still parses — a file that names it is read like any other — and no
+  command in this build consults it. The commands a delegate may run are `up`, `down`, `add`
+  and `remove`.
 - A pane named in several approved team files is a delegate of each — the files do not see or
   limit one another — and in every one of them the owner-only sections stay the owner's, never
   a delegate's.

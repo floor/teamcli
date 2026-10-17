@@ -93,8 +93,8 @@ A dry run that reaches a refusal the real run would give before doing anything r
 
 A pane of another session the approved file's `delegates` section names may run `up` when that
 entry's `commands` list names it. The ordinary rule above refuses such a caller first, and only
-then — the section is in the file — does the delegate gate decide, against the live file and the
-approved copy, never a cached team: refused, the gate's own words replace the ordinary refusal
+then — the section is in the file — does the delegate gate decide, against the default live file,
+never a cached team: refused, the gate's own words replace the ordinary refusal
 (same list, same dry-run line, same exit); passed, the run is the delegate's. The section is read
 from the folder's own default file, never one the caller names: a delegated run never has
 `--session` or `--file` — both are the owner's, the gate refuses them before the file or the
@@ -551,6 +551,8 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | ``only the owner or the approved delegate runs `up`; this call is <caller>`` — the delegate gate: the file's `delegates` section names panes, and this caller is none of them |
 | ``--<flag> is the owner's; the approved delegate cannot use it`` — the delegate gate, for `--session` and `--file` on a delegated run, refused before the file or the session the flag names is read |
 | the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |
+| ``--<flag> is the owner's; the granted seat cannot use it`` — the granted seat, for `--session` and `--file`, refused before the file or the session the flag names is read |
+| ``deny`` — a caller `up` does not admit: not the owner, not a pane the file's `delegates` names with `up`, not the seat the file's `grant` names for it, and not an agent with an active standing create-grant. Stderr is the four characters `deny` and a newline — no `team up:` prefix, no reason — and stdout is empty; a `--dry-run` by that caller is the same reply and prints no plan. The sentences the ordinary refusal and the delegate and grant gates used to print here are not said: their ids all exit through this word |
 | ``the file was never approved on this machine `` — dev mode only, as a warning; a missing record is not a refusal |
 | ``approved before records were signed`` — the record was written by an earlier `team` |
 | the case a refused record names — a signed record that does not verify |
