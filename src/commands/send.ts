@@ -186,8 +186,6 @@ type Aim = {
   seat: string;
   session: string;
   cli: string;
-  /** The pane the target resolved to; null when the pane is read live, by name. */
-  pane: string | null;
   /** The cross-session address the registry recorded for the target; null when none. */
   address: string | null;
   /** The team file's folder this send belongs to: the receiving team's, across teams. */
@@ -291,19 +289,19 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (!configured) {
       return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
     }
-    to = { seat: seatName, session: team.session, cli: configured.cli, pane: null, address: null, dir, project: team.project, root, cross: false };
+    to = { seat: seatName, session: team.session, cli: configured.cli, address: null, dir, project: team.project, root, cross: false };
   } else {
     admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
-    // A resolved spec is addressed by its record: its pane, its session and its CLI, under the
-    // receiving team's own folder; across teams this run's daemon is skipped, so the send is
-    // reached directly.
+    // A resolved spec is addressed by its record: its session and its CLI, under the receiving
+    // team's own folder; across teams this run's daemon is skipped, so the send is reached
+    // directly. The pane is the live read's, by the seat's name (`findAgent`), never the
+    // record's alone.
     const cross = hit.team.root !== root;
     to = {
       seat: hit.agent.reach.seat,
       session: hit.agent.reach.session,
       cli: hit.agent.cli,
-      pane: hit.pane,
       address: hit.agent.reach.address,
       dir: cross ? join(hit.team.root, '.agents') : dir,
       project: hit.team.project,
@@ -419,9 +417,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
       return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon, socketNote ?? undefined);
     }
-    // A resolved record carries the pane the send goes to; the plain path reads the pane live,
-    // by the seat's name.
-    const found: Found = to.pane !== null ? { ok: true, pane: to.pane } : findAgent(host, to.session, to.seat);
+    // The pane is read live, by the seat's name: a record's recorded pane may have been closed or
+    // reused since it was written, and a trigger typed into a pane another seat now holds would
+    // reach that seat. A name the session does not list is unreachable, never typed into.
+    const found: Found = findAgent(host, to.session, to.seat);
     if (!found.ok) {
       if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
       const entry = { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) };
@@ -539,16 +538,17 @@ function recordRun(args: Args, io: Io, host: SendHost): number {
     if (!configured) {
       return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
     }
-    to = { seat: seatName, session: team.session, cli: configured.cli, pane: null, address: null, dir, project: team.project, root, cross: false };
+    to = { seat: seatName, session: team.session, cli: configured.cli, address: null, dir, project: team.project, root, cross: false };
   } else {
     admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
+    // A resolved spec is addressed by its record: its session and its CLI, under the receiving
+    // team's own folder. Nothing is delivered here, so no pane is read.
     const cross = hit.team.root !== root;
     to = {
       seat: hit.agent.reach.seat,
       session: hit.agent.reach.session,
       cli: hit.agent.cli,
-      pane: hit.pane,
       address: hit.agent.reach.address,
       dir: cross ? join(hit.team.root, '.agents') : dir,
       project: hit.team.project,
@@ -678,7 +678,9 @@ async function deliverSocket(
     return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon);
   }
 
-  const found: Found = to.pane !== null ? { ok: true, pane: to.pane } : findAgent(host, to.session, to.seat);
+  // The pane is read live, by the seat's name: a recorded pane may have been reused by another
+  // seat since the record was written.
+  const found: Found = findAgent(host, to.session, to.seat);
   if (!found.ok) {
     if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, body, id: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
@@ -978,7 +980,9 @@ async function deliverSocketFrame(
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
   }
-  const found: Found = to.pane !== null ? { ok: true, pane: to.pane } : findAgent(host, to.session, to.seat);
+  // The pane is read live, by the seat's name: a recorded pane may have been reused by another
+  // seat since the record was written, and its socket is not this seat's.
+  const found: Found = findAgent(host, to.session, to.seat);
   if (!found.ok) return { kind: 'fallback', reason: found.reason };
   // The seat lock stays the gate: a command that holds it — a send typing a trigger, an `up`,
   // an outstanding --wait — keeps this fast path out, and the typed path below answers the
