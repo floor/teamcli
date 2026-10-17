@@ -209,8 +209,9 @@ export function stateThresholds(declared: Partial<Record<SettingLevel, Partial<S
  * An order setting: a list of legs, declared once per feature with the order in force when no
  * level declares one. There is no permissive side here — a level below the one that set the order
  * may always drop a leg from it or put the legs it keeps in a different order, and may never add
- * one: a word naming a leg the order in force does not have — or naming one twice — is set aside
- * and the order in force stands. A word equal to the order in force is no word at all.
+ * one nor empty it: an order with no leg takes nothing at all. A word naming a leg the order in
+ * force does not have — or naming one twice, or naming none — is set aside and the order in force
+ * stands. A word equal to the order in force is no word at all.
  */
 export type OrderSettingSpec<L extends string> = {
   /** The name the setting is written under, for reports. */
@@ -228,9 +229,13 @@ export type OrderResolution<L extends string = string> = {
   refused: OrderDeclaration<L>[];
 };
 
-/** Whether every leg of `word` is a leg of `order`, each at most once: the one form a word on an
- *  order setting may take. */
+/** Whether every leg of `word` is a leg of `order`, each at most once, and there is at least one:
+ *  the one form a word on an order setting may take. A word with no leg is no form at all — an
+ *  order that names no leg takes no send, and the loaders that read an order from a file refuse
+ *  an empty one the same way (`src/file/sections/delivery_order.ts`,
+ *  `src/registry/projects.ts`). */
 function dropsOrReorders<L extends string>(word: readonly L[], order: readonly L[]): boolean {
+  if (word.length === 0) return false;
   const seen = new Set<L>();
   for (const leg of word) {
     if (seen.has(leg) || !order.includes(leg)) return false;
@@ -246,8 +251,9 @@ function sameOrder<L extends string>(left: readonly L[], right: readonly L[]): b
 /**
  * The inheritance itself, order-valued: levels are read outermost first, and within a level the
  * last word wins. A word that drops or reorders the order in force is honoured; one that names a
- * leg the order in force does not have is set aside and the order stands. A word equal to the
- * order in force is no word at all — the order it keeps may be declared at every level.
+ * leg the order in force does not have, or names none at all, is set aside and the order stands.
+ * A word equal to the order in force is no word at all — the order it keeps may be declared at
+ * every level.
  */
 export function resolveOrderSetting<L extends string>(spec: OrderSettingSpec<L>, declared: readonly OrderDeclaration<L>[]): OrderResolution<L> {
   let value = spec.fallback;

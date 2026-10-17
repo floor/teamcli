@@ -137,8 +137,18 @@ describe('delivery_order', () => {
     expect(resolved.source).toBe('seat');
   });
 
-  test('a level may drop every leg', () => {
-    expect(deliveryOrder({ entity: ['typed'], seat: [] })).toEqual([]);
+  test('a word with no leg is set aside: an order of no legs takes no send', () => {
+    // The YAML reader refuses a written key with no items, and the registry refuses an empty
+    // `delivery_order` at load. A chain built in code gets the same answer: taken as a drop of
+    // every leg, the word would resolve the order to `[]` and every send would then fail.
+    const resolved = resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf<DeliveryLeg>({ entity: ['typed'], seat: [] }));
+    expect(resolved.value).toEqual(['typed']);
+    expect(resolved.source).toBe('entity');
+    expect(resolved.refused).toEqual([{ level: 'seat', value: [] }]);
+    expect(deliveryOrder({ entity: ['typed'], seat: [] })).toEqual(['typed']);
+    // Against the default order, an empty word at any level leaves the default standing.
+    expect(deliveryOrder({ team: [] })).toEqual(['native', 'mcp-inbox', 'typed']);
+    expect(deliveryOrder({ entity: [], project: [], team: [], seat: [] })).toEqual(['native', 'mcp-inbox', 'typed']);
   });
 
   test('a level may not add a leg: the word is set aside and the order in force stands', () => {

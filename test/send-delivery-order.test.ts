@@ -1,10 +1,11 @@
 // The delivery-order walk: the receiving seat's own chain — entity, project, team, seat — decides
 // the order a plain send walks (native, mcp-inbox, typed when nothing declares one); a level may
-// drop legs or reorder the ones it keeps and may never add one; a leg that definitely cannot take
-// the send hands it on and is recorded as a failure on the history line; and the legs this build
-// does not carry — mcp-inbox always, native while its frame path is a socket write this build does
-// not make — are recorded `unavailable` in the walk's own words. A waited send is refused unless
-// the native leg leads the order: the frame the reply listener stands beside is that leg.
+// drop legs or reorder the ones it keeps, and may never add one nor empty it — an empty word is
+// set aside; a leg that definitely cannot take the send hands it on and is recorded as a failure
+// on the history line; and the legs this build does not carry — mcp-inbox always, native while
+// its frame path is a socket write this build does not make — are recorded `unavailable` in the
+// walk's own words. A waited send is refused unless the native leg leads the order: the frame the
+// reply listener stands beside is that leg.
 //
 // Both ways a chain reaches the walk are here: handed in on the host, and — the production
 // reading — left out, so the team file's own `delivery_order` and its seats' are what the walk
@@ -276,20 +277,21 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP, MCP_SKIP]);
   });
 
-  test('an order that drops every leg walks nowhere and says so, with no leg to record', async () => {
+  test('an empty order is set aside: the default walk still takes the send', async () => {
+    // An order of no legs would walk nowhere and fail every send. The empty word is no drop: it
+    // is set aside like one naming a leg the order does not have, and the default order walks
+    // and records both skips — before the guard this resolved to `[]` and the send was
+    // unreachable.
     const w = world();
-    const host = walker(w, { entity: ['typed'], seat: [] });
+    const host = walker(w, { team: [] });
     const io = owner(w.root);
 
-    const code = await runSend(['lead', 'hello'], io, host);
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(code).toBe(1);
-    expect(io.err).toBe('team send: lead: unreachable: no leg of its delivery order took the send\n');
-    expect(host.typed).toEqual([]);
-    expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
+    expect(io.out).toBe('lead: delivered\n');
     const entry = lastEntry(w.root, w.home);
-    expect(entry.outcome).toBe('unreachable');
-    expect('failed' in entry).toBe(false);
+    expect(entry.via).toBe('typed');
+    expect(entry.failed).toEqual([NATIVE_SKIP, MCP_SKIP]);
   });
 });
 
@@ -409,8 +411,9 @@ describe('the dry run names only the legs this build can walk', () => {
   });
 
   test('an order that holds no walkable leg prints that, not a channel', async () => {
+    // Non-empty, so the word stands: both legs it names are ones this build cannot walk.
     const w = world();
-    const host = walker(w, { seat: [] });
+    const host = walker(w, { seat: ['native', 'mcp-inbox'] });
     const io = owner(w.root);
 
     expect(await runSend(['lead', 'hello', '--dry-run'], io, host)).toBe(0);
