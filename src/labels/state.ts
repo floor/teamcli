@@ -18,7 +18,7 @@
 // say: a hold stands over the team (`held`), herdr cannot reach the seat at all (`unreachable`),
 // or the process the launch recorded no longer stands in its pane (`done`). The thresholds are
 // settings (src/settings/inherit.ts); the fallbacks below are the shipped values.
-import { DEFAULT_STATE_THRESHOLDS, type StateThresholds } from '../settings/inherit.ts';
+import { DEFAULT_STATE_THRESHOLDS, sayThreshold, type StateThresholds } from '../settings/inherit.ts';
 import type { Screen } from '../watch/screen.ts';
 import { readScreen } from '../watch/screen.ts';
 
@@ -193,9 +193,6 @@ export function observedSeatState(input: ObservedSeatInput): SeatStateReading {
   return seatState(observation, input.now, input.limits ?? DEFAULT_STATE_THRESHOLDS);
 }
 
-/** A threshold said the way a report says it: 90s, 30m, 2h. */
-export function sayThreshold(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  return `${Math.round(seconds / 3600)}h`;
-}
+/** A threshold said the way a report says it: 90s, 5m, 2h. The settings module owns the words;
+ *  the readers that already import them from here keep importing them from here. */
+export { sayThreshold };

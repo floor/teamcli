@@ -265,21 +265,25 @@ describe('a pass of the watch', () => {
     const { labels, ...rest } = pass({
       team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(),
     });
-    expect(rest).toEqual({ reports: [], nudge: null, work: [], fallback: null, ring: null, mailboxNote: null, readings: [], machineReadings: [] });
+    expect(rest).toEqual({ reports: [], nudge: null, work: [], fallback: null, ring: null, mailboxNote: null, readings: [], machineReadings: [], refusals: [] });
     expect(labels.length).toBe(5);
   });
 
-  test('an idle seat is reported after idle_first, and again every idle_repeat', () => {
+  test('an idle seat is reported after idle_first, to the owner after idle_owner, and again every idle_repeat', () => {
     const memory = newMemory();
     const quiet = live({ 'deepseek-acme': { status: 'done', screen: idle } });
     const at = (minute: number) => pass({ team: team(), watch: team().watch, state: emptySession(), live: quiet, machine: fine, now: minute * MIN, memory }).reports.map((report) => report.text);
     expect(at(0)).toEqual([]);
-    expect(at(9)).toEqual([]);
+    expect(at(4)).toEqual([]);
     // Never seen working: the report says so instead of inventing a duration.
-    expect(at(10)).toEqual(['deepseek-acme has been idle since the watch started']);
+    expect(at(5)).toEqual(['deepseek-acme has been idle since the watch started']);
     expect(at(12)).toEqual([]);
-    expect(at(29)).toEqual([]);
-    expect(at(30)).toEqual(['deepseek-acme has been idle since the watch started']);
+    // The owner hears once per idle period, at idle_owner.
+    expect(at(15)).toEqual(['deepseek-acme has been idle since the watch started — reported to the owner']);
+    expect(at(24)).toEqual([]);
+    // Every idle_repeat after the lead's own report, the lead hears again.
+    expect(at(25)).toEqual(['deepseek-acme has been idle since the watch started']);
+    expect(at(45)).toEqual(['deepseek-acme has been idle since the watch started']);
   });
 
   test('work resets the idle timer', () => {
@@ -301,10 +305,13 @@ describe('a pass of the watch', () => {
     // off it.
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: quiet, machine: fine, now: 10 * MIN, memory }).reports.map((report) => report.text))
       .toEqual(['deepseek-acme has been idle since the watch started']);
-    // An hour in, the neighbour reports again on the idle_repeat cadence; the parked seat's idle is
-    // still absent from every report.
+    // An hour in, the neighbour's lead report repeats on the idle_repeat cadence and its owner
+    // report lands; the parked seat's idle is still absent from every report.
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: quiet, machine: fine, now: 60 * MIN, memory }).reports.map((report) => report.text))
-      .toEqual(['deepseek-acme has been idle since the watch started']);
+      .toEqual([
+        'deepseek-acme has been idle since the watch started',
+        'deepseek-acme has been idle since the watch started — reported to the owner',
+      ]);
   });
 
   test('a parked seat that holds unsent text is reported, after unsent_after', () => {
@@ -379,10 +386,13 @@ describe('a pass of the watch', () => {
     // off it.
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: quiet, machine: fine, now: 10 * MIN, memory }).reports.map((report) => report.text))
       .toEqual(['deepseek-acme has been idle since the watch started']);
-    // An hour in, the neighbour reports again on the idle_repeat cadence; the stopped seat is still
-    // absent from every report.
+    // An hour in, the neighbour's lead report repeats on the idle_repeat cadence and its owner
+    // report lands; the stopped seat is still absent from every report.
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: quiet, machine: fine, now: 60 * MIN, memory }).reports.map((report) => report.text))
-      .toEqual(['deepseek-acme has been idle since the watch started']);
+      .toEqual([
+        'deepseek-acme has been idle since the watch started',
+        'deepseek-acme has been idle since the watch started — reported to the owner',
+      ]);
   });
 
   test('a permission prompt that herdr calls idle is the owner\'s, and is never an idle seat', () => {
@@ -830,9 +840,11 @@ describe('the idle anchor', () => {
     const memory = newMemory();
     const quiet = { [name]: { status: 'idle', screen: idleScreen } };
     expect(reportAt(memory, 0, quiet)).toEqual([]);
-    expect(reportAt(memory, 9, quiet)).toEqual([]);
-    expect(reportAt(memory, 10, quiet)).toEqual([`${name} has been idle since the watch started`]);
-    // By default idle_repeat is off: reported once per watch run.
+    expect(reportAt(memory, 4, quiet)).toEqual([]);
+    expect(reportAt(memory, 5, quiet)).toEqual([`${name} has been idle since the watch started`]);
+    // The owner hears once per idle period, at idle_owner (15m).
+    expect(reportAt(memory, 15, quiet)).toEqual([`${name} has been idle since the watch started — reported to the owner`]);
+    // By default idle_repeat is off: the lead is told once per idle stretch.
     expect(reportAt(memory, 30, quiet)).toEqual([]);
   });
 });
@@ -870,15 +882,20 @@ describe('the nudge', () => {
   });
 
   const askedLine = 'deepseek-acme-2 asked a question: the operator\'s to act on';
-  const variants: [string, { status?: string; screen?: string }, string[]][] = [
-    ['mid-turn', { status: 'working', screen: busy }, [askedLine]],
-    ['at a permission prompt that herdr calls idle', { status: 'idle', screen: permission }, [askedLine]],
-    ['holding unsent text', { status: 'idle', screen: unsent }, [askedLine]],
+  const idleStarted = 'deepseek-acme has been idle since the watch started';
+  // Each variant: the seat's state on the first pass, what waits behind the question then, and
+  // what waits when the free seat takes the nudge five minutes in — the idle seat's own lead
+  // report joins the queue that pass, when the clock has run since it was first seen quiet. A
+  // seat first seen mid-turn counts from that work; at a prompt, the clock has not started.
+  const variants: [string, { status?: string; screen?: string }, string[], string[]][] = [
+    ['mid-turn', { status: 'working', screen: busy }, [askedLine], [askedLine, 'deepseek-acme has been idle for 5 minutes']],
+    ['at a permission prompt that herdr calls idle', { status: 'idle', screen: permission }, [askedLine], [askedLine]],
+    ['holding unsent text', { status: 'idle', screen: unsent }, [askedLine], [askedLine, idleStarted]],
     // The seat's own screen is one nothing reads, so the fail-safe reports that too: the
     // question waits behind it, and is still never dropped.
-    ['with a screen the watch doesn\'t recognise', { status: 'idle', screen: 'Welcome back!' }, [`deepseek-acme: herdr reports the status "idle"`, askedLine]],
+    ['with a screen the watch doesn\'t recognise', { status: 'idle', screen: 'Welcome back!' }, [`deepseek-acme: herdr reports the status "idle"`, askedLine], [`deepseek-acme: herdr reports the status "idle"`, askedLine, idleStarted]],
   ];
-  for (const [name, seat, waiting] of variants) {
+  for (const [name, seat, waiting, laterWaiting] of variants) {
     test(`waits while the idle seat is ${name}, and is never dropped`, () => {
       const memory = newMemory();
       expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: asked(seat), machine: fine, now: 0, memory }).nudge).toBeNull();
@@ -886,7 +903,7 @@ describe('the nudge', () => {
       const later = pass({ team: team(), watch: team().watch, state: emptySession(), live: asked(), machine: fine, now: 5 * MIN, memory });
       expect(later.nudge?.pane).toBe('w3:p1');
       expect(later.nudge?.text).toBe(NUDGE_TEXT);
-      expect(later.nudge?.pending).toEqual(waiting);
+      expect(later.nudge?.pending).toEqual(laterWaiting);
       expect(memory.pending).toEqual([]);
     });
   }

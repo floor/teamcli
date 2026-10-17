@@ -22,8 +22,9 @@ import { readCliHook } from '../launch/cli-hook.ts';
 import { supportsCliHook } from '../profiles/profile.ts';
 import { newestTraceAt, seatTraces } from '../labels/traces.ts';
 import { findAgent } from '../registry/agents.ts';
+import { ofTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { DEFAULT_STATE_THRESHOLDS } from '../settings/inherit.ts';
+import { DEFAULT_STATE_THRESHOLDS, stateThresholds, type StateThresholds } from '../settings/inherit.ts';
 import { emptySession, isSeatId, liveHold, readState, type SessionState } from '../state.ts';
 import { compare, type Comparison, type Difference, type Live } from '../status/compare.ts';
 import { waitOrStop } from '../wait.ts';
@@ -49,7 +50,27 @@ export type SeatTraceSources = {
   /** The session the rows are read for: its own folder under the state folder holds the seats'
    *  hook files, so a seat of the same name in another session is never read here. */
   session?: string;
+  /** The thresholds the reading runs by, resolved from the team's chain. Absent is the shipped
+   *  fallbacks — the reading a caller holds no team file for. */
+  limits?: StateThresholds;
 };
+
+/** The state thresholds a team's chain puts in force: the project record's liveness word when
+ *  the registry answers, then the team's own `watch.blind_after`. A registry that cannot be read
+ *  declares no word here — `team check` is where that file is refused — and a word that would
+ *  loosen a default is set aside by the resolver, the value in force standing. */
+export function stateLimitsOf(team: TeamFile, home: string | undefined, teamId: string): StateThresholds {
+  let project: Partial<StateThresholds> | undefined;
+  try {
+    project = home === undefined ? undefined : ofTeam(home, teamId)?.liveness;
+  } catch {
+    project = undefined;
+  }
+  return stateThresholds({
+    ...(project !== undefined ? { project } : {}),
+    team: { blind_after_seconds: team.watch.blindAfter },
+  });
+}
 
 export const realSeatsSources: SeatsSources = {
   live: (session, team, state) => realStatusSources.live(session, team, state),
@@ -224,6 +245,7 @@ export function seatRegistryRows(
       ...(held ? { held: true } : {}),
       reachable: live.running,
       now,
+      ...(traceSources?.limits !== undefined ? { limits: traceSources.limits } : {}),
     });
     // Working now: the reading says so — the screen, a trace inside its window, herdr or the
     // seat's own hook — or herdr's word and the record say the turn is still on. The seat's
@@ -276,7 +298,7 @@ export function blindDifferences(
   /** Where the traces are read from; absent is the old carried-forward `last_active` alone. */
   traceSources?: SeatTraceSources,
 ): Difference[] {
-  const said = sayThreshold(DEFAULT_STATE_THRESHOLDS.blind_after_seconds);
+  const said = sayThreshold(traceSources?.limits?.blind_after_seconds ?? DEFAULT_STATE_THRESHOLDS.blind_after_seconds);
   return seatRegistryRows(team, state, live, comparison, now, true, held, traceSources)
     .filter((row) => row.blind)
     .map((row): Difference => ({
@@ -419,6 +441,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       home: sources.home,
       stateDir: dir,
       session,
+      limits: stateLimitsOf(team, sources.home, teamIdOf(root)),
     });
 
     if (json) {

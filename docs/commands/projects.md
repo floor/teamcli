@@ -44,6 +44,13 @@ and `-` written as one `-` and nothing left at either end: `TeamCLI` is `teamcli
 `name`. The registry sits beside the agent and team records, all three described in
 [the registries](../concepts/registry.md).
 
+A record may also carry `liveness` — the windows by which its teams report an idle seat and count
+it blind: `idle_lead_seconds`, `idle_owner_seconds` and `blind_after_seconds`, each a positive
+number of seconds. A project tightens them for every team in it, never loosens them: a value
+longer than the one in force is set aside where the thresholds resolve, and the value in force
+stands. Omitted, each keeps the shipped default — five minutes to the lead, fifteen to the owner,
+five to blind.
+
 A missing file is no projects — every team is its own project — and prints the table header and
 `0 project(s)`. A
 file that does not read as a project registry (not a map with a `projects` key, a project without

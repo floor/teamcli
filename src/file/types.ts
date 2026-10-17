@@ -179,7 +179,12 @@ export type TeamFile = {
   // Durations in seconds.
   watch: {
     interval: number;
+    /** The idle lead threshold: how long a quiet seat waits before its lead is told. */
     idleFirst: number;
+    /** The idle owner threshold: how long after that the owner is told, once per idle period. */
+    idleOwner: number;
+    /** How long a seat no source has heard from may read unknown before it is blind. */
+    blindAfter: number;
     /** How often to repeat an idle report; absent when repeats are off (the default). */
     idleRepeat?: number;
     teamIdle: number;

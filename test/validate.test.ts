@@ -90,7 +90,7 @@ describe('the complete example of the RFC', () => {
   });
 
   test('values with units are read into seconds, percent and bytes', () => {
-    expect(team.watch).toMatchObject({ interval: 120, idleFirst: 600, idleRepeat: 1200, unsentAfter: 60, quotaMarks: [50, 75, 90] });
+    expect(team.watch).toMatchObject({ interval: 120, idleFirst: 300, idleOwner: 900, blindAfter: 300, idleRepeat: 1200, unsentAfter: 60, quotaMarks: [50, 75, 90] });
     expect(team.machine).toEqual({
       loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
       swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,

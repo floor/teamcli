@@ -5,6 +5,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import type { CheckContext, Report, SeatObservation } from '../src/watch/check.ts';
 import { providerError } from '../src/watch/checks/provider-error.ts';
 import type { Screen } from '../src/watch/screen.ts';
+import { DEFAULT_LIVENESS_THRESHOLDS } from '../src/settings/inherit.ts';
 
 function seat(name: string, screen: { kind: string; reset?: string | null }, running = true, working = false, account?: string): SeatObservation {
   return {
@@ -22,6 +23,7 @@ function harness(): { ctx: CheckContext; finish: () => void } {
   const ctx: CheckContext = {
     now: 0,
     watch: {} as TeamFile['watch'],
+    liveness: DEFAULT_LIVENESS_THRESHOLDS,
     budgets: {} as TeamFile['budgets'],
     once(key: string, text: string, to: Report['to'] = 'operator'): Report | null {
       current.add(key);

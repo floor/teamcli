@@ -46,7 +46,7 @@ workspace:
 
 watch:
   interval: 120s               # between passes
-  idle_first: 10m              # before an idle seat is reported
+  idle_first: 5m               # before an idle seat's lead is told
   idle_repeat: 20m             # between reports while it stays idle
   team_idle: 10m               # a fully idle team, before the nudge
   nudge_wait: 10m              # a nudge that can't be delivered becomes a notification

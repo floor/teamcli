@@ -36,6 +36,9 @@ import { stateOf } from './down.ts';
 import type { DownSeat } from '../launch/plan.ts';
 import { profileFor } from '../profiles/index.ts';
 import { classifyWith, overridesInForceOf, quotaWith, type OverrideForce } from '../profiles/overrides.ts';
+import { ofTeam } from '../registry/projects.ts';
+import { teamIdOf } from '../registry/teams.ts';
+import type { LivenessThresholds } from '../settings/inherit.ts';
 import { LEGACY_LINE, type Standing } from '../store/store.ts';
 import { realSources, standingSource } from './status.ts';
 
@@ -472,7 +475,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const run = (stored: readonly Seen[]) => pass({
           machineAccounts,
           team, state, live, machine, now, memory,
-          approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce, outcomes, budgets: budget,
+          approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce,
+          liveness: { project: projectLiveness(sources.home, root) },
+          outcomes, budgets: budget,
           quotaFor: (cli) => quotaWith(cli, overrides.profiles),
           readScreen: (cli, pane) => classifyWith(cli, pane, overrides.profiles),
           readings: stored, foreground, processes,
@@ -490,6 +495,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             return { readings: folded.readings, value: folded };
           });
         if (!foreign && sources.home) saveMachineReadings(sources.home, result.machineReadings, now);
+        // A liveness word the chain set aside: said once per process, as a line, never nudged
+        // into a seat and never a desktop notice. The value in force stands.
+        for (const refusal of result.refusals) {
+          const key = `liveness:${refusal.setting}`;
+          if (told.has(key)) continue;
+          told.add(key);
+          say(refusal.text, false);
+        }
         for (const report of result.reports) tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
         for (const label of result.labels) {
           const slot = (memory.seatLabels[label.name] ??= {});
@@ -762,6 +775,18 @@ async function deliver(
         ? `nudged ${who} (its own unsent line was already in its box): ${spoken}`
         : `nudged ${who}: ${spoken}`, false);
   } else keep();
+}
+
+/** The liveness words of the project a team sits in, or none when it sits in none, no home is
+ *  known, or the registry can't be read. The registry's own errors are `team check`'s to refuse;
+ *  the watch keeps watching with the values in force. */
+function projectLiveness(home: string | undefined, root: string): Partial<LivenessThresholds> | undefined {
+  if (home === undefined) return undefined;
+  try {
+    return ofTeam(home, teamIdOf(root))?.liveness;
+  } catch {
+    return undefined;
+  }
 }
 
 function tellOnce(told: Set<string>, key: string, text: string, tell: (text: string, notify: boolean) => void): void {

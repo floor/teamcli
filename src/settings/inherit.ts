@@ -114,20 +114,23 @@ export type NumberSettingSpec = {
 /** One level's word on a number setting: the level that holds it, and the value it declares. */
 export type NumberDeclaration = { level: SettingLevel; value: number };
 
-export type NumberResolution = { value: number; source: SettingLevel | null; refused: NumberDeclaration[] };
+/** A word the resolver set aside, with the value it would have replaced: a report names both. */
+export type RefusedNumberDeclaration = NumberDeclaration & { inherited: number };
+
+export type NumberResolution = { value: number; source: SettingLevel | null; refused: RefusedNumberDeclaration[] };
 
 /** The inheritance itself, number-valued: the same order, the same loosen-only-where-listed
  *  rule, and a word equal to the value in force counting as none. */
 export function resolveNumberSetting(spec: NumberSettingSpec, declared: readonly NumberDeclaration[]): NumberResolution {
   let value = spec.fallback;
   let source: SettingLevel | null = null;
-  const refused: NumberDeclaration[] = [];
+  const refused: RefusedNumberDeclaration[] = [];
   for (const level of SETTING_LEVELS) {
     for (const declaration of declared) {
       if (declaration.level !== level || declaration.value === value) continue;
       const looser = spec.permissive === 'higher' ? declaration.value > value : declaration.value < value;
       if (looser && !spec.looseningLevels.includes(level)) {
-        refused.push(declaration);
+        refused.push({ ...declaration, inherited: value });
         continue;
       }
       value = declaration.value;
@@ -149,13 +152,27 @@ export function numberDeclarationsOf(declared: Partial<Record<SettingLevel, numb
 }
 
 /**
+ * How long a seat may read unknown before it counts as not working — the reading `status` and
+ * `check` flag `blind`. It is one of the liveness defaults, so it is declared once and read by
+ * both groups below; a longer window tolerates more, so the permissive side is 'higher'. No
+ * level may loosen it: a project may tighten it, never lengthen it.
+ */
+const BLIND_AFTER_SECONDS: NumberSettingSpec = {
+  name: 'state_blind_after_seconds',
+  fallback: 300,
+  permissive: 'higher',
+  looseningLevels: [],
+};
+
+/**
  * The three thresholds the seat-state reading runs by: how fresh a TeamCLI trace must
  * be for the seat to read as working, how long a seat may read unknown before it counts as
  * not working — the reading `status` and `check` flag `blind` — and how long the CLI's own
  * `working` word outranks the screen outright. Past the last one, a screen that still reads
  * — a prompt showing again after an interrupted turn — answers instead; a screen it cannot
  * read leaves the hook to answer for the day. A longer window tolerates more, so the permissive
- * side is 'higher'; the project may open any of them, and every level inside may tighten again.
+ * side is 'higher'; the project may open the trace and hook windows, the same level
+ * `seats_cross_teams` allows, while the blind threshold is liveness and only ever tightens.
  * Declared per seat as a partial set, each field inherited on its own.
  */
 export type StateThresholds = { trace_window_seconds: number; blind_after_seconds: number; hook_working_seconds: number };
@@ -167,12 +184,7 @@ export const STATE_THRESHOLDS: { [K in keyof StateThresholds]: NumberSettingSpec
     permissive: 'higher',
     looseningLevels: ['project'],
   },
-  blind_after_seconds: {
-    name: 'state_blind_after_seconds',
-    fallback: 1800,
-    permissive: 'higher',
-    looseningLevels: ['project'],
-  },
+  blind_after_seconds: BLIND_AFTER_SECONDS,
   hook_working_seconds: {
     name: 'state_hook_working_seconds',
     fallback: 120,
@@ -187,6 +199,73 @@ export const DEFAULT_STATE_THRESHOLDS: StateThresholds = {
   blind_after_seconds: STATE_THRESHOLDS.blind_after_seconds.fallback,
   hook_working_seconds: STATE_THRESHOLDS.hook_working_seconds.fallback,
 };
+
+/**
+ * The three liveness defaults: an idle seat is reported to its lead this long after it went
+ * quiet, reported to the owner this long after that, and a seat that no source has heard from
+ * this long reads blind. They ship at 5 minutes, 15 minutes and 5 minutes. A longer threshold
+ * tolerates more, so the permissive side is 'higher' — and no level may take it: a project, a
+ * team and a seat may each tighten a liveness default, never loosen it, unless the level above
+ * allows it, which none of these three does.
+ */
+export type LivenessThresholds = { idle_lead_seconds: number; idle_owner_seconds: number; blind_after_seconds: number };
+
+export const LIVENESS_THRESHOLDS: { [K in keyof LivenessThresholds]: NumberSettingSpec } = {
+  idle_lead_seconds: {
+    name: 'liveness_idle_lead_seconds',
+    fallback: 300,
+    permissive: 'higher',
+    looseningLevels: [],
+  },
+  idle_owner_seconds: {
+    name: 'liveness_idle_owner_seconds',
+    fallback: 900,
+    permissive: 'higher',
+    looseningLevels: [],
+  },
+  blind_after_seconds: BLIND_AFTER_SECONDS,
+};
+
+/** The values when nothing declares any — the same fallbacks the specs carry. */
+export const DEFAULT_LIVENESS_THRESHOLDS: LivenessThresholds = {
+  idle_lead_seconds: LIVENESS_THRESHOLDS.idle_lead_seconds.fallback,
+  idle_owner_seconds: LIVENESS_THRESHOLDS.idle_owner_seconds.fallback,
+  blind_after_seconds: LIVENESS_THRESHOLDS.blind_after_seconds.fallback,
+};
+
+/** One declaration set aside, in the words a report names it by. */
+export type ThresholdRefusal = {
+  setting: keyof LivenessThresholds;
+  level: SettingLevel;
+  value: number;
+  inherited: number;
+  /** The rule the word broke, with the setting, the level and both values in it. */
+  text: string;
+};
+
+export type LivenessResolution = { thresholds: LivenessThresholds; refused: ThresholdRefusal[] };
+
+/** A threshold said the way a report says it: 90s, 5m, 2h. */
+export function sayThreshold(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds / 3600)}h`;
+}
+
+/** The rule a refused liveness word broke, as the report says it. */
+export const LIVENESS_RULE = 'a liveness threshold may be tightened, never loosened, unless the level above allows it';
+
+function declarationsFor<K extends keyof LivenessThresholds>(
+  declared: Partial<Record<SettingLevel, Partial<LivenessThresholds> | undefined>>,
+  name: K,
+): NumberDeclaration[] {
+  const out: NumberDeclaration[] = [];
+  for (const level of SETTING_LEVELS) {
+    const value = declared[level]?.[name];
+    if (value !== undefined) out.push({ level, value });
+  }
+  return out;
+}
 
 /** The one call the state reading makes: the chain in, every threshold out. */
 export function stateThresholds(declared: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>): StateThresholds {
@@ -203,6 +282,31 @@ export function stateThresholds(declared: Partial<Record<SettingLevel, Partial<S
     blind_after_seconds: resolveNumberSetting(STATE_THRESHOLDS.blind_after_seconds, said('blind_after_seconds')).value,
     hook_working_seconds: resolveNumberSetting(STATE_THRESHOLDS.hook_working_seconds, said('hook_working_seconds')).value,
   };
+}
+
+/**
+ * The one call the watch makes: the chain in, the three liveness values out, plus every word it
+ * set aside, each with the rule it broke. A looser word changes nothing — the value in force
+ * stands — so a project that declares a longer idle window sends its seats no later report.
+ */
+export function livenessThresholds(declared: Partial<Record<SettingLevel, Partial<LivenessThresholds> | undefined>>): LivenessResolution {
+  const thresholds = {} as LivenessThresholds;
+  const refused: ThresholdRefusal[] = [];
+  for (const setting of ['idle_lead_seconds', 'idle_owner_seconds', 'blind_after_seconds'] as const) {
+    const spec = LIVENESS_THRESHOLDS[setting];
+    const resolution = resolveNumberSetting(spec, declarationsFor(declared, setting));
+    thresholds[setting] = resolution.value;
+    for (const word of resolution.refused) {
+      refused.push({
+        setting,
+        level: word.level,
+        value: word.value,
+        inherited: word.inherited,
+        text: `${spec.name}: the ${word.level} declared ${sayThreshold(word.value)}, longer than the ${sayThreshold(word.inherited)} in force — ${LIVENESS_RULE}`,
+      });
+    }
+  }
+  return { thresholds, refused };
 }
 
 /**
