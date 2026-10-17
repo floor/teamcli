@@ -85,7 +85,8 @@
               "setter",
               "date",
               "expiry",
-              "kind"
+              "kind",
+              "set"
             ],
             "properties": {
               "name": {
@@ -127,6 +128,9 @@
                   "enforced",
                   "advised"
                 ]
+              },
+              "set": {
+                "type": "boolean"
               }
             }
           }
