@@ -31,7 +31,8 @@ describe('Antigravity launch and captured screens', () => {
     expect(versionVerdict('1.2.18', antigravity.tested)).toBe('tested');
     expect(versionVerdict('1.3.5', antigravity.tested)).toBe('tested');
     expect(versionVerdict('1.4.0', antigravity.tested)).toBe('tested');
-    expect(versionVerdict('1.4.1', antigravity.tested)).toBe('newer');
+    expect(versionVerdict('1.4.1', antigravity.tested)).toBe('tested');
+    expect(versionVerdict('1.4.2', antigravity.tested)).toBe('newer');
     expect(versionVerdict('1.2.10', antigravity.tested)).toBe('older');
   });
 
@@ -127,6 +128,20 @@ describe('Antigravity launch and captured screens', () => {
     expect(readScreen('antigravity', current('question')).kind).toBe('question');
     expect(readScreen('antigravity', current('permission')).kind).toBe('permission');
     expect(readScreen('antigravity', current('exit')).kind).toBe('unknown');
+  });
+
+  test('1.4.1 captures keep the same dialog kinds', () => {
+    const current = (name: string) => readFileSync(new URL(`../fixtures/antigravity/1.4.1/${name}.txt`, import.meta.url), 'utf8');
+    expect(readScreen('antigravity', current('trust')).kind).toBe('trust');
+    expect(readScreen('antigravity', current('idle')).kind).toBe('idle');
+    expect(readScreen('antigravity', current('unsent')).kind).toBe('unsent');
+    expect(readScreen('antigravity', current('working')).kind).toBe('working');
+    expect(readScreen('antigravity', current('question')).kind).toBe('question');
+    expect(readScreen('antigravity', current('permission')).kind).toBe('permission');
+    expect(readScreen('antigravity', current('exit')).kind).toBe('unknown');
+    // The folder is the profile's ceiling, and its footer still names the running model.
+    expect(profileFor('antigravity')?.tested.to).toBe('1.4.1');
+    expect(runningModel('antigravity', current('idle'))).toEqual({ model: 'Gemini Argon', version: '4' });
   });
 
   test('the plan delivers the one line through the guarded path, never a config file', () => {

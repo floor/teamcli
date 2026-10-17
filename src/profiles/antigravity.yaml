@@ -7,7 +7,7 @@ process_names:
   - agy
 tested:
   from: '1.2.16'
-  to: '1.4.0'
+  to: '1.4.1'
 unattended:
   - --dangerously-skip-permissions
 rules: first-message
@@ -51,16 +51,18 @@ trust_answer:
     extract:
       after: 'Accessing workspace:'
       before: 'Do you trust the contents of this project?'
-  # The same dialog again on 1.4.0 (`antigravity/1.4.0/trust.txt`): the marked row is still
-  # `Yes, I trust this folder`, Enter still confirms, and the path still sits between
+  # The same dialog again on 1.4.0 and 1.4.1 (`antigravity/1.4.1/trust.txt`): the marked row is
+  # still `Yes, I trust this folder`, Enter still confirms, and the path still sits between
   # `Accessing workspace:` and the question. The footer still reads `↑/↓ Navigate · enter Confirm`.
+  # 1.4.1 adds the model row `Gemini 4 Argon · medium` under the footer; the question itself and
+  # the box's rows are unchanged.
   - from: '1.4.0'
-    to: '1.4.0'
+    to: '1.4.1'
     label: 'Yes, I trust this folder'
     mark: '>'
     footer: 'enter Confirm'
     action: '0d'
-    capture: antigravity/1.4.0/trust.txt
+    capture: antigravity/1.4.1/trust.txt
     extract:
       after: 'Accessing workspace:'
       before: 'Do you trust the contents of this project?'
