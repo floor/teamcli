@@ -98,6 +98,24 @@ commands read them.
   label and the display line under it — are the file's own text, re-applied from the file by
   `team register` without a relaunch, and `team check` reports one that reads as neither.
 
+- **`team rename`, and the seat numbering.** `team rename <seat> <new-seat>` renames a seat in
+  the live team file and carries what the old name held: the file's references to it — the
+  `coordinator:` and `operator:` lines, a `grant:`'s `seat:` — the registry record under its
+  agent id, the herdr agent's name, its task leases, pending send-drops, mailbox messages (a
+  signature this machine can check is remade under the new name), its rules, queue and notes
+  files, the state's records and the message history, so nothing is left addressed to a name no
+  seat holds. Comments, order and every other seat stay as written: the edit is by the line,
+  never a rewrite of the file. `team rename --renumber [--dry-run]` rewrites every numbered seat
+  to the width and separator the `seat-numbering` setting in force asks for (`builder-1` →
+  `builder-01`), leaves a name with no number plain and skips a seat written with `count`; a dry
+  run prints each `from -> to (dry run)` and writes nothing. A seat number is read as a number,
+  so a roster naming the same role and number twice — `builder-1` beside `builder-01` — is
+  refused at load rather than left for an address to pick between. The owner or `leads` renames;
+  a target already declared, a target another seat's nickname holds, a counted seat renamed
+  partially and a name outside the seat grammar are each refused with the reason. A verified copy
+  of the file this machine still holds is carried across the rename where the renamed digests
+  match it, so a rename alone reports no drift.
+
 - **Three more launch profiles.** `grok`, `gemini` and `muse` join `claude-code`, `codex`,
   `cursor` and `antigravity`, each with its own screen reading, unattended flags, login check
   where the CLI offers one, and tested range.
