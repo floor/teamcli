@@ -465,6 +465,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -487,7 +493,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]"
+        "team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]"
       ]
     },
     {

@@ -688,6 +688,19 @@ export const RESTART_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** Published `--json` output schema for `team down` (`schema/down.schema.json`). */
+export const DOWN_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.down',
+  fileName: 'down.schema.json',
+  title: 'team down --json output',
+  statuses: ['stopped', 'idle', 'dry-run'],
+  required: ['seats'],
+  properties: {
+    seats: { type: 'array', items: { type: 'string', minLength: 1 } },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+});
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -706,6 +719,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   RELOAD_OUTPUT_SCHEMA,
   INIT_OUTPUT_SCHEMA,
   RESTART_OUTPUT_SCHEMA,
+  DOWN_OUTPUT_SCHEMA,
 ];
 
 
