@@ -22,7 +22,7 @@ import { historyPath, parseHistoryLine } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { NATIVE_BODY_MARKER, routesPath } from '../src/send/routes.ts';
 import { ROUTE_OUTPUT_SCHEMA } from '../src/output/index.ts';
-import { updateState } from '../src/state.ts';
+import { LOG_FILE, updateState } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { liveAgentsOf, testIo, type TestIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -190,6 +190,11 @@ describe('route: the address the native channel answers', () => {
 
     expect(code).toBe(0);
     expect(run.frames).toEqual([]);
+    // The log says what the route read, never that anything was delivered: a seat that reads the
+    // log cannot take a lookup for a message that arrived.
+    const log = readFileSync(join(w.root, '.agents', LOG_FILE), 'utf8');
+    expect(log).toContain('route [owner] looked up lead: live, native yes');
+    expect(log).not.toContain('routed (');
     const at = routesPath('acme', w.root, w.home);
     const lines = routeLines(at);
     expect(lines).toEqual([
@@ -210,6 +215,30 @@ describe('route: the address the native channel answers', () => {
     ]);
     // No drop file: a route moves no text.
     expect(existsSync(join(w.root, '.agents', 'send-drops'))).toBe(false);
+  });
+
+  test('a seat’s route logs its own name, not its role, and the record carries it', async () => {
+    const { w, lead, helper, leadIo } = acme();
+    socketAt(w.sockets, 4242);
+    const run = host(w, { processInfo: () => ({ shell: 111, foreground: [4242] }) });
+
+    const code = await runRoute(['helper'], leadIo, run);
+
+    expect(code).toBe(0);
+    // The lookup says what it read, and the caller's own seat stands in the bracket: the
+    // coordinator's seat is `lead`, never the role word.
+    const log = readFileSync(join(w.root, '.agents', LOG_FILE), 'utf8');
+    expect(log).toContain('route [lead] looked up helper: found on the pane, native no');
+    expect(log).not.toContain('[orchestrator]');
+    const [record] = routeLines(routesPath('acme', w.root, w.home));
+    expect(record).toMatchObject({
+      from: 'lead',
+      from_id: lead.id,
+      to: 'helper',
+      to_id: helper.id,
+      socket_state: 'pane',
+      native: false,
+    });
   });
 
   test('the answer names the recipient, its session, CLI, pane, socket and the rule', async () => {
@@ -473,6 +502,7 @@ describe('route: the address the native channel answers', () => {
         'dry run: nothing was run\n',
     );
     expect(existsSync(routesPath('acme', w.root, w.home))).toBe(false);
+    expect(existsSync(join(w.root, '.agents', LOG_FILE))).toBe(false);
 
     const jsonIo = testIo(w.root, OWNER);
     expect(await runRoute(['lead', '--dry-run', '--json'], jsonIo, run)).toBe(0);
@@ -611,7 +641,9 @@ describe('send --record: the delivery the sender made itself', () => {
     expect(run.frames).toEqual([]);
     expect(existsSync(join(w.root, '.agents', 'send-drops'))).toBe(false);
     const log = readFileSync(join(w.root, '.agents', 'team.log'), 'utf8');
-    expect(log).toContain('send [orchestrator] helper: recorded (native, 812 ms)');
+    // The coordinator's seat logs by its own name: the role never stands in for it.
+    expect(log).toContain('send [lead] helper: recorded (native, 812 ms)');
+    expect(log).not.toContain('[orchestrator]');
     expect(lead.id).not.toBe(helper.id);
   });
 

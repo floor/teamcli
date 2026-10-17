@@ -369,14 +369,25 @@ export function describeCaller(caller: Caller): string {
   return `unplaced (${caller.reason})`;
 }
 
-/** The bracket a log line carries. The owner is `owner` with or without a terminal: the log's
- *  caller column names classes, and `(no terminal for owner)` on the record already says the rest. */
-export function callerLabel(caller: Caller): string {
+/** The bracket a log line carries: the caller's own name — `owner`, the seat that called, or the
+ *  pane a passed run stands on. A seat is never its role: the orchestrator's seat logs as its
+ *  name, as every other seat does. An unplaced caller is `unplaced` and never its reason — a
+ *  reason can hold a pane id, and the bracket carries none. */
+export function logTag(caller: Caller): string {
   if (caller.kind === 'owner' || caller.kind === 'owner-no-tty') return 'owner';
+  if (caller.kind === 'unplaced') return 'unplaced';
   // A passed run's log names the pane. The refusal, which says no grant lists it, stays in
   // `describeCaller` and is not this bracket.
   if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
-  return describeCaller(caller);
+  return caller.name;
+}
+
+/** The bracket the owner-gated commands' warnings and refusals carry: `logTag`, and an unplaced
+ *  caller's reason, which those lines are allowed to say. The owner is `owner` with or without a
+ *  terminal: `(no terminal for owner)` on the record already says the rest. */
+export function callerLabel(caller: Caller): string {
+  if (caller.kind === 'unplaced') return describeCaller(caller);
+  return logTag(caller);
 }
 
 // One process's parent and name, or null. By name only: arguments can hold credentials.
