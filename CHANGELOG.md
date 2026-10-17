@@ -19,6 +19,20 @@ commands read them.
 
 ### Added
 
+- **One output contract, and `team --about`.** Every command prints under one contract across its
+  plain text, `--json` documents, `--help` usage and exit codes: a reading opens with
+  `team <project>, session "<session>"` (or the project line), prints an uppercase-headered
+  table, notes and any `difference:`/`repair:`/`who:` blocks, and closes with one summary line; an
+  action prints its plan steps under `--dry-run` and one summary line. `--json` prints one
+  document per command, its `schema` first (`team.<command>`, format 1) and a refusal as a
+  `team.error` document carrying the contract's exit id and repair; the schemas are published
+  under `schema/`. Output is quiet by default: stopped seats wait for `--all`, repeated notes
+  collapse to one line with `(x<n>)`, the `what 0.5.0 must not pretend` block prints only in
+  `team doctor` and `team --about`, and a deprecation warning only in `team check` and
+  `team doctor`, with its repair. Colour reaches a terminal only — never `--json`, never under
+  `NO_COLOR`. `team --about` prints the version, the licence, the docs link and the block; `watch`
+  and `broker` keep their foreground loops and take no `--json`.
+
 - **The registry, and `team register`.** The machine keeps records of the agents it has seen, the
   teams and the projects they sit in, under `~/.config/team/`. `team register <seat>` writes the
   record for one seat that is already running — a pane herdr places under that name, holding a
@@ -184,10 +198,16 @@ commands read them.
   revocation is its own appended record, never an edit of the grant — `team revoke <name>`
   appends it. `team delegate <session/pane> --commands <acts>` records one pane outside the
   team, up to eight, and `team revoke delegate` removes one. A create-grant — a record in
-  `~/.config/team/grants/` naming its `runner` and the paths it covers — admits that runner,
-  outside herdr and before the record expires, to `init`, `up`, `add` and `remove` under those
-  paths; a caller under herdr is never admitted this way. Every one of these is the owner's,
-  from a terminal outside herdr, with a `--dry-run`, and none can widen its own entry.
+  `~/.config/team/grants/` naming its holder by registry identity, `agent:` an agent id (`agt_`
+  …) or `team:` a registry team id, with the paths or entity it covers and its expiry — admits
+  its holder to `init`, `up`, `add` and `remove` under those paths until the record expires.
+  The holder is the caller's own registry record while it is running, placed by the session,
+  pane and seat it stands as, and a team record admits an agent registered to that team; the
+  owner, an agentless pane and an unplaced process have no registry record, so no record admits
+  them. A record spelling a name, a seat, a pane, a session or a runner grants nothing, and one
+  naming both `agent` and `team`, or no holder, is skipped with the rule. Every one of these is
+  the owner's, from a terminal outside herdr, with a `--dry-run`, and none can widen its own
+  entry.
 
 - **The work queue.** `team issues` lists the typed records in the one file the team file names;
   `team next` claims one, held by a lease in this clone (`--mine`, `--release`, and `--wait` at
@@ -198,15 +218,24 @@ commands read them.
   file's `tasks.policy` filtering every record before it crosses. A broker runs as the same OS
   principal as the seats: that is integrity, not authenticity, and it isolates nothing.
 
+<!-- 0.5.0 draft: the rebuilt `team usage` — release 4ea44296 carries an earlier cut; builder-7's final pass has not landed; re-verify this entry when the orchestrator says it landed, then remove this line -->
+- **The rebuilt `team usage`.** `team usage` reads the machine rather than one project: every
+  team with an approval store here, in one report — each account and window with what is left and
+  used, when it was last read and from which source, its reserve and its state, under a header
+  that counts the machine's teams, labs and accounts. Anyone may run it from any folder, and it
+  only reads: no check runs, no CLI is launched, no pane is read, nothing is written. The owner at
+  a terminal reads every team, and `--all` adds each team's seat-to-account breakdown; every other
+  caller reads the restricted view, a closed list built before anything prints. Shared machine
+  subscriptions live once in `~/.config/team/accounts.yaml`, and `--json` carries the same report
+  as one document, format 1.
+
 - **Around the seats.** `team list` shows the herdr sessions on this machine — the running ones
   unless `--all`, `--seats` for the active breakdown, `--watch` to refresh every two seconds;
   `team feed` reads and follows the project's message history, `--all` merging every project on
   the machine; `team messages` verifies a waiting message, prints its body and writes the
   receipt; `team proc` keeps the processes the seats started as a register in the team's state;
-  `team usage --all`
-  reads every team's seat-to-account breakdown for the owner, and machine-wide shared
-  subscriptions are listed once in `~/.config/team/accounts.yaml`; `team hold <reason>` places a
-  note on the team's work (`--release` clears it) that `status` and `doctor` show; `team tempo`
+  `team hold <reason>` places a note on the team's work (`--release` clears it) that `status` and
+  `doctor` show; `team tempo`
   sets the watch's pace; `team lock` and `team unlock` take and release a named machine lock, so
   one heavy run holds it at a time; `team mcp status` and `team mcp doctor` read the MCP bridge's
   legs; `team ask-show` prints one signed ask; `team reload` and `team restart` bring a later
@@ -261,6 +290,16 @@ commands read them.
 - `team worktree` gains `list` and `remove --branch <name>`, and reads the live file's workspace
   values. `team release check` warns when npm's `next` dist-tag points below `latest` and prints
   the exact `npm dist-tag add` command, without running it.
+
+- `team check --repair` settles every finding the file alone can settle, in one owner-signed
+  run: besides the state's leftovers, it re-records each seat an agent registered under dev
+  mode, clearing the mark the way an owner's `team register <seat>` does, and sets herdr's
+  drifted workspace label and display line back from the file through the same two writes
+  `team register` makes. Each written line is printed as `repaired:` and logged as its phase
+  finishes, and a sidebar write the session refuses prints the line it could not report. A
+  model drift keeps its relaunch advice: the repair never starts, stops or relaunches a seat,
+  and it stays owner-only. Under a governing dev-mode policy the check's rows still collapse to
+  one quiet count, and `--repair` clears the marks behind it.
 
 ### Removed
 
