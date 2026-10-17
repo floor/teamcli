@@ -18,6 +18,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import type { AgentSigning } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import type { Live } from '../src/status/compare.ts';
 import { testIo } from './helpers.ts';
@@ -63,6 +64,19 @@ beforeEach(() => {
   mkdirSync(home);
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   writeFileSync(join(root, '.agents/team.yaml'), example);
+  // The state a launch leaves: every live seat recorded on its own pane. The signing drift is
+  // read on the pane the state recorded, as the attention and label differences read theirs.
+  updateState(join(root, '.agents'), (state) => {
+    const session = (state.sessions['acme-web'] ??= emptySession());
+    for (const [name, workspace] of [
+      ['claude-coordinator-acme', 'w1'],
+      ['codex-acme', 'w2'],
+      ['deepseek-acme', 'w3'],
+      ['deepseek-acme-2', 'w4'],
+    ] as const) {
+      session.seats[name] = { stage: 'ready', pane: `${workspace}:p1`, workspace };
+    }
+  });
 });
 afterEach(() => rmSync(base, { recursive: true, force: true }));
 
@@ -122,11 +136,24 @@ describe('the signing drift', () => {
     const { code, out } = check({ ...built(), screens: { ...built().screens, 'w2:p1': codexScreen('idle') } });
     expect(out).toContain('difference: codex-acme: signs as GPT-6 Sol, runs GPT Terra 5.6');
     expect(out).toContain(
-      '  repair: re-record the seat once the drift is accepted (team register codex-acme), ' +
-        "or relaunch it on the record's model (team remove codex-acme --keep, then team add codex-acme)",
+      "  repair: update the team file's model, then team register codex-acme, " +
+        'or relaunch on the recorded model (team remove codex-acme --keep, then team add codex-acme)',
     );
     expect(code).toBe(1);
     expect(registryOnDisk()).toEqual(before);
+  });
+
+  test('a name herdr lists on another pane than the state recorded is not the seat', () => {
+    record('codex-acme', { model: 'GPT Sol', version: '6', role: 'implementer' }, 'w2:p1');
+    // herdr now lists the name on the watchdog's pane; the state still records the seat on
+    // w2:p1, so the screen there is not this seat's and no drift is read from it.
+    const live = built();
+    live.agents = live.agents.map((item) =>
+      item.name === 'codex-acme' ? { ...item, pane: 'w9:p1', workspace: 'w9' } : item,
+    );
+    live.screens = { ...live.screens, 'w9:p1': codexScreen('idle') };
+    const { out } = check(live);
+    expect(out).not.toContain('signs as');
   });
 
   test('a lead\'s relaunch names the whole team, and the file\'s display spells the record', () => {
@@ -138,8 +165,8 @@ describe('the signing drift', () => {
     const { out } = check(live);
     expect(out).toContain('difference: claude-coordinator-acme: signs as Claude Opus 5.5, runs Claude Fable 5.1');
     expect(out).toContain(
-      "  repair: re-record the seat once the drift is accepted (team register claude-coordinator-acme), " +
-        "or relaunch it on the record's model (team down, then team up (to restart the whole team))",
+      "  repair: update the team file's model, then team register claude-coordinator-acme, " +
+        'or relaunch on the recorded model (team down, then team up (to restart the whole team))',
     );
   });
 
