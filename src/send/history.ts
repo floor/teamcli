@@ -40,6 +40,10 @@ export type HistoryEntry = {
   ms?: number;
   /** The path the message travelled: `typed` (a composer trigger) or `socket` (a frame); absent when it never left the sender. */
   via?: string;
+  /** The legs of the delivery order that did not take the send, each `<leg>: <reason>`, in the
+   *  order they were tried; absent when the walk had none to pass on — the leg that carried the
+   *  send was reached without a failure behind it, or there was no walk at all. */
+  failed?: string[];
 };
 
 export type HistoryWrite =
@@ -173,6 +177,7 @@ export function appendHistory(project: string, root: string, home: string, entry
   // Written only when the sender measured them, so older lines keep their exact shape.
   if (entry.ms !== undefined) record.ms = entry.ms;
   if (entry.via !== undefined) record.via = entry.via;
+  if (entry.failed !== undefined && entry.failed.length > 0) record.failed = entry.failed;
   return appendStoreLine(project, root, home, HISTORY_FILE, record);
 }
 
@@ -288,12 +293,15 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     id: obj.id,
     outcome: obj.outcome,
   };
-  // `ms` and `via` are optional: a line with a wrong-typed one keeps its other fields.
+  // `ms`, `via` and `failed` are optional: a line with a wrong-typed one keeps its other fields.
   if (typeof obj.ms === 'number' && Number.isFinite(obj.ms) && obj.ms >= 0) {
     entry.ms = obj.ms;
   }
   if (typeof obj.via === 'string' && obj.via !== '') {
     entry.via = obj.via;
+  }
+  if (Array.isArray(obj.failed) && obj.failed.length > 0 && obj.failed.every((one) => typeof one === 'string')) {
+    entry.failed = obj.failed as string[];
   }
   return entry;
 }
