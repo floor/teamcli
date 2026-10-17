@@ -256,6 +256,18 @@ and only then is Enter pressed, once. A box that already holds exactly today's l
 stopped after typing it) is verified and sent, never typed onto again. `up` never clears a box it
 could not verify: a stop leaves the text where it is.
 
+Under `--json` the run writes one `team.up` v1 document on stdout, its `schema` tag first:
+`format`, `dry_run`, `status` (`dry-run`, or `ready` on a real run), `action_summary`, `project`,
+`session`, `seats` — every name the file carries, once — and `notes`. A dry run's document is the
+plan instead of the records: `action_summary` is `dry run: nothing was run`, and `plan` holds one
+`{ step, seat?, detail, prefix? }` per plan line — a run step prefixed `+`, a skip `skip`, a wait
+with none — with a folded warning leading as `{ step: "warning", prefix: "!" }` when there is one.
+On a real run `action_summary` is the run's closing record — the last `<seat>: ready` line, or
+`the team is ready` when the file has no seat to record — and the records before it travel in
+`notes`. A refusal under `--json` writes a `team.error` v1 document on stdout instead — the
+refusal's own `id`, its `message` and `repair`, and `rule` where the refusal carries one — and
+stderr stays empty. The exit code is the same as without `--json`.
+
 ### Waiting for the owner
 
 A seat that stops at anything that isn't idle and that `team` may not answer — `trust` under either

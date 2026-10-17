@@ -126,6 +126,14 @@ not the owner's text: when the profile carries the one key that empties a box, t
 with it inside the stop and the exit typed fresh, and when it does not, the seat is left as it is
 with the text named, in the refusal below.
 
+Under `--json` the run writes one `team.remove` v1 document on stdout, its `schema` tag first:
+`format`, `dry_run` (always false — `remove` has no dry run), `status` (`removed`, `kept` for
+`--keep`, `swapped` for a seat stopped for a swap, `temporary` for one that was never in the
+file), `action_summary` — the closing line the plain run prints — `project`, `session`, `seat`
+and `notes`. A refusal under `--json` writes a `team.error` v1 document on stdout instead — the
+refusal's own `id`, its `message` and `repair` — and stderr stays empty. The exit code is the
+same as without `--json`.
+
 ## Refusals
 
 | Message | Exit |
@@ -342,6 +350,8 @@ A name is required, and its absence stops at the usage line before the file is r
 ```console
 $ team remove ; echo "exit $?"
 team remove: a seat name is required
-Usage: team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]
+Usage: team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]
+
+Exits 0 when the seat is removed (or stopped for a swap), 1 when removal is refused or fails, 2 when the invocation or team file can't be read.
 exit 2
 ```
