@@ -666,7 +666,9 @@ function finishDaemonSend(
   if (res.outcome === 'unreachable') return unreachable(io, dir, who, seatName, res.detail, host, report);
   if (res.outcome === 'not-submitted') {
     const result: DeliverResult = { outcome: 'not-submitted', tries: res.tries, ...(res.box === null ? {} : { box: res.box }) };
-    return notSubmitted(io, dir, who, seatName, result, `the drop file is at ${res.drop_path}; a running watch retries it when the seat is idle`, host, report);
+    // The daemon keeps no pending record in the folder a watch scans, so this line promises no
+    // retry: it names the drop and stops there.
+    return notSubmitted(io, dir, who, seatName, result, `the drop file is at ${res.drop_path}`, host, report);
   }
   return refuse(io, dir, who, res.detail, host, report);
 }

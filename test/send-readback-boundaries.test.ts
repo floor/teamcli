@@ -227,6 +227,7 @@ describe('the composer read-back at its boundaries', () => {
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'never submitted through the daemon'], io, host)).toBe(1);
     expect(io.err).toContain('not-submitted: the seat did not take the trigger after 1 Enter; the box holds "a draft that is not the trigger"');
+    expect(io.err).not.toContain('a running watch retries it');
     expect(host.enters.length).toBe(1);
     expect(outcomes(world)).toEqual(['not-submitted']);
 
