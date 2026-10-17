@@ -168,6 +168,31 @@ describe('send admission: the rules that admit', () => {
     expect(admitSend(orchLabs, orchLabs, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
   });
 
+  test('the operator is the place the file declares, never the role word', () => {
+    // The file marks its operator by name: a seat written `role: implementer` there reaches
+    // every seat of its own team, and a seat merely holding the role word `operator` does not.
+    const ops = agent('agt_00000000000f', 'ops', 'teamcli');
+    const byWord = agent('agt_000000000010', 'wordsmith', 'teamcli');
+    const base = headless();
+    const declared: AdmitTeams = {
+      ...base,
+      teamcli: {
+        ...base.teamcli!,
+        operator: 'ops',
+        roster: [
+          ...base.teamcli!.roster,
+          { agent: ops.id, seat: 'ops', role: 'implementer' },
+          { agent: byWord.id, seat: 'wordsmith', role: 'operator' },
+        ],
+      },
+    };
+    expect(admitSend(ops, builder1, declared)).toEqual({ ok: true, rule: 'an orchestrator or operator to a seat of its own team' });
+    expect(admitSend(byWord, builder1, declared).ok).toBe(false);
+    expect(admitSend(byWord, builder1, base).ok).toBe(false);
+    // The place is the team's own: it reaches that team's seats and no other team's.
+    expect(admitSend(ops, builderLabs, declared).ok).toBe(false);
+  });
+
   test('an owner-signed grant naming send admits the pair it was verified for', () => {
     expect(admitSend(builderRadio, builder1, teams, { name: 'send to the teamcli builders' })).toEqual({
       ok: true,

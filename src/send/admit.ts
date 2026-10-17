@@ -27,6 +27,10 @@ export type AdmitTeam = {
   /** The team's lead seat, when the record carries it — the seat a team file's own `leads` spelling
    *  projects onto; the roster line holding the capability is read when it does not. */
   orchestrator?: string | null;
+  /** The seat the team file declares as its operator — a place in the file's chain, like the
+   *  lead's, never a role word. Read from the live file's `operator:` key; a record that carries
+   *  none leaves the operator rule off for that team. */
+  operator?: string | null;
   /** The session the team runs in, when the record carries it; a grant may spell a team by it. */
   session?: string | null;
   /** The roster lines, and, where the record holds them, the capabilities that make a seat's
@@ -168,7 +172,9 @@ export function admitSend(
   }
   // The team's own leads brief its seats: the orchestrator, or the operator, to any seat of the
   // same team. Never across teams: another team's seats are reached through its orchestrator.
-  const leadsOwnTeam = seatOf(caller) === leadSeat(callerTeam) || roleOf(caller, callerTeam) === 'operator';
+  // Both are places in the file's chain — the seat the file declares as its lead or its operator —
+  // never a role's word, which is each team's own, in any language.
+  const leadsOwnTeam = seatOf(caller) === leadSeat(callerTeam) || seatOf(caller) === operatorSeat(callerTeam);
   if (callerTeam !== undefined && targetTeam === callerTeam && leadsOwnTeam) {
     return { ok: true, rule: 'an orchestrator or operator to a seat of its own team' };
   }
@@ -292,19 +298,6 @@ function idOf(side: SendSide): string {
   return 'reach' in side ? side.id : '';
 }
 
-/** The sender's role in its own team's roster: the roster first, by agent id and then by the
- *  seat it sits in, and the side's own role when the roster does not name it. */
-function roleOf(caller: SendSide, team: AdmitTeam | undefined): string | null {
-  if (team) {
-    const byAgent = team.roster.find((entry) => entry.agent !== '' && entry.agent === idOf(caller));
-    if (byAgent) return byAgent.role;
-    const bySeat = team.roster.find((entry) => entry.seat === seatOf(caller));
-    if (bySeat) return bySeat.role;
-  }
-  if ('reach' in caller) return caller.signing.role === '' ? null : caller.signing.role;
-  return caller.role ?? null;
-}
-
 /** The team's lead seat — the seat the rules above also call its orchestrator: the record's own
  *  field, which a live file's `orchestrator:` seat fills, else the seat holding the `leads`
  *  capability — the mark a file's `leads: true` writes on the lead's line. Null when the record
@@ -314,6 +307,12 @@ function leadSeat(team: AdmitTeam | undefined): string | null {
   if (!team) return null;
   if (team.orchestrator) return team.orchestrator;
   return team.roster.find((entry) => entry.leads === true)?.seat ?? null;
+}
+
+/** The team's operator seat: the file's declared `operator:` place, exactly as `leadSeat` reads
+ *  the file's lead. A role word named `operator` is no place at all. */
+function operatorSeat(team: AdmitTeam | undefined): string | null {
+  return team?.operator ?? null;
 }
 
 /** The entity's assistant, with the team it sits in: the seat holding the `assistant` capability
