@@ -250,9 +250,11 @@ describe('the send daemon\'s boundaries', () => {
     expect(host.typed.length).toBe(1);
     expect(host.enters).toEqual([]);
     const directDrops = join(world.dir, 'send-drops', 'acme', 'lead');
-    const directFiles = readdirSync(directDrops);
+    // The drop, and the retry record a held send leaves beside it.
+    const directFiles = readdirSync(directDrops).filter((name) => !name.endsWith('.pending'));
     expect(directFiles.length).toBe(1);
     expect(readFileSync(join(directDrops, directFiles[0]!), 'utf8')).toBe(filed(longBrief));
+    expect(readdirSync(directDrops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
 
     // 2. Direct send when composer shows a paste chip instead of the trigger
     typedOnce = false;

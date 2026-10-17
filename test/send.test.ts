@@ -950,9 +950,12 @@ describe('team send: native drop', () => {
     expect(pane.enters).toBe(1);
     expect(pane.typed.length).toBe(1);
     const drops = join(dir, 'send-drops', 'acme', 'native');
-    const name = readdirSync(drops)[0] as string;
+    const names = readdirSync(drops);
+    const name = names.filter((entry) => !entry.endsWith('.pending'))[0] as string;
     expect(io.err).toContain(join(drops, name));
     expect(readFileSync(join(drops, name), 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    // A not-submitted drop is marked pending so a running watch retries it.
+    expect(names.filter((entry) => entry.endsWith('.pending'))).toHaveLength(1);
   });
 
   test('a codex seat already at done is not delivered until the status changes', async () => {

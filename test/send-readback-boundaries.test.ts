@@ -167,11 +167,13 @@ describe('the composer read-back at its boundaries', () => {
     expect(host.enters.length).toBe(1);
     expect(outcomes(world)).toEqual(['not-submitted']);
 
-    // The body waits in the drop file, whole, for the seat to pick up.
+    // The body waits in the drop file, whole, for the seat to pick up, with the retry record
+    // the watch reads beside it.
     const drops = join(world.dir, 'send-drops', 'acme', 'lead');
-    const files = readdirSync(drops);
+    const files = readdirSync(drops).filter((name) => !name.endsWith('.pending'));
     expect(files.length).toBe(1);
     expect(readFileSync(join(drops, files[0]!), 'utf8')).toBe(filed('the pane refused the Enter'));
+    expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
   });
 
   test('a box that stops holding the trigger after the first Enter gets no second Enter', async () => {

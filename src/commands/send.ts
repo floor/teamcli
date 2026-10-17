@@ -24,6 +24,7 @@ import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendRespon
 import { deliveryChainOf } from '../send/delivery.ts';
 import { bindPane, deliverTrigger, showsHeldFrameDialog, type DeliverResult } from '../send/deliver.ts';
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { markPending } from '../send/pending.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
@@ -858,10 +859,14 @@ async function deliverNative(
     }
     const result = await deliverTrigger(bindPane(host.native, session), pane, trigger, cli);
     const where = `the drop file is at ${path}`;
+    // A held drop gets a record beside it, for the watch to deliver once the seat is free. The
+    // line names that retry, so a sender does not have to guess whether the drop still travels.
+    const retry = 'a running watch retries it when the seat is idle';
     const entry = { ts: host.now().toISOString(), from, to: seatName, body, id: msgId };
     if (result.outcome === 'held') {
       appendHistory(project, root, host.home, { ...entry, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
-      return held(io, dir, who, seatName, `${result.reason ?? 'the composer holds text'}; ${where}`, host, report);
+      markPending(dropDir, entry);
+      return held(io, dir, who, seatName, `${result.reason ?? 'the composer holds text'}; ${where}; ${retry}`, host, report);
     }
     if (result.outcome === 'unreachable') {
       appendHistory(project, root, host.home, { ...entry, outcome: 'unreachable', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
@@ -869,7 +874,8 @@ async function deliverNative(
     }
     if (result.outcome === 'not-submitted') {
       appendHistory(project, root, host.home, { ...entry, outcome: 'not-submitted', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
-      return notSubmitted(io, dir, who, seatName, result, where, host, report);
+      markPending(dropDir, entry);
+      return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}`, host, report);
     }
     logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
     appendHistory(project, root, host.home, { ...entry, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
