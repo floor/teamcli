@@ -23,7 +23,8 @@ build. It is absent when no leg failed, and a line that has none of the six, fro
 than these fields, carries the six required fields alone. `note` is the short qualifier the
 outcome word cannot carry alone: a delivered send whose box cleared before herdr's status or the
 transcript showed the seat act reads `taken, not yet confirmed`, and the sign that the seat acted
-is read later. The table shows `ms` and `via` with the outcome in the KIND column, `delivered (via
+is read later — a later line for the same id reads `taken but never acted on` when that sign
+never came. The table shows `ms` and `via` with the outcome in the KIND column, `delivered (via
 socket in 812 ms)`, and carries `spec`, `resolved`, `failed` and `note` in the `--json` event,
 since the plain row keeps the channel that took the send.
 

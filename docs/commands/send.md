@@ -292,8 +292,11 @@ line on stderr and has none.
 A running watch retries a `held`, `not-submitted` or dialog-stopped send once the seat is idle,
 up to three tries in thirty minutes; the line the send printed tells the sender so, and a retry
 that stops says where the message is. A `delivered (taken, not yet confirmed)` send is never
-retried: the seat took the line, and the transcript or the status is read for the sign that it
-acted on it.
+retried: the seat took the line, and a running watch reads the transcript and the status on its
+later passes for the sign that it acted on it. A sign confirms the delivery silently; a seat that
+sits free for a minute past the send, or a record thirty minutes old, with no sign at all, is said
+once — `<seat>: a send from <sender> was taken but never acted on`, with the drop file's path —
+and one more history line keeps it. Even then the line is never typed again.
 
 Under `--json` the same outcomes are one document: the action surface for a send, the roster
 document for `--list`, and the structured error document for an exit 1 or 2 — `error.id` is the

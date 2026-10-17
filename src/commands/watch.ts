@@ -29,6 +29,7 @@ import { listUnacked } from './messages.ts';
 import { labelSweep } from '../watch/label-tick.ts';
 import { newMemory, ownUnsent, pass, type MailboxWaiting } from '../watch/pass.ts';
 import { retryHeldDrops } from '../watch/retry.ts';
+import { confirmTakenDrops } from '../watch/taken.ts';
 import { readScreen } from '../watch/screen.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
 import { readEnd, type EndView } from '../watch/end.ts';
@@ -611,6 +612,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // gives up. `--no-nudge` is the watch that types nothing, and this types too.
         if (!foreign && !args.flags.has('no-nudge')) {
           await retryHeldDrops({
+            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+          });
+        }
+        // A delivered send whose seat was not seen acting on the line yet leaves a record of its
+        // own: this pass looks for the sign and, past the window, says so once. It types nothing,
+        // so a watch without nudges still keeps that word for the sender.
+        if (!foreign) {
+          confirmTakenDrops({
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
           });
         }

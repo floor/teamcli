@@ -28,6 +28,7 @@ import { deliveryChainOf } from '../send/delivery.ts';
 import { bindPane, deliverTrigger, showsHeldFrameDialog, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { markPending } from '../send/pending.ts';
+import { markTaken } from '../send/taken.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
@@ -1058,8 +1059,9 @@ async function deliverNative(
     }
     const taken = result.evidence === 'taken';
     logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
-    // A taken send is a delivery with its confirmation still to come: the history says so, and no
-    // record is written beside the drop — a taken line is never typed again.
+    // A taken send is a delivery with its confirmation still to come: the history says so, and a
+    // record beside the drop lets a running watch look for the later sign. It is never a retry
+    // record — a taken line is never typed again.
     appendHistory(project, root, host.home, {
       ...entry,
       outcome: 'delivered',
@@ -1068,6 +1070,16 @@ async function deliverNative(
       via: 'typed',
       ...failed,
     });
+    if (taken) {
+      markTaken(dropDir, {
+        id: msgId,
+        from,
+        to: seatName,
+        body,
+        ts: entry.ts,
+        before: result.prior ?? 'unknown',
+      });
+    }
     return delivered(io, seatName, report, taken ? (note === undefined ? TAKEN_REASON : `${TAKEN_REASON}; ${note}`) : note);
   } finally {
     lock.release();
