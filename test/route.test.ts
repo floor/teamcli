@@ -110,10 +110,15 @@ function team(
   upsertTeam(home, id, { project, entity: project, session, root, lobby: join(home, 'lobby'), roster, lifecycle: 'running' });
 }
 
-/** The state record `up` leaves for a launched seat: the pane herdr placed it on. */
+/** The state record `up` leaves for a launched seat: the pane herdr placed it on. Seats add to
+ *  their session's record — one launch never erases the seat already standing beside it. */
 function place(root: string, session: string, seat: string, pane: string): void {
   updateState(join(root, '.agents'), (state) => {
-    state.sessions[session] = { seats: { [seat]: { stage: 'launched', pane, workspace: 'w1' } }, worktrees: {} };
+    const seats = state.sessions[session]?.seats ?? {};
+    state.sessions[session] = {
+      seats: { ...seats, [seat]: { stage: 'launched', pane, workspace: 'w1' } },
+      worktrees: state.sessions[session]?.worktrees ?? {},
+    };
   });
 }
 

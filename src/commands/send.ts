@@ -274,9 +274,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // asks placement first, whatever the spec resolved to — the owner, or a seat on the pane the
   // state records for it, in the session judged, the same verdict `answer` asks, with the two
   // repairable refusals it can name — so the seat is judged only where the state records it
-  // standing; a registry-resolved send by a sender the store does hold a record for is bound to
-  // that record instead, and needs no pane in the state. All of it runs before the message is
-  // read and before any seat is probed.
+  // standing. A sender the store does hold a record for is bound to that record only where the
+  // call stands as it — the record's own seat, running, on the pane it records, in its session,
+  // and on the pane the state records for that seat (`admissionOf`'s identity check) — never by
+  // session and seat name alone. All of it runs before the message is read and before any seat
+  // is probed.
   const standing = standingOf(dir, judged.session, caller);
   let to: Aim;
   let admission: Admission;
@@ -1082,6 +1084,14 @@ export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender
  * granted: a grant names a record's identity. A caller the file does not declare, and any send
  * that would leave the file's team, stays refused with the commands that write the record.
  *
+ * A record names a sender only where the call stands as it — the record's own seat, running, on
+ * the pane the record holds, in its session, and on the pane the state records for that seat
+ * (`recordIdentityProblem`; the same verdict `who.ts` asks of a seat). A call whose name matches a
+ * record but does not stand as it is refused, never bound: a pane renamed to a registered seat's
+ * name, and a caller of that name in another session, are not that seat, and must not send with
+ * its id. A registry-resolved target does not skip this: the sender's identity is judged the same
+ * way on every path, before any rule is asked.
+ *
  * The last rule is read only once the registry's own rules have refused: the owner's send-grants
  * folder, and, only when it holds a record, the clock that decides expiry — the same order `up`
  * and `init` ask the grants in. A record the folder returns still has to name this caller's own
@@ -1100,6 +1110,15 @@ export function admissionOf(
 ): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
   const record = recordFor(home, team.session, caller.kind === 'seat' ? caller.name : '');
+  // A record is bound to a call only where the call stands as it: the record's own seat, running,
+  // on the pane the record holds, in its session, and on the pane the state records for that seat
+  // (`callerVerdict`). Session and seat name bind no one — a pane renamed to a registered seat's
+  // name is not that seat, and a caller of the same name in another session is not either — so a
+  // record the call does not stand as refuses instead of acting for it. Nobody is judged by it.
+  if (record !== null) {
+    const identity = recordIdentityProblem(caller, record, at);
+    if (identity !== null) return { ok: false, why: identity };
+  }
   const declared = record === null ? declaredSenderOf(caller, team, fileTeamId) : null;
   const sender = record ?? declared;
   if (sender === null) return { ok: false, why: noAgentRecord(caller, declared) };
@@ -1154,6 +1173,36 @@ function noAgentRecord(caller: Caller, declared: DeclaredSender | null): string 
   return `${describeCaller(caller)}: no agent record on this machine, so no rule admits the send (${RULE_SUMMARY}); ${register}\`team up\` registers a seat it leaves standing`;
 }
 
+/** Why a call may not act as the agent record its name found: null when it may — the call is a
+ *  seat standing as the record holds it, on the pane the record names, in the record's session,
+ *  with the record running, and the state recording that seat on that same pane (`callerVerdict`,
+ *  the pane proof every admitted seat meets). Session and seat name alone bind nobody: a pane
+ *  renamed to a registered seat's name is not that seat, and a caller of that name in another
+ *  session is not it either. */
+function recordIdentityProblem(caller: Caller, record: Agent, at: SeatStanding): string | null {
+  const name = record.reach.seat;
+  if (caller.kind !== 'seat') {
+    return `the registry holds agent ${record.id} for seat ${name}, and this call is ${describeCaller(caller)}: a record is its own seat's, never a placement beside it`;
+  }
+  if (record.lifecycle !== 'running') {
+    return `the registry's record for seat ${name} is ${record.lifecycle}, not running: only a running seat acts as its own record`;
+  }
+  if (record.reach.session !== caller.session) {
+    return `seat ${name} stands in session ${record.reach.session}, and this call is not placed in it: a caller of another session is not that seat`;
+  }
+  if (record.reach.pane !== caller.pane) {
+    const on = record.reach.pane === null ? 'no pane' : `pane ${record.reach.pane}`;
+    return `the registry records ${on} for seat ${name} in session ${record.reach.session}, and this call is on pane ${caller.pane}: a pane renamed to a seat's name is not that seat`;
+  }
+  const verdict = callerVerdict(caller, name, at);
+  if (verdict.kind === 'no-pane') return noPaneRefusal(verdict.name);
+  if (verdict.kind === 'another-pane') return anotherPaneRefusal(verdict.name, verdict.recordedPane);
+  if (verdict.kind === 'refused') {
+    return `seat ${name} stands in session ${at.session}, and this call is not placed in it: a caller of another session is not that seat`;
+  }
+  return null;
+}
+
 /** The seat the live file declares for a caller the store holds no record for: its own name, the
  *  file's team id, and the role the file gives it. Null for a caller that is not a seat, or a
  *  name the file does not declare; whether the caller stands where the state records that seat is
@@ -1165,8 +1214,9 @@ function declaredSenderOf(caller: Caller, team: TeamFile, fileTeamId: string): D
   return { seat: seat.name, team: fileTeamId, role: seat.role, declared: true };
 }
 
-/** The registry's record for a seat of this session: the most recently updated one, retired
- *  records left out. Null when the store holds none. */
+/** The registry's record whose name this session holds for a seat: the most recently updated one,
+ *  retired records left out. Null when the store holds none. A candidate only — the call is bound
+ *  to it by `recordIdentityProblem`, which asks that the call stands as the record holds it. */
 function recordFor(home: string, session: string, seat: string): Agent | null {
   if (seat === '') return null;
   let found: Agent | null = null;

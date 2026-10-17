@@ -31,7 +31,7 @@ import { admitSend, senderHeader } from '../src/send/admit.ts';
 import { bindPane, deliverTrigger } from '../src/send/deliver.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { resolveTarget } from '../src/send/resolve.ts';
-import { readState } from '../src/state.ts';
+import { readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
@@ -133,6 +133,15 @@ function teamRecord(
 type Typed = { session: string; pane: string; text: string };
 type Scripted = NativePane & { typed: Typed[]; enters: number };
 
+/** The state record `up` leaves for a launched seat: the pane herdr placed it on. The identity
+ *  check binds a registered caller only where the state records it standing, so every registered
+ *  caller in these scenes is placed here. */
+function place(root: string, session: string, seat: string, pane: string): void {
+  updateState(join(root, '.agents'), (state) => {
+    state.sessions[session] = { seats: { [seat]: { stage: 'launched', pane, workspace: 'w1' } }, worktrees: {} };
+  });
+}
+
 /** Status samples, one per read: the pre-Enter read, then the polls. `wait` costs nothing. */
 function scripted(samples: string[]): Scripted {
   const typed: Typed[] = [];
@@ -157,13 +166,14 @@ function scripted(samples: string[]): Scripted {
 }
 
 /** The fake herdr of the send scenes: each seat's pane has its own scripted status, and a
- *  trigger typed into any other pane is not taken. */
-function sendHost(world: SendWorld, seats: Record<string, { session: string; pane: string; paneStatus: Scripted }>): SendHost & { typedInto: (pane: string) => Typed[] } {
+ *  trigger typed into any other pane is not taken. The live name is the seat's own unless the
+ *  scene keys two seats of one name in different sessions apart by a distinct key. */
+function sendHost(world: SendWorld, seats: Record<string, { name?: string; session: string; pane: string; paneStatus: Scripted }>): SendHost & { typedInto: (pane: string) => Typed[] } {
   const byPane = new Map(Object.values(seats).map((seat) => [seat.pane, seat]));
   const bySession = new Map<string, { name: string; pane: string }[]>();
-  for (const [name, seat] of Object.entries(seats)) {
+  for (const [key, seat] of Object.entries(seats)) {
     const list = bySession.get(seat.session) ?? [];
-    list.push({ name, pane: seat.pane });
+    list.push({ name: seat.name ?? key, pane: seat.pane });
     bySession.set(seat.session, list);
   }
   return {
@@ -291,6 +301,7 @@ describe('an agy seat sends to the main coordinator', () => {
       ],
     });
     const coordPane = scripted(['idle', 'working']);
+    place(root, 's', 'agy-seat', 'pane-agy');
     const host = sendHost(world, {
       'agy-seat': { session: 's', pane: 'pane-agy', paneStatus: scripted(['idle']) },
       'main-coordinator': { session: 's', pane: 'pane-coordinator', paneStatus: coordPane },
@@ -335,12 +346,13 @@ describe('an orchestrator reaches another team by name', () => {
     teamRecord(world.home, alphaId, { project: 'alpha', entity: 'alpha-ent', session: 'alpha', root: alphaRoot, roster: [{ agent: alpha.id, seat: 'lead', role: 'coordinator', leads: true }] });
     teamRecord(world.home, betaId, { project: 'beta', entity: 'beta-ent', session: 'beta', root: betaRoot, roster: [{ agent: beta.id, seat: 'lead', role: 'coordinator', leads: true }] });
     const caller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-alpha-lead', session: 'alpha' };
+    place(alphaRoot, 'alpha', 'lead', 'pane-alpha-lead');
     const io = testIo(alphaRoot, caller);
     const alphaPane = scripted(['idle']);
     const betaPane = scripted(['idle', 'working']);
     const host = sendHost(world, {
-      'alpha-lead': { session: 'alpha', pane: 'pane-alpha-lead', paneStatus: alphaPane },
-      'beta-lead': { session: 'beta', pane: 'pane-beta-lead', paneStatus: betaPane },
+      'alpha-lead': { name: 'lead', session: 'alpha', pane: 'pane-alpha-lead', paneStatus: alphaPane },
+      'beta-lead': { name: 'lead', session: 'beta', pane: 'pane-beta-lead', paneStatus: betaPane },
     });
 
     expect(findTeam(world.home, 'beta')?.root).toBe(betaRoot);
