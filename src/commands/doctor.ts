@@ -500,7 +500,7 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
 // in the file, and it is the owner's or an authorised swapper's; the line still offers the
 // whole-team sequence, which every caller of these lines may follow. For every other seat — stop it, keep it in the
 // file, add it again: the add launches it fresh, which is what records the process, writes the
-// rules file and starts the seat in the machine lobby — or the whole team at once.
+// rules file and starts the seat in the team's lobby — or the whole team at once.
 export const relaunch = (team: Pick<TeamFile, 'orchestrator' | 'operator'>, name: string): string =>
   relaunchRepair(team, name, 'markdown');
 
@@ -724,7 +724,7 @@ export function doctorFindings(
           const unknown: string[] = [];
           for (const [name, s] of activeSeats) {
             if (s.start_cwd) {
-              // The machine lobby and the project root are not this old folder. A lead recorded
+              // The team's lobby and the project root are not this old folder. A lead recorded
               // in either is not told to move.
               if (s.start_cwd === oldLanding) inOld.push(name);
               continue;

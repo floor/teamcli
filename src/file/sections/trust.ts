@@ -33,6 +33,6 @@ export const trust: Section = {
   schema: {
     type: 'array',
     items: { type: 'string', minLength: 1 },
-    $comment: 'absolute paths the seats may work in, including the machine lobby ~/.config/team/lobby and the project root',
+    $comment: "absolute paths the seats may work in, including the team's lobby (the default ~/.config/team/lobby) and the project root",
   },
 };
