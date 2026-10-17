@@ -6,7 +6,7 @@ import { currentTeam } from '../file/current.ts';
 import { LINK_NOT_FOLLOWED, NOT_A_REPO } from '../file/load.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { plainLine } from '../launch/plain.ts';
+import { plainLine, plainText } from '../launch/plain.ts';
 import { validLockName } from '../lock/machine.ts';
 import { contextLine, formatTable, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
@@ -179,7 +179,7 @@ function add(rest: string[], args: Args, io: Io, json: boolean, sources: ProcSou
 
   const current = currentTeam(io.cwd, undefined, sources.now(), sources.home, false);
   if (!current.ok) return fileProblems(io, json, current.errors);
-  if (current.notice && !json) io.stdout(`${current.notice}\n`);
+  if (current.notice && !json) io.stdout(`${plainText(current.notice)}\n`);
   const { caller, shown } = judgeCallerOf(io, current.team.session);
   const seat = caller.kind === 'seat' && current.team.seats.some((held) => held.name === caller.name) ? caller.name : undefined;
   if (caller.kind !== 'owner' && seat === undefined) return refuseCaller(io, json, describeCaller(shown));
@@ -200,13 +200,14 @@ function add(rest: string[], args: Args, io: Io, json: boolean, sources: ProcSou
     return undefined;
   });
   if (taken !== undefined) return refuseTaken(io, json, name, taken.by, taken.at);
-  summary(io, json, current.team, name, 'added', pid);
+  summary(io, json, current.team, name, 'added', pid, current.notice);
   // exit: proc.added
   return 0;
 }
 
 /** One action outcome: the context line and the line it already printed in plain text, the
- *  `team.proc` action envelope under `--json`. `value` is the pid the record watches. */
+ *  `team.proc` action envelope under `--json`. `value` is the pid the record watches, and a
+ *  fallback notice rides in the document's own member — never as a line before it. */
 function summary(
   io: Io,
   json: boolean,
@@ -214,6 +215,7 @@ function summary(
   name: string,
   status: 'added' | 'done',
   pid?: number,
+  notice?: string,
 ): void {
   const line = `proc ${name}: ${status}`;
   if (json) {
@@ -226,6 +228,7 @@ function summary(
       session: team.session,
       target: name,
       value: pid !== undefined ? String(pid) : null,
+      ...(notice !== undefined ? { notice: plainText(notice) } : {}),
     });
   } else {
     io.stdout(`${contextLine(team.project, team.session)}\n${line}\n`);
@@ -249,7 +252,7 @@ function list(rest: string[], args: Args, io: Io, json: boolean, sources: ProcSo
   } else if (!current.ok) {
     return fileProblems(io, json, current.errors);
   }
-  if (current.notice && !json) io.stdout(`${current.notice}\n`);
+  if (current.notice && !json) io.stdout(`${plainText(current.notice)}\n`);
 
   const state = readState(current.dir);
   const session = state.sessions[current.team.session] ?? emptySession();
@@ -302,7 +305,7 @@ function done(rest: string[], args: Args, io: Io, json: boolean, sources: ProcSo
 
   const current = currentTeam(io.cwd, undefined, sources.now(), sources.home, false);
   if (!current.ok) return fileProblems(io, json, current.errors);
-  if (current.notice && !json) io.stdout(`${current.notice}\n`);
+  if (current.notice && !json) io.stdout(`${plainText(current.notice)}\n`);
   const { caller, shown } = judgeCallerOf(io, current.team.session);
   const seat = caller.kind === 'seat' && current.team.seats.some((held) => held.name === caller.name) ? caller.name : undefined;
   if (caller.kind !== 'owner' && seat === undefined) return refuseCaller(io, json, describeCaller(shown));
@@ -324,7 +327,7 @@ function done(rest: string[], args: Args, io: Io, json: boolean, sources: ProcSo
   });
   if (outcome.kind === 'unknown') return refuseUnknown(io, json, name);
   if (outcome.kind === 'other') return refuseOtherSeat(io, json, name, outcome.by);
-  summary(io, json, current.team, name, 'done');
+  summary(io, json, current.team, name, 'done', undefined, current.notice);
   // exit: proc.done
   return 0;
 }

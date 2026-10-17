@@ -724,6 +724,7 @@ const PROC_ACTION_BRANCH: JsonSchema = {
     session: { type: 'string', minLength: 1 },
     target: { type: 'string', minLength: 1 },
     value: { type: ['string', 'null'] },
+    notice: { type: ['string', 'null'] },
   },
 };
 
@@ -790,6 +791,7 @@ const WORKTREE_ACTION_BRANCH: JsonSchema = {
     task: { type: 'string', minLength: 1 },
     branch: { type: 'string', minLength: 1 },
     path: { type: 'string', minLength: 1 },
+    notice: { type: ['string', 'null'] },
   },
 };
 
