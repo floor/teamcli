@@ -17,6 +17,7 @@ import { emptySession, holdText, liveHold, liveProcs, pidAlive, readState, type 
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
+import type { SeatStateWord, StateSource } from '../labels/state.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { INTEGRITY_NOT_AUTHORITY } from '../permissions/must-not-pretend.ts';
@@ -130,6 +131,13 @@ export interface StatusJson {
     last_active?: string | null;
     pane: string;
     launch_line?: string | null;
+    /** The seat's own reading (src/labels/state.ts), the table's STATE and SOURCE columns.
+     *  `state` above keeps its published meaning — the comparison's phrase about the record. */
+    seat_state?: SeatStateWord;
+    seat_state_source?: StateSource;
+    /** Present, true, only where it applies: `unknown` past the blind threshold, which counts
+     *  as not working (the table's `(blind)`). */
+    blind?: true;
     start_cwd?: string;
   }>;
   notes: string[];
@@ -242,7 +250,12 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const budgets = budgetTable(budgetsInForceOf(standing, team), recall(whole.budgets), now.getTime());
   const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
   const all = args.flags.has('all');
-  const registryRows = all ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, { project: team.project, root, home: sources.home }) : undefined;
+  // The registry rows carry each seat's own reading: `--all` renders them as the expanded
+  // table, and every `--json` document carries the reading on each row whether `--all` is
+  // there or not. Without either, nothing here is read.
+  const registryRows = all || args.flags.has('json')
+    ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, { project: team.project, root, home: sources.home })
+    : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
   // The one machine check this reading cannot pass — the same fact `doctor` reports as a finding,
   // as one note, in the reading's own words. `up`'s refusal on it is its own line, and nothing
@@ -290,7 +303,10 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       project: team.project,
       session,
       rows: comparison.rows.map((row) => {
-        const extra = registryByName?.get(row.name);
+        // The expanded columns stay `--all`'s: without it `extra` is undefined and every field
+        // the row published stands as it was. The reading below is every row's, `--all` or not.
+        const found = registryByName?.get(row.name);
+        const extra = all ? found : undefined;
         return {
           name: row.name,
           ...(extra ? { id: extra.id } : row.id ? { id: row.id } : {}),
@@ -300,6 +316,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
           ...(extra ? { effort: extra.effort, last_active: extra.last_active } : {}),
           pane: row.pane,
           ...(extra ? { launch_line: extra.launch_line } : {}),
+          ...(found ? { seat_state: found.state, seat_state_source: found.state_source } : {}),
+          ...(found?.blind ? { blind: true as const } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
         };
       }),

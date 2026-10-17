@@ -31,7 +31,10 @@ A seat no source has heard from past the blind threshold counts as not working, 
 in the status alike: the run adds the owner's difference `<seat>: unknown for over <threshold> —
 blind, and it counts as not working`, repaired with the owner's look at the pane, and
 [`team seats`](seats.md) prints the reading itself as `unknown (blind)` beside the source it was
-read from.
+read from. The `--json` documents carry the same reading on each row: `state` and `state_source`
+in [`team seats --json`](seats.md), and `seat_state` and `seat_state_source` in this command's —
+`state` here keeps the meaning it published, the comparison's phrase about the record — with
+`blind: true` on a row only where it applies.
 
 A process a seat recorded with `team proc add` shows too: one `note:` line per live record —
 `proc <name>: <by> since <at>`, with `, pid <n>` when one is recorded — printed after the other
@@ -49,7 +52,7 @@ such line. `--json` carries the same reading as a `procs` array, absent when the
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
 | `--project` | `<name>` | cover the project the name holds — its teams, read from the registry — instead of one team's reading; anyone may aim it, from any folder |
-| `--all` | — | render the expanded seat registry columns (`SEAT`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `STATE`, `SOURCE`, `LAST ACTIVE`, `PANE`); `--json` rows keep the shape they published, so `STATE` and `SOURCE` print in the table alone |
+| `--all` | — | render the expanded seat registry columns (`SEAT`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `STATE`, `SOURCE`, `LAST ACTIVE`, `PANE`); those expanded columns print in the table under `--all` alone, while every `--json` row carries the seat's own reading as `seat_state` and `seat_state_source` either way |
 | `--json` | — | the same reading as one JSON document instead of the table, the notes and the repairs |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -106,8 +109,8 @@ whole in a mode-0600 drop file and one short trigger line is typed into the pane
 cross-session socket, and `--wait`, which would ride one, is refused for every seat until the
 native leg carries a waited send — nothing written. The word
 is read from the processes the comparison already holds, so no extra herdr call is made; only the
-socket file itself is looked up on disk. `--json` rows keep the shape they published: the document
-carries no such word.
+socket file itself is looked up on disk. `--json` rows carry no such word: `reach` is the plain
+table's alone.
 
 ## Example
 

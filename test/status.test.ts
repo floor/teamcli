@@ -589,12 +589,15 @@ describe('team status', () => {
       'deepseek-acme: version unread (its screen doesn\'t show the model)',
       'deepseek-acme-2: version unread (its screen doesn\'t show the model)',
     ]);
+    // `state` stays the comparison's phrase about the record, byte for byte as it published;
+    // each row also carries the seat's own reading beside it, seat_state/seat_state_source —
+    // the table's STATE and SOURCE columns — and no `blind` key here: every row reads a word.
     expect(doc.rows).toEqual([
-      { name: 'claude-coordinator-acme', state: 'working', model: 'Claude Opus 5.5', pane: 'w1:p1' },
-      { name: 'codex-acme', state: 'idle (screen not recognised), parked', model: 'GPT-6 Sol (unread)', pane: 'w2:p1' },
-      { name: 'deepseek-acme', state: 'done (screen not recognised)', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w3:p1' },
-      { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w4:p1' },
-      { name: 'grok-acme', state: 'stopped', model: 'Grok 4.7', pane: '-' },
+      { name: 'claude-coordinator-acme', state: 'working', seat_state: 'idle', seat_state_source: 'cli', model: 'Claude Opus 5.5', pane: 'w1:p1' },
+      { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', model: 'GPT-6 Sol (unread)', pane: 'w2:p1' },
+      { name: 'deepseek-acme', state: 'done (screen not recognised)', seat_state: 'done', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w3:p1' },
+      { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', seat_state: 'idle', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w4:p1' },
+      { name: 'grok-acme', state: 'stopped', seat_state: 'done', seat_state_source: 'process', model: 'Grok 4.7', pane: '-' },
     ]);
   });
 
@@ -925,9 +928,13 @@ describe('a pane that no longer holds the process team launched', () => {
     );
     expect(out).toContain('1 difference(s), 1 for the owner\n');
     const doc = JSON.parse((await status('--json')).out);
+    // The comparison's own 'missing' is a certainty: the reading is done, from the process,
+    // even while herdr still lists the agent in the pane.
     expect(doc.rows.find((row: { name: string }) => row.name === 'codex-acme')).toEqual({
       name: 'codex-acme',
       state: 'missing',
+      seat_state: 'done',
+      seat_state_source: 'process',
       model: 'GPT-6 Sol',
       pane: 'w2:p1',
     });
@@ -970,9 +977,13 @@ describe('a pane that no longer holds the process team launched', () => {
     );
     expect(out).not.toContain('difference: codex-acme: the process in its pane is not the one team launched');
     const doc = JSON.parse((await status('--json')).out);
+    // A replaced pane is not the seat's process, but the word is not 'done': nothing ties the
+    // row to a launched process, so the reading is herdr's own idle word about the listed agent.
     expect(doc.rows.find((row: { name: string }) => row.name === 'codex-acme')).toEqual({
       name: 'codex-acme',
       state: 'restored, not launched by team',
+      seat_state: 'idle',
+      seat_state_source: 'herdr',
       model: '-',
       pane: 'w2:p1',
     });

@@ -211,14 +211,17 @@ line):
       "format": 1,
       "project": "beacon",
       "session": "beacon",
-      "rows": [{ "name": "claude-keeper", "state": "missing", "model": "Claude Opus 5.5", "pane": "-" }],
+      "rows": [{ "name": "claude-keeper", "state": "missing", "model": "Claude Opus 5.5", "pane": "-", "seat_state": "done", "seat_state_source": "process" }],
       "notes": [],
       "differences": [{ "what": "claude-keeper is in the file and is not running", "repair": "team add claude-keeper" }],
       "notice": null
     }
 
 `rows`, `notes` and `differences` hold what the table, the notes and the repairs hold; each seat in
-`rows` has `name`, `state`, `model`, `pane`, and, when recorded at workspace creation by a migrated launch,
+`rows` has `name`, `state` — the comparison's phrase about the record, the meaning it always
+published — `seat_state` and `seat_state_source` (the seat's own reading, the table's STATE and
+SOURCE columns, on every row whether `--all` is given or not, with `blind: true` only where it
+applies), `model`, `pane`, and, when recorded at workspace creation by a migrated launch,
 `start_cwd`. `notice` is the line a normal run prints above the table, or null when there is none. `budgets` is present only
 when the budgets table would be printed, one object per row (`account`, `window`, `left`, `used`,
 `resetsIn`, `seat`, `age`, `source`, `fallback`, `state`, `inside`, `reserve`). `inside` is true
@@ -370,13 +373,17 @@ team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's 
       "name": "claude-keeper",
       "state": "missing",
       "model": "Claude Opus 5.5",
-      "pane": "-"
+      "pane": "-",
+      "seat_state": "done",
+      "seat_state_source": "process"
     },
     {
       "name": "claude-beacon",
       "state": "working",
       "model": "Claude Opus 5.5",
-      "pane": "w1:p1"
+      "pane": "w1:p1",
+      "seat_state": "working",
+      "seat_state_source": "cli"
     }
   ],
   "notes": [],
