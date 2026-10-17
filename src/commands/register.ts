@@ -622,17 +622,37 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
           ? `${plainLine(name)}: ${ended}; the record ${dry ? 'would be' : 'was'} refreshed from the file, nothing relaunched`
           : `${plainLine(name)}: ${ended}; nothing was written`;
     if (json) {
-      writeJson(io, 'team.register', {
-        format: 1,
-        dry_run: dry,
-        status: 'already',
-        action_summary: line,
-        project: team.project,
-        session,
-        seat: name,
-        pane,
-        notes: jsonNotes,
-      });
+      if (dry) {
+        // A dry run's document is its plan whatever the real run would find, the already path
+        // included: its one step is the write it would make, and nothing is launched.
+        const detail = unlisted
+          ? `${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written`
+          : `${plainLine(name)}: ${ended}; the record was refreshed from the file, nothing relaunched`;
+        writeJson(io, 'team.register', {
+          format: 1,
+          dry_run: true,
+          status: 'dry-run',
+          action_summary: 'dry run: nothing was run',
+          project: team.project,
+          session,
+          seat: name,
+          pane,
+          plan: [{ step: 'register', seat: name, detail, prefix: '+' }],
+          notes: jsonNotes,
+        });
+      } else {
+        writeJson(io, 'team.register', {
+          format: 1,
+          dry_run: false,
+          status: 'already',
+          action_summary: line,
+          project: team.project,
+          session,
+          seat: name,
+          pane,
+          notes: jsonNotes,
+        });
+      }
     } else {
       out.stdout(`${line}\n`);
     }

@@ -4,7 +4,7 @@
 // herdr, a temporary home, a pinned caller, and an owner who reads the team file under trust.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runRegister, type RegisterSources } from '../../src/commands/register.ts';
@@ -159,6 +159,38 @@ describe('team register --json', () => {
     ]);
     expect(existsSync(join(w.dir, STATE_FILE))).toBe(false);
     expect(existsSync(join(w.dir, LOG_FILE))).toBe(false);
+  });
+
+  test('a dry run on an already-registered seat is still the dry-run document, never the already one', async () => {
+    const w = world();
+    const first = await register(w, ['lead']);
+    expect(first.code).toBe(0);
+    const before = readFileSync(join(w.dir, STATE_FILE), 'utf8');
+    const { code, io } = await register(w, ['lead', '--dry-run', '--json']);
+    expect(code, io.err).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{
+      dry_run: boolean;
+      status: string;
+      action_summary: string;
+      seat: string;
+      pane: string | null;
+      plan: { step: string; seat?: string | null; detail: string; prefix?: string }[];
+    }>(io.out, REGISTER_OUTPUT_SCHEMA);
+    // A dry run paints nothing for real, so its document is a plan whatever the real run would
+    // find — the already path included — and says so in the status and the summary.
+    expect(doc.dry_run).toBe(true);
+    expect(doc.status).toBe('dry-run');
+    expect(doc.action_summary).toBe('dry run: nothing was run');
+    expect(doc.seat).toBe('lead');
+    expect(doc.pane).toBe(PANE);
+    expect(doc.plan.length).toBe(1);
+    expect(doc.plan[0]!.step).toBe('register');
+    expect(doc.plan[0]!.seat).toBe('lead');
+    expect(doc.plan[0]!.prefix).toBe('+');
+    expect(doc.plan[0]!.detail.startsWith(`lead: already registered — pane ${PANE}`)).toBe(true);
+    // And the record the real first run wrote is left exactly as it stands.
+    expect(readFileSync(join(w.dir, STATE_FILE), 'utf8')).toBe(before);
   });
 
   test('a seat the file does not declare is the register.no-seat document', async () => {
