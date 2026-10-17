@@ -155,6 +155,18 @@ describe('team commits check follows the output contract', () => {
     });
   });
 
+  test('--json is read before the parser: a bad option, or --json=<value>, still writes the error document', async () => {
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const result = await run([...argv]);
+      expect(result.code).toBe(2);
+      expect(result.err).toBe('');
+      assertJsonErrorShape(result.out, { id: 'commits.invocation', messageContains, repair: null });
+    }
+  });
+
   test('--json: a git failure is the team.error document for its row', async () => {
     const folder = mkdtempSync(join(tmpdir(), 'team-commits-plain-'));
     try {

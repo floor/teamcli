@@ -8,7 +8,7 @@ import type { Problem, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { validLockName } from '../lock/machine.ts';
-import { contextLine, formatTable, refuse, writeJson } from '../output/index.ts';
+import { contextLine, formatTable, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { emptySession, liveProcs, pidAlive, pruneProcs, readState, updateState } from '../state.ts';
 
@@ -52,9 +52,9 @@ export async function runProc(argv: string[], io: Io, sources: ProcSources = rea
   // One parse for all three verbs — the command contract reads a single `readArgs` call — and
   // each verb refuses the flags that are not its own (below) rather than reading them silently.
   const args = readArgs(argv, ['pid', 'note'], ['json']);
-  // A bad option stops the parser before `--json` is read when it comes first, and the
-  // structured refusal is still the one the caller asked for.
-  const json = args.flags.has('json') || argv.includes('--json');
+  // Read from the raw argv before the parser runs: a bad option before `--json`, or a
+  // malformed `--json=<value>`, still asks for the structured refusal.
+  const json = hasJsonFlag(argv);
   if (args.error) return invocation(out, json, args.error);
   const verb = args.rest[0];
   const rest = args.rest.slice(1);

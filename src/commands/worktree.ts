@@ -11,7 +11,7 @@ import { launchedTeamFile } from '../file/launched-file.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
-import { contextLine, refuse, renderNotes, formatTable, writeJson } from '../output/index.ts';
+import { contextLine, formatTable, hasJsonFlag, refuse, renderNotes, writeJson } from '../output/index.ts';
 import { emptySession, readState, withLock, writeAtomic, STATE_FILE, type State } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { fillPattern, publicNameHit, realLanding, taskProblem } from '../worktree/place.ts';
@@ -48,9 +48,9 @@ export default worktree;
 
 export async function runWorktree(argv: string[], io: Io, sources: WorktreeSources = realSources): Promise<number> {
   const args = readArgs(argv, ['kind', 'seat', 'session', 'file', 'branch'], ['json']);
-  // A bad option stops the parser before `--json` is read when it comes first, and the
-  // structured refusal is still the one the caller asked for.
-  const json = args.flags.has('json') || argv.includes('--json');
+  // Read from the raw argv before the parser runs: a bad option before `--json`, or a
+  // malformed `--json=<value>`, still asks for the structured refusal.
+  const json = hasJsonFlag(argv);
   const sub = args.rest[0];
   const task = args.rest[1];
   if (args.error) {

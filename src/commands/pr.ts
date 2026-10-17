@@ -12,7 +12,7 @@ import { bodyDifferences, checkBody, formatBodyReport } from '../check/run.ts';
 import { LINK_NOT_FOLLOWED, NOT_A_REPO } from '../file/load.ts';
 import type { Problem } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
-import { refuse, whoOfDifference, writeJson } from '../output/index.ts';
+import { hasJsonFlag, refuse, whoOfDifference, writeJson } from '../output/index.ts';
 
 export const USAGE = `Usage: team pr check <file> [--file <path>] [--json]
 
@@ -57,7 +57,9 @@ function loadProblemId(errors: Problem[]): 'pr.not-a-repo' | 'pr.file' | 'pr.fil
 
 export async function pr(argv: string[], io: Io, load: LoadConfig = loadConfig): Promise<number> {
   const args = readArgs(argv, ['file'], ['json']);
-  const json = args.flags.has('json');
+  // Read from the raw argv before the parser runs: a bad option before `--json`, or a
+  // malformed `--json=<value>`, still asks for the structured refusal.
+  const json = hasJsonFlag(argv);
   const sub = args.rest[0];
   const fail = (message: string): number => {
     refuse(io, json, 'pr check', { id: 'pr.invocation', message, repair: null, usage: USAGE });

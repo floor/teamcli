@@ -211,4 +211,17 @@ describe('team tempo', () => {
     expect(bad.err).toBe('');
     assertJsonErrorShape(bad.out, { id: 'tempo.word', messageContains: 'must be relaxed, normal or urgent' });
   });
+
+  test('--json is read before the parser: a bad option, or --json=<value>, still writes the error document', async () => {
+    const where = place();
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const io = testIo(where.root, { kind: 'owner' });
+      expect(await runTempo([...argv], io, { home: where.home })).toBe(2);
+      expect(io.err).toBe('');
+      assertJsonErrorShape(io.out, { id: 'tempo.invocation', messageContains, repair: null });
+    }
+  });
 });

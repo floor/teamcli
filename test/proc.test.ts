@@ -202,6 +202,19 @@ describe('team proc add', () => {
     expect(bad.err).toBe('');
     assertJsonErrorShape(bad.out, { id: 'proc.invocation', messageContains: 'is a name, not a path' });
   });
+
+  test('--json is read before the parser: a bad option, or --json=<value>, still writes the error document', async () => {
+    const where = place();
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const io = owner(where);
+      expect(await runProc([...argv], io, sources(where))).toBe(2);
+      expect(io.err).toBe('');
+      assertJsonErrorShape(io.out, { id: 'proc.invocation', messageContains, repair: null });
+    }
+  });
 });
 
 describe('team proc list', () => {

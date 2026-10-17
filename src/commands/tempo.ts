@@ -5,7 +5,7 @@ import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
 import { TEMPOS, type Tempo } from '../file/sections/tempo.ts';
 import { writeTeamFile } from '../file/write.ts';
 import type { Command, Io } from '../io.ts';
-import { contextLine, refuse, writeJson } from '../output/index.ts';
+import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 
 export const USAGE = `Usage: team tempo <word> [--json]
 
@@ -24,9 +24,9 @@ export default tempo;
  */
 export async function runTempo(argv: string[], io: Io, sources: { home?: string } = {}): Promise<number> {
   const args = readArgs(argv, [], ['json']);
-  // A bad option stops the parser before `--json` is read when it comes first, and the
-  // structured refusal is still the one the caller asked for.
-  const json = args.flags.has('json') || argv.includes('--json');
+  // Read from the raw argv before the parser runs: a bad option before `--json`, or a
+  // malformed `--json=<value>`, still asks for the structured refusal.
+  const json = hasJsonFlag(argv);
   if (args.error || args.rest.length !== 1) {
     const extra = args.rest[1];
     const message = args.error ?? (extra !== undefined ? `unexpected "${extra}"` : 'a word is required');

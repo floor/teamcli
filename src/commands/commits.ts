@@ -13,7 +13,7 @@ import {
 import { LINK_NOT_FOLLOWED, NOT_A_REPO } from '../file/load.ts';
 import type { Problem } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
-import { refuse, whoOfDifference, writeJson } from '../output/index.ts';
+import { hasJsonFlag, refuse, whoOfDifference, writeJson } from '../output/index.ts';
 import { bodyRefused, bodyText } from './pr.ts';
 
 export const USAGE = `Usage: team commits check <ref> [--since <ref>] [--file <path>] [--json]
@@ -33,7 +33,6 @@ interface Arguments {
   ref: string;
   since?: string;
   file?: string;
-  json: boolean;
 }
 
 const VALUE_OPTIONS = ['since', 'file'] as const;
@@ -68,7 +67,7 @@ function parse(argv: string[]): Arguments | string {
   const ref = args.rest[1];
   if (ref === undefined) return 'a <ref> is required';
   if (args.rest.length > 2) return 'one <ref> at most';
-  return { ref, ...args.values, json: flags.has('json') };
+  return { ref, ...args.values };
 }
 
 /** What a run needs after the arguments are read. `pr` is the path as typed, not its text: the
@@ -206,9 +205,12 @@ export async function runCommits(io: Io, load: LoadConfig, options: CommitsRun):
 }
 
 export async function commits(argv: string[], io: Io, load: LoadConfig = loadConfig): Promise<number> {
+  // Read from the raw argv before the parser runs: a bad option before `--json`, or a
+  // malformed `--json=<value>`, still asks for the structured refusal.
+  const json = hasJsonFlag(argv);
   const args = parse(argv);
   if (typeof args === 'string') {
-    refuse(io, argv.includes('--json'), 'commits check', {
+    refuse(io, json, 'commits check', {
       id: 'commits.invocation',
       message: args,
       repair: null,
@@ -217,7 +219,7 @@ export async function commits(argv: string[], io: Io, load: LoadConfig = loadCon
     // exit: commits.invocation
     return 2;
   }
-  return runCommits(io, load, args);
+  return runCommits(io, load, { ...args, json });
 }
 
 const command: Command = (argv, io) => commits(argv, io);
