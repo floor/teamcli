@@ -340,12 +340,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
   }));
   // --wait needs the socket frame, and only a Claude Code seat has that listener. Any other
-  // seat is refused before a write. A Claude Code --wait run is refused as well when the order
-  // does not lead with the native leg — the frame the reply listener stands beside is that leg —
-  // and while SOCKET_SEND is off (deliverSocket names that refusal). A dry run prints a refusal
-  // the same way wherever the real run would refuse, and names the channel otherwise, since
-  // nothing is written either way.
-  if (wait && to.cli !== 'claude-code' && !dry) {
+  // seat is refused before a write, a dry run included: the refusal is unconditional and stands
+  // whether or not anything would be written, so the dry run reports the real run's refusal and
+  // its exit rather than a channel the run could never walk. A Claude Code --wait run is refused
+  // as well when the order does not lead with the native leg — the frame the reply listener
+  // stands beside is that leg — and while SOCKET_SEND is off (deliverSocket names that refusal);
+  // those print a `dry-run:` line in a dry run, since nothing is written either way.
+  if (wait && to.cli !== 'claude-code') {
     return refuse(io, dir, who, `${to.seat} runs ${to.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`, host, report);
   }
   if (wait && to.cli === 'claude-code') {
