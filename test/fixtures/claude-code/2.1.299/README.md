@@ -15,3 +15,10 @@ in a scratch session created for the purpose and stopped afterwards. `claude --v
 - `permission.txt`: `claude --permission-mode manual`. `Do you want to create synthetic-note.txt?`
   with `1. Yes` and `Esc to cancel · Tab to amend`. Escape dismissed it; the file was not created.
 - `exit.txt`: after `/exit`. `Resume this session with:`.
+
+## Not produced
+
+- `unsent`: not produced, the installed binary 2.1.302 is newer than this folder's 2.1.299,
+  so a 2.1.299 composer screen cannot be launched on this machine without downgrading. The
+  capture waits for a refresh to the installed version, in a new version folder with its own
+  `tested.to` bump.
