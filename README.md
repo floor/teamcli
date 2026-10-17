@@ -18,9 +18,37 @@ The project's name is TeamCLI; the package and the command are `team`. The site 
 [teamcli.io](https://teamcli.io), and the founding text is
 [RFC 000](https://github.com/floor/teamcli/discussions/147).
 
-**Status: early, herdr only.** This build parses and
-validates the file, checks who is calling, and holds `add`, `answer`, `approve`, `check`, `doctor`,
-`down`, `init`, `list`, `release`, `remove`, `status`, `up`, `watch` and `worktree`.
+**Status: early, herdr only.** This build parses and validates the file, checks who is calling,
+and holds every command `team --help` lists — from `team init`, `team up` and `team status` to
+`team send`, `team seats`, `team register`, `team grant` and the work queue (`team issues`,
+`team next`, `team plan`).
+
+## What's new in 0.5.0
+
+The first release since 0.3.5, and the first to ship on npm since it. The full list is in
+[CHANGELOG.md](CHANGELOG.md).
+
+- **A registry, and `team register`.** The machine records the agents, teams and projects it has
+  seen, and a seat that is already running is written in — without a relaunch — so `team send`,
+  `team seats`, `team watch` and `team down` can address it.
+- **`team send`, and the channel it takes.** A plain send gives the seat the body in a drop file
+  and one trigger line; `--wait` to a Claude Code seat takes its cross-session socket and brings
+  the reply back. Every run ends in one word — `delivered`, `answered`, `held`, `not-submitted`,
+  `timeout`, `unreachable` or `refused` — and the history `team feed` reads keeps the
+  milliseconds and the path. A seat its file marks `assistant: true` — one per file, never a seat
+  with `count` — is its entity's assistant: the routing admits it to the entity's main
+  coordinator, by its place in the chain and never by a role's name.
+- **Projects.** A team names the project it sits in; `team projects` lists them, and
+  `team status --project <name>` covers one project's teams.
+- **Seat state, live.** `team seats` gives each seat a STATE and the SOURCE it was read from, a
+  blind seat is called blind, and the pane's sidebar lines are the file's own text.
+- **Grants and delegates, the owner's alone.** `team grant` records what a seat or a team may do
+  — the team file's one grant by `--scope`, or a signed standing record by `--capabilities` — and
+  `team delegate` records a pane outside the team; `team revoke` takes any of them back.
+- **`team approve` is gone.** The file in the clone is the record, and `team up` admits from it.
+- **`team check` is integrity, not authority.** It reads and reports — the differences, each with
+  its repair — and grants nothing: a clean answer approves no change, starts no seat and gives no
+  right.
 
 ## Install
 
