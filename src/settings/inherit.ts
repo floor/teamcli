@@ -193,3 +193,101 @@ export function stateThresholds(declared: Partial<Record<SettingLevel, Partial<S
     blind_after_seconds: resolveNumberSetting(STATE_THRESHOLDS.blind_after_seconds, said('blind_after_seconds')).value,
   };
 }
+
+/**
+ * An order setting: a list of legs, declared once per feature with the order in force when no
+ * level declares one. There is no permissive side here — a level below the one that set the order
+ * may always drop a leg from it or put the legs it keeps in a different order, and may never add
+ * one: a word naming a leg the order in force does not have — or naming one twice — is set aside
+ * and the order in force stands. A word equal to the order in force is no word at all.
+ */
+export type OrderSettingSpec<L extends string> = {
+  /** The name the setting is written under, for reports. */
+  name: string;
+  /** The order when nothing declares it. */
+  fallback: readonly L[];
+};
+
+/** One level's word on an order setting: the level that holds it, and the order it declares. */
+export type OrderDeclaration<L extends string = string> = { level: SettingLevel; value: readonly L[] };
+
+export type OrderResolution<L extends string = string> = {
+  value: readonly L[];
+  source: SettingLevel | null;
+  refused: OrderDeclaration<L>[];
+};
+
+/** Whether every leg of `word` is a leg of `order`, each at most once: the one form a word on an
+ *  order setting may take. */
+function dropsOrReorders<L extends string>(word: readonly L[], order: readonly L[]): boolean {
+  const seen = new Set<L>();
+  for (const leg of word) {
+    if (seen.has(leg) || !order.includes(leg)) return false;
+    seen.add(leg);
+  }
+  return true;
+}
+
+function sameOrder<L extends string>(left: readonly L[], right: readonly L[]): boolean {
+  return left.length === right.length && left.every((leg, at) => leg === right[at]);
+}
+
+/**
+ * The inheritance itself, order-valued: levels are read outermost first, and within a level the
+ * last word wins. A word that drops or reorders the order in force is honoured; one that names a
+ * leg the order in force does not have is set aside and the order stands. A word equal to the
+ * order in force is no word at all — the order it keeps may be declared at every level.
+ */
+export function resolveOrderSetting<L extends string>(spec: OrderSettingSpec<L>, declared: readonly OrderDeclaration<L>[]): OrderResolution<L> {
+  let value = spec.fallback;
+  let source: SettingLevel | null = null;
+  const refused: OrderDeclaration<L>[] = [];
+  for (const level of SETTING_LEVELS) {
+    for (const declaration of declared) {
+      if (declaration.level !== level || sameOrder(declaration.value, value)) continue;
+      if (!dropsOrReorders(declaration.value, value)) {
+        refused.push(declaration);
+        continue;
+      }
+      value = declaration.value;
+      source = level;
+    }
+  }
+  return { value, source, refused };
+}
+
+/** The declarations a chain of per-level orders holds, in inheritance order; a level the chain
+ *  says nothing about is left out, and so is a level given `undefined`. */
+export function orderDeclarationsOf<L extends string>(declared: Partial<Record<SettingLevel, readonly L[] | undefined>>): OrderDeclaration<L>[] {
+  const out: OrderDeclaration<L>[] = [];
+  for (const level of SETTING_LEVELS) {
+    const value = declared[level];
+    if (value !== undefined) out.push({ level, value });
+  }
+  return out;
+}
+
+/**
+ * The legs a send may walk, in the words the delivery order is written in: `native`, the frame on
+ * the receiving seat's cross-session socket; `mcp-inbox`, the seat's own MCP inbox; `typed`, the
+ * 0600 drop file and one composer trigger line.
+ */
+export type DeliveryLeg = 'native' | 'mcp-inbox' | 'typed';
+
+export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'typed'];
+
+/**
+ * The order a send walks when no level of the receiving seat's chain declares one: native, then
+ * mcp-inbox, then typed. mcp-inbox is not in this build: a walk that reaches it skips the leg and
+ * records it unavailable. The chain is the receiving seat's own — entity, project, team, seat —
+ * because the order says how that seat's messages may travel.
+ */
+export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
+  name: 'delivery_order',
+  fallback: DELIVERY_LEGS,
+};
+
+/** The one call a send makes: the receiving seat's chain in, the order its delivery walks out. */
+export function deliveryOrder(declared: Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>): readonly DeliveryLeg[] {
+  return resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf(declared)).value;
+}

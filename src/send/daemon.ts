@@ -95,6 +95,10 @@ export type DaemonSendRequest = {
   body: string;
   wait?: boolean;
   timeout_s?: number;
+  /** The legs the caller's walk already tried and could not take the send, each `<leg>:
+   *  <reason>`: the daemon writes the history line this send ends in, and the failures travel
+   *  with it. Absent when the walk had none. */
+  failed?: string[];
 };
 
 export type DaemonRequest =
@@ -805,6 +809,7 @@ async function executeQueuedSend(
       id: msgId,
       outcome: 'unreachable',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason };
   }
@@ -821,6 +826,7 @@ async function executeQueuedSend(
       id: msgId,
       outcome: 'unreachable',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
   }
@@ -876,6 +882,7 @@ async function executeQueuedSend(
       id: msgId,
       outcome: 'held',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     };
     // The path is named only once the trigger had been typed, never for a refusal before it.
     if (via !== undefined) entry.via = via;
@@ -892,6 +899,7 @@ async function executeQueuedSend(
       id: msgId,
       outcome: 'unreachable',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     };
     // The path is named only once the trigger had been typed, never for a refusal before it.
     if (via !== undefined) entry.via = via;
@@ -978,6 +986,7 @@ async function executeQueuedSend(
         outcome: 'not-submitted',
         ms: Date.now() - startedAt,
         via: 'typed',
+        failed: request.failed,
       });
       return {
         v: 1,
@@ -1009,6 +1018,7 @@ async function executeQueuedSend(
       outcome: 'delivered',
       ms: Date.now() - startedAt,
       via: 'typed',
+      failed: request.failed,
     });
     return {
       v: 1,

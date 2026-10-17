@@ -2,11 +2,19 @@
 
 Writes one message to one seat. A plain send writes the body whole to a drop file, mode 0600,
 by renaming a temporary file into place, and types one short trigger line that names that file.
-The body is never typed, and it is never split across several writes. That is the channel for
-every seat, Claude Code's included: a socket write to a busy session can land at its held-message
-dialog, where the box is blocked, so this build opens no cross-session socket at all — the plain
-send is the typed trigger, and `--wait`, which would ride that socket, is refused until the
-native leg ships. `delivered` means herdr reported the seat `working` — or `done` or `blocked`, and not
+The body is never typed, and it is never split across several writes. The receiving seat's
+delivery order decides the channel: `native`, `mcp-inbox`, then `typed` when no level of the
+seat's chain declares one. Each leg in turn either takes the send, which ends the walk, or
+definitely cannot take it, which hands the send to the next leg and is recorded as a failure —
+the history line names the channel the send went by and the legs that failed before it. The
+typed leg is terminal: the drop file and one trigger line, the only channel a send of this build
+can go by. A level of the receiving seat's own chain — entity, project, team, seat — may drop legs
+from the order or put the legs it keeps in a different order, and may never add one: a word
+naming a leg the order does not have, or naming one twice, is set aside and the order in force
+stands. This build carries no `mcp-inbox` leg and makes no socket write — a frame can land at a
+busy session's held-message dialog, where the box is blocked — so a walk that keeps `mcp-inbox`
+records it `unavailable`, and a Claude Code seat's walk records its `native` leg the same way.
+`--wait`, which rides that frame, is refused until the native leg ships. `delivered` means herdr reported the seat `working` — or `done` or `blocked`, and not
 the status read before Enter — after that one line and Enter, or the transcript shows the drop
 being read (a CLI's status can lag while it works), the line had left the seat's input box, and
 the pane was not a dialog this command already classifies: question, permission, trust, vendor notice, provider error, or
@@ -25,7 +33,14 @@ asked from — the CLI, or an older caller asking the send daemon for one:
 
     claude-keeper: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent
 
-`--wait` to any other seat is refused too, with that seat's own reason, and nothing is written; a
+A waited send also needs the native leg first in the seat's delivery order — the frame the reply
+listener stands beside is that leg — so a `--wait` whose order leads elsewhere is refused too,
+naming the order in force:
+
+    claude-keeper: --wait needs the native leg first, and its delivery order is typed; nothing was sent
+
+`--wait` to any other seat is refused as well, with that seat's own reason, and nothing is
+written; a
 dry run of either prints the refusal without writing anything, except that a native seat's
 `--wait --dry-run` names the drop channel instead, since neither run writes.
 
@@ -72,8 +87,10 @@ usage error. `--timeout` is a whole number of seconds, 1 to 86,400, and is only 
 never read. `--json` prints one result document instead of
 the lines — `{seat, status, exit, reply?, error?, ids}` — where `ids.sent` is the id of the
 message this command composed and `ids.reply` the reply frame's own, when there is one.
-`--dry-run` resolves the seat and names the channel the run would take — a drop file and one
-trigger line for a plain send; a waited Claude Code send is named as the refusal it is. It
+`--dry-run` resolves the seat and names the channel its walk would take — the first leg this
+build can actually walk, none it cannot — a drop file and one trigger line for every plain send
+of this build, since the socket write is skipped; a waited Claude Code send is named as the
+refusal it is, and a waited send whose order leads elsewhere as that refusal. It
 writes no drop file and types nothing; it appends one line to
 `.agents/team.log`.
 
@@ -110,7 +127,11 @@ send's write, so a launch of the same seat cannot act beside it and two sends ca
 one pane at once; a refused waited send holds nothing, because it returns before the lock. It
 writes one line to `.agents/team.log` — a refusal writes its own line there — and appends the
 message's body to the project's message history
-([team feed](feed.md)) when a send completes. The daily log keeps the seat and the size; the
+([team feed](feed.md)) when a send completes. The history line names the channel the send went by,
+when one took it (`via`), and the legs of the walk that definitely could not take it (`failed`,
+each as `<leg>: <reason>` — `native` and `mcp-inbox` are recorded `unavailable` there in this
+build). The daily log keeps the
+seat and the size; the
 history keeps the message.
 
 ## Who may send to whom
@@ -244,11 +265,13 @@ for nothing: only the transcript can show that seat took this line. An unverifie
 `unreachable` is the seat not reached: no live agent of that name, a screen that is one of the
 dialogs listed above, no socket file for a waited Claude Code seat, a connection that would not
 take that frame, or a pane that would not take the trigger — the socket reasons return with the
-leg. `timeout`
+leg — and a walk that ran out of legs is unreachable too, printing `no leg of its delivery order
+took the send` with the legs that failed. `timeout`
 is a waited frame written on the socket and no reply inside the window. `refused` is nothing
 being sent on purpose: an unknown seat (the file's seats are named), any `--wait` — the native
-leg's absence for a Claude Code seat, and the same absence, with that seat's own reason, for
-every other — a frame over the socket limit, a trigger longer than the measured line, a
+leg's absence for a Claude Code seat, the same absence, with that seat's own reason, for
+every other, and a delivery order that does not lead with the native leg — a frame over the
+socket limit, a trigger longer than the measured line, a
 reply listener that could not be opened, a lock another command holds, or a caller that may not
 send.
 
