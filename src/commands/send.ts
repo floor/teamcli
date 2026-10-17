@@ -1180,10 +1180,10 @@ function recordFor(home: string, session: string, seat: string): Agent | null {
 
 /** The admission records a send is judged against: every registered team — so a target in another
  *  team is judged by that team's own record — and, over it, this run's team from the live file,
- *  which is the seed the registry projects. The file's project, entity and lead, with the roster
- *  the store holds for that team and the file's own seats behind it; a file seat the file names as
- *  its coordinator carries the `leads` capability there, so the project rules read the file's own
- *  lead off the line the file declares it on. */
+ *  which is the seed the registry projects. The file's project, entity, lead and operator, with
+ *  the roster the store holds for that team and the file's own seats behind it; a file seat the
+ *  file names as its coordinator carries the `leads` capability there, so the project rules read
+ *  the file's own lead off the line the file declares it on. */
 function admitRecordsOf(home: string, team: TeamFile, teamId: string): AdmitTeams {
   // The file's own assistant, by the place the file gives it: the capability rides the seat's
   // line, whether the line comes from the registry or from the file's seats below it.
@@ -1206,7 +1206,7 @@ function admitRecordsOf(home: string, team: TeamFile, teamId: string): AdmitTeam
   }
   return {
     ...readTeams(home),
-    [teamId]: { project: team.project, entity: team.entity, orchestrator: team.orchestrator, roster },
+    [teamId]: { project: team.project, entity: team.entity, orchestrator: team.orchestrator, operator: team.operator, roster },
   };
 }
 
