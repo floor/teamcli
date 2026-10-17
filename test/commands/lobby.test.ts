@@ -1054,7 +1054,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-01', cwd: lobby });
   });
 
   test('up and add pass a lobby whose .claude holds only the lock, plus a readme and a notes folder', async () => {
@@ -1074,7 +1074,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-01', cwd: lobby });
   });
 
   test('up and add refuse CLAUDE.md when each is about to start a seat in the lobby', async () => {
@@ -1258,7 +1258,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-01', cwd: lobby });
   });
 });
 
@@ -1971,7 +1971,7 @@ describe('legacy files and migration', () => {
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
     const added = made.workspaces.slice(before);
-    expect(added).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
+    expect(added).toContainEqual({ label: 'worker-tmp-01', cwd: lobby });
   });
 
   test('add refuses when trust has no lobby and leaves file untouched', async () => {
@@ -3212,7 +3212,7 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     const before = made.workspaces.length;
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made, { home: homeLink });
     expect(addRun.code).toBe(0);
-    expect(made.workspaces.slice(before)).toContainEqual({ label: 'worker-tmp-1', cwd: canonical });
+    expect(made.workspaces.slice(before)).toContainEqual({ label: 'worker-tmp-01', cwd: canonical });
   });
 
   test('an existing lobby with a looser mode is refused, never repaired', () => {
