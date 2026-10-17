@@ -253,6 +253,34 @@ describe('team add', () => {
     expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toBe(clashing);
   });
 
+  test('refuses a new seat named lead, and points the lead address at the team\'s lead', async () => {
+    // The fixture's lead seat is named by `team init`'s default, so `lead` is a name the file
+    // does not declare: exactly the new name the reservation binds.
+    const text = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
+    approve(
+      text
+        .replace('coordinator: lead\n', 'coordinator: orchestrator\n')
+        .replace('operator: lead\n', 'operator: orchestrator\n')
+        .replace('    name: lead\n    label: lead\n', '    name: orchestrator\n    label: orchestrator\n'),
+    );
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['lead'], io, sources(made))).toBe(2);
+    expect(io.err).toContain(
+      'team add: "lead" is reserved: lead@<team> addresses the team\'s lead, so no new seat takes it as a name\nUsage: team add <name>',
+    );
+    expect(made.creates).toEqual([]);
+  });
+
+  test('a legacy file that declares a seat named lead still starts it: the reservation binds new names', async () => {
+    // The fixture's coordinator is literally named `lead`, as files written before 0.5.0 may
+    // be: it loads, and re-adding it is a restart, never a new name.
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['lead'], io, sources(made))).toBe(0);
+    expect(io.err).not.toContain('is reserved');
+  });
+
   test('the next temporary number is two digits by default and numeric past 9', async () => {
     const made = world();
     const io = testIo(project, owner);

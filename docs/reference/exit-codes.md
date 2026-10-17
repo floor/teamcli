@@ -60,6 +60,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.model` | `add` | 2 | the --model override is not known for the seat's CLI | `team add worker --model unknown` |
 | `add.not-a-repo` | `add` | 2 | not inside a git repository | `team add worker` |
 | `add.prepared` | `add` | 2 | the prepared edit does not validate | `team add worker` |
+| `add.reserved-name` | `add` | 2 | a new seat may not be named lead | `team add lead` |
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
 | `add.temporary-flags` | `add` | 2 | --like, --until and --worktree need --temporary | `team add worker --like lead` |
 | `add.temporary-unexpected` | `add` | 2 | an unexpected argument was passed to --temporary | `team add extra --temporary` |

@@ -382,6 +382,13 @@
     {
       "code": 2,
       "command": "add",
+      "id": "add.reserved-name",
+      "meaning": "a new seat may not be named lead",
+      "trigger": "team add lead"
+    },
+    {
+      "code": 2,
+      "command": "add",
       "id": "add.seat-name",
       "meaning": "a seat name is required",
       "trigger": "team add"

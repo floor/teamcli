@@ -469,12 +469,13 @@
           },
           "name": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "$comment": "a seat named \"lead\" still loads: lead@<team> always addresses the seat holding leads, and team check notes the name"
           },
           "nickname": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-            "$comment": "a human name for this seat: unique in its team and never another seat's name; a send addresses it bare in its own team or as <nickname>@<team>, and it confers nothing — the role keeps the grants"
+            "pattern": "^(?!lead$)[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "$comment": "a human name for this seat: unique in its team and never another seat's name, and \"lead\" is reserved for the team's lead address; a send addresses it bare in its own team, as @<nickname>, or as <nickname>@<team>, and it confers nothing — the role keeps the grants"
           },
           "cli": {
             "enum": [

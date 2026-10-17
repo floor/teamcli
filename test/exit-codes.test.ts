@@ -569,6 +569,17 @@ function invalid(place: Place): void {
 
 scene('add.invocation', async (place) => show(await added(place, ['--nope'], owner, addSources(place)), 'unknown option'));
 scene('add.seat-name', async (place) => show(await added(place, [], owner, addSources(place)), 'a seat name is required'));
+scene('add.reserved-name', async (place) => {
+  // The file names its lead the way `team init` writes it, so `lead` would be a new name; a
+  // legacy file that already declares the seat starts it instead (the add tests hold that half).
+  write(
+    place,
+    TWO.replace('coordinator: lead\n', 'coordinator: orchestrator\n')
+      .replace('operator: lead\n', 'operator: orchestrator\n')
+      .replace('    name: lead\n    label: lead\n', '    name: orchestrator\n    label: orchestrator\n'),
+  );
+  return show(await added(place, ['lead'], owner, addSources(place)), '"lead" is reserved');
+});
 scene('add.temporary-unexpected', async (place) => show(await added(place, ['extra', '--temporary'], owner, addSources(place)), 'unexpected'));
 scene('add.temporary-flags', async (place) => show(await added(place, ['worker', '--like', 'lead'], owner, addSources(place)), '--like, --until and --worktree'));
 scene('add.not-a-repo', async (place) => show(await added(place, ['worker'], owner, addSources(place)), 'not inside a git repository'), false);

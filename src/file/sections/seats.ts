@@ -22,6 +22,11 @@ export type DraftSeat = Omit<Seat, 'mode'> & { mode?: Mode };
  *  there is no second, looser one. */
 export const SEAT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** The send grammar's team-lead address: `lead@<team>` names the seat its file marks `leads`,
+ *  so no new seat or nickname takes the name (src/send/resolve.ts). A seat already named `lead`
+ *  keeps loading — the address never means it — and `team check` notes the name. */
+export const LEAD_NAME = 'lead';
+
 export const seats: Section = {
   name: 'seats',
   owner: false,
@@ -42,11 +47,11 @@ export const seats: Section = {
       additionalProperties: false,
       properties: {
         role: { type: 'string', minLength: 1 },
-        name: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$' },
+        name: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$', $comment: 'a seat named "lead" still loads: lead@<team> always addresses the seat holding leads, and team check notes the name' },
         nickname: {
           type: 'string',
-          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$',
-          $comment: 'a human name for this seat: unique in its team and never another seat\'s name; a send addresses it bare in its own team or as <nickname>@<team>, and it confers nothing — the role keeps the grants',
+          pattern: '^(?!lead$)[A-Za-z0-9][A-Za-z0-9._-]*$',
+          $comment: 'a human name for this seat: unique in its team and never another seat\'s name, and "lead" is reserved for the team\'s lead address; a send addresses it bare in its own team, as @<nickname>, or as <nickname>@<team>, and it confers nothing — the role keeps the grants',
         },
         cli: { enum: CLIS },
         vendor: { type: 'string', minLength: 1 },
@@ -132,6 +137,10 @@ function readSeats(
     if (name && !SEAT_NAME.test(name)) {
       check.fail(fields.get('name')?.line ?? line, `${at}: the name takes letters, digits, ".", "_" and "-"`);
     }
+    // `lead` is the send grammar's team-lead address (`lead@<team>`, src/send/resolve.ts). A seat
+    // already named `lead` is legacy and keeps loading — the address still means the seat holding
+    // `leads`, and `team check` notes a `lead` seat that holds them not — but no nickname may take
+    // the name, and `team add` and `team rename` refuse it: the reservation binds new names only.
     // The human name for this seat (OD-20261017-15). It confers nothing — the role keeps the
     // grants — and it is a field of the built seat like every other, so it is in the digest and
     // omitted when the file omits the key. The same rule as the name, because a send addresses
@@ -140,6 +149,10 @@ function readSeats(
     let nickname = check.text(nicknameEntry, `${at}: nickname`);
     if (nickname !== undefined && !SEAT_NAME.test(nickname)) {
       check.fail(nicknameEntry?.value.line ?? line, `${at}: the nickname takes letters, digits, ".", "_" and "-"`);
+      nickname = undefined;
+    }
+    if (nickname === LEAD_NAME) {
+      check.fail(nicknameEntry?.value.line ?? line, `${at}: "lead" is reserved: lead@<team> addresses the team's lead, so no nickname takes it`);
       nickname = undefined;
     }
     if (!fields.get('cli')) check.fail(line, `${at}: cli is required`);
@@ -406,6 +419,9 @@ export function nicknameProblem(
   nickname: string,
   own: string,
 ): { line: number; message: string } | null {
+  if (nickname === LEAD_NAME) {
+    return { line: 0, message: '"lead" is reserved: lead@<team> addresses the team\'s lead, so no new name or nickname takes it' };
+  }
   for (const other of seats) {
     if (other.name === own) continue;
     if (other.nickname === nickname) {

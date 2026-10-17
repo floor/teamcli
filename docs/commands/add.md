@@ -166,6 +166,7 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 | --- | --- |
 | `team add: unknown option --x` / `team add: a seat name is required` / `team add: --like needs a value` (each with the usage) | 2 |
 | `team add: --like, --until and --worktree are for --temporary` | 2 |
+| `team add: "lead" is reserved: lead@<team> addresses the team's lead, so no new seat takes it as a name` — the file declares no seat of the name; a file written before 0.5.0 that already declares one still starts it | 2 |
 | `team add: line <n>: <message>` / `team add: <message>` | 2 |
 | `team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is <caller>` | 1 |
 | ``team add: delegation needs a verified approval: <reason>`` — the delegate gate. A fingerprint difference is not a refusal; the live file names the delegate | 1 |

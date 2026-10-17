@@ -26,7 +26,7 @@ import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel, validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
@@ -270,6 +270,17 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 2;
   }
   const { team, root, path } = loaded;
+  // The send grammar's team-lead address is `lead@<team>` (src/send/resolve.ts), so the word may
+  // not become a new seat's name. A file written before 0.5.0 may already declare a seat of that
+  // name: it keeps loading, `lead@<team>` still addresses the seat holding `leads`, and this
+  // command may still start it — the reservation binds only a name that would be new, and a new
+  // name it refuses is one the file does not declare (the file's own load refuses a new nickname
+  // of the word, src/file/sections/seats.ts).
+  if (!temporary && args.rest[0] === LEAD_NAME && !team.seats.some((seat) => seat.name === LEAD_NAME)) {
+    out.stderr(`team add: "${LEAD_NAME}" is reserved: lead@<team> addresses the team's lead, so no new seat takes it as a name\n${USAGE}`);
+    // exit: add.reserved-name
+    return 2;
+  }
   // The create-grant, decided on the loaded root: the team this run would change must be under
   // the granted paths. The early detached sentence above stands alone: no record admits a
   // caller with no terminal.
