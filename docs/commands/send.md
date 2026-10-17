@@ -243,6 +243,10 @@ line on stderr and has none.
 | usage | 2 | `team send: <message>` and the usage on stderr |
 | configuration | 2 | `team send: <message>` on stderr |
 
+A running watch retries a `held`, `not-submitted` or dialog-stopped send once the seat is idle,
+up to three tries in thirty minutes; the line the send printed tells the sender so, and a retry
+that stops says where the message is.
+
 Under `--json` the same outcomes are one document: the action surface for a send, the roster
 document for `--list`, and the structured error document for an exit 1 or 2 — `error.id` is the
 outcome's own (`send.refused`, `send.not-submitted`, …), `error.message` the text the plain run
