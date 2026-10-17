@@ -56,7 +56,9 @@ export const realSeatsSources: SeatsSources = {
   branch: (path) => realStatusSources.branch(path),
   standing: (root) => realStatusSources.standing(root),
   now: () => realStatusSources.now(),
-  home: realStatusSources.home,
+  get home() {
+    return realStatusSources.home;
+  },
   wait: waitOrStop,
 };
 

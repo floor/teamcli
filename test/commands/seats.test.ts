@@ -3,11 +3,12 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { verifiedOf } from '../../src/approve/approval.ts';
 import { main } from '../../src/cli.ts';
 import { activeSeatsOf, formatActiveSeats, runList, type ListSeatsRow, type ListSources } from '../../src/commands/list.ts';
-import { formatRelativeTime, runSeats, USAGE, type SeatsJson, type SeatsSources } from '../../src/commands/seats.ts';
-import { runStatus, type StatusJson, type StatusSources } from '../../src/commands/status.ts';
+import { formatRelativeTime, realSeatsSources, runSeats, USAGE, type SeatsJson, type SeatsSources } from '../../src/commands/seats.ts';
+import { realSources as realStatusSources, runStatus, type StatusJson, type StatusSources } from '../../src/commands/status.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { SEATS_OUTPUT_SCHEMA } from '../../src/output/index.ts';
@@ -625,5 +626,15 @@ describe('team list --watch and --seats', () => {
       roster: [],
     });
   });
+
+  test('realSeatsSources.home forwards realStatusSources.home without import-cycle TDZ on status --help or watch --help', () => {
+    expect(realSeatsSources.home).toBe(realStatusSources.home);
+    const cliEntry = fileURLToPath(new URL('../../src/cli.ts', import.meta.url));
+    for (const name of ['status', 'watch']) {
+      const out = execFileSync(process.execPath, [cliEntry, name, '--help'], { encoding: 'utf8' });
+      expect(out).toMatch(new RegExp(`^Usage: team ${name}\\b`));
+    }
+  });
 });
+
 
