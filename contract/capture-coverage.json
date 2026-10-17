@@ -1224,10 +1224,10 @@
   },
   "notProduced": {
     "antigravity": {
-      "unsent": "the installed binary 1"
+      "unsent": "the installed binary 1.4.0 is newer than this folder's 1.3.5"
     },
     "claude-code": {
-      "unsent": "the installed binary 2"
+      "unsent": "the installed binary 2.1.302 is newer than this folder's 2.1.299"
     },
     "codex": {
       "question": "Codex has no interactive question widget in unattended or   default mode"
@@ -1235,7 +1235,7 @@
     "cursor": {},
     "gemini": {},
     "grok": {
-      "unsent": "the installed binary 1",
+      "unsent": "the installed binary 1.0.60 is newer than this folder's 1.0.52",
       "trust": "a fresh directory showed no trust dialog on this CLI"
     },
     "muse": {
