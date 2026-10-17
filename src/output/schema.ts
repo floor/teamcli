@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
-import { DIFFERENCE_WHO_VALUES } from './text.ts';
+import { DIFFERENCE_WHO_VALUES, SEVERITY_LEVELS } from './text.ts';
 
 export interface CommandSchemaSpec {
   /** Schema identifier, e.g. `'team.status'` or `'team.error'`. */
@@ -377,10 +377,48 @@ export const PROJECTS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team doctor` (`schema/doctor.schema.json`). */
+export const DOCTOR_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.doctor',
+  fileName: 'doctor.schema.json',
+  title: 'team doctor --json output',
+  required: ['format', 'project', 'session', 'findings', 'summary'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    login_only: { type: 'boolean' },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['level', 'text', 'blocks_launch'],
+        properties: {
+          level: { type: 'string', enum: [...SEVERITY_LEVELS] },
+          text: { type: 'string', minLength: 1 },
+          blocks_launch: { type: 'boolean' },
+        },
+      },
+    },
+    summary: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['missing', 'warnings', 'blockers'],
+      properties: {
+        missing: { type: 'integer', minimum: 0 },
+        warnings: { type: 'integer', minimum: 0 },
+        blockers: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
   SEATS_OUTPUT_SCHEMA,
   PROJECTS_OUTPUT_SCHEMA,
+  DOCTOR_OUTPUT_SCHEMA,
 ];

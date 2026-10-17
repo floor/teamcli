@@ -8,7 +8,7 @@ them are done; the last line counts those.
 
 ## Synopsis
 
-    team doctor [--session <name>] [--file <path>] [--login]
+    team doctor [--session <name>] [--file <path>] [--login] [--json]
 
 ## Flags
 
@@ -17,6 +17,7 @@ them are done; the last line counts those.
 | `--session` | `<name>` | the herdr session to report on, instead of `team.session` |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml` |
 | `--login` | — | the seats' CLIs' logins alone, one line per CLI, instead of the whole report; herdr, the session and the machine are not read |
+| `--json` | — | the report as one JSON document on stdout |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -98,6 +99,7 @@ Everything here is as it should be:
 
 ```console
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used

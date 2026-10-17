@@ -324,7 +324,8 @@ export interface OutputFinding {
 export function renderFinding(finding: OutputFinding, style: TtyStyle = ttyStyle(false)): string {
   const rawLabel = SEVERITY_LABELS[finding.level];
   const label = style.enabled ? style.styleState(rawLabel) : rawLabel;
-  return `${label}  ${plainLine(finding.text)}`;
+  const text = finding.text.includes('\n') ? finding.text.split('\n').map(plainLine).join('\n') : plainLine(finding.text);
+  return `${label}  ${text}`;
 }
 
 /**

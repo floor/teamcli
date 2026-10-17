@@ -410,6 +410,7 @@ describe('team doctor', () => {
     expect(run.err).toBe('');
     expect(run.out).toBe(
       [
+        'team acme-web, session "acme-web"',
         FILE_WARNING,
         'ok    herdr 0.7.1',
         '--    session acme-web is not running',

@@ -394,6 +394,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--login",
           "repeatable": false,
           "takesValue": false
@@ -416,7 +422,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team doctor [--session <name>] [--file <path>] [--login]"
+        "team doctor [--session <name>] [--file <path>] [--login] [--json]"
       ]
     },
     {
