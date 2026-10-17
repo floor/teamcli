@@ -7,7 +7,7 @@ import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
-import { devMode, logDevMode } from '../dev_mode.ts';
+import { devMode, devModeCallerGate, logDevMode } from '../dev_mode.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
@@ -1288,14 +1288,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // Dev mode says the no-approval lines and the caller-placement line once, as a warning,
   // and mounts. Every other refusal stays a refusal. Unset, the list is unchanged.
   const warning = dev ? devWarningLine(refusals, standing, caller) : '';
+  // The one override sentence every lifecycle command prints, its tail included.
+  const folded = warning ? devModeCallerGate('up', io, warning) ?? warning : '';
   // The audit line the fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
-  if (!dry && warning) logDevMode(dir, 'up', callerLabel(caller), `warning: ${warning}`, sources.now?.() ?? new Date());
+  if (!dry && folded) logDevMode(dir, 'up', callerLabel(caller), folded, sources.now?.() ?? new Date());
 
   if (dry) {
     stampLobbyTrust(false);
     if (!json) {
-      if (warning) out.stdout(`! warning: ${plainText(warning)}\n`);
+      if (folded) out.stdout(`! ${plainText(folded)}\n`);
       // The same cause can reach the list twice — the gate and `doctor` both read the
       // approval — so a refusal is said once. A refusal leaves through the real run's
       // return below, so the status and the exit id are that refusal's; the words stay these.
@@ -1314,10 +1316,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // A dev-mode warning rides in the same sentence, so it is not lost in the envelope.
     if (json) {
       const first = refusals[0]!;
-      const message = warning ? `${plainText(warning)}; ${plainText(first.message)}` : plainText(first.message);
+      const message = folded ? `${plainText(folded)}; ${plainText(first.message)}` : plainText(first.message);
       refuse(io, true, 'up', { id: first.id, message, repair: first.repair ?? null, code: 1 });
     } else if (!dry) {
-      if (warning) out.stderr(`team up: warning: ${plainText(warning)}\n`);
+      if (folded) out.stderr(`team up: ${plainText(folded)}\n`);
       for (const refusal of uniqueRefusals(refusals)) out.stderr(`team up: ${plainText(refusal.message)}\n`);
     }
     // exit: up.never-approved
@@ -1330,13 +1332,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.placement
     return 1;
   }
-  if (!dry && warning) stderrLine(`team up: warning: ${plainText(warning)}\n`);
+  if (!dry && folded) stderrLine(`team up: ${plainText(folded)}\n`);
   if (dry) {
     if (json) {
       // The plan is the document's: the warning first when there is one, then one step per
       // plan line, each with the prefix the terminal draws (`+`, `!`, `skip`).
       const plan: PlanStep[] = [
-        ...(warning ? [{ step: 'warning', detail: warning, prefix: '!' as const }] : []),
+        ...(folded ? [{ step: 'warning', detail: folded, prefix: '!' as const }] : []),
         ...planStepsOf(buildPlan()),
       ];
       writeJson(io, 'team.up', {

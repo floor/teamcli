@@ -3,7 +3,7 @@ import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { processNameMatches } from '../clis.ts';
-import { devMode, logDevMode } from '../dev_mode.ts';
+import { devMode, devModeCallerGate, logDevMode } from '../dev_mode.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
@@ -789,10 +789,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       if (line.message === placement) warning = line.message;
       else kept.push(line);
     }
-    if (warning) refusals.splice(0, refusals.length, ...kept);
+    if (warning) {
+      refusals.splice(0, refusals.length, ...kept);
+      // The one override sentence every lifecycle command prints, its tail included.
+      warning = devModeCallerGate('down', io, warning) ?? warning;
+    }
     // The audit line the fold owes: written where the gate is used, on a real run, whether a
     // later refusal stops the stop or the stop goes on. A dry run decides nothing and logs none.
-    if (warning && !dry) logDevMode(dir, 'down', describeCaller(caller), `warning: ${warning}`, sources.now());
+    if (warning && !dry) logDevMode(dir, 'down', describeCaller(caller), warning, sources.now());
   }
 
   const state = readState(dir).sessions[session];
@@ -802,8 +806,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     const standing = sources.standing?.(root) ?? approvalStanding(root, home);
     if (standing.kind !== 'verified' && standing.kind !== 'none') {
       if (warning) {
-        if (json) collect(`warning: ${warning}`);
-        else io.stderr(`team down: warning: ${warning}\n`);
+        if (json) collect(warning);
+        else io.stderr(`team down: ${warning}\n`);
       }
       refuse(io, json, 'down', {
         id: standing.kind === 'legacy' ? 'down.legacy' : 'down.refused',
@@ -971,7 +975,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if (dry && !json) {
     // A refusal leaves through the real run's return below, so the status and the exit id
     // are that refusal's. The words stay the dry run's, and nothing is written.
-    if (warning) io.stdout(`! warning: ${warning}\n`);
+    if (warning) io.stdout(`! ${warning}\n`);
     for (const refusal of refusals) io.stdout(`! down would refuse: ${refusal.message}\n`);
     io.stdout(formatPlan(plan));
   }
@@ -980,7 +984,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (json) {
       refuse(io, json, 'down', { id: first.id, message: first.message, repair: first.repair ?? null, code: 1 });
     } else if (!dry) {
-      if (warning) io.stderr(`team down: warning: ${warning}\n`);
+      if (warning) io.stderr(`team down: ${warning}\n`);
       for (const refusal of refusals) io.stderr(`team down: ${refusal.message}\n`);
     }
     // exit: down.caller
@@ -998,8 +1002,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     return 1;
   }
   if (!dry && warning) {
-    if (json) collect(`warning: ${warning}`);
-    else io.stderr(`team down: warning: ${warning}\n`);
+    if (json) collect(warning);
+    else io.stderr(`team down: ${warning}\n`);
   }
   if (dry) {
     if (json) {

@@ -552,12 +552,12 @@ test('register: unset, the caller gate refuses; set, it warns and the run reads 
   readIo.env = { ...readIo.env, TEAMCLI_DEV_MODE: '1' };
   expect(await runRegister(['lead'], readIo, registerSources(readOn.home))).toBe(1);
   expect(readIo.err).toBe(
-    `team register: warning: ${REGISTER_LINE}\n`
+    `team register: warning: ${REGISTER_LINE}; dev mode continues\n`
     + 'team register: no agent named lead is running in session "acme"; nothing was registered\n',
   );
   expect(readIo.out).toBe('');
   expect(readFileSync(join(readOn.root, '.agents', 'team.log'), 'utf8'))
-    .toContain(`warning: ${REGISTER_LINE}\n`);
+    .toContain(`warning: ${REGISTER_LINE}; dev mode continues\n`);
 });
 
 // --- the owner-only edits ---------------------------------------------------------------------

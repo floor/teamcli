@@ -20,7 +20,7 @@ import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerLabel, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { devMode, logDevMode } from '../dev_mode.ts';
+import { devMode, devModeCallerGate, logDevMode } from '../dev_mode.ts';
 import { noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -464,16 +464,17 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // the owner's own command beside it. The grant's and the delegate's own refusals stay
     // refusals either way, as they do for `up`.
     const line = notOwnerLine(caller);
-    if (dev) {
-      warning.push(line);
-      if (!dry) logDevMode(dir, 'register', callerLabel(walked), `warning: ${line}`, sources.now());
-    } else return notOwnerRefused(io, json, caller, dry, unblock(args.values));
+    if (dev) warning.push(line);
+    else return notOwnerRefused(io, json, caller, dry, unblock(args.values));
   }
   if (warning.length > 0) {
     const line = [...new Set(warning)].join('; ');
-    if (json) out.stderr(`warning: ${plainText(line)}\n`);
-    else if (dry) out.stdout(`! warning: ${plainText(line)}\n`);
-    else out.stderr(`team register: warning: ${plainText(line)}\n`);
+    // The one override sentence every lifecycle command prints, its tail included.
+    const folded = devModeCallerGate('register', io, line) ?? line;
+    if (!dry) logDevMode(dir, 'register', callerLabel(walked), folded, sources.now());
+    if (json) out.stderr(`${plainText(folded)}\n`);
+    else if (dry) out.stdout(`! ${plainText(folded)}\n`);
+    else out.stderr(`team register: ${plainText(folded)}\n`);
   }
 
   const session = args.values.session ?? team.session;
