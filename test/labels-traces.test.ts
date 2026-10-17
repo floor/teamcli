@@ -118,12 +118,24 @@ describe('the seat traces', () => {
       at: '2026-10-17T09:00:00Z',
       what: 'answered a message from orchestrator',
     });
-    // The history's own outcome word stands even when the message never arrived.
+    // A send that never reached the seat is the sender's trouble, not the seat's work: the
+    // history keeps its own word for it, and it is no trace here. Counting it would read the
+    // seat as working because someone failed to reach it — and clear a blind seat's flag.
     message('orchestrator', 'builder-2', 'unreachable', '2026-10-17T09:15:00Z');
     expect(messageTrace('acme-web', root, 'builder-2', home)).toEqual({
-      kind: 'message',
-      at: '2026-10-17T09:15:00Z',
-      what: 'a message from orchestrator (unreachable)',
+      kind: 'ack',
+      at: '2026-10-17T09:00:00Z',
+      what: 'answered a message from orchestrator',
+    });
+    // Every failed outcome the send paths write, in either direction, is passed over.
+    message('orchestrator', 'builder-2', 'not-submitted', '2026-10-17T09:20:00Z');
+    message('orchestrator', 'builder-2', 'held', '2026-10-17T09:25:00Z');
+    message('orchestrator', 'builder-2', 'timeout', '2026-10-17T09:30:00Z');
+    message('builder-2', 'orchestrator', 'unreachable', '2026-10-17T09:35:00Z');
+    expect(messageTrace('acme-web', root, 'builder-2', home)).toEqual({
+      kind: 'ack',
+      at: '2026-10-17T09:00:00Z',
+      what: 'answered a message from orchestrator',
     });
   });
 
