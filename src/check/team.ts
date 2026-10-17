@@ -1006,6 +1006,10 @@ function policyCheck(
   }
 
   const notes: string[] = [];
+  const expiredDevMode = teamChain.expired.filter((exp) => exp.name === 'dev-mode').at(-1);
+  if (expiredDevMode && (!teamChain.ok || teamChain.policies['dev-mode']?.value === 'off')) {
+    notes.push(`dev-mode expired at ${expiredDevMode.expiry ?? 'now'} for ${expiredDevMode.level}; off since`);
+  }
   if (env.TEAMCLI_DEV_MODE === '1') {
     if (!teamChain.devModeGoverned) {
       notes.push(

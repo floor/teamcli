@@ -1005,7 +1005,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
   test('expiry reading is worded "<name> at <level> expired at <t>; read as unset", logged at most once per expired entry, and leaves the signed file untouched', async () => {
     const fx = makeFixture();
     try {
-      const expiryIso = '2026-10-17T13:00:00Z';
+      const expiryIso = '2026-10-17T12:00:05Z';
       const setIo = testIo(fx.root, { kind: 'owner' });
       const setCode = await runPolicy(
         ['set', 'team', 'dev-mode', 'on', '--until', expiryIso, '--file', '.agents/team.yaml'],
@@ -1018,8 +1018,8 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       const signedTeamYamlBefore = readFileSync(teamYamlPath, 'utf8');
 
       // Read twice after expiry:
-      const t1 = new Date('2026-10-17T14:00:00Z');
-      const t2 = new Date('2026-10-17T14:00:08Z');
+      const t1 = new Date('2026-10-17T12:00:10Z');
+      const t2 = new Date('2026-10-17T12:00:18Z');
       const view1 = testIo(fx.root, { kind: 'owner' });
       expect(await runPolicy(['--file', '.agents/team.yaml'], view1, { home: fx.home, now: () => t1 })).toBe(0);
 
@@ -1036,6 +1036,19 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
         .filter((line) => line.includes('expired at'));
       expect(logLines).toHaveLength(1);
       expect(logLines[0]).toContain(`policy [owner] dev-mode at team expired at ${expiryIso}; read as unset`);
+
+      // Once the expiry has passed, team check shows ONE notice ("dev-mode expired at <t> for <level>; off since") as a note, not a difference.
+      const checkIo = testIo(fx.root, { kind: 'owner' });
+      const checkCode = runTeamCheck({ file: '.agents/team.yaml' }, checkIo, {
+        live: () => QUIET_LIVE,
+        branch: () => 'main',
+        standing: (at) => approvalStanding(at, fx.home),
+        now: () => t2,
+        home: fx.home,
+      });
+      expect(checkCode).toBe(0);
+      expect(checkIo.out).toContain(`note: dev-mode expired at ${expiryIso} for team; off since\n`);
+      expect(checkIo.out).toContain('0 difference(s)\n');
     } finally {
       fx.cleanup();
     }
