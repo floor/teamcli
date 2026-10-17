@@ -145,6 +145,9 @@ export interface StatusJson {
     name: string;
     id?: string | null;
     role?: string;
+    /** `--all` only, like the registry's other fields: the seat's human name from the file, or
+     *  null when it writes none. */
+    nickname?: string | null;
     cli?: string;
     state: string;
     model: string;
@@ -399,7 +402,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         return {
           name: row.name,
           ...(extra ? { id: extra.id } : row.id ? { id: row.id } : {}),
-          ...(extra ? { role: extra.role, cli: extra.cli } : {}),
+          ...(extra ? { role: extra.role, nickname: extra.nickname ?? null, cli: extra.cli } : {}),
           state: row.stored ?? row.state,
           model: row.model,
           ...(extra ? { effort: extra.effort, last_active: extra.last_active } : {}),
@@ -440,7 +443,7 @@ export function emptyOverrides(): OverrideForce {
 export function overrideDrift(report: OverrideForce): Difference[] {
   return [
     ...report.differences.map((line): Difference => ({
-      what: `the overrides differ from the approved copy: ${line}`,
+      what: `the overrides differ from the stored copy: ${line}`,
       repair: APPROVAL_REPAIR,
       approval: true,
       owner: true,

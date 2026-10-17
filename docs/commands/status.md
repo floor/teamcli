@@ -62,7 +62,7 @@ difference `the watch's last pass was <n> minute(s) ago`, repaired with `team wa
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
 | `--project` | `<name>` | cover the project the name holds — its teams, read from the registry — instead of one team's reading; anyone may aim it, from any folder |
-| `--all` | — | render the expanded seat registry columns (`SEAT`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `STATE`, `SOURCE`, `LAST ACTIVE`, `PANE`); those expanded columns print in the table under `--all` alone, while every `--json` row carries the seat's own reading as `seat_state` and `seat_state_source` either way |
+| `--all` | — | render the expanded seat registry columns (`SEAT`, `NICKNAME`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `STATE`, `SOURCE`, `LAST ACTIVE`, `PANE`); those expanded columns print in the table under `--all` alone, while every `--json` row carries the seat's own reading as `seat_state` and `seat_state_source` either way |
 | `--json` | — | the same reading as one JSON document instead of the table, the notes and the repairs |
 | `--help`, `-h` | — | the usage, and exit 0 |
 

@@ -51,7 +51,7 @@ Given `<seat>`:
    ```
 3. **Parked or stopped seat (`restart.signed-off`, exit 1)**: if the declared seat has `parked: true` or `stopped: true`, `team restart` refuses:
    ```
-   team restart: <seat> is signed off; the owner approves the seat back and runs team up
+   team restart: <seat> is signed off; the owner takes the sign-off off in the file and runs team up
    ```
 
 ---

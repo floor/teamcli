@@ -29,9 +29,9 @@ export const USAGE = `Usage: team answer <seat> trust [--session <name>] [--file
 Presses the one recorded key of a folder-trust dialog, and only that key. Every check has
 to pass on two fresh reads of the pane, and the folder must be the lobby on three readings
 at once: the path the screen shows, the folder the pane itself reports working in, and the
-lobby's parent directory. <seat> names one seat of the approved copy; trust is the only
+lobby's parent directory. <seat> names one seat of the team file; trust is the only
 dialog word. No option takes a key, a text, or another dialog. The pane is herdr's one agent
-of that name; a pane recorded in the state selects nothing. A name the copy does not carry
+of that name; a pane recorded in the state selects nothing. A name the file does not carry
 is left as it is, and two agents of the name send nothing. --session is the owner's alone,
 and so is --file: each is refused before the flagged session or file is read. The answer
 opens on the team's context line and closes on <seat>: answered trust (<folder>). A refused
@@ -45,7 +45,7 @@ Exits 0 when the trust dialog is answered and the seat is ready, 1 when the answ
 refused or does not complete, 2 when the invocation or team file can't be read.
 `;
 
-const OUTSIDE = 'ask the owner to approve this exact folder and answer through team up';
+const OUTSIDE = 'ask the owner to add this exact folder to trust and answer through team up';
 
 export type AnswerHost = {
   version(binary: string): string | null;

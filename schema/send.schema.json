@@ -203,6 +203,7 @@
             "additionalProperties": false,
             "required": [
               "name",
+              "nickname",
               "cli",
               "role",
               "project",
@@ -213,6 +214,12 @@
               "name": {
                 "type": "string",
                 "minLength": 1
+              },
+              "nickname": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "cli": {
                 "type": "string",

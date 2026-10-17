@@ -406,8 +406,14 @@ describe('the stable seat handle', () => {
       now: () => NOW,
       home,
     };
-    const cellOf = (page: string, name: string): string | undefined =>
-      page.split('\n').find((line) => line.startsWith(`${name}  `))?.trim().split(/\s{2,}/)[1];
+    // The page's columns are its header's: a column added before `ID` moves it, and the
+    // reading here follows the header rather than a fixed position.
+    const columns = (page: string): string[] =>
+      page.split('\n').find((line) => line.startsWith('SEAT  '))?.trim().split(/\s{2,}/) ?? [];
+    const cellOf = (page: string, name: string): string | undefined => {
+      const at = columns(page).indexOf('ID');
+      return page.split('\n').find((line) => line.startsWith(`${name}  `))?.trim().split(/\s{2,}/)[at];
+    };
 
     const before = testIo(root, owner);
     expect(await runSeats(['--all'], before, sources), `seats said:\n${before.out}\n${before.err}`).toBe(0);

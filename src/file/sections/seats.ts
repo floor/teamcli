@@ -6,6 +6,7 @@ import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, type LivenessThreshold
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
+import { seatNumberOf } from '../../seat-names.ts';
 import type { Check } from '../check.ts';
 import type { Mode, Seat, SeatReach } from '../types.ts';
 import type { LeadMark, Section } from './section.ts';
@@ -20,6 +21,11 @@ export type DraftSeat = Omit<Seat, 'mode'> & { mode?: Mode };
  *  and `-`. Everything that builds a path out of a seat name holds itself to the same rule —
  *  there is no second, looser one. */
 export const SEAT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** The send grammar's team-lead address: `lead@<team>` names the seat its file marks `leads`,
+ *  so no new seat or nickname takes the name (src/send/resolve.ts). A seat already named `lead`
+ *  keeps loading — the address never means it — and `team check` notes the name. */
+export const LEAD_NAME = 'lead';
 
 export const seats: Section = {
   name: 'seats',
@@ -41,7 +47,12 @@ export const seats: Section = {
       additionalProperties: false,
       properties: {
         role: { type: 'string', minLength: 1 },
-        name: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$' },
+        name: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$', $comment: 'a seat named "lead" still loads: lead@<team> always addresses the seat holding leads, and team check notes the name' },
+        nickname: {
+          type: 'string',
+          pattern: '^(?!lead$)[A-Za-z0-9][A-Za-z0-9._-]*$',
+          $comment: 'a human name for this seat: unique in its team and never another seat\'s name, and "lead" is reserved for the team\'s lead address; a send addresses it bare in its own team, as @<nickname>, or as <nickname>@<team>, and it confers nothing — the role keeps the grants',
+        },
         cli: { enum: CLIS },
         vendor: { type: 'string', minLength: 1 },
         account: { type: 'string' },
@@ -115,7 +126,7 @@ function readSeats(
   const assistants: { name: string; line: number }[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
-      'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
+      'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
       'parked', 'stopped', 'count', 'leads', 'assistant', 'reach', 'delivery_order', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
@@ -125,6 +136,24 @@ function readSeats(
     const at = name ? `seat "${name}"` : 'a seat';
     if (name && !SEAT_NAME.test(name)) {
       check.fail(fields.get('name')?.line ?? line, `${at}: the name takes letters, digits, ".", "_" and "-"`);
+    }
+    // `lead` is the send grammar's team-lead address (`lead@<team>`, src/send/resolve.ts). A seat
+    // already named `lead` is legacy and keeps loading — the address still means the seat holding
+    // `leads`, and `team check` notes a `lead` seat that holds them not — but no nickname may take
+    // the name, and `team add` and `team rename` refuse it: the reservation binds new names only.
+    // The human name for this seat (OD-20261017-15). It confers nothing — the role keeps the
+    // grants — and it is a field of the built seat like every other, so it is in the digest and
+    // omitted when the file omits the key. The same rule as the name, because a send addresses
+    // it as `<nickname>@<team>` and `@` is the address's own separator.
+    const nicknameEntry = fields.get('nickname');
+    let nickname = check.text(nicknameEntry, `${at}: nickname`);
+    if (nickname !== undefined && !SEAT_NAME.test(nickname)) {
+      check.fail(nicknameEntry?.value.line ?? line, `${at}: the nickname takes letters, digits, ".", "_" and "-"`);
+      nickname = undefined;
+    }
+    if (nickname === LEAD_NAME) {
+      check.fail(nicknameEntry?.value.line ?? line, `${at}: "lead" is reserved: lead@<team> addresses the team's lead, so no nickname takes it`);
+      nickname = undefined;
     }
     if (!fields.get('cli')) check.fail(line, `${at}: cli is required`);
     const cli = check.oneOf(fields.get('cli'), `${at}: cli`, CLIS);
@@ -170,6 +199,11 @@ function readSeats(
     if (assistant && count > 1) {
       check.fail(assistantField?.value.line ?? line, `\`assistant\` on "${name}" can't be a seat with count`);
     }
+    // A nickname names one seat: a counted entry becomes several, and one human name cannot be
+    // held by all of them — an address would have to pick one. Refused like `assistant`.
+    if (nickname !== undefined && count > 1) {
+      check.fail(nicknameEntry?.value.line ?? line, `\`nickname\` on "${name}" can't be a seat with count`);
+    }
     const label = check.text(fields.get('label'), `${at}: label`);
     const effort = readEffort(fields.get('effort'), at, vendor, check);
     // The seat's own word on the delivery order, when the file writes one. A field of the built
@@ -201,6 +235,9 @@ function readSeats(
         count,
         instance,
         ...(account ? { account } : {}),
+        // Omitted when the file writes no nickname, so `seatDigest` hashes the same fields as
+        // before; a counted entry never carries one (it is refused above).
+        ...(nickname !== undefined && count <= 1 ? { nickname } : {}),
         // Omitted when the file has no effort, so `seatDigest` hashes the same fields as before.
         ...(effort ? { effort } : {}),
         // Omitted when the file declares no order, for the same reason.
@@ -216,6 +253,8 @@ function readSeats(
     }
   }
   reportCollisions(seats, 'name', check);
+  reportNumberClashes(seats, check);
+  reportNicknames(seats, check);
   reportReach(seats, check);
   // Refused at the second mark's line, the one that makes it more than one — the lead's own
   // refusal, one seat over: the entity's assistant is one seat, and admission reads its name.
@@ -341,6 +380,78 @@ function reportCollisions(seats: DraftSeat[], field: 'name', check: Check): void
     if (!first) seen.set(seat[field], seat);
     else if (first.line !== seat.line || first.instance === seat.instance) {
       check.fail(seat.line, `two seats have the ${field} "${seat[field]}" (the other is on line ${first.line}${first.count > 1 || seat.count > 1 ? ', after count is expanded' : ''})`);
+    }
+  }
+}
+
+/**
+ * Two names of one role that carry one number — `builder-1` and `builder-01` — are one seat
+ * written twice at two widths: the numbering points at one seat and an address would have to
+ * pick. Refused at the second name's line, so the file never loads, and `add` and `register`,
+ * which read the file first, refuse the same way. The exact duplicate name above is not repeated
+ * here. `builder` (a name with no number) and `builder-1` are distinct seats, as they always were.
+ */
+function reportNumberClashes(seats: DraftSeat[], check: Check): void {
+  const seen = new Map<string, { name: string; line: number }>();
+  for (const seat of seats) {
+    const number = seatNumberOf(seat.name);
+    if (number === null) continue;
+    const key = `${seat.role}\u0000${number.base}\u0000${String(number.number)}`;
+    const first = seen.get(key);
+    if (first === undefined) {
+      seen.set(key, { name: seat.name, line: seat.line });
+      continue;
+    }
+    if (first.name === seat.name) continue;
+    check.fail(seat.line, `two seats have the same role and number: "${first.name}" on line ${first.line} and "${seat.name}" here (the number is written with and without leading zeros)`);
+  }
+}
+
+/**
+ * Why `nickname` cannot be written on the seat `own`, or null: another seat already carries it,
+ * or it is another seat's name. Either would make one spec match two seats, and a send refuses
+ * such a spec — so the collision is prevented here, where names are written (RFC 002 § 4).
+ * A nickname equal to its own seat's name is not a collision: both spellings reach one seat.
+ * Exported for the rename command, which writes a nickname where no file check runs.
+ */
+export function nicknameProblem(
+  seats: ReadonlyArray<{ name: string; nickname?: string; line: number }>,
+  nickname: string,
+  own: string,
+): { line: number; message: string } | null {
+  if (nickname === LEAD_NAME) {
+    return { line: 0, message: '"lead" is reserved: lead@<team> addresses the team\'s lead, so no new name or nickname takes it' };
+  }
+  for (const other of seats) {
+    if (other.name === own) continue;
+    if (other.nickname === nickname) {
+      return { line: other.line, message: `the nickname "${nickname}" is also on seat "${other.name}" (line ${other.line})` };
+    }
+    if (other.name === nickname) {
+      return { line: other.line, message: `the nickname "${nickname}" is the name of another seat (line ${other.line})` };
+    }
+  }
+  return null;
+}
+
+/** One report per nickname: the second seat carrying it, or the seat whose human name an
+ *  earlier seat's name would shadow. A nickname equal to its own seat's name is allowed. */
+function reportNicknames(seats: DraftSeat[], check: Check): void {
+  const seen = new Map<string, DraftSeat>();
+  for (const seat of seats) {
+    const nickname = seat.nickname;
+    if (nickname === undefined) continue;
+    const first = seen.get(nickname);
+    if (first !== undefined) {
+      if (first.name !== seat.name) {
+        check.fail(seat.line, `seat "${seat.name}": two seats have the nickname "${nickname}" (the other is "${first.name}" on line ${first.line})`);
+      }
+      continue;
+    }
+    seen.set(nickname, seat);
+    const clash = seats.find((other) => other.name !== seat.name && other.name === nickname);
+    if (clash !== undefined) {
+      check.fail(seat.line, `seat "${seat.name}": the nickname "${nickname}" is the name of another seat (line ${clash.line})`);
     }
   }
 }

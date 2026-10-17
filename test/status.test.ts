@@ -114,7 +114,7 @@ describe('team status', () => {
     expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
     expect(out).not.toMatch(/grok-acme\s+stopped/);
     const all = await status('--all');
-    expect(all.out).toMatch(/grok-acme\s+-\s+reviewer\s+grok\s+Grok 4\.7\s+-\s+stopped/);
+    expect(all.out).toMatch(/grok-acme\s+-\s+-\s+reviewer\s+grok\s+Grok 4\.7\s+-\s+stopped/);
     // The suffix is a reading, not a difference: a team that matches its file still reads clean.
     expect(out).toContain('0 difference(s)');
     expect(code).toBe(0);
@@ -1391,13 +1391,13 @@ profiles:
 `);
 
     const forced = await status();
-    expect(forced.out).toContain('difference: the overrides differ from the approved copy: `overrides` changed');
+    expect(forced.out).toContain('difference: the overrides differ from the stored copy: `overrides` changed');
     expect(forced.out).toContain('  who: the owner');
 
     setDevMode('on');
     const dev = await statusDev();
     expect(dev.out).toContain('note: 1 override difference(s); dev mode does not compare them');
-    expect(dev.out).not.toContain('difference: the overrides differ from the approved copy');
+    expect(dev.out).not.toContain('difference: the overrides differ from the stored copy');
   });
 
   test('a governing off retires the variable: the state row stays a difference under TEAMCLI_DEV_MODE=1', async () => {

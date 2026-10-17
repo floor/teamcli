@@ -16,6 +16,8 @@ import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
+import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
+import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, seatIsStopped } from '../file/lines.ts';
@@ -24,7 +26,7 @@ import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel, validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
@@ -268,6 +270,17 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 2;
   }
   const { team, root, path } = loaded;
+  // The send grammar's team-lead address is `lead@<team>` (src/send/resolve.ts), so the word may
+  // not become a new seat's name. A file written before 0.5.0 may already declare a seat of that
+  // name: it keeps loading, `lead@<team>` still addresses the seat holding `leads`, and this
+  // command may still start it — the reservation binds only a name that would be new, and a new
+  // name it refuses is one the file does not declare (the file's own load refuses a new nickname
+  // of the word, src/file/sections/seats.ts).
+  if (!temporary && args.rest[0] === LEAD_NAME && !team.seats.some((seat) => seat.name === LEAD_NAME)) {
+    out.stderr(`team add: "${LEAD_NAME}" is reserved: lead@<team> addresses the team's lead, so no new seat takes it as a name\n${USAGE}`);
+    // exit: add.reserved-name
+    return 2;
+  }
   // The create-grant, decided on the loaded root: the team this run would change must be under
   // the granted paths. The early detached sentence above stands alone: no record admits a
   // caller with no terminal.
@@ -418,7 +431,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const original = readFileSync(path, 'utf8');
   const asked = args.rest[0] ?? '';
   const built = temporary
-    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base)
+    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now())
     : declaredSeat(asked, original, team, sources.home, sources.fs);
   if ('error' in built) {
     // The builder names the row its refusal is (`add.no-seat`, `add.until`, `add.branch-missing`,
@@ -1038,7 +1051,7 @@ function declaredSeat(
 
 function temporarySeat(
   values: Record<string, string>, current: string, approved: TeamFile, state: SessionState, agents: readonly HerdrAgent[],
-  root: string, base: string | null,
+  root: string, base: string | null, home: string, now: Date,
 ): { name: string; seat: Seat; edited: string; temporary: NonNullable<SeatState['temporary']> } | { error: string; id: string } {
   const like = approved.seats.find((item) => item.name === values.like);
   if (!like) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(values.like)}` };
@@ -1065,7 +1078,7 @@ function temporarySeat(
   const worktree = task ? state.worktrees[task] : undefined;
   if (task && !worktree) return { id: 'add.worktree-missing', error: `no worktree named ${JSON.stringify(task)} is recorded` };
   if (worktree?.setup === 'failed') return { id: 'add.worktree-failed', error: `worktree ${task} has a failed setup; team worktree remove ${task}` };
-  const name = temporaryName(like.name, approved, state, agents);
+  const name = temporaryName(like.name, approved, state, agents, seatNumberingInForce({ home, root, team: approved, now }));
   return {
     name,
     edited: current,
@@ -1079,11 +1092,16 @@ function temporarySeat(
   };
 }
 
-function temporaryName(like: string, team: TeamFile, state: SessionState, agents: readonly HerdrAgent[]): string {
+/**
+ * The temporary seat's name: the like seat's own name, `-tmp`, and the next free seat number in
+ * the numbering in force — the `seat-numbering` setting's width and separator (`worker-tmp-01`
+ * at the shipped default). The number is read as a number, so a `worker-tmp-1` minted under an
+ * older width still holds 1 and the next name is `worker-tmp-02`; a name already running in the
+ * session or listed by herdr holds its number too.
+ */
+function temporaryName(like: string, team: TeamFile, state: SessionState, agents: readonly HerdrAgent[], numbering: SeatNumbering): string {
   const used = new Set([...team.seats.map((seat) => seat.name), ...Object.keys(state.seats), ...agents.map((agent) => agent.name ?? '')]);
-  let n = 1;
-  while (used.has(`${like}-tmp-${n}`)) n++;
-  return `${like}-tmp-${n}`;
+  return nextFreeSeatNumber(`${like}-tmp`, used, numbering);
 }
 
 function parseUntil(value: string): Until | null {

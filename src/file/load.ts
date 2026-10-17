@@ -115,7 +115,7 @@ export function loadTeamFile(cwd: string, options: { file?: string; home?: strin
         line: 0,
         message: options.file
           ? `no team file at ${options.file}`
-          : 'no team file here; it is private to each clone: run `team init`, or `team init --restore` to bring back the copy you last approved on this machine',
+          : 'no team file here; it is private to each clone: run `team init`, or `team init --restore` to bring back the copy this machine stored',
       }],
     };
   }

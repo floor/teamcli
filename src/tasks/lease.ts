@@ -72,6 +72,28 @@ export function releaseLocal(root: string, seat: string, pane: string, now: numb
   });
 }
 
+/** Re-keys any lease held by `fromSeat` to `toSeat` so a renamed seat can still renew and release it. */
+export function renameSeatLeases(root: string, fromSeat: string, toSeat: string): string[] {
+  const dir = leasesDir(root);
+  let files: string[];
+  try {
+    files = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  if (files.length === 0) return [];
+  return withLock(dir, () => {
+    const moved: string[] = [];
+    for (const path of leaseFiles(dir)) {
+      const lease = readLease(path);
+      if (!lease || lease.seat !== fromSeat) continue;
+      writeAtomic(path, body({ ...lease, seat: toSeat }));
+      moved.push(lease.id);
+    }
+    return moved;
+  });
+}
+
 function body(lease: Lease): string {
   return `${JSON.stringify(lease, null, 2)}\n`;
 }

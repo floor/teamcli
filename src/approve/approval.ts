@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import type { ApprovedCheck } from '../budgets/checks.ts';
+import { renameSeat } from '../file/lines.ts';
 import type { TeamFile } from '../file/types.ts';
 import { defaultBudgets, defaultWatch, validateTeamFile } from '../file/validate.ts';
 import {
@@ -188,6 +189,69 @@ export function recordSeatDigestOf(standing: Standing, team: TeamFile, root: str
 /** `recordSeatDigest` as a command uses it: the caller's own standing, read once. */
 export function recordSeatDigest(team: TeamFile, root: string, name: string, home: string = homedir()): void {
   recordSeatDigestOf(approvalStanding(root, home), team, root, name, home);
+}
+
+/**
+ * Carries the approved record across `team rename` by applying the rename to `record.file`
+ * and moving a seat or lead section digest only when the live file matches the renamed record.
+ */
+export function recordSeatRenameOf(
+  standing: Standing,
+  team: TeamFile,
+  root: string,
+  renames: ReadonlyArray<{ from: string; to: string }>,
+  home: string = homedir(),
+): void {
+  if (standing.kind !== 'verified' || renames.length === 0) return;
+  const store = storePath(team.project, root, home);
+  const record = standing.record;
+  if (!validateTeamFile(record.file).ok) return;
+  let renamedRecordFile = record.file;
+  for (const { from, to } of renames) {
+    renamedRecordFile = renameSeat(renamedRecordFile, from, to);
+  }
+  const renamedRecord = validateTeamFile(renamedRecordFile);
+  if (!renamedRecord.ok) return;
+  const approved = approvedFingerprints(record);
+  const expectedAfter = fingerprints(renamedRecord.team);
+  const live = fingerprints(team);
+
+  const nextSeats = { ...record.approval.fingerprints.seats };
+  for (const { from, to } of renames) {
+    const after = expectedAfter.seats[to];
+    if (approved.seats[from] !== undefined && after !== undefined && live.seats[to] === after) {
+      delete nextSeats[from];
+      nextSeats[to] = after;
+    }
+  }
+
+  const nextSections = { ...record.approval.fingerprints.sections };
+  for (const section of ['orchestrator', 'operator', 'grant'] as const) {
+    const after = expectedAfter.sections[section];
+    if (
+      record.approval.fingerprints.sections[section] !== undefined &&
+      after !== undefined &&
+      live.sections[section] === after
+    ) {
+      nextSections[section] = after;
+    }
+  }
+
+  writeApproval(
+    store,
+    {
+      approval: {
+        ...record.approval,
+        fingerprints: {
+          sections: nextSections,
+          seats: nextSeats,
+        },
+      },
+      file: renamedRecordFile,
+    },
+    [],
+    home,
+  );
 }
 
 /** The differences of a file against one verified snapshot: the caller's own standing, read once. */

@@ -98,7 +98,7 @@ describe('an override is the owner\'s, by approval', () => {
 
     const status = testIo(root, OWNER);
     expect(await runStatus(FILE, status, statusSources())).toBe(1);
-    expect(status.out).toContain('the overrides differ from the approved copy: `overrides` changed');
+    expect(status.out).toContain('the overrides differ from the stored copy: `overrides` changed');
   });
 
   test('approving the file puts it in force, and a later edit leaves the approved copy', async () => {

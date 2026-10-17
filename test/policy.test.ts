@@ -166,8 +166,8 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     expect(POLICY_LEVELS).toEqual(['entity', 'project', 'team', 'seat']);
   });
 
-  test('dev-mode lifts the eight everyday operations (reload included) and is never seat-scoped', () => {
-    expect(DEV_MODE_OPERATIONS).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init', 'reload']);
+  test('dev-mode lifts the nine everyday operations (reload and rename included) and is never seat-scoped', () => {
+    expect(DEV_MODE_OPERATIONS).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init', 'reload', 'rename']);
     expect(POLICY_CATALOGUE['dev-mode'].levels).toEqual(['entity', 'project', 'team']);
     expect(POLICY_CATALOGUE['dev-mode'].defaultValue).toBe('off');
     expect(POLICY_CATALOGUE['dev-mode'].gateLifting).toBe(true);

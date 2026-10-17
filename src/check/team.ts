@@ -23,7 +23,7 @@ import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
@@ -342,6 +342,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
   const notes = collapseNotes([
     ...delegateNotes(team),
+    ...leadNameNotes(team),
     ...lobbyNotes(team, root, sources.home, session),
     ...policyChecked.notes,
     ...unknownStatusNotes(team, state, live),
@@ -591,6 +592,22 @@ function delegateNotes(team: TeamFile): string[] {
     notes.push(`${delegate.pane}'s delegate entry names approve, which no command acts on since team approve was removed; drop it from the file`);
   }
   return notes;
+}
+
+/**
+ * A seat still named `lead`, where the file's own lead is another seat. The word is the send
+ * grammar's team-lead address (`lead@<team>`, src/send/resolve.ts): the file keeps loading — a
+ * file written before 0.5.0 may name its coordinator's seat so — the address always reaches the
+ * seat that holds `leads`, and the legacy seat stays addressable by its bare name in its own
+ * team. The team's lead renames it when convenient, so the address and the seat's name stop
+ * sharing a spelling. A note, not a difference: nothing is wrong with the team, and the fix is a
+ * `team rename` away.
+ */
+function leadNameNotes(team: TeamFile): string[] {
+  if (team.orchestrator === LEAD_NAME) return [];
+  const legacy = team.seats.find((seat) => seat.name === LEAD_NAME);
+  if (legacy === undefined) return [];
+  return [`seat "${LEAD_NAME}" does not hold leads: lead@<team> addresses the seat that does, so this seat answers only to its bare name; the team's lead: run team rename ${LEAD_NAME} <new-name> to give it another name`];
 }
 
 /**

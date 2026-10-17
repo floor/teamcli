@@ -224,6 +224,7 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
               name: { type: 'string', minLength: 1 },
               id: { type: ['string', 'null'] },
               role: { type: 'string' },
+              nickname: { type: ['string', 'null'] },
               cli: { type: 'string' },
               state: { type: 'string', minLength: 1 },
               model: { type: 'string', minLength: 1 },
@@ -324,6 +325,7 @@ export const SEATS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           name: { type: 'string', minLength: 1 },
           id: { type: ['string', 'null'] },
           role: { type: 'string', minLength: 1 },
+          nickname: { type: ['string', 'null'] },
           cli: { type: 'string', minLength: 1 },
           model: { type: 'string', minLength: 1 },
           effort: { type: ['string', 'null'] },
@@ -1136,9 +1138,10 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['name', 'cli', 'role', 'project', 'reach', 'stopped'],
+            required: ['name', 'nickname', 'cli', 'role', 'project', 'reach', 'stopped'],
             properties: {
               name: { type: 'string', minLength: 1 },
+              nickname: { type: ['string', 'null'] },
               cli: { type: 'string', minLength: 1 },
               role: { type: 'string' },
               project: { type: 'string', minLength: 1 },

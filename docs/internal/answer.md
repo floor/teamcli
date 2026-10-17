@@ -54,7 +54,7 @@ Every refusal line is `<seat>: <reason>` except an unplaced caller's, which is i
 | version | `this version has no trust answer` |
 | screen | `the pane is not the trust dialog` |
 | label | `the trust choice is not the recorded one` |
-| folder | `the dialog does not show exactly one folder`; `the dialog does not show the lobby as written: the owner answers it through team up`; `the pane's folder cannot be read`; `the pane's folder is not the lobby as written`; `the lobby's parent folder cannot be read`; `the lobby's parent folder holds a name that differs from the lobby's by whitespace alone`; `this folder is not an exact trust entry`; `ask the owner to approve this exact folder and answer through team up` |
+| folder | `the dialog does not show exactly one folder`; `the dialog does not show the lobby as written: the owner answers it through team up`; `the pane's folder cannot be read`; `the pane's folder is not the lobby as written`; `the lobby's parent folder cannot be read`; `the lobby's parent folder holds a name that differs from the lobby's by whitespace alone`; `this folder is not an exact trust entry`; `ask the owner to add this exact folder to trust and answer through team up` |
 | action | `the recorded key is not one this version sends` |
 | process | `the process in its pane is not the one team launched`; `its pane could not be read`; `<reason>; rules were typed, not sent` |
 
@@ -117,9 +117,9 @@ Usage: team answer <seat> trust [--session <name>] [--file <path>] [--json]
 Presses the one recorded key of a folder-trust dialog, and only that key. Every check has
 to pass on two fresh reads of the pane, and the folder must be the lobby on three readings
 at once: the path the screen shows, the folder the pane itself reports working in, and the
-lobby's parent directory. <seat> names one seat of the approved copy; trust is the only
+lobby's parent directory. <seat> names one seat of the team file; trust is the only
 dialog word. No option takes a key, a text, or another dialog. The pane is herdr's one agent
-of that name; a pane recorded in the state selects nothing. A name the copy does not carry
+of that name; a pane recorded in the state selects nothing. A name the file does not carry
 is left as it is, and two agents of the name send nothing. --session is the owner's alone,
 and so is --file: each is refused before the flagged session or file is read. The answer
 opens on the team's context line and closes on <seat>: answered trust (<folder>). A refused

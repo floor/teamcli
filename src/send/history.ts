@@ -36,6 +36,13 @@ export type HistoryEntry = {
   body: string;
   id: string;
   outcome: string;
+  /** The address the caller wrote, when it was not the resolved seat's own name: a `@<nickname>`,
+   *  a `<seat|nickname>@<team>`, `lead@<team>`, or an agent id. It lets a reader see what was
+   *  addressed beside `to`, the seat it resolved to. */
+  spec?: string;
+  /** The registry id (`agt_…`) the spec resolved to, written with `spec`; the canonical form
+   *  records and scripts use. */
+  resolved?: string;
   /** Send to outcome in whole milliseconds, written when the sender measured it. */
   ms?: number;
   /** The path the message travelled: `typed` (a composer trigger) or `socket` (a frame); absent when it never left the sender. */
@@ -174,7 +181,9 @@ export function appendHistory(project: string, root: string, home: string, entry
     id: entry.id,
     outcome: entry.outcome,
   };
-  // Written only when the sender measured them, so older lines keep their exact shape.
+  // Written only when the run recorded them, so a plain line keeps its exact older shape.
+  if (entry.spec !== undefined) record.spec = entry.spec;
+  if (entry.resolved !== undefined) record.resolved = entry.resolved;
   if (entry.ms !== undefined) record.ms = entry.ms;
   if (entry.via !== undefined) record.via = entry.via;
   if (entry.failed !== undefined && entry.failed.length > 0) record.failed = entry.failed;
@@ -293,7 +302,13 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     id: obj.id,
     outcome: obj.outcome,
   };
-  // `ms`, `via` and `failed` are optional: a line with a wrong-typed one keeps its other fields.
+  // `spec`, `resolved`, `ms`, `via` and `failed` are optional: a line with a wrong-typed one keeps its other fields.
+  if (typeof obj.spec === 'string' && obj.spec !== '') {
+    entry.spec = obj.spec;
+  }
+  if (typeof obj.resolved === 'string' && obj.resolved !== '') {
+    entry.resolved = obj.resolved;
+  }
   if (typeof obj.ms === 'number' && Number.isFinite(obj.ms) && obj.ms >= 0) {
     entry.ms = obj.ms;
   }
@@ -381,5 +396,73 @@ export function readAllHistories(home: string): { ok: true; entries: HistoryEntr
   }
   all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   return { ok: true, entries: all };
+}
+
+/**
+ * Re-keys `from` and `to` in the project's history log (`messages.jsonl`, `.1`, `.2`) when a
+ * seat is renamed, preserving `spec` (recording the prior seat name when `to` was rewritten and
+ * `spec` was absent) so `team feed --seat <new-seat>` finds the seat's entire history.
+ */
+export function renameSeatHistory(
+  project: string,
+  root: string,
+  home: string,
+  fromSeat: string,
+  toSeat: string,
+): number {
+  const storeDir = storePath(project, root, home);
+  if (ladderProblem(storeDir) !== null || heldAt(storeDir).kind !== 'folder') return 0;
+  const base = join(storeDir, HISTORY_FILE);
+  const candidates: string[] = [];
+  for (let n = HISTORY_KEPT - 1; n >= 1; n--) candidates.push(`${base}.${String(n)}`);
+  candidates.push(base);
+
+  let updated = 0;
+  for (const candidate of candidates) {
+    if (fileProblem(candidate) !== null || heldAt(candidate).kind !== 'file') continue;
+    const text = readNoFollow(candidate);
+    if (text === null) continue;
+    let fileChanged = false;
+    const nextLines = text.split('\n').map((raw) => {
+      const entry = parseHistoryLine(raw);
+      if (!entry) return raw;
+      let changed = false;
+      const next: HistoryEntry = { ...entry };
+      if (next.from === fromSeat) {
+        next.from = toSeat;
+        changed = true;
+      }
+      if (next.to === fromSeat) {
+        if (next.spec === undefined) next.spec = fromSeat;
+        next.to = toSeat;
+        changed = true;
+      }
+      if (!changed) return raw;
+      fileChanged = true;
+      updated += 1;
+      return JSON.stringify(next);
+    });
+    if (!fileChanged) continue;
+    const tmp = `${candidate}.${process.pid}.rename.tmp`;
+    const bytes = Buffer.from(nextLines.join('\n'), 'utf8');
+    try {
+      const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | NOFOLLOW, 0o600);
+      try {
+        fchmodSync(fd, 0o600);
+        for (let wrote = 0; wrote < bytes.length;) {
+          wrote += writeSync(fd, bytes, wrote, bytes.length - wrote);
+        }
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(tmp, candidate);
+      chmodSync(candidate, 0o600);
+    } catch {
+      try {
+        unlinkSync(tmp);
+      } catch {}
+    }
+  }
+  return updated;
 }
 

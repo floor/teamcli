@@ -99,6 +99,11 @@ export type DaemonSendRequest = {
    *  <reason>`: the daemon writes the history line this send ends in, and the failures travel
    *  with it. Absent when the walk had none. */
   failed?: string[];
+  /** The address the caller wrote, when it was not the resolved seat's own name — a `@<nickname>`,
+   *  a `<seat|nickname>@<team>`, `lead@<team>`, or an agent id — and the registry id it resolved
+   *  to. The history line keeps both beside `to`, the seat. */
+  spec?: string;
+  resolved?: string;
 };
 
 export type DaemonRequest =
@@ -776,6 +781,9 @@ async function executeQueuedSend(
   const who = from === 'owner' ? 'owner' : from === team.orchestrator ? 'orchestrator' : 'seat';
   const body = request.body;
   const msgId = request.id ?? randomUUID();
+  // The address as written and the id it resolved to, when the caller wrote a form rather than
+  // the seat's own name: every history line this send writes keeps them beside `to`.
+  const sentAs: Pick<HistoryEntry, 'spec' | 'resolved'> = { spec: request.spec, resolved: request.resolved };
   // Send to outcome is measured from here: the daemon's own handling, not the requester's wait.
   const startedAt = Date.now();
   const configured = team.seats.find((s) => s.name === seatName);
@@ -805,7 +813,7 @@ async function executeQueuedSend(
         detail: `${seatName} runs ${configured.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`,
       };
     }
-    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive);
+    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs);
   }
 
   const found = findSeatAgent(host, team.session, seatName);
@@ -817,6 +825,7 @@ async function executeQueuedSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
@@ -834,6 +843,7 @@ async function executeQueuedSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
@@ -890,6 +900,7 @@ async function executeQueuedSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'held',
@@ -907,6 +918,7 @@ async function executeQueuedSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
@@ -993,6 +1005,7 @@ async function executeQueuedSend(
         ts: host.now().toISOString(),
         from,
         to: seatName,
+        ...sentAs,
         body,
         id: msgId,
         outcome: 'not-submitted',
@@ -1025,6 +1038,7 @@ async function executeQueuedSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'delivered',
@@ -1062,6 +1076,8 @@ async function executeSocketSend(
   pollMs: number,
   host: DaemonHost,
   alive: (pid: number) => boolean,
+  /** The address as written, when it was a form: every history line carries it beside the seat. */
+  sentAs: Pick<HistoryEntry, 'spec' | 'resolved'>,
 ): Promise<DaemonSendResponse> {
   // While SOCKET_SEND is off, the daemon serves no waited send: the frame the reply would ride
   // is one this build does not write, and a caller asking for one anyway — an older CLI — is
@@ -1100,6 +1116,7 @@ async function executeSocketSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
@@ -1114,6 +1131,7 @@ async function executeSocketSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
@@ -1128,6 +1146,7 @@ async function executeSocketSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
@@ -1151,6 +1170,7 @@ async function executeSocketSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'held',
@@ -1172,6 +1192,7 @@ async function executeSocketSend(
           ts: host.now().toISOString(),
           from,
           to: seatName,
+          ...sentAs,
           body,
           id: msgId,
           outcome: 'unreachable',
@@ -1189,6 +1210,7 @@ async function executeSocketSend(
           ts: host.now().toISOString(),
           from,
           to: seatName,
+          ...sentAs,
           body,
           id: msgId,
           outcome: 'answered',
@@ -1202,6 +1224,7 @@ async function executeSocketSend(
         ts: host.now().toISOString(),
         from,
         to: seatName,
+        ...sentAs,
         body,
         id: msgId,
         outcome: 'timeout',

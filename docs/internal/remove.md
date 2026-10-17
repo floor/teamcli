@@ -296,17 +296,17 @@ longer the approved one.
 
 ```console
 $ team add --temporary --like claude-beacon --until result:notes/result.md ; echo "exit $?"
-claude-beacon-tmp-1: ready
+claude-beacon-tmp-01: ready
 exit 0
-$ team remove claude-beacon-tmp-1 --keep ; echo "exit $?"
+$ team remove claude-beacon-tmp-01 --keep ; echo "exit $?"
 team remove: a temporary seat is not in the file; there is nothing to keep
 exit 1
-$ team remove claude-beacon-tmp-1 ; echo "exit $?"
-team remove: claude-beacon-tmp-1: its record is not an approved seat; left as it is (the owner cleans it: team remove claude-beacon-tmp-1 --abandon)
+$ team remove claude-beacon-tmp-01 ; echo "exit $?"
+team remove: claude-beacon-tmp-01: its record is not an approved seat; left as it is (the owner cleans it: team remove claude-beacon-tmp-01 --abandon)
 exit 1
-$ team remove claude-beacon-tmp-1 --abandon ; echo "exit $?"
-claude-beacon-tmp-1: stopped
-removed temporary claude-beacon-tmp-1
+$ team remove claude-beacon-tmp-01 --abandon ; echo "exit $?"
+claude-beacon-tmp-01: stopped
+removed temporary claude-beacon-tmp-01
 exit 0
 ```
 

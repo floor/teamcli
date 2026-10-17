@@ -630,10 +630,10 @@ describe('team answer', () => {
       { name: 'dot segment', screen: withPath(cursorTrust, '<untrusted-directory>', lobby.replace('/team/', '/./team/')), message: 'lead: the dialog does not show the lobby as written: the owner answers it through team up' },
       { name: 'two paths', screen: two, message: 'lead: the dialog does not show exactly one folder' },
       { name: 'no path', screen: none, message: 'lead: the dialog does not show exactly one folder' },
-      { name: 'parent', screen: parent, message: 'lead: ask the owner to approve this exact folder and answer through team up' },
-      { name: 'child', screen: child, message: 'lead: ask the owner to approve this exact folder and answer through team up' },
-      { name: 'sibling', screen: sibling, message: 'lead: ask the owner to approve this exact folder and answer through team up' },
-      { name: 'symlink', screen: linked, message: 'lead: ask the owner to approve this exact folder and answer through team up' },
+      { name: 'parent', screen: parent, message: 'lead: ask the owner to add this exact folder to trust and answer through team up' },
+      { name: 'child', screen: child, message: 'lead: ask the owner to add this exact folder to trust and answer through team up' },
+      { name: 'sibling', screen: sibling, message: 'lead: ask the owner to add this exact folder to trust and answer through team up' },
+      { name: 'symlink', screen: linked, message: 'lead: ask the owner to add this exact folder to trust and answer through team up' },
       { name: 'version', screen: trust, version: '2026.10.02', message: 'lead: this version has no trust answer' },
       { name: 'prerelease version', screen: trust, version: '2026.10.01-beta.1', message: 'lead: this version has no trust answer' },
       { name: 'suffix dropped version', screen: trust, version: '2026.10.01', message: 'lead: this version has no trust answer' },
@@ -673,7 +673,7 @@ describe('team answer', () => {
     const movedIo = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], movedIo, moved)).toBe(1);
     expect(moved.keys).toEqual([]);
-    expect(movedIo.err).toBe('lead: ask the owner to approve this exact folder and answer through team up\n');
+    expect(movedIo.err).toBe('lead: ask the owner to add this exact folder to trust and answer through team up\n');
   });
 
   test('a dialog that names the old per-project lobby sends no key', async () => {
@@ -688,7 +688,7 @@ describe('team answer', () => {
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(host.keys).toEqual([]);
     expect(host.typed).toEqual([]);
-    expect(io.err).toBe('lead: ask the owner to approve this exact folder and answer through team up\n');
+    expect(io.err).toBe('lead: ask the owner to add this exact folder to trust and answer through team up\n');
     expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
   });
 
@@ -1254,7 +1254,7 @@ describe('team answer', () => {
     expect(host.typed).toEqual([]);
     expect([
       'lead: the dialog does not show the lobby as written: the owner answers it through team up\n',
-      'lead: ask the owner to approve this exact folder and answer through team up\n',
+      'lead: ask the owner to add this exact folder to trust and answer through team up\n',
     ]).toContain(io.err);
     expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
   });

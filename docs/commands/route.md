@@ -10,7 +10,10 @@ records that it handed the address out.
 
     team route <seat> [--json] [--dry-run]
 
-`<seat>` names one seat: a bare seat, a `seat@team`, or an agent id. Access is decided exactly as a
+`<seat>` names one seat: a bare seat or nickname, a `@nickname`, a `seat@team` or
+`nickname@team`, `lead@team`, or an agent id — the same address grammar
+[`team send`](send.md#addressing) takes.
+Access is decided exactly as a
 send's is, against the same team file, the same team rules, the same grant store, and default deny;
 the rule that admitted the pair is named in the answer. A spec the registry holds no record for is
 refused — a route hands out a recorded address, and `team up` or `team register` writes the record.

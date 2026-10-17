@@ -155,18 +155,18 @@ describe('team seats', () => {
     expect(ioJsonHelp.out).toBe(USAGE);
   });
 
-  test('lists active seats in the 11-column registry table and omits stopped seats by default', async () => {
+  test('lists active seats in the 12-column registry table and omits stopped seats by default', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runSeats(['--file', file], io, statusSources);
     expect(code).toBe(0);
     expect(io.out).toContain('team acme-web, session "acme-web"');
-    expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE    SOURCE  LAST ACTIVE  PANE');
+    expect(io.out).toContain('SEAT                     NICKNAME  ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE    SOURCE  LAST ACTIVE  PANE');
     // The coordinator is idle at its prompt, but its record was touched 12s before NOW — a
     // trace inside the window, which an idle word yields to (src/labels/state.ts).
-    expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               working  trace   now          pane-1');
-    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  idle     herdr   4m ago       pane-2');
-    expect(io.out).toContain('deepseek-acme            seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       done (screen not recognised)          done     herdr   1h ago       pane-3');
-    expect(io.out).toContain('deepseek-acme-2          seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle (screen not recognised)          idle     herdr   -            pane-4');
+    expect(io.out).toContain('claude-coordinator-acme  -         seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               working  trace   now          pane-1');
+    expect(io.out).toContain('codex-acme               -         seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  idle     herdr   4m ago       pane-2');
+    expect(io.out).toContain('deepseek-acme            -         seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       done (screen not recognised)          done     herdr   1h ago       pane-3');
+    expect(io.out).toContain('deepseek-acme-2          -         seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle (screen not recognised)          idle     herdr   -            pane-4');
     expect(io.out).toContain('4 seat(s)');
     expect(io.out).not.toContain('grok-acme');
   });
@@ -202,7 +202,7 @@ describe('team seats', () => {
     // reads `idle herdr`, as the scene above pins. The commit inside the window is a trace, and
     // a fresh trace beats an idle word: working, from TeamCLI's own record. A working reading is
     // activity now, whatever carried the word — the row says so, not the trace's age.
-    expect(io.out).toContain('codex-acme               seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  working  trace   now          pane-2');
+    expect(io.out).toContain('codex-acme               -         seat_222222222222  implementer          codex        GPT-6 Sol (unread)            xhigh   idle (screen not recognised), parked  working  trace   now          pane-2');
   });
 
   test('a seat’s own hook file is read from the state folder beside the team file', async () => {
@@ -236,7 +236,7 @@ describe('team seats', () => {
     live!.screens['pane-4'] = `⏺ Bash(ls -la)\n${claudeIdle}`;
     const io = testIo(dir, { kind: 'owner' });
     expect(await runSeats(['--file', file], io, statusSources)).toBe(0);
-    expect(io.out).toContain('deepseek-acme-2          seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle                                  idle     cli     -            pane-4');
+    expect(io.out).toContain('deepseek-acme-2          -         seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (unread)  -       idle                                  idle     cli     -            pane-4');
   });
 
   test('--all includes stopped seats with retained id and last_active', async () => {
@@ -244,7 +244,7 @@ describe('team seats', () => {
     const code = await runSeats(['--file', file, '--all'], io, statusSources);
     expect(code).toBe(0);
     // A retained seat is done (its process is gone), not judged blind on its day-old trace.
-    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done     process  1d ago       -');
+    expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done     process  1d ago       -');
     expect(io.out).toContain('5 seat(s)');
   });
 
@@ -265,6 +265,7 @@ describe('team seats', () => {
     ]);
     expect(parsedActive.seats[0]).toEqual({
       name: 'claude-coordinator-acme',
+      nickname: null,
       id: 'seat_111111111111',
       role: 'project coordinator',
       cli: 'claude-code',
@@ -287,6 +288,7 @@ describe('team seats', () => {
     const grok = parsedAll.seats.find((s) => s.name === 'grok-acme');
     expect(grok).toEqual({
       name: 'grok-acme',
+      nickname: null,
       id: 'seat_555555555555',
       role: 'reviewer',
       cli: 'grok',
@@ -495,14 +497,14 @@ describe('the reading against a live herdr', () => {
 });
 
 describe('team status --all', () => {
-  test('renders the 11-column registry table while preserving difference footer and notes', async () => {
+  test('renders the 12-column registry table while preserving difference footer and notes', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runStatus(['--file', file, '--all'], io, statusSources);
     expect(code).toBe(0);
     expect(io.out).toContain('team acme-web, session "acme-web"');
-    expect(io.out).toContain('SEAT                     ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE    SOURCE   LAST ACTIVE  PANE');
-    expect(io.out).toContain('claude-coordinator-acme  seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               working  trace    now          pane-1');
-    expect(io.out).toContain('grok-acme                seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done     process  1d ago       -');
+    expect(io.out).toContain('SEAT                     NICKNAME  ID                 ROLE                 CLI          MODEL                         EFFORT  STATUS                                STATE    SOURCE   LAST ACTIVE  PANE');
+    expect(io.out).toContain('claude-coordinator-acme  -         seat_111111111111  project coordinator  claude-code  Claude Opus 5.5               high    working                               working  trace    now          pane-1');
+    expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                      -       stopped                               done     process  1d ago       -');
     expect(io.out).toContain('0 difference(s)');
     expect(io.out).toContain('note: codex-acme: version unread');
   });
@@ -631,4 +633,34 @@ describe('team list --watch and --seats', () => {
   });
 });
 
+describe('a seat\'s nickname', () => {
+  test('is a column in seats and status --all, and a field in their JSON', async () => {
+    const named = example.replace(
+      '    launch: claude --model claude-opus-5-5\n',
+      '    launch: claude --model claude-opus-5-5\n    nickname: zeus\n',
+    );
+    expect(named).not.toBe(example);
+    writeFileSync(file, named);
+
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file], io, statusSources)).toBe(0);
+    expect(io.out).toContain('claude-coordinator-acme  zeus      seat_111111111111  project coordinator');
+    expect(io.out).toContain('codex-acme               -         seat_222222222222');
+
+    const ioJson = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], ioJson, statusSources)).toBe(0);
+    const doc = JSON.parse(ioJson.out) as SeatsJson;
+    expect(doc.seats.map((seat) => [seat.name, seat.nickname])).toEqual([
+      ['claude-coordinator-acme', 'zeus'],
+      ['codex-acme', null],
+      ['deepseek-acme', null],
+      ['deepseek-acme-2', null],
+    ]);
+
+    const ioAll = testIo(dir, { kind: 'owner' });
+    expect(await runStatus(['--file', file, '--all', '--json'], ioAll, statusSources)).toBe(0);
+    const status = JSON.parse(ioAll.out) as StatusJson;
+    expect(status.rows.find((row) => row.name === 'claude-coordinator-acme')?.nickname).toBe('zeus');
+  });
+});
 

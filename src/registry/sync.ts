@@ -61,22 +61,28 @@ function ensureTeam(input: RegistryTeam): string | null {
   return noteTeam(home, root, seed, 'running', by);
 }
 
-/** One roster entry set (an agent) or taken out (null). Every line's `leads` and `assistant` are
- *  re-resolved to the file's own marks — the lead seat `team.orchestrator`, whatever `leads: true`
- *  or `coordinator:` it was spelled with, and the seat the file marks `assistant: true` — the
- *  capabilities, never a role name. So a mark that moved between launches does not linger on a
- *  line that no longer holds it. */
+/** One roster entry set (an agent) or taken out (null). Every line's `nickname`, `leads` and
+ *  `assistant` are re-resolved to the file's own word — the human name the file writes on that
+ *  seat, the lead seat `team.orchestrator`, whatever `leads: true` or `coordinator:` it was
+ *  spelled with, and the seat the file marks `assistant: true` — the capabilities and the name,
+ *  never a role name. So a mark that moved between launches does not linger on a line that no
+ *  longer holds it. */
 function writeRoster(input: RegistryTeam, teamId: string, seat: string, entry: { agent: string; role: string } | null): void {
   const leadSeat = input.team.orchestrator;
   const assistantSeat = input.team.seats.find((candidate) => candidate.assistant === true)?.name ?? null;
-  const mark = (line: { agent: string; seat: string; role: string }): { agent: string; seat: string; role: string; leads?: boolean; assistant?: boolean } => ({
-    ...line,
-    ...(line.seat === leadSeat ? { leads: true } : {}),
-    ...(line.seat === assistantSeat ? { assistant: true } : {}),
-  });
+  const nicknames = new Map(input.team.seats.flatMap((candidate) => candidate.nickname === undefined ? [] : [[candidate.name, candidate.nickname] as const]));
+  const mark = (line: { agent: string; seat: string; role: string }): { agent: string; seat: string; role: string; nickname?: string; leads?: boolean; assistant?: boolean } => {
+    const nickname = nicknames.get(line.seat);
+    return {
+      ...line,
+      ...(nickname !== undefined ? { nickname } : {}),
+      ...(line.seat === leadSeat ? { leads: true } : {}),
+      ...(line.seat === assistantSeat ? { assistant: true } : {}),
+    };
+  };
   const roster = (getTeam(input.home, teamId)?.roster ?? [])
     .filter((item) => item.seat !== seat)
-    .map(({ leads: _stale, assistant: _staleAssistant, ...item }) => mark(item));
+    .map(({ leads: _stale, assistant: _staleAssistant, nickname: _staleNickname, ...item }) => mark(item));
   if (entry) roster.push(mark({ agent: entry.agent, seat, role: entry.role }));
   setRoster(input.home, teamId, roster);
 }
@@ -132,7 +138,12 @@ export function registerLaunch(
     const teamId = teamIdOf(input.root);
     const unrecorded = ensureTeam(input);
     if (unrecorded) return { note: unrecorded };
-    const known = findAgent(home, { team: teamId, seat: seat.name });
+    const known = findAgent(home, {
+      team: teamId,
+      seat: seat.name,
+      seatHandle: SEAT_HANDLE.test(handle ?? '') ? handle : null,
+    });
+    const priorSeat = known && known.reach.seat !== seat.name ? known.reach.seat : null;
     // The seat's stable handle, kept on the agent for continuity: set when the agent has none, and
     // never changed after, so a handle the state minted later does not rewrite the record.
     const seatHandle = SEAT_HANDLE.test(handle ?? '') && !known?.seat_handle ? { seat_handle: handle as string } : {};
@@ -159,7 +170,7 @@ export function registerLaunch(
     const stated = Object.keys(provenance).length === 0 ? undefined : provenance;
     const agent = known
       ? updateAgent(home, known.id, {
-        signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
+        name: seat.name, signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
         ...(stated === undefined ? {} : { provenance: stated }), ...seatHandle,
       })
       : registerAgent(home, {
@@ -167,9 +178,47 @@ export function registerLaunch(
         reach, mcp: [], skills: [], lifecycle: 'running', by, devMode,
         ...(delegation === undefined || delegation === null ? {} : { delegated: delegation }), ...seatHandle,
       });
+    if (priorSeat) writeRoster(input, teamId, priorSeat, null);
     writeRoster(input, teamId, seat.name, { agent: agent.id, role: seat.role });
     recordProjectLead(input, teamId);
     return { id: agent.id };
+  } catch (error) {
+    return { note: noteOf(error) };
+  }
+}
+
+/**
+ * A seat was renamed from `fromSeat` to `toSeat`: its agent record keeps the same `agt_…` id
+ * (so grants keyed by agent id continue to cover the seat) while `name` and `reach.seat` move
+ * to `toSeat` and the team's roster is re-keyed. Returns `{ id }` when an agent record was
+ * updated, `{ id: null }` when no live agent record existed yet, or `{ note }` on failure.
+ */
+export function registerRename(
+  input: RegistryTeam,
+  fromSeat: string,
+  toSeat: string,
+  handle?: string,
+): { id: string | null } | { note: string } {
+  try {
+    const { home, team } = input;
+    const teamId = teamIdOf(input.root);
+    const known = findAgent(home, {
+      team: teamId,
+      seat: fromSeat,
+      seatHandle: SEAT_HANDLE.test(handle ?? '') ? handle : null,
+    });
+    if (!known) return { id: null };
+    const seat = team.seats.find((candidate) => candidate.name === toSeat);
+    const seatHandle = SEAT_HANDLE.test(handle ?? '') && !known.seat_handle ? { seat_handle: handle as string } : {};
+    const updated = updateAgent(home, known.id, {
+      name: toSeat,
+      reach: { ...known.reach, seat: toSeat },
+      ...seatHandle,
+    });
+    writeRoster(input, teamId, fromSeat, null);
+    writeRoster(input, teamId, toSeat, { agent: updated.id, role: seat?.role ?? updated.signing.role });
+    recordProjectLead(input, teamId);
+    return { id: updated.id };
   } catch (error) {
     return { note: noteOf(error) };
   }

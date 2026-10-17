@@ -72,6 +72,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-or-leads',
       why: 'removing a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner',
     },
+    rename: {
+      kind: 'owner-or-leads',
+      why: 'renaming a seat: the owner or `leads` for its own team',
+    },
     register: {
       kind: 'owner-or-own-team',
       why: 'a registry record is a report and confers no right: the owner, or the seat\'s own team',

@@ -230,12 +230,23 @@ export function recordAgentAddress(home: string, id: string, address: string | n
 }
 
 /** The agent that holds a seat of a team. A retired agent no longer holds it; if more than one
- *  does, the most recently updated wins. */
-export function findAgent(home: string, query: { team: string; seat: string }): Agent | null {
+ *  does, the most recently updated wins. When `(team, seat)` finds none, an optional
+ *  `seatHandle` match in the same team keeps the same agent id across a seat rename. */
+export function findAgent(
+  home: string,
+  query: { team: string; seat: string; seatHandle?: string | null },
+): Agent | null {
+  const agents = readAgents(home);
   let found: Agent | null = null;
-  for (const agent of readAgents(home)) {
+  for (const agent of agents) {
     if (agent.lifecycle === 'retired') continue;
     if (agent.reach.team !== query.team || agent.reach.seat !== query.seat) continue;
+    if (!found || agent.provenance.updated_at >= found.provenance.updated_at) found = agent;
+  }
+  if (found || !query.seatHandle) return found;
+  for (const agent of agents) {
+    if (agent.lifecycle === 'retired' || agent.reach.team !== query.team) continue;
+    if (agent.seat_handle !== query.seatHandle) continue;
     if (!found || agent.provenance.updated_at >= found.provenance.updated_at) found = agent;
   }
   return found;

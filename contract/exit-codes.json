@@ -382,6 +382,13 @@
     {
       "code": 2,
       "command": "add",
+      "id": "add.reserved-name",
+      "meaning": "a new seat may not be named lead",
+      "trigger": "team add lead"
+    },
+    {
+      "code": 2,
+      "command": "add",
       "id": "add.seat-name",
       "meaning": "a seat name is required",
       "trigger": "team add"
@@ -2600,6 +2607,34 @@
     },
     {
       "code": 0,
+      "command": "rename",
+      "id": "rename.done",
+      "meaning": "the seat was renamed (or --renumber planned/applied)",
+      "trigger": "team rename worker builder-1"
+    },
+    {
+      "code": 1,
+      "command": "rename",
+      "id": "rename.refused",
+      "meaning": "the caller is not the owner or leads, the target seat exists, or the target clashes with a nickname",
+      "trigger": "team rename worker lead"
+    },
+    {
+      "code": 2,
+      "command": "rename",
+      "id": "rename.invalid",
+      "meaning": "the team file or new seat name is invalid",
+      "trigger": "team rename worker Bad_Name"
+    },
+    {
+      "code": 2,
+      "command": "rename",
+      "id": "rename.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team rename"
+    },
+    {
+      "code": 0,
       "command": "restart",
       "id": "restart.dry-run",
       "meaning": "the stop and launch plan was printed and nothing was touched",
@@ -2959,8 +2994,8 @@
       "code": 2,
       "command": "send",
       "id": "send.configuration",
-      "meaning": "the team file can't be read",
-      "trigger": "team send worker hello --file missing.yaml"
+      "meaning": "the team file cannot be read, or the caller's folder is no team and a bare name has none to resolve in",
+      "trigger": "team send lead --file missing.yaml"
     },
     {
       "code": 2,

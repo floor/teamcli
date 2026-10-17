@@ -72,9 +72,9 @@ team --version            # 0.4.8
 
 `team init` keeps `.agents/team.yaml` out of git through `.git/info/exclude`, never by editing
 `.gitignore`: a public repository shouldn't carry its roster. A fresh clone therefore has no team
-file. Run `team init` to write one, or `team init --restore` to bring back the copy you last
-approved on this machine. A file you receive from someone else runs nothing until you approve it
-yourself.
+file. Run `team init` to write one, or `team init --restore` to bring back the copy this machine
+stored. A file you receive from someone else is the record as soon as you run it: read it before
+you start its seats.
 
 ## The file's format
 

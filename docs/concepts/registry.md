@@ -73,4 +73,5 @@ the project's lead. A team the registry names in two projects is refused by
 An id is assigned once and never changes: a rename moves `name`, never `id`, and a retired id is
 never reused. A seat keeps its id across relaunches; only `reach.pane` is re-pointed. Routing and
 the sender header read the id — a name is for display, and for addressing a target as
-`<seat>@<team>`.
+`<seat>@<team>`; a human name addresses one as `@<nickname>` in its own team or
+`<nickname>@<team>`.

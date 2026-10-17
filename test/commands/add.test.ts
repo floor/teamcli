@@ -16,6 +16,7 @@ import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
 import { rulesFilePath } from '../../src/launch/rules-file.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
@@ -121,6 +122,14 @@ function approve(text: string = FILE): void {
     loaded.team.seats,
     home,
   );
+}
+
+/** The team's signed word on the seat numbering, written into the file the run reads and then
+ *  approved over it — the policy is part of the text the approval covers. */
+function setNumbering(value: string): void {
+  const written = writePolicySet(home, { level: 'team', target: project, teamRoot: project, name: 'seat-numbering', value }, { now: NOW });
+  if (!written.ok) throw new Error(written.why);
+  approve(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8'));
 }
 
 function doctor(): DoctorSources {
@@ -230,6 +239,82 @@ describe('team add', () => {
     expect(readState(join(project, '.agents')).sessions.acme?.seats.worker?.stage).toBe('ready');
     const loaded = loadTeamFile(project, { home });
     expect(loaded.ok && approvalDifferences(loaded.team, project, home)).toEqual([]);
+  });
+
+  test('a file where builder-1 and builder-01 are one number is refused at load, before anything starts', async () => {
+    const clashing = FILE.replace('name: worker', 'name: builder-1').replace('name: scribe', 'name: builder-01');
+    writeFileSync(join(project, '.agents', 'team.yaml'), clashing);
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['builder-1'], io, sources(made))).toBe(2);
+    expect(io.err).toContain('two seats have the same role and number: "builder-1" on line');
+    expect(io.err).toContain('and "builder-01" here');
+    expect(made.creates).toEqual([]);
+    expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toBe(clashing);
+  });
+
+  test('refuses a new seat named lead, and points the lead address at the team\'s lead', async () => {
+    // The fixture's lead seat is named by `team init`'s default, so `lead` is a name the file
+    // does not declare: exactly the new name the reservation binds.
+    const text = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
+    approve(
+      text
+        .replace('coordinator: lead\n', 'coordinator: orchestrator\n')
+        .replace('operator: lead\n', 'operator: orchestrator\n')
+        .replace('    name: lead\n    label: lead\n', '    name: orchestrator\n    label: orchestrator\n'),
+    );
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['lead'], io, sources(made))).toBe(2);
+    expect(io.err).toContain(
+      'team add: "lead" is reserved: lead@<team> addresses the team\'s lead, so no new seat takes it as a name\nUsage: team add <name>',
+    );
+    expect(made.creates).toEqual([]);
+  });
+
+  test('a legacy file that declares a seat named lead still starts it: the reservation binds new names', async () => {
+    // The fixture's coordinator is literally named `lead`, as files written before 0.5.0 may
+    // be: it loads, and re-adding it is a restart, never a new name.
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['lead'], io, sources(made))).toBe(0);
+    expect(io.err).not.toContain('is reserved');
+  });
+
+  test('the next temporary number is two digits by default and numeric past 9', async () => {
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/out.md'], io, sources(made))).toBe(0);
+    expect(made.creates).toEqual(['worker-tmp-01']);
+    // The same team again: the taken number is 1, so the next mint is 2.
+    const again = world();
+    const ioAgain = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/out.md'], ioAgain, sources(again))).toBe(0);
+    expect(again.creates).toEqual(['worker-tmp-02']);
+  });
+
+  test('a width 3 seat-numbering at the team level writes the temporary name at that width', async () => {
+    setNumbering('3-');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/out.md'], io, sources(made))).toBe(0);
+    expect(made.creates).toEqual(['worker-tmp-001']);
+    // The taken number is 1, so the next mint is 2 at the same width.
+    const again = world();
+    const ioAgain = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/out.md'], ioAgain, sources(again))).toBe(0);
+    expect(again.creates).toEqual(['worker-tmp-002']);
+  });
+
+  test('an auto seat-numbering writes the number at its own width after the declared separator, and an older width still holds its number', async () => {
+    // The file holds worker-tmp-1 under the hyphen: number 1 is taken whatever separator the
+    // setting writes, so the next mint is 2 — written plain, with no padding under `auto`.
+    approve(FILE.replace('name: scribe', 'name: worker-tmp-1'));
+    setNumbering('auto.');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/out.md'], io, sources(made))).toBe(0);
+    expect(made.creates).toEqual(['worker-tmp.2']);
   });
 
   test('a dev-mode add records the mark and the caller it admitted', async () => {
@@ -559,24 +644,24 @@ describe('team add', () => {
     const code = await runAdd(['--temporary', '--like', 'worker', '--until', 'merged:fix/fresh'], io, sources(made));
     expect(code).toBe(0);
     // A redirected stdout holds the seat's one record, and records alone.
-    expect(io.out).toBe('worker-tmp-1: ready\n');
-    expect(made.renames).toEqual(['worker-tmp-1']);
+    expect(io.out).toBe('worker-tmp-01: ready\n');
+    expect(made.renames).toEqual(['worker-tmp-01']);
     const text = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
     const loaded = loadTeamFile(project, { home });
     if (!loaded.ok) throw new Error(loaded.errors.map((problem) => problem.message).join('\n'));
-    expect(loaded.team.seats.map((seat) => seat.name)).not.toContain('worker-tmp-1');
+    expect(loaded.team.seats.map((seat) => seat.name)).not.toContain('worker-tmp-01');
     expect(text).toContain('stopped: true');
-    const seat = readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1'];
+    const seat = readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-01'];
     expect(seat?.temporary).toEqual({ like: 'worker', until: 'merged:fix/fresh', own_commits: false });
     expect(readLedger(storePath('acme', project, home)).some((entry) => entry.display === 'Claude Opus 5.5')).toBe(true);
     // One line per final record: the log holds the seat's record alone, never the separate
     // `started <seat>` line `add` used to write beside it. The temporary facts stay in the
     // state file and the seat's doctor/status reading.
     const log = readFileSync(join(project, '.agents', 'team.log'), 'utf8');
-    const mine = log.split('\n').filter((line) => line.includes('worker-tmp-1'));
+    const mine = log.split('\n').filter((line) => line.includes('worker-tmp-01'));
     expect(mine).toHaveLength(1);
-    expect(mine[0]).toContain('worker-tmp-1: ready');
-    expect(log).not.toContain('started worker-tmp-1');
+    expect(mine[0]).toContain('worker-tmp-01: ready');
+    expect(log).not.toContain('started worker-tmp-01');
     expect(log).not.toContain('until merged:fix/fresh');
   });
 
@@ -595,14 +680,14 @@ describe('team add', () => {
     made.launch.closeWorkspace = (_session, workspace) => { closes.push(workspace); return true; };
     // The rules file is written only when the rules are delivered, and this seat never reached
     // its prompt: nothing was typed, so no file exists. It is the `team up` finish that types.
-    const file = rulesFilePath('acme', project, home, 'scribe-tmp-1') as string;
+    const file = rulesFilePath('acme', project, home, 'scribe-tmp-01') as string;
     const io = testIo(project, owner);
     expect(await runAdd(['--temporary', '--like', 'scribe', '--until', 'merged:fix/fresh'], io, sources(made))).toBe(1);
-    expect(io.out).toContain('scribe-tmp-1: left out: trust\n');
+    expect(io.out).toContain('scribe-tmp-01: left out: trust\n');
     expect(io.err).toContain('  the owner finishes it with `team up`\n');
     expect(closes).toEqual([]);
     expect(existsSync(file)).toBe(false);
-    const seat = readState(join(project, '.agents')).sessions.acme?.seats['scribe-tmp-1'];
+    const seat = readState(join(project, '.agents')).sessions.acme?.seats['scribe-tmp-01'];
     expect(seat?.waiting).toMatchObject({ state: 'waiting-owner', classification: 'trust' });
     expect(seat?.temporary).toMatchObject({ like: 'scribe', until: 'merged:fix/fresh' });
   });
@@ -621,7 +706,7 @@ describe('team add', () => {
     const absolute = testIo(project, owner);
     expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:/tmp/out.md'], absolute, sources(world()))).toBe(1);
     expect(absolute.err).toContain('relative to the project');
-    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-01']).toBeUndefined();
 
     // `../outside.md` is outside this project (home/acme). `notes/../../outside.md` contains
     // `..` and lands in the same place. Neither may be stored, and no seat is recorded.
@@ -632,14 +717,14 @@ describe('team add', () => {
     const nested = testIo(project, owner);
     expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/../../outside.md'], nested, sources(world()))).toBe(1);
     expect(nested.err).toContain('relative to the project');
-    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-01']).toBeUndefined();
   });
 
   test('refuses a merged branch that starts with a dash', async () => {
     const io = testIo(project, owner);
     expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'merged:-not-a-branch'], io, sources(world()))).toBe(1);
     expect(io.err).toContain('is not a branch name');
-    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeUndefined();
+    expect(readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-01']).toBeUndefined();
   });
 
   test('each start limit refuses with its figure before the file is edited', async () => {
@@ -760,7 +845,7 @@ describe('team add', () => {
     const yaml = `${readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')}limits:\n  seats: 2\n  temporary: 1\n  vendors:\n    anthropic: 1\n    openai: 1\n`;
     approve(yaml);
     const liveTemp: HerdrAgent = {
-      name: 'worker-tmp-1',
+      name: 'worker-tmp-01',
       agent: 'claude',
       pane: 'pane-temp',
       workspace: 'ws-temp',
@@ -861,11 +946,11 @@ describe('team add', () => {
     made.launch.processInfo = () => ({ shell: 200, foreground: [201] });
     const io = testIo(project, owner);
     expect(await runAdd(['--temporary', '--like', 'scribe', '--until', 'merged:fix/fresh'], io, sources(made))).toBe(1);
-    expect(io.out).toContain('scribe-tmp-1: left out: vendor notice\n');
+    expect(io.out).toContain('scribe-tmp-01: left out: vendor notice\n');
     expect(io.err).toContain('  the owner finishes it with `team up`\n');
     expect(closed).toEqual([]);
     expect(sent).toEqual([]);
-    const seat = readState(join(project, '.agents')).sessions.acme?.seats['scribe-tmp-1'];
+    const seat = readState(join(project, '.agents')).sessions.acme?.seats['scribe-tmp-01'];
     expect(seat?.waiting).toMatchObject({ state: 'waiting-owner', classification: 'vendor notice' });
     expect(seat?.launched).toEqual({ shell: 200, cli: [201] });
   });
@@ -1663,7 +1748,7 @@ describe('team add --model and --effort', () => {
     expect(typed).toHaveLength(1);
     expect(typed[0]).toContain('claude --model claude-sonnet-5-5 --effort medium');
 
-    const recorded = readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-1'];
+    const recorded = readState(join(project, '.agents')).sessions.acme?.seats['worker-tmp-01'];
     expect(recorded?.id).toMatch(/^seat_[0-9a-f]{12}$/);
     expect(recorded?.model).toBe('Claude Sonnet');
     expect(recorded?.version).toBe('5.5');

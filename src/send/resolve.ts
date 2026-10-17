@@ -1,15 +1,25 @@
-// Send addressing: one spec — an agent id (`agt_…`), a `seat@team`, or a plain seat of the
-// team whose shell the caller stands in — resolved through the registry. The registry's records
-// are the address; the live herdr read is the fallback for a record that carries no pane yet.
+// Send addressing: one spec — an agent id (`agt_…`), a `@<nickname>`, a `<target>@<team>` (a
+// seat or a nickname before the `@`, or the reserved `lead` for the team's own lead), or a plain
+// seat or nickname of the team whose shell the caller stands in — resolved through the registry.
+// The parse step reads the text alone; the lookup step asks the team's roster and the agent
+// records what it reaches. The registry's records are the address; the live herdr read is the
+// fallback for a record that carries no pane yet.
 
 import { loadTeamFile } from '../file/load.ts';
 import { agentList } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { AGENT_ID_PATTERN, findAgent, getAgent, type Agent } from '../registry/agents.ts';
-import { findTeam, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { findTeam, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 
 /** What a spec resolves to: the owning team record, the agent, and the pane to type into. */
 export type Target = { team: TeamRecord; agent: Agent; pane: string };
+
+/**
+ * A spec the resolver refuses. `kind` labels the refusals a caller must act on before any
+ * fallback: an ambiguous spec names two seats (or two leads for `lead@<team>`), and no
+ * declared-seat path may pick one of them by accident.
+ */
+export type ResolveProblem = { error: string; kind?: 'ambiguous' };
 
 /** One live agent as the herdr read returns it: a name and a pane. */
 export type LiveAgent = { name?: string | null; pane: string };
@@ -18,43 +28,84 @@ export type LiveRead = (session: string) => LiveAgent[] | null;
 
 const liveFromHerdr: LiveRead = (session) => agentList(session);
 
-/** True for the specs the registry alone answers: an agent id, whole or mistyped, and a
- *  `seat@team`. A plain seat is answered by the registry too, but falls back to the pre-registry
- *  path when the team has no record. */
+/** The reserved word that addresses a team's lead: `lead@<team>`. No team file may give a new
+ *  seat or any nickname that name (src/file/sections/seats.ts), so the address names the `leads`
+ *  seat and nothing else; a legacy seat that keeps the name loads and is addressed bare, never
+ *  by the lead address. */
+const LEAD = 'lead';
+
+const GRAMMAR = '@<nickname>, <seat>@<team>, <nickname>@<team>, lead@<team>, or an agent id';
+
+/** True for the specs the registry alone answers: an agent id, whole or mistyped, a
+ *  `@<nickname>`, and a `<seat>@<team>`. A plain seat is answered by the registry too, but
+ *  falls back to the pre-registry path when the team has no record. */
 export function isRegistrySpec(spec: string): boolean {
   return AGENT_ID_PATTERN.test(spec) || spec.startsWith('agt_') || spec.includes('@');
 }
 
+/** What a spec's text names, before the registry is asked: an agent id, a bare
+ *  `@<nickname>`, a `<target>@<team>` pair (a seat, a nickname, or the reserved `lead`), or a
+ *  plain seat or nickname of the caller's own team. The parse reads no file. */
+export type ParsedSpec =
+  | { kind: 'id'; id: string }
+  | { kind: 'at'; target: string; scope: string }
+  | { kind: 'nickname'; nickname: string }
+  | { kind: 'seat'; seat: string };
+
 /**
- * The team a spec names, as a person wrote it: the agent id's own `reach.team`, or the key after
- * the `@`, or — for a plain seat — the team file at the caller's cwd, matched by the id the
- * registry keys teams on, then by the project or session name it may also be written as.
+ * The parse step: one grammar, whatever the `<target>` later turns out to name. An agent id is
+ * whole; a spec that starts with `@` is a bare nickname; `<target>@<scope>` is exactly one `@`
+ * with a scope after it. A plain target is a seat or nickname of the caller's own team. The
+ * agent-id spelling is caught before the plain form so a mistyped id is refused as one rather
+ * than looked up as a seat.
+ */
+export function parseSpec(spec: string): ParsedSpec | { error: string } {
+  if (AGENT_ID_PATTERN.test(spec)) return { kind: 'id', id: spec };
+  if (spec.startsWith('@')) {
+    const nickname = spec.slice(1);
+    if (nickname === '' || nickname.includes('@')) return { error: `${spec}: a spec is ${GRAMMAR}` };
+    return { kind: 'nickname', nickname };
+  }
+  const at = spec.indexOf('@');
+  if (at >= 0) {
+    const target = spec.slice(0, at);
+    const scope = spec.slice(at + 1);
+    if (at !== spec.lastIndexOf('@') || scope === '') {
+      return { error: `${spec}: a spec is ${GRAMMAR}` };
+    }
+    return { kind: 'at', target, scope };
+  }
+  if (spec.startsWith('agt_')) return { error: `${spec}: that is not an agent id (agt_ plus 12 hex)` };
+  return { kind: 'seat', seat: spec };
+}
+
+/**
+ * The team a spec names, as a person wrote it: the agent id's own `reach.team`, the scope after
+ * the `@`, the caller's own team for a `@<nickname>`, or — for a plain seat — the team file at
+ * the caller's cwd, matched by the id the registry keys teams on, then by the project or
+ * session name it may also be written as.
  */
 export function resolveTarget(
   home: string,
   spec: string,
   io: Pick<Io, 'cwd'>,
   live: LiveRead = liveFromHerdr,
-): Target | { error: string } {
-  if (AGENT_ID_PATTERN.test(spec)) return fromId(home, spec, live);
-  const at = spec.indexOf('@');
-  if (at >= 0) {
-    const seat = spec.slice(0, at);
-    const key = spec.slice(at + 1);
-    if (at !== spec.lastIndexOf('@') || seat === '' || key === '') {
-      return { error: `${spec}: a spec is <seat>@<team>, or an agent id` };
-    }
-    const team = findTeam(home, key);
-    if (!team) return { error: `${spec}: no team registry record matches "${key}" (by id, project or session)` };
-    return fromSeat(home, spec, team, seat, live);
+): Target | ResolveProblem {
+  const parsed = parseSpec(spec);
+  if ('error' in parsed) return parsed;
+  if (parsed.kind === 'id') return fromId(home, parsed.id, live);
+  if (parsed.kind === 'at') {
+    const team = findTeam(home, parsed.scope);
+    if (!team) return { error: `${spec}: no team registry record matches "${parsed.scope}" (by id, project or session)` };
+    return lookupInTeam(home, spec, team, parsed.target, live, true);
   }
-  if (spec.startsWith('agt_')) return { error: `${spec}: that is not an agent id (agt_ plus 12 hex)` };
+  if (parsed.kind === 'nickname') return fromNickname(home, spec, parsed.nickname, io, live);
   const loaded = loadTeamFile(io.cwd, { home });
   if (!loaded.ok) return { error: `${spec}: the team of the caller's folder cannot be read (${io.cwd})` };
   const id = teamIdOf(loaded.root);
   const team = findTeam(home, id) ?? findTeam(home, loaded.team.project) ?? findTeam(home, loaded.team.session);
   if (!team) return { error: `${spec}: this team has no registry record yet` };
-  return fromSeat(home, spec, team, spec, live);
+  return lookupInTeam(home, spec, team, parsed.seat, live, false);
 }
 
 /** The agent that holds a seat, across the spellings a record's `reach.team` may use: the
@@ -67,7 +118,7 @@ export function seatAgent(home: string, teamKeys: string[], seat: string): Agent
   return null;
 }
 
-function fromId(home: string, id: string, live: LiveRead): Target | { error: string } {
+function fromId(home: string, id: string, live: LiveRead): Target | ResolveProblem {
   const agent = getAgent(home, id);
   if (!agent) return { error: `${id}: no registered agent carries that id` };
   if (agent.lifecycle === 'retired') return { error: `${id}: the agent is retired; nothing was sent` };
@@ -78,21 +129,170 @@ function fromId(home: string, id: string, live: LiveRead): Target | { error: str
   return { team, agent, pane: pane.pane };
 }
 
-function fromSeat(
+type NicknameSeat = { team: TeamRecord; seat: string };
+
+/** The roster lines one nickname answers in one team. The file makes a nickname unique in its
+ *  team; a registry written elsewhere may hold the collision, and no address in it may pick a
+ *  seat by accident. */
+function nicknameSeatsOf(team: TeamRecord, nickname: string): NicknameSeat[] {
+  return team.roster
+    .filter((entry) => entry.nickname === nickname)
+    .map((entry) => ({ team, seat: entry.seat }));
+}
+
+/**
+ * The seat a `@<nickname>` names: the caller's team first — the team file at its cwd and the
+ * registry record keyed on it — then the other teams of that team's entity, each asked for a
+ * roster line carrying the nickname. A caller outside any team's folder has neither, so every
+ * team record is asked. Exactly one answer sends; several are refused, each named by the
+ * `<nickname>@<team>` spelling that picks it; none is refused, pointing at `team send --list`.
+ */
+function fromNickname(
+  home: string,
+  spec: string,
+  nickname: string,
+  io: Pick<Io, 'cwd'>,
+  live: LiveRead,
+): Target | ResolveProblem {
+  // The caller's own team: the file at its cwd names the registry record (by the id the registry
+  // keys on, then the project or session it may also be written as), and the file's `entity`
+  // stands in when that record carries none.
+  let self: TeamRecord | null = null;
+  let entity: string | null = null;
+  const loaded = loadTeamFile(io.cwd, { home });
+  if (loaded.ok) {
+    const id = teamIdOf(loaded.root);
+    self = findTeam(home, id) ?? findTeam(home, loaded.team.project) ?? findTeam(home, loaded.team.session);
+    entity = self?.entity ?? loaded.team.entity ?? null;
+  }
+  if (self !== null) {
+    const own = nicknameSeatsOf(self, nickname);
+    if (own.length > 1) {
+      const named = own.map((one) => `the seat "${one.seat}"`);
+      return { error: `${spec}: the nickname "${nickname}" names more than one seat of this team — ${named.join(' and ')}; nothing was sent`, kind: 'ambiguous' };
+    }
+    if (own.length === 1) {
+      const one = own[0] as NicknameSeat;
+      return targetOfSeat(home, spec, self, one.seat, `the seat "${one.seat}" (the nickname "${nickname}")`, live);
+    }
+  }
+  const teams = Object.values(readTeams(home)).sort((left, right) => left.project.localeCompare(right.project));
+  // Inside a team's folder, that team and its entity are the whole reach; outside one, every
+  // registry record is. A caller whose team has no entity is reached by its own team alone.
+  const scope =
+    self === null
+      ? teams
+      : teams.filter((team) => team.id !== self.id && entity !== null && team.entity === entity);
+  const found = scope.flatMap((team) => nicknameSeatsOf(team, nickname));
+  if (found.length === 0) {
+    return { error: `${spec}: no seat carries the nickname "${nickname}"; \`team send --list\` shows the addresses` };
+  }
+  if (found.length > 1) {
+    const named = found.map((one) => `${nickname}@${one.team.project}`);
+    return { error: `${spec}: the nickname "${nickname}" is on more than one team: ${named.join(' or ')}: say which`, kind: 'ambiguous' };
+  }
+  const only = found[0] as NicknameSeat;
+  return targetOfSeat(home, spec, only.team, only.seat, `the seat "${only.seat}" (the nickname "${nickname}")`, live);
+}
+
+/**
+ * The lookup step: the record a target reaches inside the team its scope named. The team's roster
+ * is asked first, so a seat is reached by its name, a nickname by the human name the file gives
+ * it, and the `lead@<team>` address by the seat whose entry holds `leads` — never by a role's
+ * name, and never the seat that happens to be named `lead` (which keeps its bare name). A target
+ * two entries answer, as one seat's name and another seat's nickname, is refused naming both
+ * before anything is sent. A seat no roster line names keeps the agent-record lookup, so a
+ * registry whose roster has not caught up still addresses the seat. The records' own spellings —
+ * the id the registry keys on, then its project and session — are asked, because a record's
+ * `reach.team` may be written as any of them.
+ */
+function lookupInTeam(
+  home: string,
+  spec: string,
+  team: TeamRecord,
+  target: string,
+  live: LiveRead,
+  leadAddress: boolean,
+): Target | ResolveProblem {
+  const chosen = seatOfTarget(team, spec, target, leadAddress);
+  if (chosen !== null && 'error' in chosen) return chosen;
+  const seat = chosen === null ? target : chosen.seat;
+  const wanted =
+    chosen === null
+      ? `the seat or nickname "${target}"`
+      : chosen.via === 'lead'
+        ? `the seat "${seat}"`
+        : seat === target
+          ? `the seat "${seat}"`
+          : `the seat "${seat}" (the nickname "${target}")`;
+  return targetOfSeat(home, spec, team, seat, wanted, live);
+}
+
+/** One roster seat's agent and pane, the registry asked by the record's own team spellings. */
+function targetOfSeat(
   home: string,
   spec: string,
   team: TeamRecord,
   seat: string,
+  wanted: string,
   live: LiveRead,
-): Target | { error: string } {
+): Target | ResolveProblem {
   const agent = seatAgent(home, [teamIdOf(team.root), team.project, team.session], seat);
   // The commands that write the record this spec needs: `register` records a seat its file
   // declares where it already runs, and `up` records every seat it launches, so a seat that ran
   // before this machine's store held it is judged by its own row afterwards.
-  if (!agent) return { error: `${spec}: no registered agent holds the seat "${seat}" in that team; \`team up\` records a seat it launches, or \`team register ${seat}\` records one already running` };
+  if (!agent) {
+    return { error: `${spec}: no registered agent holds ${wanted} in that team; \`team up\` records a seat it launches, or \`team register ${seat}\` records one already running` };
+  }
   const pane = paneOf(agent, live);
   if ('error' in pane) return pane;
   return { team, agent, pane: pane.pane };
+}
+
+/**
+ * The seat a target names in one team, from the team's roster: the `lead@<team>` address is the
+ * team's lead — the entry its file marks `leads: true`, since the reserved word may not be a new
+ * seat's name or any nickname, though a legacy seat may still carry the name and keeps its bare
+ * spelling. A team with no lead has no one its lead address can reach, so the send is refused
+ * rather than silently dropped; a roster marking two leads refuses that address too, naming both.
+ * Any other target is a seat's name or a nickname, and one that two entries answer is refused
+ * naming both: the load refuses that collision, so only a registry written elsewhere can hold it,
+ * and no address in it may pick a seat by accident. `null` leaves the target to the agent-record
+ * lookup in `targetOfSeat`.
+ */
+function seatOfTarget(
+  team: TeamRecord,
+  spec: string,
+  target: string,
+  leadAddress: boolean,
+): { seat: string; via: 'lead' | 'seat' | 'nickname' } | ResolveProblem | null {
+  if (leadAddress && target === LEAD) {
+    const [lead, ...otherLeads] = team.roster.filter((entry) => entry.leads === true);
+    if (lead === undefined) {
+      // TODO 0.5.1: resolve to the owner once the owner is reachable through team send
+      return { error: `${spec}: this team has no lead seat, so there is no one to deliver to; name a seat (team send --list) or give a seat \`leads\`` };
+    }
+    if (otherLeads.length > 0) {
+      const named = [lead, ...otherLeads].map((entry) => `"${entry.seat}"`);
+      return { error: `${spec}: this team has more than one lead seat — ${named.join(' and ')}; nothing was sent`, kind: 'ambiguous' };
+    }
+    return { seat: lead.seat, via: 'lead' };
+  }
+  const seatNames = team.roster.filter((entry) => entry.seat === target).map((entry) => entry.seat);
+  const nicknameSeats = team.roster
+    .filter((entry) => entry.nickname === target && entry.seat !== target)
+    .map((entry) => entry.seat);
+  const answers = [...new Set([...seatNames, ...nicknameSeats])];
+  if (answers.length > 1) {
+    const named = [
+      ...seatNames.map((seat) => `the seat "${seat}"`),
+      ...nicknameSeats.filter((seat) => !seatNames.includes(seat)).map((seat) => `the nickname "${target}" of the seat "${seat}"`),
+    ];
+    return { error: `${spec}: the spec matches two seats — ${named.join(' and ')}; nothing was sent`, kind: 'ambiguous' };
+  }
+  if (seatNames.length > 0) return { seat: seatNames[0] as string, via: 'seat' };
+  if (nicknameSeats.length > 0) return { seat: nicknameSeats[0] as string, via: 'nickname' };
+  return null;
 }
 
 /** The pane to type into: the one the record carries, re-pointed on relaunch; when it carries

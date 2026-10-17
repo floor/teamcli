@@ -61,6 +61,14 @@ export type SeatReach = {
 export type Seat = {
   role: string;
   name: string;
+  /**
+   * The human name for this seat, when the file writes one: unique in its team, never another
+   * seat's name, and conferring nothing — the role keeps the grants. A send may address it as a
+   * bare name in its own team or `<nickname>@<team>` elsewhere (src/send/resolve.ts). A field of
+   * the built seat like every other, so it is part of the seat's digest and omitted when the
+   * file omits the key — every file that writes none keeps the digest it had.
+   */
+  nickname?: string;
   cli: string;
   vendor: string;
   /**

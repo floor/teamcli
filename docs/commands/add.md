@@ -84,7 +84,11 @@ that proceeds is attributed in the log before its effects, as
 | `--json` | one `team.add` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | the usage, and exit 0 |
 
-The temporary seat's name is the `--like` seat's, with `-tmp-<n>`: the first `n` that is free.
+The temporary seat's name is the `--like` seat's, with `-tmp-` and the next free seat number. The
+number is written in the width and separator the advised `seat-numbering` setting resolves for the
+team — two digits and `-` by default (`worker-tmp-01`), or a width of 1 to 4 digits, or `auto` for
+the number's own digits, with the separator the setting names. Numbers are compared as numbers, so
+a name from an older width still holds its place: 9 is followed by 10, and 99 by 100.
 
 `--until` accepts one of two ends, and nothing else.
 
@@ -162,6 +166,7 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 | --- | --- |
 | `team add: unknown option --x` / `team add: a seat name is required` / `team add: --like needs a value` (each with the usage) | 2 |
 | `team add: --like, --until and --worktree are for --temporary` | 2 |
+| `team add: "lead" is reserved: lead@<team> addresses the team's lead, so no new seat takes it as a name` — the file declares no seat of the name; a file written before 0.5.0 that already declares one still starts it | 2 |
 | `team add: line <n>: <message>` / `team add: <message>` | 2 |
 | `team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is <caller>` | 1 |
 | ``team add: delegation needs a verified approval: <reason>`` — the delegate gate. A fingerprint difference is not a refusal; the live file names the delegate | 1 |
@@ -312,7 +317,7 @@ A temporary seat is not in the file at all. It is a copy of an approved seat —
 
 ```console
 $ team add --temporary --like claude-beacon --until result:notes/result.md ; echo "exit $?"
-claude-beacon-tmp-1: ready
+claude-beacon-tmp-01: ready
 exit 0
 ```
 

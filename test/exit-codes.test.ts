@@ -45,6 +45,7 @@ import { runProjects, type ProjectSources, type ProjectView } from '../src/comma
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runRename } from '../src/commands/rename.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -569,6 +570,17 @@ function invalid(place: Place): void {
 
 scene('add.invocation', async (place) => show(await added(place, ['--nope'], owner, addSources(place)), 'unknown option'));
 scene('add.seat-name', async (place) => show(await added(place, [], owner, addSources(place)), 'a seat name is required'));
+scene('add.reserved-name', async (place) => {
+  // The file names its lead the way `team init` writes it, so `lead` would be a new name; a
+  // legacy file that already declares the seat starts it instead (the add tests hold that half).
+  write(
+    place,
+    TWO.replace('coordinator: lead\n', 'coordinator: orchestrator\n')
+      .replace('operator: lead\n', 'operator: orchestrator\n')
+      .replace('    name: lead\n    label: lead\n', '    name: orchestrator\n    label: orchestrator\n'),
+  );
+  return show(await added(place, ['lead'], owner, addSources(place)), '"lead" is reserved');
+});
 scene('add.temporary-unexpected', async (place) => show(await added(place, ['extra', '--temporary'], owner, addSources(place)), 'unexpected'));
 scene('add.temporary-flags', async (place) => show(await added(place, ['worker', '--like', 'lead'], owner, addSources(place)), '--like, --until and --worktree'));
 scene('add.not-a-repo', async (place) => show(await added(place, ['worker'], owner, addSources(place)), 'not inside a git repository'), false);
@@ -3256,7 +3268,7 @@ scene('ask-show.invocation', async (place) =>
 
 scene('send.usage', async (place) => show(await sent(place, [], owner, sendHost(place)), 'a seat and a message are required'));
 scene('send.configuration', async (place) =>
-  show(await sent(place, ['lead', '--file', 'missing.yaml'], owner, sendHost(place)), 'no team file'));
+  show(await sent(place, ['lead', '--file', 'missing.yaml'], owner, sendHost(place)), 'lead needs a team'));
 scene('send.refused', async (place) => {
   write(place, TWO);
   return show(await sent(place, ['missing', 'hello'], owner, sendHost(place)), 'it is not a declared seat');
@@ -3303,7 +3315,7 @@ scene('send.dry-run', async (place) => {
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['--list'], owner, sendHost(place)), '  lead  coordinator  acme     socket');
+  return show(await sent(place, ['--list'], owner, sendHost(place)), '  lead  -         coordinator  acme     socket');
 });
 
 /** The file's lead seat, registered and rostered: `route` hands out addresses from the registry
@@ -3988,6 +4000,26 @@ for (const [name, command, args, invalidArgs] of [
   scene('policy.done', async (place) => {
     write(place, TEAM);
     return show(await policyRun(place, []), 'POLICY');
+  });
+}
+
+{
+  async function renameRun(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runRename([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+  }
+  scene('rename.invocation', async (place) => show(await renameRun(place, []), 'a seat name and a new seat name are required'));
+  scene('rename.refused', async (place) => {
+    write(place, TWO);
+    return show(await renameRun(place, ['worker', 'lead']), 'seat "lead" is already declared');
+  });
+  scene('rename.invalid', async (place) => {
+    write(place, TWO);
+    return show(await renameRun(place, ['worker', 'Bad_Name']), 'not a valid seat name');
+  });
+  scene('rename.done', async (place) => {
+    write(place, TWO);
+    return show(await renameRun(place, ['worker', 'builder-1']), 'renamed worker -> builder-1');
   });
 }
 

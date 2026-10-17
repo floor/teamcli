@@ -60,6 +60,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.model` | `add` | 2 | the --model override is not known for the seat's CLI | `team add worker --model unknown` |
 | `add.not-a-repo` | `add` | 2 | not inside a git repository | `team add worker` |
 | `add.prepared` | `add` | 2 | the prepared edit does not validate | `team add worker` |
+| `add.reserved-name` | `add` | 2 | a new seat may not be named lead | `team add lead` |
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
 | `add.temporary-flags` | `add` | 2 | --like, --until and --worktree need --temporary | `team add worker --like lead` |
 | `add.temporary-unexpected` | `add` | 2 | an unexpected argument was passed to --temporary | `team add extra --temporary` |
@@ -377,6 +378,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.invocation` | `remove` | 2 | the invocation can't be read | `team remove` |
 | `remove.locked` | `remove` | 2 | the locked edit does not validate | `team remove worker` |
 | `remove.not-a-repo` | `remove` | 2 | not inside a git repository | `team remove worker` |
+| `rename.done` | `rename` | 0 | the seat was renamed (or --renumber planned/applied) | `team rename worker builder-1` |
+| `rename.refused` | `rename` | 1 | the caller is not the owner or leads, the target seat exists, or the target clashes with a nickname | `team rename worker lead` |
+| `rename.invalid` | `rename` | 2 | the team file or new seat name is invalid | `team rename worker Bad_Name` |
+| `rename.invocation` | `rename` | 2 | the invocation can't be read | `team rename` |
 | `restart.dry-run` | `restart` | 0 | the stop and launch plan was printed and nothing was touched | `team restart worker --dry-run` |
 | `restart.ready` | `restart` | 0 | the seat was restarted in a new pane | `team restart worker` |
 | `restart.abandon-working` | `restart` | 1 | a seat caller passed --abandon on a working seat | `team restart worker --abandon` |
@@ -428,7 +433,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.stopped` | `send` | 1 | the seat is stopped in the team file | `team send worker hello` |
 | `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
-| `send.configuration` | `send` | 2 | the team file can't be read | `team send worker hello --file missing.yaml` |
+| `send.configuration` | `send` | 2 | the team file cannot be read, or the caller's folder is no team and a bare name has none to resolve in | `team send lead --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |

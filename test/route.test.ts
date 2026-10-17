@@ -519,7 +519,7 @@ describe('route: the address the native channel answers', () => {
 
     expect(code).toBe(1);
     expect(io.err).toBe(
-      'team route: refused: ghost: no registered agent holds the seat "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running\n',
+      'team route: refused: ghost: no registered agent holds the seat or nickname "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running\n',
     );
     expect(io.out).toBe('');
   });
@@ -573,7 +573,7 @@ describe('route: the address the native channel answers', () => {
     const refusedIo = testIo(w.root, OWNER);
     expect(await runRoute(['ghost', '--json'], refusedIo, host(w))).toBe(1);
     expect(refusedIo.err).toBe('');
-    assertJsonErrorShape(refusedIo.out, { id: 'route.refused', messageContains: 'no registered agent holds the seat "ghost"' });
+    assertJsonErrorShape(refusedIo.out, { id: 'route.refused', messageContains: 'no registered agent holds the seat or nickname "ghost"' });
 
     const at = storePath('acme', w.root, w.home);
     mkdirSync(join(w.home, '.config', 'team'), { recursive: true });

@@ -649,10 +649,10 @@ describe('team send: --list', () => {
     // project it sits in, and the reach a send would take.
     expect(io.out).toBe(
       'team acme, session "acme"\n'
-        + '  SEAT    ROLE         PROJECT  REACH\n'
-        + '  lead    coordinator  acme     socket\n'
-        + '  helper  implementer  acme     socket\n'
-        + '  native  reviewer     acme     typed\n'
+        + '  SEAT    NICKNAME  ROLE         PROJECT  REACH\n'
+        + '  lead    -         coordinator  acme     socket\n'
+        + '  helper  -         implementer  acme     socket\n'
+        + '  native  -         reviewer     acme     typed\n'
         + '3 seat(s)\n',
     );
   });
@@ -665,7 +665,7 @@ describe('team send: --list', () => {
     const code = await runSend(['--list'], io, fake(sockets));
 
     expect(code).toBe(0);
-    expect(io.out).toContain('  lead    coordinator  acme     socket');
+    expect(io.out).toContain('  lead    -         coordinator  acme     socket');
   });
 
   test("a registry that names the team's project shows that project on every row", async () => {
@@ -692,10 +692,10 @@ describe('team send: --list', () => {
     expect(code).toBe(0);
     expect(io.out).toBe(
       'team acme, session "acme"\n'
-        + '  SEAT    ROLE         PROJECT  REACH\n'
-        + '  lead    coordinator  TeamCLI  socket\n'
-        + '  helper  implementer  TeamCLI  socket\n'
-        + '  native  reviewer     TeamCLI  typed\n'
+        + '  SEAT    NICKNAME  ROLE         PROJECT  REACH\n'
+        + '  lead    -         coordinator  TeamCLI  socket\n'
+        + '  helper  -         implementer  TeamCLI  socket\n'
+        + '  native  -         reviewer     TeamCLI  typed\n'
         + '3 seat(s)\n',
     );
   });
@@ -712,10 +712,10 @@ describe('team send: --list', () => {
     expect(code).toBe(0);
     expect(io.out).toBe(
       'team acme, session "acme"\n'
-        + '  SEAT    ROLE         PROJECT  REACH\n'
-        + '  lead    coordinator  TeamCLI  socket\n'
-        + '  helper  implementer  TeamCLI  socket\n'
-        + '  native  reviewer     TeamCLI  typed\n'
+        + '  SEAT    NICKNAME  ROLE         PROJECT  REACH\n'
+        + '  lead    -         coordinator  TeamCLI  socket\n'
+        + '  helper  -         implementer  TeamCLI  socket\n'
+        + '  native  -         reviewer     TeamCLI  typed\n'
         + '3 seat(s)\n',
     );
   });
@@ -736,15 +736,15 @@ describe('team send: --list', () => {
       project: 'acme',
       session: 'acme',
       seats: [
-        { name: 'lead', cli: 'claude-code', role: 'coordinator', project: 'acme', reach: 'socket', stopped: false },
-        { name: 'helper', cli: 'claude-code', role: 'implementer', project: 'acme', reach: 'socket', stopped: false },
-        { name: 'native', cli: 'codex', role: 'reviewer', project: 'acme', reach: 'typed', stopped: true },
+        { name: 'lead', nickname: null, cli: 'claude-code', role: 'coordinator', project: 'acme', reach: 'socket', stopped: false },
+        { name: 'helper', nickname: null, cli: 'claude-code', role: 'implementer', project: 'acme', reach: 'socket', stopped: false },
+        { name: 'native', nickname: null, cli: 'codex', role: 'reviewer', project: 'acme', reach: 'typed', stopped: true },
       ],
       summary: '3 seat(s)',
     });
     const plain = owner(root);
     expect(await runSend(['--list'], plain, fake(sockets))).toBe(0);
-    expect(plain.out).toContain('  native  reviewer     acme     stopped');
+    expect(plain.out).toContain('  native  -         reviewer     acme     stopped');
   });
 });
 

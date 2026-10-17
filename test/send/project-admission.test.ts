@@ -204,8 +204,11 @@ function twoTeams(): {
   const ioId = teamIdOf(ioRoot);
   const cliLead = registered(world.home, { name: 'lead', role: 'chief', team: cliId, seat: 'lead', session: 'teamcli', pane: 'pane-cli-lead' });
   const ioLead = registered(world.home, { name: 'lead', role: 'chief', team: ioId, seat: 'lead', session: 'teamcli.io', pane: 'pane-io-lead' });
-  teamRecord(world.home, cliId, { project: 'teamcli', session: 'teamcli', root: cliRoot, roster: [{ agent: cliLead.id, seat: 'lead', role: 'chief' }] });
-  teamRecord(world.home, ioId, { project: 'teamcli.io', session: 'teamcli.io', root: ioRoot, roster: [{ agent: ioLead.id, seat: 'lead', role: 'chief' }] });
+  // The file makes the seat named `lead` its coordinator, so the record carries the `leads`
+  // capability on it: `lead@<team>` addresses the seat holding leads, never a name alone
+  // (src/send/resolve.ts). The role stays an ordinary word.
+  teamRecord(world.home, cliId, { project: 'teamcli', session: 'teamcli', root: cliRoot, roster: [{ agent: cliLead.id, seat: 'lead', role: 'chief', leads: true }] });
+  teamRecord(world.home, ioId, { project: 'teamcli.io', session: 'teamcli.io', root: ioRoot, roster: [{ agent: ioLead.id, seat: 'lead', role: 'chief', leads: true }] });
   // The state record `up` leaves for the caller: the pane the seat stands on, which is what
   // binds the call to its registry record.
   updateState(join(cliRoot, '.agents'), (state) => {
