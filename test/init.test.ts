@@ -370,7 +370,7 @@ describe('team init', () => {
       status: 'restored',
       file: '.agents/team.yaml',
       restored: true,
-      action_summary: 'Restored .agents/team.yaml from the copy you last approved on this machine.',
+      action_summary: 'Restored .agents/team.yaml from the copy this machine stored.',
     });
   });
 
