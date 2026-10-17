@@ -8,6 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { keyExit, stateOf, stateOfPane, type ExitIo } from '../src/commands/down.ts';
+import { activeSeatsOf, rosterStatus } from '../src/commands/list.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { profileFor } from '../src/profiles/index.ts';
@@ -234,5 +235,25 @@ describe('a profile herdr cannot report reads its state from the screen', () => 
     const nudged = pass({ team: julesTeam(), watch: julesTeam().watch, state: emptySession(), live: quiet, machine: fine, now: 0, memory: waiting });
     expect(nudged.nudge?.pane).toBe('w1:p1');
     expect(nudged.nudge?.seat).toBe('jules-acme');
+  });
+});
+
+describe('the list reads a jules seat from its screen', () => {
+  test('a project row counts a jules seat ready or working by its screen, not herdr\'s unknown', () => {
+    const live = { status: 'unknown' };
+    // The project row's two counts, from the word each seat's own screen gives.
+    const roster = [
+      { name: 'jules-lead', status: rosterStatus(live, 'jules', 'ready', capture('idle')), pane: 'w0:p1' },
+      { name: 'jules-acme', status: rosterStatus(live, 'jules', 'ready', capture('working')), pane: 'w1:p1' },
+    ];
+    expect(roster.map((seat) => seat.status)).toEqual(['ready', 'working']);
+    expect(activeSeatsOf(roster, roster.length, true)).toEqual({ ready: 1, working: 1, waiting: 0, stopped: 0 });
+    // A completed card is the table again: the same word the other three readers give.
+    expect(rosterStatus(live, 'jules', 'ready', capture('done'))).toBe('ready');
+    // A screen no profile reads leaves herdr's unknown unread, and a reliable profile keeps its
+    // word: neither row is counted from a screen.
+    expect(rosterStatus(live, 'jules', 'ready', 'Welcome back!\n')).toBeNull();
+    expect(rosterStatus(live, 'claude-code', 'ready', capture('idle'))).toBeNull();
+    expect(rosterStatus({ status: 'idle' }, 'claude-code', 'ready', capture('idle'))).toBe('ready');
   });
 });
