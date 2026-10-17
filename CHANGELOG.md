@@ -145,6 +145,16 @@ commands read them.
   `cursor` and `antigravity`, each with its own screen reading, unattended flags, login check
   where the CLI offers one, and tested range.
 
+- **Jules as a pane seat.** `jules` joins the profiles with its 0.1.42 CLI: a send to a jules seat
+  still writes its drop file, and the body is typed through the CLI's own screens, so a new
+  remote session on the seat's own repo is the delivery. A seat sends only to the repo of its own
+  folder; when the account's repo list does not hold that repo, the send is refused with nothing
+  typed rather than sent elsewhere. The profile never deletes a session: a turn is ended with
+  `ctrl+c` alone, and every jules seat's rules carry `Never delete a Jules session.` herdr cannot
+  report a jules pane's agent, so the profile declares `herdr_status: unreliable` and the screen
+  is the reading — an idle session table is a free seat, a running card a working one — across
+  `status`, `check`, `watch`, `list` and `down`.
+
 - **Grants, and delegates, the owner's alone.** `team grant <seat> --scope <acts>` sets the team
   file's one grant — the seat the file's orchestrator marks, and the complete scope it may run; a
   later run replaces it exactly — and `team revoke grant` removes it. `team grant <seat|@team>
