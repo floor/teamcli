@@ -33,7 +33,9 @@ The first release since 0.3.5, and the first to ship on npm since it. The full l
   `team seats`, `team watch` and `team down` can address it.
 - **`team send`, and the channel it takes.** A plain send gives the seat the body in a drop file
   and one trigger line; `--wait` to a Claude Code seat takes its cross-session socket and brings
-  the reply back. Every run ends in one word — `delivered`, `answered`, `held`, `not-submitted`,
+  the reply back; a sender with its own cross-session tool takes the native channel — `team route
+  <seat>` answers the address, and `team send --record <seat> --channel native --ms <n>` writes
+  the delivery down. Every run ends in one word — `delivered`, `answered`, `held`, `not-submitted`,
   `timeout`, `unreachable` or `refused` — and the history `team feed` reads keeps the
   milliseconds and the path. A seat its file marks `assistant: true` — one per file, never a seat
   with `count` — is its entity's assistant: the routing admits it to the entity's main
