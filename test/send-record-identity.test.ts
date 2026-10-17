@@ -137,7 +137,7 @@ function acme(options: { place?: ('lead' | 'helper')[]; lifecycle?: Agent['lifec
     entity: 'acme',
     session: 'acme',
     root: w.root,
-    lobby: join(w.home, 'lobby'),
+    lobby: lobbyDir(w.home),
     roster: [
       { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
       { agent: helper.id, seat: 'helper', role: 'implementer', leads: false },
@@ -203,7 +203,7 @@ describe('a registry record binds the call only where the call stands as it', ()
       entity: 'acme',
       session: 'acme',
       root: w.root,
-      lobby: join(w.home, 'lobby'),
+      lobby: lobbyDir(w.home),
       roster: [
         { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
         { agent: helper.id, seat: 'helper', role: 'implementer', leads: false },
