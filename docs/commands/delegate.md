@@ -6,7 +6,7 @@ their values and order.
 
 ## Synopsis
 
-    team delegate <session/pane> --commands <act,...> [--dry-run]
+    team delegate <session/pane> --commands <act,...> [--dry-run] [--json]
 
 `<session/pane>` identifies a pane outside the team's own session. Both components are
 required, with one slash and no whitespace. At most eight delegates may be recorded.

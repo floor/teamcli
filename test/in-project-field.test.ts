@@ -119,7 +119,11 @@ describe('every team file already in the tree loads unchanged', () => {
       if (!result.ok) throw new Error(`${path} is refused: ${JSON.stringify(result.errors)}`);
       const line = text.slice(0, legacyLine).split('\n').length;
       expect(result.warnings).toEqual([
-        { line, message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read' },
+        {
+          line,
+          message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
+          repair: "set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml",
+        },
       ]);
       expect(result.team.inProject).toBeNull();
       expect(result.team.projectLead).toBe(false);

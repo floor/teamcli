@@ -88,8 +88,11 @@ test('herdr not answering is an empty list and exit 0', async () => {
   expect(text.out).toBe('herdr is not running\n');
   const json = capture();
   expect(await runList(['--json'], json, sources({ sessions: null }))).toBe(0);
-  expect(json.out).toBe('[]\n');
-  expect(JSON.parse(json.out)).toEqual([]);
+  expect(JSON.parse(json.out)).toEqual({
+    schema: { name: 'team.list', version: 1 },
+    format: 1,
+    rows: [],
+  });
 });
 
 test('no running session is empty, and --all shows a stopped one', async () => {
@@ -100,13 +103,17 @@ test('no running session is empty, and --all shows a stopped one', async () => {
   });
   const text = capture();
   expect(await runList([], text, stopped)).toBe(0);
-  expect(text.out).toBe('no running sessions\n');
+  expect(text.out).toBe('no running sessions\n0 session(s)\n');
   const all = capture();
   expect(await runList(['--all'], all, stopped)).toBe(0);
-  expect(all.out).toBe('TEAM  PROJECT  STATUS   SEATS  ACTIVITY  NOTE\nacme  acme     stopped  2      -\n');
+  expect(all.out).toBe('TEAM  PROJECT  STATUS   SEATS  ACTIVITY  NOTE\nacme  acme     stopped  2      -\n1 session(s)\n');
   const none = capture();
   expect(await runList(['--all', '--json'], none, sources({ sessions: [] }))).toBe(0);
-  expect(none.out).toBe('[]\n');
+  expect(JSON.parse(none.out)).toEqual({
+    schema: { name: 'team.list', version: 1 },
+    format: 1,
+    rows: [],
+  });
 });
 
 test('running rows, orphans, unreadable rosters and --json', async () => {
@@ -132,7 +139,8 @@ test('running rows, orphans, unreadable rosters and --json', async () => {
     },
   }));
   expect(code).toBe(0);
-  const rows = JSON.parse(run.out) as Array<Record<string, string>>;
+  const doc = JSON.parse(run.out) as { rows: Array<Record<string, string>> };
+  const rows = doc.rows;
   expect(rows.map((row) => row.team)).toEqual(['acme', 'zeta']);
   expect(rows[0]).toEqual({
     team: 'acme',

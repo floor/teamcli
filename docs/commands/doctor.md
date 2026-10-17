@@ -8,7 +8,7 @@ them are done; the last line counts those.
 
 ## Synopsis
 
-    team doctor [--session <name>] [--file <path>] [--login]
+    team doctor [--session <name>] [--file <path>] [--login] [--json]
 
 ## Flags
 
@@ -17,6 +17,7 @@ them are done; the last line counts those.
 | `--session` | `<name>` | the herdr session to report on, instead of `team.session` |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml` |
 | `--login` | — | the seats' CLIs' logins alone, one line per CLI, instead of the whole report; herdr, the session and the machine are not read |
+| `--json` | — | the report as one JSON document on stdout |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -98,6 +99,7 @@ Everything here is as it should be:
 
 ```console
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
@@ -108,6 +110,13 @@ ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 2 warnings
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
+  No policy object yet (amendment 02)
 exit 0
 ```
 

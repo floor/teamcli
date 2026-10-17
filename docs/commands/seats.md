@@ -103,8 +103,10 @@ Without `--all`, stopped seats are omitted:
 
 ```console
 $ team seats ; echo "exit $?"
+team beacon, session "beacon"
 SEAT           ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
 claude-keeper  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
+1 seat(s)
 exit 0
 ```
 
@@ -112,9 +114,11 @@ With `--all`, stopped seats are included:
 
 ```console
 $ team seats --all ; echo "exit $?"
+team beacon, session "beacon"
 SEAT           ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
 claude-keeper  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
 claude-beacon  seat_fedcba987654  implementer  claude-code  Claude Opus 5.5  -       stopped  done   process  1h ago       -
+2 seat(s)
 exit 0
 ```
 
@@ -125,6 +129,10 @@ as `state` and `state_source`, with `blind: true` only where it applies:
 ```console
 $ team seats --json ; echo "exit $?"
 {
+  "schema": {
+    "name": "team.seats",
+    "version": 1
+  },
   "format": 1,
   "project": "beacon",
   "session": "beacon",

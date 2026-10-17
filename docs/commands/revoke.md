@@ -6,9 +6,9 @@ section.
 
 ## Synopsis
 
-    team revoke grant [--dry-run]
-    team revoke delegate <session/pane> [--dry-run]
-    team revoke <name> [--dry-run]
+    team revoke grant [--dry-run] [--json]
+    team revoke delegate <session/pane> [--dry-run] [--json]
+    team revoke <name> [--dry-run] [--json]
 
 The delegate target is exact. There is no wildcard or revoke-all form. The bare `<name>` form
 revokes a standing grant only when a record with that name exists; any other word is the

@@ -51,7 +51,7 @@ drops nothing.
 
 ## Synopsis
 
-    team check [--session <name>] [--file <path>] [--repair]
+    team check [--session <name>] [--file <path>] [--repair] [--json]
 
 ## Flags
 
@@ -60,6 +60,7 @@ drops nothing.
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
 | `--repair` | — | drop the state's leftovers: a record for a seat the file no longer declares, and a session with no seat of the team in it; the owner's alone |
+| `--json` | — | emit the structured `team.check` JSON document on stdout (`schema/check.schema.json`) |
 
 ## Who may run it
 
@@ -77,9 +78,9 @@ meet the refusal every command gives them and exit 1.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| nothing needs acting on | `team check: nothing wrong`, over the line naming what the check cannot see (`not known: work sent and unread, a lead waiting on a seat, a landing not recorded`) and the block naming what 0.5.0 must not pretend | 0 |
-| the owner's `--repair` dropped the state's leftovers, and nothing else needs acting on | one `repaired: <what was dropped>` line per record, then `team check: nothing wrong`, over the same not-known line and block | 0 |
-| something needs acting on | one `difference:` line per finding with its `  repair:` line under it, then `team check: <n> difference(s)`, and `, <n> for the owner` when any finding is the owner's; the not-known line and the same block stand under this answer too | 1 |
+| nothing needs acting on | `team <project>, session "<session>"`, any deprecation `warning:` or `note:` lines, and `0 difference(s)` | 0 |
+| the owner's `--repair` dropped the state's leftovers, and nothing else needs acting on | `team <project>, session "<session>"`, one `repaired: <what was dropped>` line per record, and `0 difference(s)` | 0 |
+| something needs acting on | `team <project>, session "<session>"`, one `difference:` block per finding with its `  repair:` and `  who:` lines under it, then `<n> difference(s)` (and `, <m> for the owner` when any finding is the owner's) | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | the check can't run (the loader's, the state's or herdr's own text), the invocation can't be read, or the caller may not check this team | `team check: <problem>`, or the one fixed sentence | 2 |
 
@@ -88,7 +89,6 @@ meet the refusal every command gives them and exit 1.
 ```yaml file=.agents/team.yaml
 format: 1
 project: beacon
-coordinator: claude-keeper
 operator: claude-keeper
 
 identity:
@@ -104,6 +104,7 @@ workspace:
 seats:
   - role: coordinator
     name: claude-keeper
+    leads: true
     label: coordinator
     cli: claude-code
     vendor: anthropic
@@ -125,20 +126,9 @@ The team runs as the file and the state say, so there is nothing to act on:
 
 ```console
 $ team check ; echo "exit $?"
-team check: nothing wrong
-not known: work sent and unread, a lead waiting on a seat, a landing not recorded
-what 0.5.0 must not pretend:
-  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
-  Standing grants with an expiry, not leases
-  No two-granter agreement, no `agree`, no `create` bounds
-  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
-  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
-  No policy object yet (amendment 02)
+team beacon, session "beacon"
+0 difference(s)
 exit 0
 ```
-
-The block under the answers is the grants decision record's own list, in its words
-(`decided-grants-minimum-2026-10-17`, "What 0.5.0 must not pretend, said plainly"): the limits
-this release does not close, said where the check runs rather than left to be discovered.
 
 Rationale, behaviour, refusals and known limits: [docs/internal/check.md](../internal/check.md).

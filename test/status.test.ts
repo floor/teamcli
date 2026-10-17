@@ -17,6 +17,7 @@ import type { Live } from '../src/status/compare.ts';
 import { runningModel } from '../src/status/statusline.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { testIo, withWas } from './helpers.ts';
+import { assertJsonErrorShape } from './helpers/output.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 const NOW = new Date('2026-10-03T14:10:00Z');
@@ -103,12 +104,15 @@ function approveOnDisk() {
 }
 
 describe('team status', () => {
-  test('a team that matches its file reads clean and exits 0', async () => {
+  test('a team that matches its file reads clean, hides stopped seats by default, shows them under --all, and exits 0', async () => {
     const { code, out } = await status();
     expect(out).toContain('team acme-web, session "acme-web"');
+    expect(out).toContain('  SEAT                     STATE                                 MODEL                         PANE   REACH');
     expect(out).toMatch(/claude-coordinator-acme\s+working\s+Claude Opus 5\.5\s+w1:p1/);
     expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
-    expect(out).toMatch(/grok-acme\s+stopped/);
+    expect(out).not.toMatch(/grok-acme\s+stopped/);
+    const all = await status('--all');
+    expect(all.out).toMatch(/grok-acme\s+-\s+reviewer\s+grok\s+Grok 4\.7\s+-\s+stopped/);
     // The suffix is a reading, not a difference: a team that matches its file still reads clean.
     expect(out).toContain('0 difference(s)');
     expect(code).toBe(0);
@@ -572,19 +576,58 @@ describe('team status', () => {
     expect(await status()).toMatchObject({ code: 2, err: expect.stringContaining('herdr doesn\'t answer') });
     expect(await status('--fix')).toMatchObject({ code: 2, err: expect.stringContaining('unknown option --fix') });
     expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]\n');
+
+    const badAfter = await status('--nope', '--json');
+    expect(badAfter.code).toBe(2);
+    expect(badAfter.err).toBe('');
+    assertJsonErrorShape(badAfter.out, {
+      id: 'status.invocation',
+      messageContains: 'unknown option --nope',
+      repair: null,
+    });
+
+    const badEquals = await status('--json=1');
+    expect(badEquals.code).toBe(2);
+    expect(badEquals.err).toBe('');
+    assertJsonErrorShape(badEquals.out, {
+      id: 'status.invocation',
+      messageContains: 'unknown option --json',
+      repair: null,
+    });
+
+    const herdrJson = await status('--json');
+    expect(herdrJson.code).toBe(2);
+    expect(herdrJson.err).toBe('');
+    assertJsonErrorShape(herdrJson.out, {
+      id: 'status.herdr',
+      messageContains: "herdr doesn't answer",
+      repair: 'start herdr and run `team status` again',
+    });
   });
 
   test('--json: pins the stable format 1 shape on a clean team', async () => {
     const { code, out, err } = await status('--json');
     expect(code).toBe(0);
-    expect(err).toBe(WARNING);
+    expect(err).toBe('');
     const doc = JSON.parse(out);
-    expect(Object.keys(doc).sort()).toEqual(['differences', 'format', 'notes', 'notice', 'project', 'rows', 'session']);
+    expect(Object.keys(doc).sort()).toEqual([
+      'differences',
+      'format',
+      'notes',
+      'notice',
+      'project',
+      'rows',
+      'schema',
+      'session',
+      'summary',
+    ]);
+    expect(doc.schema).toEqual({ name: 'team.status', version: 1 });
     expect(doc.format).toBe(1);
     expect(doc.project).toBe('acme-web');
     expect(doc.session).toBe('acme-web');
     expect(doc.notice).toBeNull();
     expect(doc.differences).toEqual([]);
+    expect(doc.summary).toEqual({ differences: 0, owner_differences: 0 });
     expect(doc.notes).toEqual([
       'codex-acme: version unread (its screen doesn\'t show the model)',
       'deepseek-acme: version unread (its screen doesn\'t show the model)',
@@ -600,7 +643,6 @@ describe('team status', () => {
       { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', model: 'GPT-6 Sol (unread)', pane: 'w2:p1' },
       { name: 'deepseek-acme', state: 'done (screen not recognised)', seat_state: 'done', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w3:p1' },
       { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', seat_state: 'idle', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w4:p1' },
-      { name: 'grok-acme', state: 'stopped', seat_state: 'done', seat_state_source: 'process', model: 'Grok 4.7', pane: '-' },
     ]);
   });
 
@@ -629,8 +671,9 @@ describe('team status', () => {
     const doc = JSON.parse(out);
     expect(doc.format).toBe(1);
     expect(doc.differences).toEqual([
-      { what: 'deepseek-acme-2 is in the file and is not running', repair: 'team add deepseek-acme-2' },
+      { what: 'deepseek-acme-2 is in the file and is not running', repair: 'team add deepseek-acme-2', who: 'the owner' },
     ]);
+    expect(doc.summary).toEqual({ differences: 1, owner_differences: 0 });
   });
 
   test('--json: includes notice when falling back to last valid copy', async () => {

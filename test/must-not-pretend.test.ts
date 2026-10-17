@@ -1,10 +1,10 @@
 // The decision record's "must not pretend" list in the product (decided-grants-minimum-2026-10-17,
-// "What 0.5.0 must not pretend, said plainly"): `team check` prints its six lines under both of
-// its answers — the gaps the release does not close, named in the check's output as the record
-// asks — and `team status` closes its plain reading with the first of them, the record's "every
-// record and view says so". The sentences below are typed out here rather than read from the
-// module, so an edit to src/permissions/must-not-pretend.ts fails these tests instead of riding
-// through them; the one assertion against the module pins the two together.
+// "What 0.5.0 must not pretend, said plainly"): under the 0.5.0 output contract (§2.3),
+// `NOT_PRETENDED` is printed only by `team doctor` and `team --about`, while `team check` and
+// `team status` omit `NOT_PRETENDED`, `INTEGRITY_NOT_AUTHORITY`, and `not known:` on every run.
+// The sentences below are typed out here rather than read from the module, so an edit to
+// src/permissions/must-not-pretend.ts fails these tests instead of riding through them; the one
+// assertion against the module pins the two together.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,7 +23,7 @@ import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
-/** The record's six lines, under its heading, as `team check` prints them. */
+/** The record's six lines, under its heading, as `team doctor` and `team --about` print them. */
 const LIST = [
   'what 0.5.0 must not pretend:',
   '  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt',
@@ -35,7 +35,7 @@ const LIST = [
 ];
 const BLOCK = `${LIST.join('\n')}\n`;
 
-/** The line the check prints above the block, whatever its answer. */
+/** The former `not known:` line, which `team check` no longer prints under the 0.5.0 output contract. */
 const NOT_KNOWN = 'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n';
 
 /** One seat leads: a file with none is refused. */
@@ -138,51 +138,58 @@ async function status(live: Live, ...argv: string[]) {
   return { code, out: io.out, err: io.err };
 }
 
-describe('team check says what 0.5.0 must not pretend', () => {
+describe('team check omits the footer on every run; team doctor and team --about print NOT_PRETENDED', () => {
   test('the module holds the record\'s lines, and the status footer is the first of them', () => {
     expect([...NOT_PRETENDED]).toEqual(LIST);
     // The record's "every record and view says so": the view prints the check's own first line.
     expect(INTEGRITY_NOT_AUTHORITY).toBe(LIST[1]!.slice(2));
   });
 
-  test('nothing wrong: the block stands under the answer, nothing else moved', async () => {
+  test('nothing wrong: ends with 0 difference(s) and omits NOT_PRETENDED and not known', async () => {
     const ran = await runCheck(running());
     expect(ran.code).toBe(0);
     expect(ran.err).toBe('');
-    expect(ran.out).toBe(`team check: nothing wrong\n${NOT_KNOWN}${BLOCK}`);
+    expect(ran.out).toBe('team beacon, session "beacon"\n0 difference(s)\n');
+    expect(ran.out).not.toContain(NOT_KNOWN);
+    expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 
-  test('a difference: the same block, under the findings and the count', async () => {
+  test('a difference: ends with the summary count and omits NOT_PRETENDED and not known', async () => {
     const ran = await runCheck(down);
     expect(ran.code).toBe(1);
     expect(ran.err).toBe('');
     expect(ran.out).toBe(
-      'difference: claude-keeper is in the file and is not running\n' +
+      'team beacon, session "beacon"\n' +
+        'difference: claude-keeper is in the file and is not running\n' +
         '  repair: the owner runs team up\n' +
+        '  who: the owner\n' +
         'difference: claude-beacon is in the file and is not running\n' +
         '  repair: the owner runs team up\n' +
-        'team check: 2 difference(s), 2 for the owner\n' +
-        NOT_KNOWN +
-        BLOCK,
+        '  who: the owner\n' +
+        '2 difference(s), 2 for the owner\n',
     );
+    expect(ran.out).not.toContain(NOT_KNOWN);
+    expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 });
 
-describe('team status closes its reading with the record\'s line', () => {
-  test('a clean reading: the footer stands after the count, the last line of the reading', async () => {
+describe('team status omits the footer on every run; team --about prints NOT_PRETENDED', () => {
+  test('a clean status reading ends with the summary count and omits the footer', async () => {
     const ran = await status(running());
     expect(ran.code).toBe(0);
     expect(ran.err).toBe('');
-    expect(ran.out).toEndWith(`0 difference(s)\n${INTEGRITY_NOT_AUTHORITY}\n`);
+    expect(ran.out).toEndWith('0 difference(s)\n');
+    expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 
-  test('a reading with differences: the footer stands under the count still', async () => {
+  test('a status reading with differences ends with the summary count and omits the footer', async () => {
     const ran = await status(down);
     expect(ran.code).toBe(1);
-    expect(ran.out).toEndWith(`2 difference(s), 2 for the owner\n${INTEGRITY_NOT_AUTHORITY}\n`);
+    expect(ran.out).toEndWith('2 difference(s), 2 for the owner\n');
+    expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 
-  test('the document is untouched: the footer is the plain reading\'s alone', async () => {
+  test('the JSON document is untouched', async () => {
     const ran = await status(running(), '--json');
     expect(ran.code).toBe(0);
     expect(ran.out).not.toContain('Integrity, not authority');

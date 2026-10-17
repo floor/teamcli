@@ -251,6 +251,50 @@ describe('team doctor --login', () => {
     const code = await runDoctor(['--file', file, '--invalid-flag'], io, fakeSources());
     expect(code).toBe(2);
     expect(io.err).toContain('unknown option --invalid-flag\n');
-    expect(io.err).toContain('Usage: team doctor [--session <name>] [--file <path>] [--login]\n');
+    expect(io.err).toContain('Usage: team doctor [--session <name>] [--file <path>] [--login] [--json]\n');
+  });
+
+  test('--json validates against DOCTOR_OUTPUT_SCHEMA and emits structured error on bad invocation', async () => {
+    const { DOCTOR_OUTPUT_SCHEMA } = await import('../../src/output/index.ts');
+    const { assertJsonErrorShape, assertMatchesOutputSchema } = await import('../helpers/output.ts');
+    const io = testIo(dir);
+    const code = await runDoctor(['--file', file, '--login', '--json'], io, fakeSources({
+      loggedIn: (profile) => (profile.cli === 'claude-code' ? true : false),
+    }));
+    expect(code).toBe(1);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{
+      project: string;
+      session: string;
+      login_only: boolean;
+      findings: { level: string; text: string; blocks_launch: boolean }[];
+      summary: { missing: number; warnings: number; blockers: number };
+    }>(io.out, DOCTOR_OUTPUT_SCHEMA);
+    expect(doc.project).toBe('acme-web');
+    expect(doc.login_only).toBe(true);
+    expect(doc.summary.missing).toBeGreaterThan(0);
+    expect(doc.summary.blockers).toBeGreaterThan(0);
+    expect(doc.findings.some((f) => f.blocks_launch === true)).toBe(true);
+
+    const badIo = testIo(dir);
+    const badCode = await runDoctor(['--file', file, '--json', 'extra'], badIo, fakeSources());
+    expect(badCode).toBe(2);
+    expect(badIo.err).toBe('');
+    assertJsonErrorShape(badIo.out, { id: 'doctor.invocation', messageContains: 'unexpected "extra"', repair: null });
+
+    const nopeIo = testIo(dir);
+    expect(await runDoctor(['--nope', '--json'], nopeIo, fakeSources())).toBe(2);
+    expect(nopeIo.err).toBe('');
+    assertJsonErrorShape(nopeIo.out, { id: 'doctor.invocation', messageContains: 'unknown option --nope', repair: null });
+
+    const inlineIo = testIo(dir);
+    expect(await runDoctor(['--json=1'], inlineIo, fakeSources())).toBe(2);
+    expect(inlineIo.err).toBe('');
+    assertJsonErrorShape(inlineIo.out, { id: 'doctor.invocation', messageContains: 'unknown option --json', repair: null });
+
+    const missingIo = testIo(dir);
+    expect(await runDoctor(['--file', join(dir, 'missing.yaml'), '--json'], missingIo, fakeSources())).toBe(2);
+    expect(missingIo.err).toBe('');
+    assertJsonErrorShape(missingIo.out, { id: 'doctor.file', messageContains: 'no team file', repair: null });
   });
 });

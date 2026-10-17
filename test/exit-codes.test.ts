@@ -875,7 +875,7 @@ scene('check.ok', async (place) => {
     // difference the check reports, so a healthy team's pane says what it is.
     screens: { 'w1:p1': IDLE },
   };
-  return show(await checked(place, [], owner, checkSources(matched, approvalStanding(place.root, place.home))), 'team check: nothing wrong');
+  return show(await checked(place, [], owner, checkSources(matched, approvalStanding(place.root, place.home))), '0 difference(s)');
 });
 scene('check.findings', async (place) => {
   write(place, TEAM);
@@ -1731,6 +1731,9 @@ async function projects(place: Place, argv: string[], sources: ProjectSources, c
 
 scene('projects.invocation', async (place) => show(await projects(place, ['extra'], projectSources()), 'unexpected'));
 scene('projects.listed', async (place) => {
+  const empty = await projects(place, [], { ...projectSources(), list: () => [] });
+  expect(empty.code).toBe(0);
+  expect(empty.out).toBe('ID  NAME  ENTITY  LEAD  TEAMS\n0 project(s)\n');
   const ran = await projects(place, [], projectSources());
   expect(ran.out).toContain('TeamCLI');
   expect(ran.out).toContain(TEAM_A);
@@ -2055,7 +2058,7 @@ async function listed(place: Place, argv: string[], sources: ListSources): Promi
 const noTeam: ListSources = { sessions: () => [], roster: () => [], team: () => null };
 scene('list.invocation', async (place) => show(await listed(place, ['--nope'], noTeam), 'unknown option'), false);
 scene('list.herdr-down', async (place) => show(await listed(place, [], { ...noTeam, sessions: () => null }), 'herdr is not running'), false);
-scene('list.empty', async (place) => show(await listed(place, [], noTeam), 'no running sessions'), false);
+scene('list.empty', async (place) => show(await listed(place, [], noTeam), 'no running sessions\n0 session(s)'), false);
 scene('list.shown', async (place) => show(await listed(place, [], {
   sessions: () => [{ name: 'acme', running: true }],
   roster: () => [],

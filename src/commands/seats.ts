@@ -2,9 +2,20 @@ import { watchInForceOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { currentTeam } from '../file/current.ts';
+import { isParseError } from '../file/load.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
+import {
+  contextLine,
+  hasJsonFlag,
+  renderTable,
+  ttyStyle,
+  writeJson,
+  writeJsonError,
+  type OutputSchemaTag,
+  type TtyStyle,
+} from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { observedSeatState, sayThreshold, type SeatStateWord, type StateSource } from '../labels/state.ts';
 import { readCliHook } from '../launch/cli-hook.ts';
@@ -73,6 +84,9 @@ export const realSeatsSources: SeatsSources = {
   branch: (path) => realStatusSources.branch(path),
   standing: (root) => realStatusSources.standing(root),
   now: () => realStatusSources.now(),
+  get home() {
+    return realStatusSources.home;
+  },
   wait: waitOrStop,
 };
 
@@ -104,9 +118,11 @@ export type SeatRegistryRow = {
 };
 
 export interface SeatsJson {
+  schema: OutputSchemaTag;
   format: 1;
   project: string;
   session: string;
+  notice?: string | null;
   seats: Array<{
     name: string;
     id: string | null;
@@ -131,7 +147,10 @@ export interface SeatsJson {
   }>;
 }
 
-export const USAGE = 'Usage: team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]\n';
+export const USAGE = `Usage: team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]
+
+Exits 0 when the seats are shown, 1 when an owner-only flag is refused, 2 when the invocation, team file, or herdr can't be read.
+`;
 
 export function formatRelativeTime(iso: string | null | undefined, now: Date): string {
   if (!iso) return '-';
@@ -304,42 +323,45 @@ export function blindDifferences(
     });
 }
 
-export function renderSeatsTable(rows: SeatRegistryRow[], indent = ''): string {
-  const head = ['SEAT', 'ID', 'ROLE', 'CLI', 'MODEL', 'EFFORT', 'STATUS', 'STATE', 'SOURCE', 'LAST ACTIVE', 'PANE'];
-  const body = rows.map((row) => [
-    plainLine(row.name),
-    // The id cell carries the record's one mark: `(dev)` says a registration dev mode admitted
-    // wrote the seat's registry record.
-    plainLine(row.dev_mode === true ? `${row.id ?? '-'} (dev)` : row.id ?? '-'),
-    plainLine(row.role),
-    plainLine(row.cli),
-    plainLine(row.model),
-    plainLine(row.effort ?? '-'),
-    plainLine(row.status),
-    // The seat-state reading: the word, and the flag when it is blind — unknown past the
-    // threshold, which counts as not working.
-    plainLine(row.blind ? `${row.state} (blind)` : row.state),
-    plainLine(row.state_source),
-    plainLine(row.last_active_display),
-    plainLine(row.pane ?? '-'),
-  ]);
-  const width = head.map((label, index) =>
-    Math.max(label.length, ...body.map((cells) => cells[index]?.length ?? 0)),
-  );
-  const line = (cells: string[]): string =>
-    `${indent}${cells
-      .map((cell, index) => (index === cells.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
-      .join('  ')
-      .trimEnd()}`;
-  return `${[line(head), ...body.map(line)].join('\n')}\n`;
+export function renderSeatsTable(rows: SeatRegistryRow[], indent = '', style: TtyStyle = ttyStyle(false)): string {
+  const lines = renderTable({
+    headers: ['SEAT', 'ID', 'ROLE', 'CLI', 'MODEL', 'EFFORT', 'STATUS', 'STATE', 'SOURCE', 'LAST ACTIVE', 'PANE'],
+    rows: rows.map((row) => [
+      row.name,
+      // The id cell carries the record's one mark: `(dev)` says a registration dev mode admitted
+      // wrote the seat's registry record.
+      row.dev_mode === true ? `${row.id ?? '-'} (dev)` : row.id ?? '-',
+      row.role,
+      row.cli,
+      row.model,
+      row.effort ?? '-',
+      row.status,
+      // The seat-state reading: the word, and the flag when it is blind — unknown past the
+      // threshold, which counts as not working.
+      row.blind ? `${row.state} (blind)` : row.state,
+      row.state_source,
+      row.last_active_display,
+      row.pane ?? '-',
+    ]),
+    indent,
+    style,
+    styleCell: (padded, _raw, _r, col, s) => (col === 6 || col === 7 ? s.styleState(padded) : padded),
+  });
+  return `${lines.join('\n')}\n`;
 }
 
 export async function runSeats(argv: string[], io: Io, sources: SeatsSources = realSeatsSources): Promise<number> {
   const args = readArgs(argv, ['session', 'file'], ['all', 'watch', 'json']);
-  if (args.error || args.rest.length || (args.flags.has('watch') && args.flags.has('json'))) {
+  const json = hasJsonFlag(argv);
+  const watching = args.flags.has('watch');
+  if (args.error || args.rest.length || (watching && json)) {
     const why = args.error
       ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : "--watch and --json can't be used together");
-    io.stderr(`team seats: ${why}\n${USAGE}`);
+    if (json) {
+      writeJsonError(io, 'seats.invocation', why, null);
+    } else {
+      io.stderr(`team seats: ${why}\n${USAGE}`);
+    }
     // exit: seats.invocation
     return 2;
   }
@@ -348,13 +370,22 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
   if (args.values.file !== undefined) {
     const refusal = fileOwnerRefusal(io, args.values.file);
     if (refusal !== undefined) {
-      io.stderr(`team seats: ${refusal}\n`);
+      if (json) {
+        writeJsonError(io, 'seats.file-owner', refusal, 'the owner runs `team seats --file <path>` from a terminal outside herdr', 1, 'owner-only');
+      } else {
+        io.stderr(`team seats: ${refusal}\n`);
+      }
       // exit: seats.file-owner
       return 1;
     }
   }
   if (args.values.session !== undefined && !owner) {
-    io.stderr(`team seats: ${sessionOwnerRefusal(walked)}\n`);
+    const refusal = sessionOwnerRefusal(walked);
+    if (json) {
+      writeJsonError(io, 'seats.session-owner', refusal, 'the owner runs `team seats --session <name>` from a terminal outside herdr', 1, 'owner-only');
+    } else {
+      io.stderr(`team seats: ${refusal}\n`);
+    }
     // exit: seats.session-owner
     return 1;
   }
@@ -362,12 +393,26 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
   const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
   if (!owner) {
     if (!current.ok || !mayReadTeam(current, io, sources)) {
-      io.stderr('team seats: this team is not yours to read\n');
+      if (json) {
+        writeJsonError(io, 'seats.not-yours', 'this team is not yours to read', null);
+      } else {
+        io.stderr('team seats: this team is not yours to read\n');
+      }
       // exit: seats.not-yours
       return 2;
     }
   } else if (!current.ok) {
-    printProblems(io, current.errors);
+    if (json) {
+      const id = current.errors[0]?.message.includes('not inside a git repository')
+        ? 'seats.not-a-repo'
+        : current.errors.some(isParseError)
+          ? 'seats.file-invalid'
+          : 'seats.file';
+      const msg = current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${p.message}`).join('; ');
+      writeJsonError(io, id, msg, null);
+    } else {
+      printProblems(io, current.errors);
+    }
     // exit: seats.not-a-repo
     // exit: seats.file
     // exit: seats.file-invalid
@@ -375,14 +420,12 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
   }
   const { team, root, dir } = current;
   const all = args.flags.has('all');
-  const json = args.flags.has('json');
-  const watching = args.flags.has('watch');
   if (!json && !watching && current.notice) io.stdout(`${current.notice}\n`);
-  for (const warning of current.warnings) io.stderr(`team seats: warning, line ${warning.line}: ${warning.message}\n`);
 
   const session = args.values.session ?? team.session;
   const standing = sources.standing(root);
   const wait = sources.wait ?? waitOrStop;
+  const style = ttyStyle(io, { json });
 
   for (;;) {
     const now = sources.now();
@@ -390,7 +433,19 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
     const state = whole.sessions[session] ?? emptySession();
     const live = sources.live(session, team, state);
     if (!live) {
-      io.stderr("team seats: herdr doesn't answer; is it installed and running?\n");
+      if (json) {
+        writeJsonError(
+          io,
+          'seats.herdr',
+          "herdr doesn't answer; is it installed and running?",
+          'start herdr and run `team seats` again',
+          1,
+          undefined,
+          current.notice,
+        );
+      } else {
+        io.stderr("team seats: herdr doesn't answer; is it installed and running?\n");
+      }
       // exit: seats.herdr
       return 2;
     }
@@ -404,10 +459,11 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
     });
 
     if (json) {
-      const doc: SeatsJson = {
-        format: 1,
+      writeJson(io, 'team.seats', {
+        format: 1 as const,
         project: team.project,
         session,
+        ...(current.notice !== undefined ? { notice: current.notice } : {}),
         seats: rows.map((row) => ({
           name: row.name,
           id: row.id,
@@ -425,17 +481,16 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
           ...(row.dev_mode === true ? { dev_mode: true } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
         })),
-      };
-      io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
+      });
       break;
     }
 
-    const rendered = renderSeatsTable(rows);
+    const rendered = renderSeatsTable(rows, '', style);
     if (watching && io.stdoutIsTTY) {
       io.stdout(`\x1b[2J\x1b[H`);
       io.stdout(`Every 2s: team seats${all ? ' --all' : ''} (${plainLine(session)})  ${now.toISOString()}\n\n${rendered}`);
     } else {
-      io.stdout(rendered);
+      io.stdout(`${contextLine(team.project, session)}\n${rendered}${rows.length} seat(s)\n`);
     }
     if (!watching) break;
     if (!(await wait(2))) break;

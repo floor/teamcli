@@ -36,7 +36,7 @@ async function listed(argv: string[], sources: ListSources): Promise<{ code: num
 }
 
 function names(out: string): string[] {
-  return out.trimEnd().split('\n').slice(1).map((line) => line.split(/\s{2,}/)[0] ?? '');
+  return out.trimEnd().split('\n').slice(1, -1).map((line) => line.split(/\s{2,}/)[0] ?? '');
 }
 
 function line(out: string, name: string): string {
@@ -84,11 +84,18 @@ test('a session list that throws is the same empty state as herdr not answering'
   expect(text).toEqual({ code: 0, out: 'herdr is not running\n', err: '' });
   expect(roster).toBe(false);
   const json = await listed(['--json'], sources);
-  expect(json).toEqual({ code: 0, out: '[]\n', err: '' });
+  expect(json.code).toBe(0);
+  expect(json.err).toBe('');
+  expect(JSON.parse(json.out)).toEqual({
+    schema: { name: 'team.list', version: 1 },
+    format: 1,
+    rows: [],
+  });
   expect(roster).toBe(false);
 });
 
 test('an empty registry with --all says there are no sessions', async () => {
   const run = await listed(['--all'], { sessions: () => [], roster: () => [], team: () => null });
-  expect(run).toEqual({ code: 0, out: 'no sessions\n', err: '' });
+  expect(run).toEqual({ code: 0, out: 'no sessions\n0 session(s)\n', err: '' });
 });
+

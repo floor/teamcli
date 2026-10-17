@@ -21,8 +21,8 @@ import { claudeBox, testIo } from '../helpers.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8');
-/** The notice the example fixture carries: it still spells the lead `coordinator:`, on line 5. */
-const WARNING = 'team approve: warning, line 5: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read\n';
+/** `team approve` no longer prints deprecation warnings on stderr (0.5.0 output contract §2.4). */
+const WARNING = '';
 /** The same notice as doctor prints it, among the file's own lines. */
 const FILE_WARNING = 'warn  the file, line 5: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read';
 const FILE = ['--file', '.agents/team.yaml'];
@@ -410,6 +410,7 @@ describe('team doctor', () => {
     expect(run.err).toBe('');
     expect(run.out).toBe(
       [
+        'team acme-web, session "acme-web"',
         FILE_WARNING,
         'ok    herdr 0.7.1',
         '--    session acme-web is not running',
@@ -428,6 +429,13 @@ describe('team doctor', () => {
         `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root, replacing "."; `
           + `${join(base, 'worktrees', 'acme-web')} is the folder workspace.path "../worktrees/{repo}/{task}" places worktrees in, replacing "../worktrees/acme-web/*"`,
         'team doctor: nothing missing, 3 warnings',
+        'what 0.5.0 must not pretend:',
+        '  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt',
+        '  Standing grants with an expiry, not leases',
+        '  No two-granter agreement, no `agree`, no `create` bounds',
+        '  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating',
+        '  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)',
+        '  No policy object yet (amendment 02)',
         '',
       ].join('\n'),
     );
@@ -557,7 +565,7 @@ describe('team doctor', () => {
       'warn  deepseek-acme: the launch runs team-deepseek, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher\n',
     );
     expect(run.out).not.toContain('cursor-other: the launch names no model this version knows');
-    expect(run.out).toEndWith('team doctor: nothing missing, 4 warnings\n');
+    expect(run.out).toContain('team doctor: nothing missing, 4 warnings\nwhat 0.5.0 must not pretend:\n');
   });
 
   test("a launch whose model is not the file's warns", async () => {

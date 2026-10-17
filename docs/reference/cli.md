@@ -14,6 +14,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--about` | no | no | no |
 | `--help` | no | no | no |
 | `--version` | no | no | no |
 | `-V` | no | no | yes |
@@ -131,7 +132,7 @@ Hidden: no
 
 Usage:
 
-    team check [--session <name>] [--file <path>] [--repair]
+    team check [--session <name>] [--file <path>] [--repair] [--json]
     team check <ref> [--pr <file>] [--since <ref>] [--file <path>]
 
 ### Flags
@@ -140,6 +141,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--pr` | yes | no | no |
 | `--repair` | no | no | no |
 | `--session` | yes | no | no |
@@ -214,7 +216,7 @@ Hidden: no
 
 Usage:
 
-    team delegate <session/pane> --commands <act,...> [--dry-run]
+    team delegate <session/pane> --commands <act,...> [--dry-run] [--json]
 
 ### Flags
 
@@ -223,6 +225,7 @@ Usage:
 | `--commands` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -237,7 +240,7 @@ Hidden: no
 
 Usage:
 
-    team doctor [--session <name>] [--file <path>] [--login]
+    team doctor [--session <name>] [--file <path>] [--login] [--json]
 
 ### Flags
 
@@ -245,6 +248,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--login` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
@@ -309,8 +313,8 @@ Hidden: no
 
 Usage:
 
-    team grant <seat> --scope <act,...> [--dry-run]
-    team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run]
+    team grant <seat> --scope <act,...> [--dry-run] [--json]
+    team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
 
 ### Flags
 
@@ -320,6 +324,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--expires` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--name` | yes | no | no |
 | `--scope` | yes | no | no |
 | `-h` | no | no | yes |
@@ -353,14 +358,15 @@ Hidden: no
 
 Usage:
 
-    team hold <reason> [--until <time>]
-    team hold --release
+    team hold <reason> [--until <time>] [--json]
+    team hold --release [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--release` | no | no | no |
 | `--until` | yes | no | no |
 | `-h` | no | no | yes |
@@ -439,7 +445,7 @@ Hidden: no
 
 Usage:
 
-    team lock <name> [--for <text>] [--wait <seconds>]
+    team lock <name> [--for <text>] [--wait <seconds>] [--json]
 
 ### Flags
 
@@ -447,6 +453,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--for` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--wait` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -866,9 +873,9 @@ Hidden: no
 
 Usage:
 
-    team revoke grant [--dry-run]
-    team revoke delegate <session/pane> [--dry-run]
-    team revoke <name> [--dry-run]
+    team revoke grant [--dry-run] [--json]
+    team revoke delegate <session/pane> [--dry-run] [--json]
+    team revoke <name> [--dry-run] [--json]
 
 ### Flags
 
@@ -876,6 +883,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -890,7 +898,7 @@ Hidden: no
 
 Usage:
 
-    team revoke delegate <session/pane> [--dry-run]
+    team revoke delegate <session/pane> [--dry-run] [--json]
 
 #### Flags
 
@@ -898,6 +906,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -912,7 +921,7 @@ Hidden: no
 
 Usage:
 
-    team revoke grant [--dry-run]
+    team revoke grant [--dry-run] [--json]
 
 #### Flags
 
@@ -920,6 +929,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1059,13 +1069,14 @@ Hidden: no
 
 Usage:
 
-    team unlock <name>
+    team unlock <name> [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

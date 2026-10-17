@@ -1,15 +1,15 @@
-// The team file's JSON Schema, assembled from the `schema` fragment of each section module and
-// checked in at schema/team.schema.json. The schema documents the shape the validator accepts so
-// a person and an editor can read it; the validator stays what refuses a file, and checks what a
-// shape cannot say (paths inside trust patterns, a seat that names a declared seat, and so on).
+// The team file's JSON Schema (assembled from the `schema` fragment of each section module and
+// checked in at schema/team.schema.json) plus the published `--json` output schemas registered in
+// `COMMAND_OUTPUT_SCHEMAS` (`src/output/schema.ts`, checked in at `schema/<command>.schema.json`).
 //
 //   bun scripts/schema.ts           check: regenerate in memory and fail on any difference
-//   bun scripts/schema.ts --write   write schema/team.schema.json
+//   bun scripts/schema.ts --write   write schema/team.schema.json and all registered output schemas
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SECTIONS } from '../src/file/sections/index.ts';
 import type { JsonSchema } from '../src/file/sections/section.ts';
+import { COMMAND_OUTPUT_SCHEMAS, publishCommandOutputSchema } from '../src/output/schema.ts';
 
 export const NAME = 'schema/team.schema.json';
 
@@ -65,19 +65,33 @@ function firstDifference(current: string, wanted: string): string {
 
 if (import.meta.main) {
   const rendered = renderSchema();
-  if (process.argv.includes('--write')) {
+  const writeMode = process.argv.includes('--write');
+  if (writeMode) {
     writeFileSync(target, rendered);
-    process.stdout.write(`schema: wrote ${NAME}\n`);
-  } else if (!existsSync(target)) {
-    process.stderr.write(`schema: ${NAME} is missing: run \`bun scripts/schema.ts --write\`\n`);
-    process.exitCode = 1;
+    for (const spec of COMMAND_OUTPUT_SCHEMAS) {
+      publishCommandOutputSchema(root, spec, 'write');
+    }
+    process.stdout.write(`schema: wrote ${NAME} and ${COMMAND_OUTPUT_SCHEMAS.length} output schema(s)\n`);
   } else {
-    const current = readFileSync(target, 'utf8');
-    if (current !== rendered) {
-      process.stderr.write(`schema: ${NAME} is out of date with the section modules (${firstDifference(current, rendered)}): run \`bun scripts/schema.ts --write\`\n`);
+    if (!existsSync(target)) {
+      process.stderr.write(`schema: ${NAME} is missing: run \`bun scripts/schema.ts --write\`\n`);
       process.exitCode = 1;
     } else {
-      process.stdout.write(`schema: ${NAME} is current\n`);
+      const current = readFileSync(target, 'utf8');
+      if (current !== rendered) {
+        process.stderr.write(`schema: ${NAME} is out of date with the section modules (${firstDifference(current, rendered)}): run \`bun scripts/schema.ts --write\`\n`);
+        process.exitCode = 1;
+      }
+    }
+    for (const spec of COMMAND_OUTPUT_SCHEMAS) {
+      const check = publishCommandOutputSchema(root, spec, 'check');
+      if (!check.ok) {
+        process.stderr.write(`schema: ${check.message}: run \`bun scripts/schema.ts --write\`\n`);
+        process.exitCode = 1;
+      }
+    }
+    if (!process.exitCode) {
+      process.stdout.write(`schema: ${NAME} and ${COMMAND_OUTPUT_SCHEMAS.length} output schema(s) are current\n`);
     }
   }
 }

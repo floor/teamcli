@@ -1,10 +1,14 @@
 import { readArgs, type Args } from '../args.ts';
 import { runAuthorityEdit, type AuthorityEditOptions } from '../authority-edit.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
+import { plainText } from '../launch/plain.ts';
+import { hasJsonFlag, writeJsonError } from '../output/index.ts';
 import { runStandingGrant } from '../permissions/manage.ts';
 
-export const USAGE = `Usage: team grant <seat> --scope <act,...> [--dry-run]
-       team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run]
+export const USAGE = `Usage: team grant <seat> --scope <act,...> [--dry-run] [--json]
+       team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
+
+Exits 0 when the grant is written or the dry-run plan is printed, 1 when it is refused, 2 when the invocation or team file is invalid.
 `;
 export const grant: Command = (argv, io) => runGrant(argv, io);
 export default grant;
@@ -17,23 +21,28 @@ export default grant;
  */
 export async function runGrant(argv: string[], rawIo: Io, options: AuthorityEditOptions = {}): Promise<number> {
   const io = cleanedIo(rawIo);
-  const args = readArgs(argv, ['scope', 'capabilities', 'expires', 'name'], ['dry-run']);
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['scope', 'capabilities', 'expires', 'name'], ['dry-run', 'json']);
   const problem = invocationProblem(args);
   if (problem !== null) {
-    io.stderr(`team grant: ${problem}\n${USAGE}`);
+    if (json) {
+      writeJsonError(rawIo, 'grant.invocation', plainText(problem), null);
+    } else {
+      io.stderr(`team grant: ${problem}\n${USAGE}`);
+    }
     return 2; // exit: grant.invocation
   }
   const dryRun = args.flags.has('dry-run');
   const capabilities = args.values.capabilities;
   const result = capabilities === undefined
-    ? await runAuthorityEdit('grant', { kind: 'grant', seat: args.rest[0]!, scope: args.values.scope!.split(',') }, io, { ...options, dryRun })
-    : runStandingGrant(io, {
+    ? await runAuthorityEdit('grant', { kind: 'grant', seat: args.rest[0]!, scope: args.values.scope!.split(',') }, rawIo, { ...options, dryRun, json })
+    : runStandingGrant(rawIo, {
         seat: args.rest[0]!,
         capabilities: capabilities.split(','),
         ...(args.values.scope !== undefined ? { scope: args.values.scope.split(',') } : {}),
         ...(args.values.expires !== undefined ? { expires: args.values.expires } : {}),
         ...(args.values.name !== undefined ? { name: args.values.name } : {}),
-      }, { ...options, dryRun });
+      }, { ...options, dryRun, json });
   if (result === 'refused') {
     return 1; // exit: grant.refused
   }

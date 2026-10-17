@@ -213,7 +213,7 @@ describe('the old spelling\'s own line, its ref, --pr and --since — the page h
       const withSession = await check(['--session', 'acme'], sessioned.io, plainLoad, world);
       expect(withSession).toBe(1);
       expect(sessioned.err(), '--session is read by this reading, not refused as unknown').toBe('');
-      expect(sessioned.out()).toBe(plain.out());
+      expect(sessioned.out()).toBe(plain.out().replace('session "acme-web"', 'session "acme"'));
     } finally {
       rmSync(folder, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });

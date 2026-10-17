@@ -93,7 +93,7 @@ test('through team check the permission difference appears exactly once', () => 
   // The summary counts exactly the lines above it — check may add differences status does not
   // carry (the rules file here), and every one of them must stay counted.
   const printed = out.split('difference: ').length - 1;
-  const summary = Number(out.match(/team check: (\d+) difference/)?.[1] ?? NaN);
+  const summary = Number(out.match(/^(\d+) difference\(s\)/m)?.[1] ?? NaN);
   expect(summary, 'the summary count parted from the printed lines').toBe(printed);
 });
 
