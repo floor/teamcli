@@ -3099,7 +3099,9 @@ scene('plan.read', async (place) => {
 
 /** `team send`'s fixtures: a fake seat of the fixture's own file, a sockets folder with a file
  *  at the pid the fake pane process reports, and a deliver that accepts — with `reply` set,
- *  the seat also answers at the sender's own pid path, as a session does. No session is read. */
+ *  the seat also answers at the sender's own pid path, as a session does. No path calls this
+ *  deliver while SOCKET_SEND (src/send/uds.ts) is off, so `reply` stands unused until the
+ *  answered scene returns with the native leg. No session is read. */
 function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; reply?: string } = {}): SendHost & { frames: string[] } {
   const sockets = join(place.base, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
@@ -3202,8 +3204,8 @@ scene('send.unreachable', async (place) => {
 });
 scene('send.not-submitted', async (place) => {
   write(place, TEAM);
-  // No socket file: the trigger not being taken is the typed path's refusal, reached after the
-  // socket was missing and the message fell back to it.
+  // The trigger not being taken is the typed path's refusal: the seat is idle, so the send takes
+  // the drop-file route and types — and the pane never turns working.
   const host = sendHost(place, { socket: false });
   host.native.status = () => 'idle';
   return show(await sent(place, ['lead', 'hello'], owner, host), 'not-submitted');
@@ -3215,14 +3217,6 @@ scene('send.delivered', async (place) => {
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written');
-});
-scene('send.answered', async (place) => {
-  write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--wait'], owner, sendHost(place, { reply: 'pong' })), 'lead: answered\npong');
-});
-scene('send.timeout', async (place) => {
-  write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--wait', '--timeout', '1'], owner, sendHost(place)), 'timeout: sent, no reply within 1s');
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);
@@ -3867,7 +3861,12 @@ for (const [name, command, args, invalidArgs] of [
   });
 }
 
-const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
+// Ids whose site is reachable but whose scene no longer is: send.answered and send.timeout sit
+// behind the socket leg, which no path dials while SOCKET_SEND (src/send/uds.ts) is off — the
+// --wait refusal in front of them returns first, so no scene can produce their codes. Their rows
+// and sites stay for the native leg's return; when it lands, un-defensive them and restore the
+// scenes beside send.listed.
+const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'send.answered', 'send.timeout']);
 
 const contract = loadContract();
 if (wanted !== null) {

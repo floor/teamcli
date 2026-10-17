@@ -41,7 +41,7 @@ import { appendHistory, type HistoryEntry } from './history.ts';
 import { bindPane, deliverTrigger } from './deliver.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
-import { FRAME_LIMIT, sendFrame, type SendOutcome } from './uds.ts';
+import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
 
 /** Maximum queued sends waiting per seat before new sends report queue full (`held`). */
 export const MAX_QUEUE_DEPTH = 32;
@@ -1041,6 +1041,20 @@ async function executeSocketSend(
   host: DaemonHost,
   alive: (pid: number) => boolean,
 ): Promise<DaemonSendResponse> {
+  // While SOCKET_SEND is off, the daemon serves no waited send: the frame the reply would ride
+  // is one this build does not write, and a caller asking for one anyway — an older CLI — is
+  // refused here rather than dialed. Nothing is written, nothing is locked, and no history
+  // line is appended: the daemon did not touch the seat.
+  if (!SOCKET_SEND) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent`,
+    };
+  }
   // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.
   const startedAt = Date.now();
   const frame = `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;

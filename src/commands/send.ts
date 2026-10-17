@@ -24,13 +24,7 @@ import { bindPane, deliverTrigger, showsHeldFrameDialog, type DeliverResult } fr
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, resolveTarget, type Target } from '../send/resolve.ts';
-import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../send/uds.ts';
-
-/** Whether a plain send to a Claude Code seat takes the cross-session socket before the typed
- *  trigger. Off: a frame can land at the receiving session's held-message dialog, where the box
- *  is blocked, so the typed trigger is the default again until the owner decides on attestation.
- *  The socket stays --wait's channel either way; one constant flips the plain-send default back. */
-const SOCKET_FIRST = false;
+import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -78,19 +72,18 @@ The outcome is one of seven, and none of them is silent:
   unreachable  the channel did not confirm (exit 1): the session is not running, no
                live agent carries the seat's name, the pane is one of those dialogs,
                no socket took a waited frame, or the pane would not take the trigger
-  refused      nothing was sent (exit 1): not a declared seat, --wait to a seat that
-               is not Claude Code, a socket frame over the measured limit, a trigger
-               that would exceed the measured line length, a reply listener that
-               could not be opened, or a caller that may not send
+  refused      nothing was sent (exit 1): not a declared seat, --wait (the frame
+               needs the native leg — the team route and the caller's own
+               SendMessage — which this build does not carry), a socket frame over
+               the measured limit, a trigger that would exceed the measured line
+               length, a reply listener that could not be opened, or a caller that
+               may not send
 
---wait to a Claude Code seat writes one frame on the cross-session socket, because
-the reply listener needs that frame, and blocks for the reply at this process's own
-<sockets dir>/<pid>.sock, for --timeout seconds (default 120; --timeout is only
-meaningful with --wait). A successful write says the frame was sent on the socket,
-not that it was delivered. A frame the receiving session holds at its held-message
-dialog ends the run at once as held (socket); nothing is typed while it stands.
---wait to any other seat is refused and nothing is
-written. --json prints one result document instead of the lines:
+--wait needs the frame the reply listener reads, and that frame is a socket write
+this build does not make: a --wait to a Claude Code seat is refused, naming the
+native leg (the team route and the caller's own SendMessage) that carries a waited
+send once it ships, and --wait to any other seat is refused too. Nothing is written
+either way. --json prints one result document instead of the lines:
 {seat, status, exit, reply?, error?, ids}. --file reads the body from a file instead
 of the one <message> argument.
 
@@ -105,7 +98,8 @@ delivery is never a way around the rules — and the body is optional: given, it
 recorded verbatim, and without it the line says the text did not pass through this
 CLI. \`team route <seat>\` answers the address such a delivery uses.
 
-Not in this build: broadcast, and a reply from a seat that is not Claude Code.
+Not in this build: broadcast, a reply from a seat that is not Claude Code, and a
+waited send — the native leg carries it.
 `;
 
 export type SendHost = {
@@ -312,7 +306,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 
   const dry = args.flags.has('dry-run');
   // --wait needs the socket frame, and only a Claude Code seat has that listener. Any other
-  // seat is refused before a write. A dry run of that refusal still names the drop channel,
+  // seat is refused before a write. A Claude Code --wait run is refused as well while
+  // SOCKET_SEND is off: the frame it would wait on is one this build does not write
+  // (deliverSocket names the refusal). A dry run of either refusal still names a channel,
   // because nothing is written either way.
   if (wait && to.cli !== 'claude-code' && !dry) {
     return refuse(io, dir, who, `${to.seat} runs ${to.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`, host, report);
@@ -331,20 +327,21 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
   }
   if (dry) {
-    const how = to.cli === 'claude-code' && SOCKET_FIRST
+    const how = to.cli === 'claude-code' && SOCKET_SEND
       ? 'its cross-session socket, falling back to a 0600 drop file and one trigger line'
       : 'a 0600 drop file and one trigger line';
     return dryRun(io, dir, who, to.seat, `${to.cli} via ${how}; nothing was written`, host, report);
   }
 
-  // Phase 1, while SOCKET_FIRST holds: a Claude Code seat takes the frame on its cross-session
+  // Phase 1, while SOCKET_SEND holds: a Claude Code seat takes the frame on its cross-session
   // socket before the typed trigger — nothing is typed. The registry's recorded address while it
   // is live, else the pane's own processes; a socket that is missing or refuses falls back to the
   // typed trigger below, and the outcome line keeps the reason it fell
   // (delivered (typed, socket <reason>)). A frame the receiving session's own dialog holds comes
   // back held: the box is blocked while that dialog is up, so nothing is typed into it.
+  // While the constant is off, this block does not run at all: the socket is nobody's channel.
   let socketNote: string | null = null;
-  if (to.cli === 'claude-code' && SOCKET_FIRST) {
+  if (to.cli === 'claude-code' && SOCKET_SEND) {
     const attempt = await deliverSocketFrame(dir, who, from, to, body, msgId, host, report, startedAt);
     if (attempt.kind === 'delivered') return delivered(io, to.seat, report, 'socket');
     if (attempt.kind === 'held') return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
@@ -537,9 +534,10 @@ function finishDaemonSend(
 }
 
 /**
- * `--wait` to a Claude Code seat. The frame is what the reply listener needs. A successful
- * write says the frame was sent on the socket: the write is not an acknowledgement that the
- * seat read it.
+ * `--wait` to a Claude Code seat. The frame is what the reply listener needs, and while
+ * SOCKET_SEND is off this build writes no frame: the run is refused, naming the leg that
+ * would carry it, and nothing dials. With the constant on, a successful write says the frame
+ * was sent on the socket: the write is not an acknowledgement that the seat read it.
  */
 async function deliverSocket(
   io: Io,
@@ -555,6 +553,14 @@ async function deliverSocket(
   /** When this run started: the ms the outcome's history entry carries is measured from it. */
   startedAt: number,
 ): Promise<number> {
+  // No socket, no waited frame: the frame the reply listener needs is one this build does not
+  // write, so the run is refused rather than carried by a channel the reply cannot come back
+  // on. The dry run prints the same sentence; nothing dials either way.
+  if (!SOCKET_SEND) {
+    const reason = '--wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent';
+    if (dry) return dryRun(io, dir, who, to.seat, `${to.cli} ${reason}`, host, report);
+    return refuse(io, dir, who, `${to.seat}: ${reason}`, host, report);
+  }
   // One JSON line, exactly the frame the probe measured: `type:"user"`, the content, and a
   // msg_id for a reader's own correlation. No `from`: this process has no session socket, so
   // any sender address it claimed would be a claim, not a fact — the listener shows the
