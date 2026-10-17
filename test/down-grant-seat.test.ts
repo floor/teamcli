@@ -33,7 +33,7 @@ const PAST_GRANT = `entity: beacon\nsession: floor\nagent: iris\npaths:\n  - ~/C
 
 /** The refusal every scene here that isn't admitted answers with: the walk judged the caller in
  *  the team's session, found no agent of it there, and the record didn't cover it. */
-const REFUSAL = '! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is unplaced (it runs in a herdr pane without an agent)\n';
+const REFUSAL = '! down would refuse: only the owner or `leads` stops the team; this call is unplaced (it runs in a herdr pane without an agent)\n';
 
 const SEAT = (role: string, name: string, leads = false) => `  - role: ${role}
     name: ${name}
