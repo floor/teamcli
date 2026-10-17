@@ -1,8 +1,9 @@
 # team check
 
 One answer to one question: **is anything wrong with this team that someone should act on?**
-It reads the team file, the approval, the state, herdr and the registries, and changes nothing —
-no git is needed, so it answers as well in a plain folder as in a repository. Where
+It reads the team file, the approval, the state, herdr and the registries, and changes nothing
+but the state's two leftovers the owner's `--repair` drops — no git is needed, so it answers as
+well in a plain folder as in a repository. Where
 [`team status`](status.md) says what the team is, the check says what to act on: the differences
 alone, each with its repair.
 It is also the old name of [`team commits check`](commits.md) and [`team pr check`](pr.md), still
@@ -10,7 +11,8 @@ read through 0.3.3. A `<ref>` (a range when it holds `..`, passed to git as give
 one commit) runs that older reading, as do `--pr <file>` (check a pull request's body as well;
 `-` reads standard input) and `--since <ref>` (skip that commit and everything reachable from
 it). `--file` is read by both readings; `--session` is this one's alone, and the older one meets
-it with `team check: unknown option --session` and exit 2. A run of the older reading says once
+it with `team check: unknown option --session` and exit 2. `--repair` is this one's alone too, and
+the older one meets it with `team check: unknown option --repair` and exit 2. A run of the older reading says once
 on stderr which command now holds it, and `--pr` adds its own line.
 
 The registries answer for the team's place: a team the project registry names in two projects is a
@@ -30,9 +32,18 @@ the file's own declaration then. A seat no source has heard from past the blind 
 [`team seats`](seats.md) and counts as not working: `<seat>: unknown for over <threshold> — blind,
 and it counts as not working`, repaired with the owner's look at the pane.
 
+The state's leftovers are differences too. A record for a seat the file no longer declares — one
+an older file named and this one dropped — and a record for a session herdr no longer runs are
+both named: `<seat>: a state seat not in the file claims pane <pane>` (its pane named when the
+record expects one) and `the state records the session "<name>", and herdr does not run it`. The
+file is the truth: neither record is ever guessed back into the file, and the one repair is
+`team check --repair`, the owner's own write, which drops exactly those records from the state. A
+record for a temporary seat is never one of these — [`team add`](add.md) `--temporary` never
+writes a temporary seat into the file, and its record is the only place it exists.
+
 ## Synopsis
 
-    team check [--session <name>] [--file <path>]
+    team check [--session <name>] [--file <path>] [--repair]
 
 ## Flags
 
@@ -40,6 +51,7 @@ and it counts as not working`, repaired with the owner's look at the pane.
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--repair` | — | drop the state's leftovers: a record for a seat the file no longer declares, and one for a session herdr no longer runs; the owner's alone |
 
 ## Who may run it
 
@@ -50,14 +62,15 @@ and it counts as not working`, repaired with the owner's look at the pane.
 | a pane outside the team that the live file names in its `delegates` entries | the same gate the changing commands use, minus the command list and the audit line: the check is a read, not an act |
 | anyone else | nothing: the fixed sentence `team check: this team is not yours to check`, whatever failed underneath |
 
-Aimed by a caller that passes the gate but is not the owner, `--file` and `--session` meet the
-refusal every command gives them and exit 1.
+Aimed by a caller that passes the gate but is not the owner, `--file`, `--session` and `--repair`
+meet the refusal every command gives them and exit 1.
 
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | nothing needs acting on | `team check: nothing wrong`, over the line naming what the check cannot see (`not known: work sent and unread, a lead waiting on a seat, a landing not recorded`) and the block naming what 0.5.0 must not pretend | 0 |
+| the owner's `--repair` dropped the state's leftovers, and nothing else needs acting on | one `repaired: <what was dropped>` line per record, then `team check: nothing wrong`, over the same not-known line and block | 0 |
 | something needs acting on | one `difference:` line per finding with its `  repair:` line under it, then `team check: <n> difference(s)`, and `, <n> for the owner` when any finding is the owner's; the not-known line and the same block stand under this answer too | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | the check can't run (the loader's, the state's or herdr's own text), the invocation can't be read, or the caller may not check this team | `team check: <problem>`, or the one fixed sentence | 2 |

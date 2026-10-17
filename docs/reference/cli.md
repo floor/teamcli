@@ -131,7 +131,7 @@ Hidden: no
 
 Usage:
 
-    team check [--session <name>] [--file <path>]
+    team check [--session <name>] [--file <path>] [--repair]
     team check <ref> [--pr <file>] [--since <ref>] [--file <path>]
 
 ### Flags
@@ -141,6 +141,7 @@ Usage:
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--pr` | yes | no | no |
+| `--repair` | no | no | no |
 | `--session` | yes | no | no |
 | `--since` | yes | no | no |
 | `-h` | no | no | yes |

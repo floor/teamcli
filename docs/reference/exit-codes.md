@@ -100,8 +100,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `broker.invocation` | `broker` | 2 | the invocation can't be read | `team broker extra` |
 | `broker.not-a-repo` | `broker` | 2 | not inside a git repository | `team broker` |
 | `check.ok` | `check` | 0 | nothing needs acting on | `team check` |
+| `check.repaired` | `check` | 0 | the owner's --repair dropped the state's leftovers, and nothing else needs acting on | `team check --repair` |
 | `check.file-owner` | `check` | 1 | --file is the owner's | `team check --file .agents/team.yaml` |
 | `check.findings` | `check` | 1 | something needs acting on | `team check` |
+| `check.repair-owner` | `check` | 1 | --repair is the owner's | `team check --repair` |
 | `check.session-owner` | `check` | 1 | --session is the owner's | `team check --session team` |
 | `check.file` | `check` | 2 | the team file can't be read | `team check --file missing.yaml` |
 | `check.file-invalid` | `check` | 2 | the team file can't be parsed | `team check --file team.yaml` |

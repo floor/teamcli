@@ -8,8 +8,9 @@ the exit codes stay on the page.
 ## What the run does: the differences, each with its repair
 
 One answer to one question: **is anything wrong with this team that someone should act on?**
-It reads the team file, the approval, the state and herdr, and changes nothing — no git is
-needed, so it answers as well in a plain folder as in a repository. It is not
+It reads the team file, the approval, the state and herdr, and changes nothing but the two
+leftovers the owner's `--repair` drops — no git is needed, so it answers as well in a plain folder
+as in a repository. It is not
 [`team status`](status.md) with fewer lines: status answers *what the team is* — the rows, the
 budgets, every difference and note — and the check answers *what to act on*: the differences
 alone, each with its repair, and the one note a file can earn.
@@ -19,12 +20,42 @@ alone, each with its repair, and the one note a file can earn.
 those — a `<ref>`, `--pr`, `--since`, any other word or option — is still read as that command
 through 0.3.3; the last section keeps those spellings and their bytes.
 
+## The state's leftovers, and the owner's `--repair`
+
+The file is the truth about who the seats are. The state can keep a record the file no longer
+speaks for — a seat an older file named and this one dropped — and, once its session is gone, a
+record for a session herdr no longer runs. Both are leftovers, and both are named:
+
+    difference: <seat>: a state seat not in the file claims pane <pane>
+      repair: drop its record from the state (team check --repair)
+    difference: the state records the session "<name>", and herdr does not run it
+      repair: drop its record from the state (team check --repair)
+
+A record with no pane reads `<seat>: a state seat not in the file`, without the pane clause. The
+repair is never an edit of the file and never a guess at which record is right: the commands that
+resolve who holds a pane read past a record the file does not declare (`seatOfFile`,
+`src/state.ts`), so a departed seat's old record no longer refuses the real seat's registration,
+and the record itself waits for the owner's `--repair`. That flag is the check's one act: it drops
+exactly the leftovers it named, in one locked state write, re-checking each record against the
+state now on disk; it prints one `repaired:` line per record, logs each line under `check` and the
+owner, and leaves the file, the approval store and every other record as they stood. A temporary
+seat is never a leftover: `team add --temporary` never writes one into the file, so its record is
+the only place it exists, and neither the check nor the repair touches it. A session herdr cannot
+answer for is not a leftover either — a read that failed is not a finding.
+
+The repair is the owner's alone. A caller that passes the gate but is not the owner meets
+`team check: --repair is the owner's` and exit 1, as it does for the two aimed flags; nothing is
+written. A `--repair` run whose drop leaves nothing else to act on is a clean check — the `repaired:`
+lines, then `team check: nothing wrong`, exit 0. A state write that fails throws, as every
+command's state write does, and the run is `team.command-threw`'s.
+
 ## Who the check answers
 
 The caller decides, not the flags. Three callers get the answer:
 
 - **the owner**, from a terminal outside herdr — the same walk `status` and the changing
-  commands make. An owner **without a terminal** is not this caller: a script meets the fixed
+  commands make, and the only caller who may aim `--file`, `--session` or `--repair`. An owner
+  **without a terminal** is not this caller: a script meets the fixed
   sentence below;
 - **a seat of the team being checked** — placed in the file's session, on the pane the state
   records for it. A seat the state records no pane for, or records on another pane, fails
@@ -136,7 +167,8 @@ and open nothing: the target is the file the caller's own place finds.
   record of the team here and the difference is not raised on it.
 
 It writes nothing at all — not the state, not the store, not the `last_valid` copy `status`
-keeps beside the file it read — for every caller, the owner included.
+keeps beside the file it read — for every caller, the owner included, save the one act: the
+owner's `--repair` write that drops the leftovers named above.
 
 ## Output
 
@@ -157,6 +189,13 @@ one word shorter.
 The closing line counts the differences and, after a comma, how many of their repairs are the
 owner's. With nothing to act on it is `team check: nothing wrong`.
 
+A `--repair` run that dropped records prints one `repaired: <what was dropped>` line per record before
+the answer — `repaired: <seat>: a state seat not in the file claimed pane <pane>; its record is
+dropped` and `repaired: the state's session "<name>" is not running; its record is dropped` — and
+each line is written to the project's log under `check` and the owner's label. The drop runs
+before the comparison, so a check whose only findings were the leftovers answers
+`team check: nothing wrong`, exit 0.
+
 Under either answer stand the one line that names what the check cannot see and, under it, the
 grants decision record's block of what 0.5.0 must not pretend — its list, in its words
 (`decided-grants-minimum-2026-10-17`, "What 0.5.0 must not pretend, said plainly"): the limits
@@ -173,7 +212,7 @@ this release does not close, said where the check runs rather than left to be di
 
 The readers are agents too, so this text is the contract: one `difference:` line per finding,
 its `  repair:` line under it, the closing count line, the `note:` line for each note the file
-earns (above the findings), the `not known:` line, and the block under both answers. A finding never quotes a seat's screen text beyond the profile's fixed
+earns (above the findings), the `repaired:` line for each record a `--repair` dropped, the `not known:` line, and the block under both answers. A finding never quotes a seat's screen text beyond the profile's fixed
 words for the kind of screen it is.
 
 ## Examples, moved here whole

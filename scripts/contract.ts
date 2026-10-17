@@ -4,7 +4,8 @@
 // table in src/cli.ts, plus every name that file compares to `name` and does
 // not list. A command's usage lines are its exported USAGE string (the same
 // string `--help` prints). Its flags are the names passed to readArgs, or
-// check's VALUE_OPTIONS. A flag no usage text mentions is hidden: `--help` is
+// check's VALUE_OPTIONS and FLAG_OPTIONS — the valued options and the switches
+// that take no value. A flag no usage text mentions is hidden: `--help` is
 // in the program usage, so a command keeps it visible, while `-h` and `-V`
 // are not written anywhere and stay hidden. Positionals are the <name> tokens
 // of the usage lines; one that a line omits or wraps in brackets is optional.
@@ -131,16 +132,22 @@ function optionLists(source: ts.SourceFile, rel: string): { valued: string[]; fl
   visit(source);
   if (reads > 1) throw new Error(`${rel}: more than one readArgs call`);
 
+  // A command that reads its own options without readArgs lists the valued ones in VALUE_OPTIONS
+  // and, when it has any, its switches — taken with no value — in FLAG_OPTIONS beside it: check
+  // is the one such command, its parse kept by hand for the old spelling's exact bytes.
   let values: string[] | null = null;
+  let switches: string[] | null = null;
   const visitValues = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'VALUE_OPTIONS' && node.initializer) {
-      values = literalStrings(node.initializer, `${rel}: VALUE_OPTIONS`);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      if (node.name.text === 'VALUE_OPTIONS') values = literalStrings(node.initializer, `${rel}: VALUE_OPTIONS`);
+      if (node.name.text === 'FLAG_OPTIONS') switches = literalStrings(node.initializer, `${rel}: FLAG_OPTIONS`);
     }
     ts.forEachChild(node, visitValues);
   };
   visitValues(source);
-  if (read && values) throw new Error(`${rel}: both readArgs and VALUE_OPTIONS`);
-  if (values) return { valued: values, flags: [] };
+  if (read && (values || switches)) throw new Error(`${rel}: both readArgs and VALUE_OPTIONS/FLAG_OPTIONS`);
+  if (values) return { valued: values, flags: switches ?? [] };
+  if (switches) throw new Error(`${rel}: FLAG_OPTIONS without VALUE_OPTIONS`);
   return read;
 }
 
