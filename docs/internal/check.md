@@ -124,10 +124,10 @@ and open nothing: the target is the file the caller's own place finds.
   (it is kept for display), so a seat whose last commit, ack or message is that fresh reads
   `working` while its prompt shows; a working screen, a blocked screen — a composer holding unsent
   text included — and the certainties (`held`, `unreachable`, `done`) never yield to it. The hook
-  (`cli-hook`) is a per-launch settings file, written under the project's `.agents/`, that the CLI
-  loads for two command hooks — a turn start and a turn end — and the state file it keeps there is
-  read for a day: a fresh `working` reads working while its turn is young
-  (`state_hook_working_seconds`, 2m shipped, the project free to loosen it), past which a screen
+  (`cli-hook`) is a per-launch settings file, written under the team file's own folder — `.agents/`
+  by default — that the CLI loads for two command hooks — a turn start and a turn end — and the
+  state file it keeps there is read for a day: a fresh `working` reads working while its turn is
+  young (`state_hook_working_seconds`, 2m shipped, the project free to loosen it), past which a screen
   that still reads answers instead — an interrupted turn leaves the file's `working` behind while
   the prompt shows again — and a screen it cannot read leaves the hook to answer; a fresh `idle`
   idle; an older reading or one this version cannot parse is no reading, so the screen answers
