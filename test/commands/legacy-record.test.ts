@@ -24,7 +24,7 @@ import type { HerdrAgent } from '../../src/herdr.ts';
 import { approvalStanding, LEGACY_LINE, readApproval, storePath, writeApproval } from '../../src/store/store.ts';
 import type { Live } from '../../src/status/compare.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(new URL('../fixtures/example.yaml', import.meta.url), 'utf8');
 const OWNER: Caller = { kind: 'owner' };
@@ -100,7 +100,7 @@ function runningState(): void {
   );
 }
 
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 const loaded_machine: Machine = { ...fine, loadPerCore: 6.5 };
 

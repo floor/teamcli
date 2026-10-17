@@ -31,10 +31,16 @@ import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
 import { runUnlock } from '../src/commands/unlock.ts';
 import { runTempo } from '../src/commands/tempo.ts';
+import { runHold } from '../src/commands/hold.ts';
+import { runGrant } from '../src/commands/grant.ts';
+import { runDelegate } from '../src/commands/delegate.ts';
+import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { pr } from '../src/commands/pr.ts';
+import { runProc, type ProcSources } from '../src/commands/proc.ts';
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
+import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
@@ -65,7 +71,7 @@ import { analyze, loadContract, problems, render, type ExitRow } from '../script
 import { runRelease } from '../src/commands/release.ts';
 import type { KeyReader } from '../src/release/keychain.ts';
 import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/world.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const owner = { kind: 'owner' } as const;
@@ -75,7 +81,7 @@ const leadSeat = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' } 
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 const hot: Machine = { ...fine, loadPerCore: 9 };
 const quiet: Live = { running: false, agents: [], workspaces: [], screens: {} };
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 const LEAD = `  - role: coordinator
     name: lead
@@ -1965,6 +1971,7 @@ scene('worktree.subcommand', async (place) => show(await worktree(place, []), 'a
 scene('worktree.task-required', async (place) => show(await worktree(place, ['new']), 'a task name is required'));
 scene('worktree.extra', async (place) => show(await worktree(place, ['new', 'task', 'extra']), 'unexpected'));
 scene('worktree.remove-flags', async (place) => show(await worktree(place, ['remove', 'task', '--kind', 'fix']), 'remove takes no'));
+scene('worktree.branch-flags', async (place) => show(await worktree(place, ['new', 'task', '--branch', 'fix/task']), 'takes no --branch'));
 scene('worktree.not-a-repo', async (place) => show(await worktree(place, ['new', 'task']), 'not inside a git repository'), false);
 scene('worktree.file', async (place) => show(await worktree(place, ['new', 'task', '--file', 'missing.yaml']), 'no team file'));
 scene('worktree.file-invalid', async (place) => {
@@ -2216,6 +2223,12 @@ scene('worktree.removed', async (place) => {
   approve(place, worktreeText());
   expect((await worktree(place, ['new', 'task', '--kind', 'fix'])).code).toBe(0);
   return show(await worktree(place, ['remove', 'task']), 'the branch fix/task is kept');
+});
+scene('worktree.remove-branch', async (place) => {
+  publish(place);
+  approve(place, worktreeText());
+  expect((await worktree(place, ['new', 'task', '--kind', 'fix'])).code).toBe(0);
+  return show(await worktree(place, ['remove', 'task', '--branch', 'fix/other']), 'does not name the branch');
 });
 
 scene('team.help', async (place) => show(await entry(['--help'], testIo(place.root, owner)), 'Usage:'));
@@ -2646,6 +2659,79 @@ scene('unlock.unknown-holder', async (place) => {
 scene('unlock.invocation', async (place) => show(await unlocked(place, [], LOCK_OWNER), 'a <name> is required'));
 scene('unlock.project', async (place) => show(await unlocked(place, ['heavy-run']), 'no team file'));
 
+/** The pid every `team proc` scene's reading calls running: the map is a stand-in, so no
+ *  assertion depends on a pid this machine happens to have. */
+const PROC_LIVE = 4243;
+const workerSeat = { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' } as const;
+
+async function proced(place: Place, argv: string[], caller: Caller = owner, over: Partial<ProcSources> = {}): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const sources: ProcSources = { home: place.home, now: () => NOW, alive: (pid) => pid === PROC_LIVE, ...over };
+  return { code: await runProc(argv, io, sources), out: io.out, err: io.err };
+}
+
+function seedProcs(place: Place, procs: Record<string, { by: string; at: string; pid?: number; note?: string }>): void {
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).procs = { ...procs };
+  });
+}
+
+scene('proc.added', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['add', 'build', '--pid', String(PROC_LIVE), '--note', 'the release build']), 'proc build: added');
+});
+scene('proc.done', async (place) => {
+  write(place, TEAM);
+  seedProcs(place, { build: { by: 'owner', at: NOW.toISOString() } });
+  return show(await proced(place, ['done', 'build']), 'proc build: done');
+});
+scene('proc.listed', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['list']), 'no processes recorded');
+});
+scene('proc.caller', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['add', 'build'], other), 'only a seat of this team or the owner records a process');
+});
+scene('proc.detached', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['add', 'build'], detachedCaller), 'only the owner runs this, from a terminal outside herdr');
+});
+scene('proc.other-seat', async (place) => {
+  write(place, TWO);
+  seedProcs(place, { build: { by: 'lead', at: NOW.toISOString(), pid: PROC_LIVE } });
+  return show(await proced(place, ['done', 'build'], workerSeat), 'only lead, a lead or the owner clears it');
+});
+scene('proc.pid', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['add', 'build', '--pid', '4244']), 'is not running');
+});
+scene('proc.taken', async (place) => {
+  write(place, TWO);
+  seedProcs(place, { build: { by: 'lead', at: NOW.toISOString(), pid: PROC_LIVE } });
+  return show(await proced(place, ['add', 'build'], workerSeat), 'is lead\'s, live since');
+});
+scene('proc.unknown', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, ['done', 'build']), 'no process named "build"');
+});
+scene('proc.file', async (place) => show(await proced(place, ['add', 'build']), 'no team file'));
+scene('proc.file-invalid', async (place) => {
+  write(place, 'format: [\n');
+  return show(await proced(place, ['add', 'build']), 'line');
+});
+scene('proc.invocation', async (place) => {
+  write(place, TEAM);
+  return show(await proced(place, []), 'a subcommand is required');
+});
+scene('proc.not-yours', async (place) => {
+  write(place, TEAM);
+  const ran = await proced(place, ['list'], other);
+  expect(ran.err).toBe('team proc: this team is not yours to read\n');
+  expect(ran.out).toBe('');
+  return ran;
+});
+
 async function tempo(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
   const io = testIo(place.root, caller);
   return { code: await runTempo(argv, io, { home: place.home }), out: io.out, err: io.err };
@@ -2670,6 +2756,52 @@ scene('tempo.invocation', async (place) => show(await tempo(place, []), 'a word 
 scene('tempo.word', async (place) => show(await tempo(place, ['faster']), 'must be relaxed, normal or urgent'));
 scene('tempo.not-a-repo', async (place) => show(await tempo(place, ['urgent']), 'not inside a git repository'), false);
 scene('tempo.file', async (place) => show(await tempo(place, ['urgent']), 'no team file'));
+
+async function held(place: Place, argv: string[], caller: Caller = owner, now: Date = NOW): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runHold(argv, io, { home: place.home, now: () => now }), out: io.out, err: io.err };
+}
+
+scene('hold.placed', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys']), 'hold: freeze deploys');
+});
+scene('hold.released', async (place) => {
+  write(place, TEAM);
+  await held(place, ['freeze deploys']);
+  return show(await held(place, ['--release']), 'hold: released');
+});
+scene('hold.held', async (place) => {
+  write(place, TEAM);
+  await held(place, ['freeze deploys']);
+  return show(await held(place, ['something else']), 'already held: freeze deploys');
+});
+scene('hold.not-held', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['--release']), 'not held');
+});
+scene('hold.until', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys', '--until', 'tomorrow']), '--until is a local <HH:MM>');
+});
+scene('hold.detached', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys'], detachedCaller), 'only the owner runs this, from a terminal outside herdr');
+});
+scene('hold.caller', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, ['freeze deploys'], other), 'only the owner, the orchestrator or the operator holds the team');
+});
+scene('hold.io', async (place) => {
+  write(place, TEAM);
+  writeFileSync(join(place.root, '.agents', 'team.state.json'), '{ not json\n');
+  return show(await held(place, ['freeze deploys']), 'is not valid JSON');
+});
+scene('hold.file', async (place) => show(await held(place, ['freeze deploys']), 'no team file'));
+scene('hold.invocation', async (place) => {
+  write(place, TEAM);
+  return show(await held(place, []), 'a <reason> is required');
+});
 
 async function nexted(place: Place, argv: string[] = [], caller: Caller = leadSeat): Promise<Ran> {
   const io = testIo(place.root, caller);
@@ -2904,6 +3036,8 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
   const sockets = join(place.base, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
   if (over.socket !== false) writeFileSync(join(sockets, '400.sock'), '');
+  // The seat's own evidence for this line: idle until the Enter, working after it.
+  let working = false;
   const host: SendHost & { frames: string[] } = {
     frames: [],
     agents: () => (over.agents === false ? null : [{ name: 'lead', pane: 'w1:p1' }]),
@@ -2920,8 +3054,11 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
     },
     native: {
       typeText: () => true,
-      pressEnter: () => true,
-      status: () => 'working',
+      pressEnter: () => {
+        working = true;
+        return true;
+      },
+      status: () => (working ? 'working' : 'idle'),
       wait: async () => {},
     },
     now: () => NOW,
@@ -2985,7 +3122,9 @@ scene('send.refused', async (place) => {
 });
 scene('send.held', async (place) => {
   write(place, TEAM);
-  const host = sendHost(place);
+  // No socket file: a held message is the typed path's own refusal, and a taken frame on a
+  // present socket would deliver before the pane was ever read for a dialog.
+  const host = sendHost(place, { socket: false });
   host.native.paneText = () => `${'─'.repeat(30)}\n❯ draft in box\n${'─'.repeat(30)}`;
   return show(await sent(place, ['lead', 'hello'], owner, host), 'held');
 });
@@ -2993,13 +3132,21 @@ scene('send.unreachable', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { agents: false })), 'unreachable');
 });
+scene('send.not-submitted', async (place) => {
+  write(place, TEAM);
+  // No socket file: the trigger not being taken is the typed path's refusal, reached after the
+  // socket was missing and the message fell back to it.
+  const host = sendHost(place, { socket: false });
+  host.native.status = () => 'idle';
+  return show(await sent(place, ['lead', 'hello'], owner, host), 'not-submitted');
+});
 scene('send.delivered', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place)), 'lead: delivered');
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via its cross-session socket, falling back to a 0600 drop file and one trigger line; nothing was written');
 });
 scene('send.answered', async (place) => {
   write(place, TEAM);
@@ -3266,7 +3413,7 @@ scene('reload.grant-file', async (place) => {
 
 // Outcomes that are listed and kept, and that no scene can produce. An edit the earlier checks
 // have already validated reads here (add.prepared, add.locked, add.not-restored), and so do
-// answer.action and up.delegate-placement. add.no-profile and
+// answer.action and up.delegate-placement. add.no-profile, register.no-profile and
 // remove.no-profile joined them when grok's profile shipped: the file loader accepts exactly the
 // CLIs this version knows, and every one of them now has a launch profile, so no team file can
 // reach the refusals — they stand, rows and exit sites whole, for a CLI listed before its profile
@@ -3408,7 +3555,177 @@ scene('restart.ready', async (place) => {
   return show(await restarted(place, ['lead'], owner), 'restarted lead');
 });
 
-const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
+// `team register`: the record for a seat that is already running. The gate is `up`'s, run by the
+// command itself; only the reads this harness has no herdr for are stood in — the session, its
+// agents, a pane's processes and a pane's text.
+function registerSources(place: Place, over: Partial<RegisterSources> = {}): RegisterSources {
+  return {
+    home: place.home,
+    sessionState: () => 'running',
+    agents: () => [],
+    // A CLI in front of the pane's own shell: the identity a launch would have recorded.
+    processInfo: () => ({ shell: 400, foreground: [401] }),
+    // The process herdr reports is the one the seat's profile names (`claude-code`).
+    foreground: () => ['claude'],
+    // The address a register records for the seat: the scene runs no sockets.
+    refreshAddress: () => ({ address: null }),
+    paneText: () => IDLE,
+    now: () => NOW,
+    ...over,
+  };
+}
+
+async function registered(
+  place: Place,
+  argv: string[],
+  caller: Caller = owner,
+  over: Partial<RegisterSources> = {},
+): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return runCompared(place, argv, (args) => runRegister(args, io, registerSources(place, over)), io);
+}
+
+/** The delegate gate's own reads, as the `up` scenes stand them in: this harness's approval store,
+ *  and herdr answers a scene gives. */
+const registerGate = (place: Place, over: DelegateSources = {}): Partial<RegisterSources> => gateAt(place, over);
+
+/** The same file with a grant naming the lead seat for `up`: register's second fallback. */
+const REGISTER_GRANT = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - up\n`;
+
+scene('register.usage', async (place) => show(await registered(place, []), 'a seat name is required'));
+scene('register.file', async (place) => show(await registered(place, ['lead']), 'no team file'));
+scene('register.detached', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], detachedCaller), SENTENCE);
+});
+scene('register.caller', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead', '--session', 'other'], leadSeat), "--session is the owner's");
+});
+scene('register.not-owner', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], other), 'only the owner, a delegate this file names for `up`, or the seat a grant names');
+});
+scene('register.delegate', async (place) => {
+  approve(place, `${TEAM}${DELEGATES}`);
+  return show(await registered(place, ['lead'], other, registerGate(place, { agents: () => [] })), 'only the owner or the approved delegate runs');
+});
+scene('register.grant', async (place) => {
+  approve(place, REGISTER_GRANT);
+  recordLead(place);
+  return show(await registered(place, ['lead'], other, { agents: () => [agent('lead')] }), 'only the seat the grant names');
+});
+scene('register.grant-flag', async (place) => {
+  approve(place, REGISTER_GRANT);
+  recordLead(place);
+  return show(await registered(place, ['lead', '--session', 'other'], leadSeat, { agents: () => [agent('lead')] }), 'the granted seat cannot use it');
+});
+scene('register.no-seat', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['missing']), 'no seat "missing"');
+});
+scene('register.stopped', async (place) => {
+  write(place, TWO);
+  return show(await registered(place, ['worker']), 'is stopped in this file');
+});
+scene('register.herdr', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, { sessionState: () => null }), "doesn't answer");
+});
+scene('register.no-session', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, { sessionState: () => 'stopped' }), 'is not running');
+});
+scene('register.session-file', async (place) => {
+  write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).launched_file = join(place.base, 'other', 'team.yaml');
+  });
+  return show(await registered(place, ['lead']), 'was launched from');
+});
+scene('register.no-agent', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, { agents: () => [] }), 'no agent named');
+});
+scene('register.many-agents', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead'), agent('lead')] }), 'agents named');
+});
+scene('register.recorded', async (place) => {
+  write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w9:p1' };
+  });
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'is already recorded on pane w9:p1');
+});
+scene('register.no-cli', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, {
+    agents: () => [agent('lead')],
+    processInfo: () => ({ shell: 400, foreground: [] }),
+  }), 'holds no process in front of its shell');
+});
+scene('register.cli', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, {
+    agents: () => [agent('lead')],
+    foreground: () => ['node'],
+  }), 'holds no `claude-code` process');
+});
+scene('register.screen', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, {
+    agents: () => [agent('lead')],
+    screen: () => ({ kind: 'permission' }),
+  }), 'not the seat at its prompt');
+});
+scene('register.dry-run', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead', '--dry-run'], owner, { agents: () => [agent('lead')] }), 'would register');
+});
+scene('register.already', async (place) => {
+  write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'already registered — pane w1:p1');
+});
+scene('register.ready', async (place) => {
+  write(place, TEAM);
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'registered — pane w1:p1; nothing was launched');
+});
+
+// Authority management shares the owner-only editor; each public wrapper owns its exits.
+for (const [name, command, args, invalidArgs] of [
+  ['grant', runGrant, ['lead', '--scope', 'up,down'], ['lead', '--scope', 'trust']],
+  ['delegate', runDelegate, ['outside/control', '--commands', 'up,down'], ['outside/control', '--commands', 'grant']],
+  ['revoke', runRevoke, ['grant'], ['delegate', 'malformed']],
+] as const) {
+  async function managed(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await command([...argv], io, { home: place.home }), out: io.out, err: io.err };
+  }
+  scene(`${name}.invocation`, async (place) => show(await managed(place, ['--unknown']), 'unknown option'));
+  scene(`${name}.refused`, async (place) => {
+    // The missing file is deliberate: caller refusal precedes its first read.
+    return show(await managed(place, args, detachedCaller), 'only the owner runs this');
+  });
+  scene(`${name}.invalid`, async (place) => {
+    write(place, TEAM);
+    return show(await managed(place, invalidArgs), `team ${name}:`);
+  });
+  scene(`${name}.done`, async (place) => {
+    const original = name === 'revoke' ? `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope: [up]\n` : TEAM;
+    write(place, original);
+    const preview = await managed(place, [...args, '--dry-run']);
+    expect(preview.code).toBe(0);
+    expect(preview.out).toBe(`${name}: would change\n`);
+    expect(readFileSync(place.file, 'utf8')).toBe(original);
+    return show(await managed(place, args), `${name}: updated`);
+  });
+}
+
+const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
 
 const contract = loadContract();
 for (const row of contract.rows) {
@@ -3453,7 +3770,7 @@ function refusalCore(text: string): string {
     .replace(/acme-[0-9a-f]{8,}/g, 'acme-<id>');
 }
 
-for (const command of ['up', 'down', 'add'] as const) {
+for (const command of ['up', 'down', 'add', 'register'] as const) {
   test(`${command}: a refused dry run exits as the real run`, async () => {
     const ids = refusalIds(command);
     expect(ids.length).toBeGreaterThan(0);
@@ -3479,6 +3796,15 @@ for (const command of ['up', 'down', 'add'] as const) {
         expect(dry.code, id).toBe(row.code);
         const shared = refusalCore(`${real.err}${real.out}`).slice(0, 80);
         expect(shared.length, id).toBeGreaterThan(0);
+        if (shared === 'deny') {
+          // `up`'s bare word is the one refusal with no sentence of its own to echo: a real run
+          // says the word alone, and a dry run is never denied — it names the reason and the
+          // owner's own command instead, which this holds to the caller the real run answered.
+          const dryText = `${dry.err}${dry.out}`;
+          expect(dryText, id).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
+          expect(dryText, id).toContain('! to unblock: the owner runs `team up');
+          continue;
+        }
         expect(refusalCore(`${dry.err}${dry.out}`), id).toContain(shared);
       } finally {
         compareDry = false;

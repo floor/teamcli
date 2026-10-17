@@ -13,6 +13,12 @@ import { readFileSync } from 'node:fs';
  *   `agy --version` (2026-10-12) printed `1.3.3`.
  *   `agy --help` names `--effort` `(low|medium|high|xhigh|max)`.
  *
+ *   `muse --version` (2026-10-16) printed `Muse Code 1.4.9 (1.4.9-R6297.1)`.
+ *   `muse serve` answered `model/list` with `supportedReasoningEfforts`
+ *   `minimal, low, medium, high, xhigh, max` for the Wonder and Spark 1.3 models. Spark 1.2
+ *   stops at `xhigh`, and `muse exec --help` also names `none` and `ultra`; the list keeps the
+ *   words every listed model takes.
+ *
  * Left out the same day: `grok --help` names `--reasoning-effort <EFFORT>`
  * (alias `--effort`) and lists no words, and `grok models` lists model ids.
  * `codex --help` and `codex exec --help` do not name an effort. `cursor-agent

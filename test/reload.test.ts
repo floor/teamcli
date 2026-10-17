@@ -12,10 +12,10 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const OWNER = { kind: 'owner' as const };
 const LEAD = { kind: 'seat' as const, name: 'lead', pane: 'lead-pane', session: 'alpha' };
 
@@ -133,7 +133,7 @@ function harness(options: { status?: string; text?: string; create?: boolean; pr
     paneRun(_session, pane, command) {
       commands.push(command);
       // The relaunched CLI draws its own model on the status row.
-      panes.set(pane, command.includes('sonnet') ? IDLE.replace('Opus 5.5', 'Sonnet 5.5') : IDLE);
+      panes.set(pane, command.includes('sonnet') ? IDLE.replaceAll('Opus 5.5', 'Sonnet 5.5') : IDLE);
       return true;
     },
     renameAgent: () => true,

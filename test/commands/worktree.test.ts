@@ -307,7 +307,7 @@ describe('team worktree remove', () => {
     expect(readState(join(project, '.agents')).sessions.acme?.worktrees['select-width']).toBeUndefined();
   });
 
-  test('refuses when the state records a path or branch that does not match the approved workspace pattern', async () => {
+  test('refuses a recorded path that does not match the approved pattern, and reads the branch from git, not the record', async () => {
     expect((await run(['new', 'select-width', '--kind', 'fix'])).code).toBe(0);
     expect((await run(['new', 'other-task', '--kind', 'fix'])).code).toBe(0);
     git(project, 'push', '-q', 'origin', 'fix/select-width');
@@ -331,15 +331,17 @@ describe('team worktree remove', () => {
         work.branch = 'main';
       }
     });
-    const wrongBranch = await run(['remove', 'select-width']);
-    expect(wrongBranch.code).toBe(1);
-    expect(wrongBranch.err).toContain('the recorded branch "main" does not match "{kind}/{task}" for "select-width"');
-    expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
+    const staleBranch = await run(['remove', 'select-width']);
+    expect(staleBranch.code).toBe(0);
+    expect(staleBranch.out).toContain('removed select-width; the branch fix/select-width is kept');
+    expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 });
 
 describe('team worktree and the live file', () => {
-  const note = 'team worktree: the file has changed since the last approval\n';
+  // The live file is the record these subcommands act on: an edit to it draws no note, and
+  // an empty stderr is the reading every test below holds to.
+  const noNote = '';
 
   function edit(text: string): void {
     writeFileSync(join(project, '.agents', 'team.yaml'), text);
@@ -351,16 +353,16 @@ describe('team worktree and the live file', () => {
     return join(storePath(loaded.team.project, loaded.root, home), 'approval.json');
   }
 
-  test('a rules-only edit draws one note and both subcommands use the live settings', async () => {
+  test('a rules-only edit draws no note and both subcommands use the live settings', async () => {
     expect((await run(['new', 'select-width', '--kind', 'fix'])).code).toBe(0);
     edit(`${teamText()}rules:\n  - "read the brief first"\n`);
     const created = await run(['new', 'tidy-logs', '--kind', 'chore']);
     expect(created.code).toBe(0);
-    expect(created.err).toBe(note);
+    expect(created.err).toBe(noNote);
     expect(created.out).toBe('../worktrees/acme/tidy-logs\n');
     const removed = await run(['remove', 'select-width']);
     expect(removed.code).toBe(0);
-    expect(removed.err).toBe(note);
+    expect(removed.err).toBe(noNote);
     expect(removed.out).toBe('removed select-width; the branch fix/select-width is kept\n');
   });
 
@@ -369,7 +371,7 @@ describe('team worktree and the live file', () => {
     edit(teamText().replace('../worktrees/{repo}/{task}', '../worktrees/{repo}/file/{task}'));
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(io.out).toBe('../worktrees/acme/file/select-width\n');
     expect(existsSync(join(base, 'worktrees', 'acme', 'file', 'select-width', 'README.md'))).toBe(true);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
@@ -386,7 +388,7 @@ describe('team worktree and the live file', () => {
     edit(teamText({ setup: '  setup:\n    - "touch from-file"\n' }));
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(ran).toEqual([{ cwd: folder, command: 'touch from-file' }]);
   });
 
@@ -397,7 +399,7 @@ describe('team worktree and the live file', () => {
     edit(teamText());
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
   });
 
@@ -406,7 +408,7 @@ describe('team worktree and the live file', () => {
     edit(teamText().replace('  - ../worktrees/acme/*\n', '  - ../worktrees/acme/task\n'));
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(1);
-    expect(io.err).toBe(`${note}team worktree: ../worktrees/acme/select-width is outside the file's trust paths\n`);
+    expect(io.err).toBe(`${noNote}team worktree: ../worktrees/acme/select-width is outside the file's trust paths\n`);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 
@@ -415,7 +417,7 @@ describe('team worktree and the live file', () => {
     edit(teamText().replace('  base: main\n', '  base: main\n  protected:\n    - .\n    - ../worktrees\n'));
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
   });
 
@@ -426,16 +428,16 @@ describe('team worktree and the live file', () => {
       .replace('\nseats:\n', '\nseats:\n  - role: implementer\n    name: ghost\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n'));
     const added = await run(['new', 'select-width', '--kind', 'fix', '--seat', 'ghost']);
     expect(added.code).toBe(0);
-    expect(added.err).toBe(note);
+    expect(added.err).toBe(noNote);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
     const kept = await run(['new', 'second-task', '--kind', 'fix', '--seat', 'lead']);
     expect(kept.code).toBe(0);
-    expect(kept.err).toBe(note);
+    expect(kept.err).toBe(noNote);
     // The worktree state records the seat's name only, and that name is the approved one.
     expect(readState(join(project, '.agents')).sessions.acme?.worktrees['second-task']?.seat).toBe('lead');
   });
 
-  test('a file equal to the approved copy prints no note and both outputs are main\'s own', async () => {
+  test('a file the record holds prints no note and both outputs are main\'s own', async () => {
     const created = await run(['new', 'select-width', '--kind', 'fix']);
     expect(created.code).toBe(0);
     expect(created.err).toBe('');
@@ -483,7 +485,7 @@ describe('team worktree and the live file', () => {
       standing: () => ({ ...real, record: { ...real.record, file: 'nope: [[[' } }),
     });
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
   });
 
@@ -495,7 +497,7 @@ describe('team worktree and the live file', () => {
     recordSeat('stranger', 'w2:p1');
     const promoted = await run(['new', 'select-width', '--kind', 'fix'], { kind: 'seat', name: 'stranger', pane: 'w2:p1', session: 'acme' });
     expect(promoted.code).toBe(0);
-    expect(promoted.err).toBe(note);
+    expect(promoted.err).toBe(noNote);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
 
   });
@@ -504,7 +506,7 @@ describe('team worktree and the live file', () => {
     edit(teamText().replace('branch: "{kind}/{task}"', 'branch: "file/{task}"'));
     const io = await run(['new', 'branch-case']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(readState(join(project, '.agents')).sessions.acme?.worktrees['branch-case']?.branch).toBe('file/branch-case');
     expect(() => git(project, 'rev-parse', '--verify', '--quiet', 'refs/heads/fix/branch-case')).toThrow();
   });
@@ -518,7 +520,7 @@ describe('team worktree and the live file', () => {
     edit(teamText().replace('base: main\n', 'base: other\n'));
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(readFileSync(join(base, 'worktrees', 'acme', 'select-width', 'README.md'), 'utf8')).toBe('other\n');
   });
 
@@ -526,7 +528,7 @@ describe('team worktree and the live file', () => {
     edit(teamText({ mode: 'shared' }));
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(1);
-    expect(io.err).toBe(`${note}team worktree: workspace.mode is shared: this team keeps one checkout, so there is no task worktree to create\n`);
+    expect(io.err).toBe(`${noNote}team worktree: workspace.mode is shared: this team keeps one checkout, so there is no task worktree to create\n`);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width', 'README.md'))).toBe(false);
   });
 
@@ -536,7 +538,7 @@ describe('team worktree and the live file', () => {
     edit(teamText({ limit: 8 }));
     const io = await run(['new', 'other-task', '--kind', 'fix']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(existsSync(join(base, 'worktrees', 'acme', 'other-task'))).toBe(true);
   });
 
@@ -557,7 +559,7 @@ describe('team worktree and the live file', () => {
     recordSeat('stranger', 'w2:p1');
     const io = await run(['new', 'select-width', '--kind', 'fix'], { kind: 'seat', name: 'stranger', pane: 'w2:p1', session: 'acme' });
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
   });
 
@@ -591,7 +593,7 @@ describe('team worktree and the live file', () => {
     edit(teamText().replace('project: acme\n', 'project: acme\nsession: other\n'));
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     const state = readState(join(project, '.agents'));
     expect(state.sessions.other?.worktrees['select-width']?.path).toBe('../worktrees/acme/select-width');
     expect(state.sessions.acme).toBeUndefined();
@@ -605,7 +607,7 @@ describe('team worktree and the live file', () => {
     edit(live);
     const io = await run(['new', 'WEB-12', '--kind', 'fix']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(existsSync(join(base, 'worktrees', 'acme', 'WEB-12'))).toBe(true);
   });
 
@@ -619,7 +621,7 @@ describe('team worktree and the live file', () => {
     edit(live);
     const io = await run(['new', 'WEB-12', '--kind', 'fix']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(existsSync(join(base, 'worktrees', 'acme', 'WEB-12'))).toBe(true);
   });
 
@@ -648,7 +650,7 @@ describe('team worktree and the live file', () => {
     edit(teamText().replaceAll('lead', 'chief'));
     const io = await run(['new', 'select-width', '--kind', 'fix', '--seat', 'lead']);
     expect(io.code).toBe(1);
-    expect(io.err).toBe(`${note}team worktree: --seat "lead" names no declared seat\n`);
+    expect(io.err).toBe(`${noNote}team worktree: --seat "lead" names no declared seat\n`);
     expect(readState(join(project, '.agents')).sessions.acme?.worktrees['select-width']).toBeUndefined();
   });
 
@@ -656,7 +658,7 @@ describe('team worktree and the live file', () => {
     edit(teamText().replace('model: Claude Opus\n', 'model: Claude Sonnet\n'));
     const io = await run(['new', 'select-width', '--kind', 'fix', '--seat', 'lead']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(readState(join(project, '.agents')).sessions.acme?.worktrees['select-width']?.seat).toBe('lead');
   });
 
@@ -692,7 +694,7 @@ seats:
 `);
     const io = await run(['new', 'select-width']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(io.out).toBe('../worktrees/acme/live/select-width\n');
     expect(ran).toEqual(['echo from-file']);
     expect(readState(join(project, '.agents')).sessions.acme?.worktrees['select-width']?.branch).toBe('live/select-width');
@@ -771,7 +773,7 @@ seats:
       .replace('  - ../worktrees/acme/*\n', '  - ../worktrees/*\n'));
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(0);
-    expect(io.err).toBe(note);
+    expect(io.err).toBe(noNote);
     expect(existsSync(join(base, 'worktrees', 'renamed'))).toBe(true);
   });
 });

@@ -14,10 +14,10 @@ import type { Terminal } from '../../src/launch/terminal.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-15T09:00:00Z');
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 const AMPLE: Machine = {
   loadPerCore: 0.2, memoryFree: 80, diskFree: 200e9, swapTotal: 10e9, swapFree: 9e9, swapUsed: 1e9,
 };
@@ -261,7 +261,12 @@ describe('team up without an approval record', () => {
         expect(seats[name]?.stage, name).toBe('ready');
       }
       expect(existsSync(approval(here.root, here.home))).toBe(false);
-      const sendIo = testIo(here.root, lead);
+      // The owner sends: an orchestrator has no reach to its own team's seats (a send down needs
+      // an owner-signed grant naming it), and this scene is about a launched seat taking work
+      // with no approval record, not about who may send.
+      const sendIo = testIo(here.root, owner);
+      // The seat takes the brief: idle until the Enter, working after it.
+      let working = false;
       const sendHost: SendHost = {
         agents: () => [{ name: 'builder-1', pane: seats['builder-1']?.pane ?? 'w2:p1' }],
         processInfo: () => ({ shell: 1, foreground: [2] }),
@@ -269,8 +274,11 @@ describe('team up without an approval record', () => {
         deliver: async () => ({ ok: true }),
         native: {
           typeText: () => true,
-          pressEnter: () => true,
-          status: () => 'working',
+          pressEnter: () => {
+            working = true;
+            return true;
+          },
+          status: () => (working ? 'working' : 'idle'),
           wait: async () => {},
         },
         now: () => NOW,
@@ -280,7 +288,9 @@ describe('team up without an approval record', () => {
       mkdirSync(sendHost.socketsDir, { recursive: true });
       const sent = await runSend(['builder-1', 'first brief'], sendIo, sendHost);
       expect(sent, `${sendIo.err}${sendIo.out}`).toBe(0);
-      expect(sendIo.out).toContain('builder-1: delivered\n');
+      // No socket file under the host's sockets folder: the typed trigger is the fallback, and
+      // the outcome names that path and the socket's reason.
+      expect(sendIo.out).toMatch(/builder-1: delivered \(typed, socket .+\)/);
       expect(existsSync(approval(here.root, here.home))).toBe(false);
     } finally {
       rmSync(here.base, { recursive: true, force: true });

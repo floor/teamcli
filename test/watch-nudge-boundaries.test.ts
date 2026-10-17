@@ -23,7 +23,7 @@ import { storePath, writeApproval, type Standing } from '../src/store/store.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
-import { testIo } from './helpers.ts';
+import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
 // The example with an operator seat of its own, so the leads are two named seats and the workers
 // stand apart: the file's `operator` names the operator, not the coordinator.
@@ -252,7 +252,7 @@ describe('its thresholds', () => {
 const NOW = new Date('2026-10-03T14:02:00Z');
 const SESSION = 'acme-web';
 // The screen a launched seat settles at: an idle prompt, ready for the operator.
-const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
+const IDLE = CLAUDE_IDLE;
 
 let base: string;
 
