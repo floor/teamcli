@@ -16,8 +16,21 @@ export type Current =
   | { ok: true; team: TeamFile; root: string; dir: string; warnings: Problem[]; notice?: string; path?: string }
   | { ok: false; errors: Problem[] };
 
-export function currentTeam(cwd: string, file: string | undefined, now: Date, home?: string, remember = true): Current {
-  const loaded = loadTeamFile(cwd, { ...(file ? { file } : {}), ...(home ? { home } : {}) });
+export function currentTeam(
+  cwd: string,
+  file: string | undefined,
+  now: Date,
+  home?: string,
+  remember = true,
+  /** The session the command addresses, when it has one: the placement check reads that
+   *  session's recorded lobby. Absent reads the file's own. */
+  session?: string,
+): Current {
+  const loaded = loadTeamFile(cwd, {
+    ...(file ? { file } : {}),
+    ...(home ? { home } : {}),
+    ...(session !== undefined ? { session } : {}),
+  });
   if (loaded.ok) {
     const dir = dirname(loaded.path);
     if (remember) rememberLastValid(dir, loaded.path, now);

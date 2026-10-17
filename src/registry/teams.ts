@@ -38,7 +38,14 @@ export type TeamRecord = {
   entity: string | null;
   session: string;
   root: string;
+  /** The lobby the team operates on in its `session`: recorded at registration and kept, so an
+   *  entity edit never moves a running fleet. It is also the `lobbies` entry for `session`. */
   lobby: string;
+  /** The lobby recorded for each session — `session` among them. The registry is keyed by the
+   *  root, and a checkout can hold another team file, or the same team can be launched with
+   *  `--session alt`: each session records its own entry without taking another's away. A file
+   *  written before the map existed reads as one entry, `{[session]: lobby}`. */
+  lobbies: Record<string, string>;
   roster: RosterEntry[];
   lifecycle: TeamLifecycle;
   provenance: TeamProvenance;
@@ -121,6 +128,7 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
         session: fields.session as string,
         root: fields.root as string,
         lobby: fields.lobby ?? '',
+        lobbies: fields.lobbies ?? (fields.lobby ? { [fields.session as string]: fields.lobby } : {}),
         roster: fields.roster ?? [],
         lifecycle: fields.lifecycle ?? 'defined',
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
@@ -128,6 +136,10 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
     }
     if (!TEAM_LIFECYCLES.includes(record.lifecycle)) throw new TeamsError(`"${record.lifecycle}" is not a team lifecycle`);
     if (record.projectId !== null && typeof record.projectId !== 'string') throw new TeamsError('"project_id" must be a project ID or null');
+    // A write of the primary session's lobby keeps that session's map entry in step; every other
+    // entry is left exactly as it was, which is what keeps the other sessions' lobbies.
+    record.lobbies = { ...(record.lobbies ?? {}) };
+    if (record.lobby) record.lobbies[record.session] = record.lobby;
     delete record.id;
     teams[id] = record;
     write(home, teams);
@@ -171,6 +183,10 @@ export type TeamSeed = {
   /** The project the file names this team sits in, as written, or null when it names none — the
    *  team is then its own project. Absent (undefined) leaves the registry's pointer as it is. */
   inProject?: string | null;
+  /** The session the team file itself names, when this note runs under another (`up --session
+   *  alt`). That session records the same lobby too, unless it already has one, so a plain
+   *  `team check` — which reads the file's own session — finds the lobby back. */
+  aliasSession?: string;
 };
 
 /**
@@ -192,21 +208,27 @@ export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: 
     return `the project registry was not updated: ${(error as Error).message}`;
   }
   try {
-    // The lobby is recorded once: a team the registry holds a lobby for keeps it, so editing the
-    // file's `entity` never moves a running team's seats. An explicit `lobby:` is the owner's own
-    // declaration, not a derivation, and is re-recorded; a new team derives from its entity
-    // (`src/lobby/recorded.ts` reads the record back at every use). The prior lobby is this
-    // team's only while the project and session are its identity too: another file in the same
-    // checkout (the registry is keyed by the root) derives from its own entity.
+    // The lobby is recorded once per session: a session the registry holds a lobby for keeps it,
+    // so editing the file's `entity` never moves a running team's seats. An explicit `lobby:` is
+    // the owner's own declaration, not a derivation, and is re-recorded; a session with no entry
+    // derives from the entity (`src/lobby/recorded.ts` reads the record back at every use). The
+    // map is what lets another session — `up --session alt`, or another team file in the same
+    // checkout, since the registry is keyed by the root — record its own lobby without taking
+    // this one's entry away. The file's own session is recorded alongside when the note runs
+    // under another name, unless it already holds an entry of its own.
     const earlier = getTeam(home, teamId);
-    const prior = earlier !== null && earlier.project === seed.project && earlier.session === seed.session ? earlier.lobby : '';
+    const prior = earlier?.lobbies[seed.session] ?? '';
+    const current = seed.lobby ? resolveLobby(home, { lobby: seed.lobby }) : prior || resolveLobby(home, { entity: seed.entity });
+    const lobbies: Record<string, string> = { ...(earlier?.lobbies ?? {}), [seed.session]: current };
+    if (seed.aliasSession && !lobbies[seed.aliasSession]) lobbies[seed.aliasSession] = current;
     upsertTeam(home, teamId, {
       project: seed.project,
       projectId,
       entity: seed.entity,
       session: seed.session,
       root: real,
-      lobby: seed.lobby ? resolveLobby(home, { lobby: seed.lobby }) : prior || resolveLobby(home, { entity: seed.entity }),
+      lobby: current,
+      lobbies,
       lifecycle,
       by,
     });
@@ -353,14 +375,29 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
   for (const key of ['registered_by', 'registered_at', 'updated_at']) {
     if (typeof prov[key] !== 'string') bad(`provenance: "${key}" must be text`);
   }
+  const session = text('session');
+  const lobby = typeof raw.lobby === 'string' ? raw.lobby : '';
+  // A record written before the map existed knows one lobby: the one its session holds. Read
+  // that way, every reader sees a session's lobby without a migration write.
+  const lobbies: Record<string, string> = {};
+  const map = raw.lobbies;
+  if (map !== undefined) {
+    if (!isMap(map)) bad('"lobbies" must be a map of sessions to lobbies');
+    for (const [name, value] of Object.entries(map as { [key: string]: YamlValue })) {
+      if (typeof value !== 'string' || !value) bad(`lobbies: "${name}" must be a lobby path`);
+      lobbies[name] = value as string;
+    }
+  }
+  if (lobby) lobbies[session] = lobby;
   return {
     id,
     project: text('project'),
     projectId: projectId as string | null,
     entity: entity as string | null,
-    session: text('session'),
+    session,
     root: text('root'),
-    lobby: typeof raw.lobby === 'string' ? raw.lobby : '',
+    lobby,
+    lobbies,
     roster: entries,
     lifecycle: lifecycle as TeamLifecycle,
     provenance: { registered_by: prov.registered_by as string, registered_at: prov.registered_at as string, updated_at: prov.updated_at as string },
@@ -397,6 +434,15 @@ function emit(teams: Record<string, TeamRecord>): string {
     lines.push(`    session: ${scalar(team.session)}`);
     lines.push(`    root: ${scalar(team.root)}`);
     lines.push(`    lobby: ${scalar(team.lobby)}`);
+    // Only sessions with a lobby of their own are written: a record whose map is just its
+    // `session` entry reads back from `lobby`, so single-session files stay byte for byte.
+    const others = Object.entries(team.lobbies ?? {})
+      .filter(([session, lobby]) => session !== team.session || lobby !== team.lobby)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    if (others.length) {
+      lines.push('    lobbies:');
+      for (const [session, lobby] of others) lines.push(`      ${scalar(session)}: ${scalar(lobby)}`);
+    }
     if (team.roster.length) {
       lines.push('    roster:');
       for (const entry of team.roster) {

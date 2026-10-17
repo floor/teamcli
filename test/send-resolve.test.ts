@@ -90,7 +90,9 @@ function agent(home: string, init: { name: string; role: string; cli: string; te
 }
 
 function team(home: string, id: string, project: string, session: string, root: string, roster: { agent: string; seat: string; role: string; leads: boolean }[]): void {
-  upsertTeam(home, id, { project, entity: project, session, root, lobby: join(home, 'lobby'), roster, lifecycle: 'running' });
+  // The file sets neither `entity` nor `lobby`, so the lobby its seats start in — and the entry
+  // its trust lists — is the machine lobby; the record says the same, as `up` would have noted it.
+  upsertTeam(home, id, { project, entity: project, session, root, lobby: lobbyDir(home), roster, lifecycle: 'running' });
 }
 
 /** The state record `up` leaves for a launched seat: the pane herdr placed it on. The placement

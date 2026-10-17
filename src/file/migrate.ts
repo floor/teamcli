@@ -1,11 +1,15 @@
 import { resolve } from 'node:path';
 import { defaultFs, lobbyTrustEntry, type FsReader } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { absoluteTrustProblem, fixedFolder, insideProject } from './paths.ts';
 import type { TeamFile } from './types.ts';
 
 /** The keys of the file the block is computed from — `seatStart`'s own Pick, so every printer
- *  passes the team it already holds. `entity` and `lobby` resolve the lobby entry it suggests. */
-export type MigrationTeam = Pick<TeamFile, 'project' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby'>;
+ *  passes the team it already holds. The lobby entry it suggests is the one the registry records
+ *  for the team's session (`src/lobby/recorded.ts`), which `entity` and `lobby` derive only
+ *  before a registration. `session` names the session a run addresses, when it is not the file's
+ *  own: a printer passes the team it is about to launch spread with the run's session. */
+export type MigrationTeam = Pick<TeamFile, 'project' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'session'>;
 
 /** One entry the migrated file's trust lists, and the key of the file it comes from. */
 export type TrustSuggestion = { entry: string; from: string };
@@ -39,11 +43,14 @@ export function migrationTrust(team: MigrationTeam, root: string, home: string, 
     else suggestions.push({ entry, from });
   };
 
-  // The lobby this team operates on: the machine-global `~/.config/team/lobby` when it sets
-  // neither `entity` nor `lobby`, or its own per-entity lobby when it does. Pasting the block
-  // writes the entry trust must list, which `load.ts` checks against the same resolved lobby.
+  // The lobby this team's session operates on — the one the registry records, the file's
+  // derivation before there is a record — so the entry must be the one every reader resolves:
+  // `lobbyOf` here, `placedProblems` and `seatStart` on the other side. A block computed from
+  // the entity alone named a folder a recorded team never starts in, and pasting it failed the
+  // placement check.
+  const lobby = lobbyOf(home, root, team);
   suggestions.push({
-    entry: lobbyTrustEntry(home, team),
+    entry: lobbyTrustEntry(home, { lobby }),
     from:
       team.entity || team.lobby
         ? 'the team\'s lobby, where its seats start now'

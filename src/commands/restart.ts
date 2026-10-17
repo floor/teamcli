@@ -167,6 +167,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const loaded = loadTeamFile(io.cwd, {
     ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
     home: sources.home,
+    // The session this run addresses: the placement check reads that session's recorded lobby.
+    ...(args.values.session !== undefined ? { session: args.values.session } : {}),
   });
   if (!loaded.ok) {
     return configuration(out, loaded.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('\n'));
@@ -264,10 +266,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (!profile) {
     return notReadyRefused(out, `no launch profile for \`${plainLine(declared.cli)}\` in this version`);
   }
-  for (const problem of placedProblems(team, root, sources.home)) {
+  for (const problem of placedProblems(team, root, sources.home, undefined, session)) {
     return notReadyRefused(out, problem.message);
   }
-  const start = seatStart(team, declared, root, sources.home);
+  const start = seatStart({ ...team, session }, declared, root, sources.home);
   if ('problem' in start) {
     return notReadyRefused(out, start.problem);
   }

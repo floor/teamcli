@@ -48,7 +48,16 @@ function noteOf(error: unknown): string {
  *  `noteTeam` never throws; the line it returns is why the record was not written. */
 function ensureTeam(input: RegistryTeam): string | null {
   const { team, root, home, by } = input;
-  const seed = { project: team.project, entity: team.entity, session: input.session ?? team.session, lobby: team.lobby, inProject: team.inProject };
+  // `up --session alt` records the session it launches; the file's own session records the same
+  // lobby beside it, so a plain `team check` still reads it back.
+  const seed = {
+    project: team.project,
+    entity: team.entity,
+    session: input.session ?? team.session,
+    lobby: team.lobby,
+    inProject: team.inProject,
+    aliasSession: team.session,
+  };
   return noteTeam(home, root, seed, 'running', by);
 }
 

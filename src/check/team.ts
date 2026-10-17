@@ -115,7 +115,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // standing, the state and herdr — and uses all of it only to decide: for a caller that does not
   // pass, `--file` is never opened and no session is placed, so the target is the file the
   // caller's own place finds.
-  const current = currentTeam(io.cwd, owner ? args.file : undefined, sources.now(), sources.home, false);
+  const current = currentTeam(io.cwd, owner ? args.file : undefined, sources.now(), sources.home, false, owner ? args.session : undefined);
   if (owner) {
     if (!current.ok) {
       printProblems(io, current.errors);
@@ -184,7 +184,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
   for (const note of delegateNotes(team)) io.stdout(`note: ${note}\n`);
-  for (const note of lobbyNotes(team, root, sources.home)) io.stdout(`note: ${note}\n`);
+  for (const note of lobbyNotes(team, root, sources.home, session)) io.stdout(`note: ${note}\n`);
   for (const difference of differences) {
     io.stdout(`difference: ${difference.what}\n  repair: ${difference.repair}\n`);
   }
@@ -245,16 +245,19 @@ function devModeDifferences(team: TeamFile, root: string, home: string | undefin
  * a running team no longer moves its seats, so the check names the file that now derives another
  * lobby and says which path stands. A file with an explicit `lobby:` is not a derivation — the
  * owner's own declaration re-records it — and a team the registry holds no lobby for has nothing
- * recorded to stand. The record speaks for this team only when its project and session are the
- * file's: another file in the same checkout derives from its own entity, as a new team does. A
- * home that names no store answers for no registry, as the other notes do.
+ * recorded to stand. The registry keeps one lobby per session, so the record speaks for this run
+ * through the session it addresses — the file's own, or the `--session` the check was given; a
+ * session with no entry derives from its entity, as a new team does. A home that names no store
+ * answers for no registry, as the other notes do.
  */
-function lobbyNotes(team: TeamFile, root: string, home: string | undefined): string[] {
+function lobbyNotes(team: TeamFile, root: string, home: string | undefined, session: string): string[] {
   if (home === undefined || team.lobby) return [];
   let recorded = '';
   try {
     const record = getTeam(home, teamIdOf(root));
-    if (record !== null && record.project === team.project && record.session === team.session) recorded = record.lobby;
+    // The session the check addresses: its own recorded lobby is the one that stands, and it is
+    // the file's own unless `team check --session` named another.
+    if (record !== null) recorded = record.lobbies[session] ?? '';
   } catch (error) {
     // An unreadable registry already has its own difference; it cannot say where the lobby is.
     if (!(error instanceof TeamsError)) throw error;

@@ -390,6 +390,8 @@ function seatPlan(
   resume: boolean,
   root: string,
   home: string,
+  /** The session this run addresses: the lobby the seat is told to move into is that session's. */
+  session: string,
   processes: Readonly<Record<string, PaneProcesses | null>> = {},
   screenOf: (pane: string) => string | null = () => null,
   owner = true,
@@ -526,7 +528,7 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         ...(listed ? { pane: listed.pane, workspace: listed.workspace } : {}),
-        ...restartNote(team, seat.name, recorded, home, root),
+        ...restartNote(team, seat.name, recorded, home, root, session),
       };
     }
     return planned;
@@ -569,12 +571,13 @@ function restartNote(
   recorded: SeatState,
   home: string,
   root: string,
+  session: string,
 ): { restartNote: string } | Record<string, never> {
   const fix = relaunchRepair(team, name, 'plain');
   if (!recorded.launched) return { restartNote: `a relaunch records its process: ${fix}` };
   // A running lead is at home in the lobby or in the project. Either recording is left as it
   // is. Every other seat still outside the lobby is told how to move.
-  if (recorded.start_cwd && recorded.start_cwd !== lobbyOf(home, root, team)) {
+  if (recorded.start_cwd && recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {
     if (isLeadSeat(team, name) && recorded.start_cwd === root) return {};
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
@@ -781,7 +784,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     delegateTeam ??
     (defaultLoad !== null && !args.values.file
       ? defaultLoad
-      : loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: sources.home }));
+      : loadTeamFile(io.cwd, {
+          ...(args.values.file ? { file: args.values.file } : {}),
+          home: sources.home,
+          // The session this run addresses: the placement check reads that session's recorded
+          // lobby, which `up --session alt` records apart from the file's own.
+          ...(args.values.session !== undefined ? { session: args.values.session } : {}),
+        }));
   if (!loaded.ok) {
     // A file that does not load refuses both runs, one voice each: the real one stops in
     // `team up`'s own words, the dry one says what a real run would stop on (`! up would
@@ -798,13 +807,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     return 2;
   }
   const { team, root } = loaded;
-  // The lobby this team operates on: its own when it sets `entity` or `lobby`, else the
-  // machine-global one. Every lobby read and make below runs against it, so a second team on the
-  // machine no longer waits behind the first team's lobby.
-  const teamLobby = lobbyOf(sources.home, root, team);
   // Owner-only targets are honoured only when no gate decided: a delegated run is the default
   // file's own session, and an aimed run by anyone but the owner has already returned above.
   const session = verdict !== null ? team.session : (args.values.session ?? team.session);
+  // The lobby this session operates on: the one the registry recorded for it, else its own when
+  // the file sets `entity` or `lobby`, else the machine-global one. Every lobby read and make
+  // below runs against it, so a second team on the machine — or another session of this one —
+  // no longer waits behind the first lobby.
+  const teamLobby = lobbyOf(sources.home, root, { ...team, session });
   const dir = dirname(loaded.path);
   let state = resolveState(sources, session);
   // A stopped session this team's state records is cleared under the run lock, then started.
@@ -957,7 +967,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // The block names every entry the next `up` will require, computed from the file, so one
     // edit takes the file past validation. The same block is what `doctor` and `add` print.
     refusals.push(
-      `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(team, root, sources.home)}`,
+      `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText({ ...team, session }, root, sources.home)}`,
     );
   }
 
@@ -1004,6 +1014,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       state === 'running',
       root,
       sources.home,
+      session,
       processes,
       (pane) => sources.launch?.paneText(session, pane) ?? null,
       // A passed delegation is not the owner, pane or seat. Every other caller keeps today's
@@ -1073,7 +1084,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       seats.push({ ...planned, ...launchProblem, ...(budget.kind === 'clear' ? {} : { budget }) });
       continue;
     }
-    const start = seatStart(team, seat, root, sources.home);
+    const start = seatStart({ ...team, session }, seat, root, sources.home);
     if ('problem' in start) {
       if (!start.once || !refused.has(start.problem)) {
         refused.add(start.problem);
