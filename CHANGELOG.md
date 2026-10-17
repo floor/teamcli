@@ -218,14 +218,19 @@ commands read them.
   file's `tasks.policy` filtering every record before it crosses. A broker runs as the same OS
   principal as the seats: that is integrity, not authenticity, and it isolates nothing.
 
-<!-- 0.5.0 draft: the rebuilt `team usage` — release 4ea44296 carries an earlier cut; builder-7's final pass has not landed; re-verify this entry when the orchestrator says it landed, then remove this line -->
 - **The rebuilt `team usage`.** `team usage` reads the machine rather than one project: every
-  team with an approval store here, in one report — each account and window with what is left and
-  used, when it was last read and from which source, its reserve and its state, under a header
-  that counts the machine's teams, labs and accounts. Anyone may run it from any folder, and it
-  only reads: no check runs, no CLI is launched, no pane is read, nothing is written. The owner at
-  a terminal reads every team, and `--all` adds each team's seat-to-account breakdown; every other
-  caller reads the restricted view, a closed list built before anything prints. Shared machine
+  team it keeps a store for, the caller's own project among them whether or not it holds one, in
+  one report — each account and window with what is left and used, when it was last read and from
+  which source, its reserve and its state, under the account table and a closing line that counts
+  the machine's teams, labs and accounts. Anyone may run it from any folder, and it changes
+  nothing: no check runs, nothing is written, no credential, key or CLI session file is opened. It
+  does read the seat panes herdr records and may run a CLI's own usage command where a seat runs
+  one, bounded by a fifteen-second timeout. The owner at a terminal reads the machine's
+  subscriptions and the caller's team, and `--all` adds every team's seat-to-account rows; every
+  other caller reads the restricted view, a closed list built before anything prints. `--tree`
+  adds the quota view between the account lines and the team tables — one block per lab and per
+  account, each window with its margin and state — while the one `advice:` line, printed either
+  way, names the accounts with headroom or where a walled seat should move. Shared machine
   subscriptions live once in `~/.config/team/accounts.yaml`, and `--json` carries the same report
   as one document, format 1.
 
