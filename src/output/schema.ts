@@ -540,6 +540,21 @@ export const LIST_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team ask-show` (`schema/ask-show.schema.json`). */
+export const ASK_SHOW_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.ask-show',
+  fileName: 'ask-show.schema.json',
+  title: 'team ask-show --json output',
+  required: ['format', 'request_id', 'question', 'expires_at', 'verified'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    request_id: { type: 'string', minLength: 1 },
+    question: { type: 'string', minLength: 1 },
+    expires_at: { type: 'string', minLength: 1 },
+    verified: { type: 'boolean', const: true },
+  },
+};
+
 /** Published `--json` output schema for `team messages` (`schema/messages.schema.json`). */
 export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.messages',
@@ -593,6 +608,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   CHECK_OUTPUT_SCHEMA,
   LIST_OUTPUT_SCHEMA,
   USAGE_OUTPUT_SCHEMA,
+  ASK_SHOW_OUTPUT_SCHEMA,
   MESSAGES_OUTPUT_SCHEMA,
 ];
 

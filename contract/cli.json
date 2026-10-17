@@ -150,6 +150,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--key",
           "repeatable": false,
           "takesValue": true
@@ -178,7 +184,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team ask-show <request_id> --ask <path> --marker <path> --key <path>"
+        "team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]"
       ]
     },
     {

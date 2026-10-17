@@ -53,6 +53,7 @@ export {
   type OutputSchemaTag,
 } from './json.ts';
 export {
+  ASK_SHOW_OUTPUT_SCHEMA,
   buildActionSchemaSpec,
   buildCommandOutputSchema,
   CHECK_OUTPUT_SCHEMA,

@@ -6,15 +6,17 @@ import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import type { Command, Io } from '../io.ts';
+import { writeJson, writeJsonError } from '../output/index.ts';
 
-export const USAGE = `Usage: team ask-show <request_id> --ask <path> --marker <path> --key <path>
+export const USAGE = `Usage: team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]
 
 Prints the question from the ask file when the marker's HMAC matches that question and
-this request id, and expires_at is not yet past. The same 5 seconds of clock skew the
-guard allows still counts as in time. A marker that does not verify, or an ask that has
-expired, prints nothing of the question. The key file is the marker key, base64url of 32
-bytes. Whoever can read that file may run this: there is no team-file check and no herdr
-call.
+this request id, and expires_at is not yet past. The question is followed by one
+verification summary line naming the request and its deadline. The same 5 seconds of
+clock skew the guard allows still counts as in time. A marker that does not verify, or
+an ask that has expired, prints nothing of the question. The key file is the marker
+key, base64url of 32 bytes. Whoever can read that file may run this: there is no
+team-file check and no herdr call. --json prints one document instead of the text.
 
 Exits 0 when the question is printed, 1 when the marker does not verify, the ask has
 expired, or a file cannot be read, 2 when the invocation cannot be read.
@@ -73,65 +75,86 @@ export function markerMac(key: Buffer, body: MarkerBody): string {
 }
 
 export async function runAskShow(argv: string[], io: Io, now: Date = new Date()): Promise<number> {
-  const args = readArgs(argv, ['ask', 'marker', 'key'], []);
-  if (args.error) return invocation(io, args.error);
+  const args = readArgs(argv, ['ask', 'marker', 'key'], ['json']);
+  const json = args.flags.has('json');
+  if (args.error) return invocation(io, args.error, json);
   const requestId = args.rest[0];
   if (args.rest.length !== 1 || requestId === undefined || !REQUEST_ID.test(requestId)) {
-    return invocation(io, 'a request id, --ask, --marker and --key are required');
+    return invocation(io, 'a request id, --ask, --marker and --key are required', json);
   }
   const askPath = args.values.ask;
   const markerPath = args.values.marker;
   const keyPath = args.values.key;
   if (askPath === undefined || markerPath === undefined || keyPath === undefined) {
-    return invocation(io, 'a request id, --ask, --marker and --key are required');
+    return invocation(io, 'a request id, --ask, --marker and --key are required', json);
   }
 
   const key = readKey(io.cwd, keyPath);
-  if (key === 'unreadable') return refused(io, 'the key file cannot be read');
-  if (key === 'shape') return refused(io, 'the key is not 32 bytes');
+  if (key === 'unreadable') return refused(io, 'the key file cannot be read', 'pass --key the marker key file, base64url of 32 bytes', json);
+  if (key === 'shape') return refused(io, 'the key is not 32 bytes', 'pass --key the marker key file, base64url of 32 bytes', json);
 
   const ask = readAsk(io.cwd, askPath);
-  if (ask === 'unreadable') return refused(io, 'the ask file cannot be read');
-  if (ask === 'shape') return refused(io, 'the marker does not verify');
+  if (ask === 'unreadable') return refused(io, 'the ask file cannot be read', 'pass --ask the signed ask file', json);
+  if (ask === 'shape') return refused(io, 'the marker does not verify', 're-run the ask whose marker this is', json);
 
   const marker = readMarker(io.cwd, markerPath);
-  if (marker === 'unreadable') return refused(io, 'the marker file cannot be read');
-  if (marker === 'shape') return refused(io, 'the marker does not verify');
+  if (marker === 'unreadable') return refused(io, 'the marker file cannot be read', 'pass --marker the marker file the guard wrote', json);
+  if (marker === 'shape') return refused(io, 'the marker does not verify', 're-run the ask whose marker this is', json);
 
   if (marker.request_id !== requestId || marker.request_id !== ask.requestId) {
-    return refused(io, 'the marker does not verify');
+    return refused(io, 'the marker does not verify', 're-run the ask whose marker this is', json);
   }
-  if (marker.question_sha256 !== questionDigest(ask.question)) return refused(io, 'the marker does not verify');
+  if (marker.question_sha256 !== questionDigest(ask.question)) {
+    return refused(io, 'the marker does not verify', 're-run the ask whose marker this is', json);
+  }
   const mac = Buffer.from(markerMac(key, marker), 'hex');
   const given = Buffer.from(marker.mac, 'hex');
-  if (mac.length !== given.length || !timingSafeEqual(mac, given)) return refused(io, 'the marker does not verify');
+  if (mac.length !== given.length || !timingSafeEqual(mac, given)) {
+    return refused(io, 'the marker does not verify', 're-run the ask whose marker this is', json);
+  }
 
   const expires = Date.parse(marker.expires_at);
   const at = now.getTime();
   if (!Number.isFinite(expires) || new Date(expires).toISOString() !== marker.expires_at || !Number.isFinite(at)) {
-    return refused(io, 'the marker does not verify');
+    return refused(io, 'the marker does not verify', 're-run the ask whose marker this is', json);
   }
-  if (at > expires + CLOCK_SKEW_MS) return expired(io);
+  if (at > expires + CLOCK_SKEW_MS) return expired(io, json);
 
-  io.stdout(ask.question.endsWith('\n') ? ask.question : `${ask.question}\n`);
+  const summary = `request ${marker.request_id} verified, expires ${marker.expires_at}`;
+  if (json) {
+    writeJson(io, 'team.ask-show', {
+      format: 1 as const,
+      request_id: marker.request_id,
+      question: ask.question,
+      expires_at: marker.expires_at,
+      verified: true as const,
+    });
+  } else {
+    const body = ask.question.endsWith('\n') ? ask.question : `${ask.question}\n`;
+    io.stdout(`${body}${summary}\n`);
+  }
   // exit: ask-show.shown
   return 0;
 }
 
-function invocation(io: Io, message: string): number {
-  io.stderr(`team ask-show: ${message}\n${USAGE}`);
+function invocation(io: Io, message: string, json: boolean): number {
+  if (json) writeJsonError(io, 'ask-show.invocation', message, null);
+  else io.stderr(`team ask-show: ${message}\n${USAGE}`);
   // exit: ask-show.invocation
   return 2;
 }
 
-function expired(io: Io): number {
-  io.stderr('team ask-show: the ask has expired\n');
+function expired(io: Io, json: boolean): number {
+  const message = 'the ask has expired';
+  if (json) writeJsonError(io, 'ask-show.expired', message, 'run the ask again to get a fresh expires_at');
+  else io.stderr(`team ask-show: ${message}\n`);
   // exit: ask-show.expired
   return 1;
 }
 
-function refused(io: Io, message: string): number {
-  io.stderr(`team ask-show: ${message}\n`);
+function refused(io: Io, message: string, repair: string, json: boolean): number {
+  if (json) writeJsonError(io, 'ask-show.refused', message, repair);
+  else io.stderr(`team ask-show: ${message}\n`);
   // exit: ask-show.refused
   return 1;
 }

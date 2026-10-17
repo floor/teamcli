@@ -89,7 +89,7 @@ Hidden: no
 
 Usage:
 
-    team ask-show <request_id> --ask <path> --marker <path> --key <path>
+    team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]
 
 ### Flags
 
@@ -97,6 +97,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--ask` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `--marker` | yes | no | no |
 | `-h` | no | no | yes |
