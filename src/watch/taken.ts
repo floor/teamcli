@@ -27,24 +27,30 @@ const FREE = new Set(['idle', 'done']);
 
 /** One taken drop, looked at on this pass. Confirmed on the first sign; reported once the window
  *  passes with none. Nothing here ever types: a taken line is never submitted again. */
-function confirmOne(scene: RetryScene, pane: string, dropDir: string, drop: TakenDrop): void {
-  const screen = scene.sources.screen(pane, scene.session);
-  const status = scene.sources.status(pane, scene.session);
-  const line = triggerLine(join(dropDir, drop.id));
-  // The transcript's sign: a row that names the drop's id and is not the trigger's own echo. The
-  // trigger line may be unreadable (a path too long to have been typed); the status still counts.
-  if (screen !== null && line !== null && showsDrop(screen, line)) {
-    clearTaken(dropDir, drop.id);
-    return;
-  }
-  // herdr's status moving from the one read before Enter is the other sign: the seat is working,
-  // or it reached a done/blocked that is not where it stood.
-  if (status !== null && sawSubmission(drop.before, [status])) {
-    clearTaken(dropDir, drop.id);
-    return;
-  }
+function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string, drop: TakenDrop): void {
   const age = scene.now.getTime() - Date.parse(drop.ts);
-  if (!(FREE.has(status ?? '') && age >= TAKEN_IDLE_GRACE_MS) && age <= TAKEN_MAX_AGE_MS) return;
+  if (pane !== undefined) {
+    const screen = scene.sources.screen(pane, scene.session);
+    const status = scene.sources.status(pane, scene.session);
+    const line = triggerLine(join(dropDir, drop.id));
+    // The transcript's sign: a row that names the drop's id and is not the trigger's own echo. The
+    // trigger line may be unreadable (a path too long to have been typed); the status still counts.
+    if (screen !== null && line !== null && showsDrop(screen, line)) {
+      clearTaken(dropDir, drop.id);
+      return;
+    }
+    // herdr's status moving from the one read before Enter is the other sign: the seat is working,
+    // or it reached a done/blocked that is not where it stood.
+    if (status !== null && sawSubmission(drop.before, [status])) {
+      clearTaken(dropDir, drop.id);
+      return;
+    }
+    if (!(FREE.has(status ?? '') && age >= TAKEN_IDLE_GRACE_MS) && age <= TAKEN_MAX_AGE_MS) return;
+  } else if (age <= TAKEN_MAX_AGE_MS) {
+    // No pane at the seat this pass: there is no sign to read yet, and the record keeps for a
+    // later pass — until the age bound runs out, which is the report below, as for a retry.
+    return;
+  }
   clearTaken(dropDir, drop.id);
   if (scene.home !== undefined) {
     appendHistory(scene.team.project, scene.root, scene.home, {
@@ -65,9 +71,11 @@ function confirmOne(scene: RetryScene, pane: string, dropDir: string, drop: Take
 }
 
 /**
- * Confirms the taken deliveries of every seat this team has a live pane for, and reports the ones
- * the window ran out on. A seat with no pane is left for a later pass: with nothing to read there
- * is no sign either way, and a marker is never guessed at.
+ * Confirms the taken deliveries of every seat, and reports the ones the window ran out on. A seat
+ * with no readable pane is left for a later pass while its record is inside the age bound: with
+ * nothing to read there is no sign either way, and a marker is never guessed at. Past the bound
+ * the record is reported and goes, as a retry's does — a seat that went away must not keep a
+ * marker in the store forever.
  */
 export function confirmTakenDrops(scene: RetryScene): void {
   for (const seat of scene.team.seats) {
@@ -75,8 +83,8 @@ export function confirmTakenDrops(scene: RetryScene): void {
     const drops = readTaken(dropDir);
     if (drops.length === 0) continue;
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
-    const pane = agents.length === 1 ? agents[0]?.pane : undefined;
-    if (pane === undefined || pane === scene.ownPane) continue;
+    const found = agents.length === 1 ? agents[0]?.pane : undefined;
+    const pane = found === scene.ownPane ? undefined : found;
     for (const drop of drops) confirmOne(scene, pane, dropDir, drop);
   }
 }

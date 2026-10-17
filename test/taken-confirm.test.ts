@@ -274,6 +274,35 @@ describe('a taken delivery its seat never acted on', () => {
     ]);
     expect(readTaken(dropDirOf(made))).toEqual([]);
   });
+
+  test('inside the window a seat with no live pane keeps its record for a later pass', async () => {
+    const made = world();
+    const one = pane(claudeBox(''));
+    await sendTaken(made, one);
+
+    const at = scene(made, one, new Date(NOW.getTime() + 5_000));
+    at.live = { running: true, agents: [], workspaces: [], screens: {} };
+    confirmTakenDrops(at);
+
+    expect(at.said).toEqual([]);
+    expect(readTaken(dropDirOf(made))).toHaveLength(1);
+  });
+
+  test('a record whose seat has no live pane ages out and is reported, as a retry record is', async () => {
+    const made = world();
+    const one = pane(claudeBox(''));
+    const id = await sendTaken(made, one);
+
+    // The seat is down or was removed: nothing to read, and the age bound still ends the record.
+    const at = scene(made, one, new Date(NOW.getTime() + 31 * 60_000));
+    at.live = { running: true, agents: [], workspaces: [], screens: {} };
+    confirmTakenDrops(at);
+
+    expect(at.said).toEqual([
+      `lead: a send from owner was taken but never acted on; the drop file is at ${join(dropDirOf(made), id)}`,
+    ]);
+    expect(readTaken(dropDirOf(made))).toEqual([]);
+  });
 });
 
 describe('a trigger left in the box is the other case', () => {
