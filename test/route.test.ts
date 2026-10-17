@@ -1,6 +1,7 @@
 // The native channel's two bookkeeping halves, run for real: `team route <seat>` answers an
-// admitted pair the recipient's own address — read from the registry, the pane's process list
-// and the socket folder's file names, never dialed — and `team send --record …` writes the one
+// admitted pair the recipient's own address — the seat resolved live by herdr, read from the
+// registry, the live pane's process list and the socket folder's file names, never dialed — and
+// `team send --record …` writes the one
 // history line for a delivery the sender made with its own tool. A route lands in its own
 // stream, `routes.jsonl`, beside `messages.jsonl`: a route is not a message and moves no text.
 // Fake herdr reads, a temporary home and a temporary root: no live session, no real CLI home and
@@ -22,7 +23,7 @@ import type { NativePane } from '../src/send/native.ts';
 import { NATIVE_BODY_MARKER, routesPath } from '../src/send/routes.ts';
 import { updateState } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
-import { testIo, type TestIo } from './helpers.ts';
+import { liveAgentsOf, testIo, type TestIo } from './helpers.ts';
 
 const OWNER = { kind: 'owner' as const };
 const BODY = 'the native delivery, written down after the fact';
@@ -136,7 +137,7 @@ function host(made: World, patch: Partial<SendHost> = {}): Fake {
   const frames: string[] = [];
   return {
     frames,
-    agents: () => [],
+    agents: (session) => liveAgentsOf(made.home, session),
     processInfo: () => ({ shell: 111, foreground: [222] }),
     socketsDir: made.sockets,
     deliver: async (_socketPath: string, frame: string) => {
@@ -288,6 +289,94 @@ describe('route: the address the native channel answers', () => {
     expect(code).toBe(0);
     expect(io.out).toContain(`socket ${found} (found on the pane)`);
     expect(routeLines(routesPath('acme', w.root, w.home))[0]?.socket_state).toBe('pane');
+  });
+
+  test('a pane the seat no longer stands on never yields its socket', async () => {
+    const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code'), seatBlock('implementer', 'helper', 'claude-code')]);
+    const id = teamIdOf(w.root);
+    const ours = socketAt(w.sockets, 4242);
+    socketAt(w.sockets, 9001); // the socket the reused pane carries: another seat's session
+    // The record still says w1:p1, and that pane now holds another seat's Claude session; herdr
+    // names this seat on w1:p2. A recorded-pane read would answer 9001.sock — the other seat's.
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: id, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null });
+    const helper = agent(w.home, { name: 'helper', role: 'implementer', cli: 'claude-code', team: id, seat: 'helper', session: 'acme', pane: 'w1:p1' });
+    team(w.home, id, 'acme', 'acme', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: helper.id, seat: 'helper', role: 'implementer', leads: false },
+    ]);
+    const io = testIo(w.root, OWNER);
+    const run = host(w, {
+      agents: () => [
+        { name: 'lead', pane: 'w1:p2', cli: 'claude' },
+        { name: 'helper', pane: 'w1:p1', cli: 'claude' },
+      ],
+      processInfo: (_session, pane) => ({ shell: 111, foreground: pane === 'w1:p2' ? [4242] : [9001] }),
+    });
+
+    const code = await runRoute(['lead'], io, run);
+
+    expect(code).toBe(0);
+    expect(io.out).toContain('pane w1:p2\n');
+    expect(io.out).toContain(`socket ${ours} (found on the pane)`);
+    expect(io.out).not.toContain('9001.sock');
+    expect(routeLines(routesPath('acme', w.root, w.home))[0]).toMatchObject({ pane: 'w1:p2', socket: ours, socket_state: 'pane' });
+  });
+
+  test('a seat herdr does not name there is refused, and no address is answered', async () => {
+    const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
+    const id = teamIdOf(w.root);
+    socketAt(w.sockets, 9001);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: id, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null });
+    team(w.home, id, 'acme', 'acme', w.root, [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }]);
+    const io = testIo(w.root, OWNER);
+    // The recorded pane now holds another seat's Claude session; herdr names no lead anywhere.
+    const run = host(w, {
+      agents: () => [{ name: 'helper', pane: 'w1:p1', cli: 'claude' }],
+      processInfo: () => ({ shell: 111, foreground: [9001] }),
+    });
+
+    const code = await runRoute(['lead'], io, run);
+
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(`team route: refused: ${lead.id}: herdr names no seat "lead" in the session "acme", so no address was answered\n`);
+    expect(existsSync(routesPath('acme', w.root, w.home))).toBe(false);
+    expect(run.frames).toEqual([]);
+  });
+
+  test('a seat herdr names on another CLI is refused, and no address is answered', async () => {
+    const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
+    const id = teamIdOf(w.root);
+    socketAt(w.sockets, 9001);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: id, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null });
+    team(w.home, id, 'acme', 'acme', w.root, [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }]);
+    const io = testIo(w.root, OWNER);
+    const run = host(w, {
+      agents: () => [{ name: 'lead', pane: 'w1:p1', cli: 'codex' }],
+      processInfo: () => ({ shell: 111, foreground: [9001] }),
+    });
+
+    const code = await runRoute(['lead'], io, run);
+
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(`team route: refused: ${lead.id}: herdr names "lead" running "codex", not the recorded CLI "claude-code"; no address was answered\n`);
+    expect(existsSync(routesPath('acme', w.root, w.home))).toBe(false);
+  });
+
+  test('a session herdr cannot be read is refused, and no address is answered', async () => {
+    const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
+    const id = teamIdOf(w.root);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: id, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null });
+    team(w.home, id, 'acme', 'acme', w.root, [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }]);
+    const io = testIo(w.root, OWNER);
+
+    const code = await runRoute(['lead'], io, host(w, { agents: () => null }));
+
+    expect(code).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe(`team route: refused: ${lead.id}: the session "acme" could not be read, so no address was answered\n`);
+    expect(existsSync(routesPath('acme', w.root, w.home))).toBe(false);
   });
 
   test('no socket anywhere is none, and a seat that is not Claude Code is not native', async () => {

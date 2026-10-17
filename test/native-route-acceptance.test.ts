@@ -27,7 +27,7 @@ import { historyPath, parseHistoryLine } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { routesPath } from '../src/send/routes.ts';
 import { updateState } from '../src/state.ts';
-import { testIo, type TestIo } from './helpers.ts';
+import { liveAgentsOf, testIo, type TestIo } from './helpers.ts';
 
 const BODY = 'the words the sender carried in its own tool call';
 const NOW = new Date('2026-10-17T07:00:00.000Z');
@@ -164,7 +164,7 @@ function rig(w: World, patch: Partial<SendHost> = {}): Rig {
     frames,
     typed,
     entered,
-    agents: () => [],
+    agents: (session) => liveAgentsOf(w.home, session),
     // The pane runs pid 222 — the pid helper's recorded address names — so the reading is live.
     processInfo: () => ({ shell: 111, foreground: [222] }),
     socketsDir: w.sockets,
