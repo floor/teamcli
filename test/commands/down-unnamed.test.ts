@@ -245,12 +245,22 @@ describe('a seat-run down keeps a lead whatever herdr calls its pane', () => {
   describe('a distinct operator', () => {
     beforeEach(() => approve(distinctOperatorFile()));
 
-    test('an unnamed pane is kept', async () => {
-      await kept('codex-acme', unnamed('seat-2', 'ws-2'), OPERATOR);
+    // Down is the owner's or a `leads` seat's: the operator runs it only as a delegate now, and
+    // this file names none. The refusal comes before the pane is read, so nothing is closed.
+    test('an unnamed pane: down is refused, and nothing is closed', async () => {
+      writeSeats({ 'codex-acme': recorded('seat-2', 'ws-2', LAUNCHED) });
+      const run = await down([], [unnamed('seat-2', 'ws-2')], () => SAME, OPERATOR);
+      expect(run.code).toBe(1);
+      expect(run.err).toBe('team down: only the owner or `leads` stops the team; this call is codex-acme\n');
+      expect(run.closed).toEqual([]);
     });
 
-    test('a pane titled something else is kept', async () => {
-      await kept('codex-acme', titled('Codex', 'seat-2', 'ws-2'), OPERATOR);
+    test('a pane titled something else: down is refused, and nothing is closed', async () => {
+      writeSeats({ 'codex-acme': recorded('seat-2', 'ws-2', LAUNCHED) });
+      const run = await down([], [titled('Codex', 'seat-2', 'ws-2')], () => SAME, OPERATOR);
+      expect(run.code).toBe(1);
+      expect(run.err).toBe('team down: only the owner or `leads` stops the team; this call is codex-acme\n');
+      expect(run.closed).toEqual([]);
     });
   });
 });
