@@ -114,7 +114,7 @@ describe('team status', () => {
     expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
     expect(out).not.toMatch(/grok-acme\s+stopped/);
     const all = await status('--all');
-    expect(all.out).toMatch(/grok-acme\s+-\s+reviewer\s+grok\s+Grok 4\.7\s+-\s+stopped/);
+    expect(all.out).toMatch(/grok-acme\s+-\s+-\s+reviewer\s+grok\s+Grok 4\.7\s+-\s+stopped/);
     // The suffix is a reading, not a difference: a team that matches its file still reads clean.
     expect(out).toContain('0 difference(s)');
     expect(code).toBe(0);

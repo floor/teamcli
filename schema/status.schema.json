@@ -75,6 +75,12 @@
               "role": {
                 "type": "string"
               },
+              "nickname": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "cli": {
                 "type": "string"
               },

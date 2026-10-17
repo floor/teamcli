@@ -83,6 +83,12 @@
             "type": "string",
             "minLength": 1
           },
+          "nickname": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cli": {
             "type": "string",
             "minLength": 1
