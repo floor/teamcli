@@ -1,0 +1,6 @@
+❯ claude --dangerously-skip-permissions
+
+Resume this session with:
+claude --resume <session-id>                        
+<workspace>                      main   12s 23:31:57
+❯ 

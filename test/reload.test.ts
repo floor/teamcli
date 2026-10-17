@@ -252,7 +252,7 @@ describe('team reload', () => {
     expect(code).toBe(1);
     expect(closed).toEqual([]);
     expect(commands).toEqual([]);
-    expect(io.err).toContain('claude 2.2.0 is newer than the tested 2.1.288 to 2.1.299; its ready screen may not be recognised, so nothing closed');
+    expect(io.err).toContain('claude 2.2.0 is newer than the tested 2.1.288 to 2.1.302; its ready screen may not be recognised, so nothing closed');
     // The record and the log are untouched: the seat is still the one the file's last run made.
     expect(readState(dir).sessions.alpha?.seats.worker?.effort).toBe('low');
     expect(logText()).toBe('');

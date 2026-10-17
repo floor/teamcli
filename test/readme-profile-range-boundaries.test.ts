@@ -25,14 +25,15 @@ function shipped(): Record<string, Profile> {
   return loaded;
 }
 
-/** The sentence's own shape: a floor, its ceiling, and the binary the reader runs. */
-const SENTENCE = /^The ([A-Z][A-Za-z-]+) profile is tested with CLI (\d+(?:\.\d+)+)(?: to (\d+(?:\.\d+)+))?(?: \(`([^`]+)`\))?\./gm;
+/** The sentence's own shape: a floor, its ceiling, and the binary the reader runs. A profile
+ *  named in two words on the page ("Claude Code") is the hyphenated cli id (`claude-code`). */
+const SENTENCE = /^The ([A-Z][A-Za-z-]+(?: [A-Z][A-Za-z-]+)?) profile is tested with CLI (\d+(?:\.\d+)+)(?: to (\d+(?:\.\d+)+))?(?: \(`([^`]+)`\))?\./gm;
 
 /** Every "The X profile is tested with CLI ..." sentence a readme carries. */
 function sentences(file: string): { file: string; name: string; from: string; to?: string; binary?: string }[] {
   return [...readFileSync(join(ROOT, file), 'utf8').matchAll(SENTENCE)].map((match) => ({
     file,
-    name: match[1]!.toLowerCase(),
+    name: match[1]!.toLowerCase().replace(/ /g, '-'),
     from: match[2]!,
     ...(match[3] ? { to: match[3] } : {}),
     ...(match[4] ? { binary: match[4] } : {}),
