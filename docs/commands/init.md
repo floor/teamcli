@@ -46,6 +46,20 @@ record, a folder outside the covered paths or one reached through a `..` segment
 a record with no `runner`. A caller under herdr is never admitted this way, and the owner needs no
 record.
 
+A record covers only the paths it names itself (`paths:`, or one `path:`). When it names an
+`entity:` and no path, it covers the roots that entity declares in
+`~/.config/team/entities.yaml`, the only roots the program knows — none is written into it:
+
+```text
+beacon:
+  roots:
+    - ~/Code/beacon
+```
+
+A record that names an entity with declared roots may narrow them, never widen them: a path
+beside them is refused, and a record left covering nothing admits no caller, exactly as an empty
+one does.
+
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |

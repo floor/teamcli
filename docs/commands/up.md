@@ -39,11 +39,12 @@ into — and its sidebar is rewritten from the file either way.
 A create-grant — a record in `~/.config/team/grants/` — admits a caller outside herdr without the
 owner's terminal when its `runner` field (or `runners: [<name>, …]` for several) names one of the
 caller's parent processes, the base name of what `ps -o comm=` prints for it. That caller runs
-`up` on the paths the record covers, before it expires. A name that is not in the ancestry, an
-expired record, a folder outside the covered paths or one reached through a `..` segment or a
-symlink, and a record with no `runner` all keep the answer above; a caller under herdr is never
-admitted this way, where the approved file's `grant` decides. The record's shape, with one
-example: [team init](init.md).
+`up` on the paths the record covers — its own `paths:`/`path:`, or the roots its `entity:`
+declares in `~/.config/team/entities.yaml` when it names none — before it expires. A name that is
+not in the ancestry, an expired record, a folder outside the covered paths or one reached through
+a `..` segment or a symlink, and a record with no `runner` all keep the answer above; a caller
+under herdr is never admitted this way, where the approved file's `grant` decides. The record's
+shape, with one example: [team init](init.md).
 
 ## Output and exit codes
 
