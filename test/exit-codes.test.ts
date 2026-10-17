@@ -2702,12 +2702,12 @@ async function issued(place: Place, argv: string[] = []): Promise<Ran> {
 scene('issues.none', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '[]\n');
-  return show(await issued(place), 'nothing is waiting');
+  return show(await issued(place), '0 issue(s)');
 });
 scene('issues.shown', async (place) => {
   write(place, TASKS);
   writeFileSync(join(place.root, '.agents', 'tasks.yaml'), '- id: m1\n  title: the task title\n');
-  return show(await issued(place), 'm1  the task title');
+  return show(await issued(place), 'm1  open   -         the task title');
 });
 scene('issues.file', async (place) => show(await issued(place), 'no team file here'));
 scene('issues.missing', async (place) => {

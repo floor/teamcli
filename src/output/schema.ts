@@ -648,6 +648,39 @@ export const UNLOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
     value: { type: ['string', 'null'] },
   },
 });
+/** Published `--json` output schema for `team issues` (`schema/issues.schema.json`). */
+export const ISSUES_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.issues',
+  fileName: 'issues.schema.json',
+  title: 'team issues --json output',
+  required: ['format', 'project', 'session', 'issues'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    issues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'title', 'state', 'assignee'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          title: { type: 'string', minLength: 1 },
+          state: { type: 'string', enum: ['open', 'blocked'] },
+          assignee: { type: ['string', 'null'] },
+          priority: { type: ['string', 'number'] },
+          milestone: { type: 'string' },
+          deadline: { type: 'string' },
+          blocked_by: { type: 'array', items: { type: 'string' } },
+          repos: { type: 'array', items: { type: 'string' } },
+          needs: { type: 'array', items: { type: 'string' } },
+          description: { type: 'string' },
+        },
+      },
+    },
+  },
+};
 
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
@@ -664,6 +697,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   HOLD_OUTPUT_SCHEMA,
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
+  ISSUES_OUTPUT_SCHEMA,
 ];
 
 

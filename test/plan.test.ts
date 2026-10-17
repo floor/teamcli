@@ -130,7 +130,14 @@ describe('team plan', () => {
     });
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(0);
-    expect(listed.out).toBe('m1  the first title\n\nm2  the second title\n  priority: 1\n\nm3  the third title\n  priority: alpha\n');
+    expect(listed.out).toBe(
+      'team acme, session "acme"\n' +
+        '  ID  STATE  ASSIGNEE  TITLE\n' +
+        '  m1  open   -         the first title\n' +
+        '  m2  open   -         the second title\n' +
+        '  m3  open   -         the third title\n' +
+        '3 issue(s)\n',
+    );
     expect(planned.out).not.toBe(listed.out);
     ready(WITH, '- id: z\n  title: the z title\n- id: a\n  title: the a title\n');
     expect(await run()).toMatchObject({ code: 0, out: 'z  the z title\n\na  the a title\n' });
@@ -162,14 +169,16 @@ describe('team plan', () => {
     expect(at.out).not.toContain('(overdue)');
   });
 
-  test('the mark is plan\'s alone: next and issues blocks keep their bytes', async () => {
+  test('the mark is plan\'s alone: next and issues do not carry one', async () => {
     ready(WITH, '- id: past\n  title: the past title\n  deadline: 2026-01-01T00:00:00Z\n');
     const io = testIo(root, lead);
     expect(await runNext([], io, { home, now: () => now })).toBe(0);
     expect(io.out).toBe('past  the past title\n  deadline: 2026-01-01T00:00:00Z\n');
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(0);
-    expect(listed.out).toBe('past  the past title\n  deadline: 2026-01-01T00:00:00Z\n');
+    expect(listed.out).toBe(
+      'team acme, session "acme"\n  ID    STATE  ASSIGNEE  TITLE\n  past  open   -         the past title\n1 issue(s)\n',
+    );
   });
 
   test('a held record still appears, and nothing is written', async () => {
