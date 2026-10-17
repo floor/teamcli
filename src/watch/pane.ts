@@ -3,6 +3,27 @@ import { emptySession, readState, updateState } from '../state.ts';
 
 export type WatchPlace = { pane: string; workspace: string };
 
+/** The label of the workspace a watch runs in. One per team, so `team status` and the checks can
+ *  tell the watch's own workspace from a seat's, which a display label may repeat. */
+export function watchLabel(project: string): string {
+  return `Watch · ${project}`;
+}
+
+/** Whether a recorded watch is still running: the pid while that process lives, or — for the
+ *  moment before its pane's first pass records a pid, and for a record whose process is gone — a
+ *  pane whose heartbeat is no older than two in-force intervals. A record with neither is no
+ *  watch. */
+export function watchRunning(
+  watch: { pid?: number; heartbeat: string; pane?: string } | undefined,
+  options: { alive(pid: number): boolean; now: number; interval: number },
+): boolean {
+  if (!watch) return false;
+  if (watch.pid !== undefined) return options.alive(watch.pid);
+  if (!watch.pane) return false;
+  const beat = Date.parse(watch.heartbeat);
+  return Number.isFinite(beat) && options.now - beat <= 2 * options.interval * 1000;
+}
+
 /** The pane this process is running in, from herdr. The shell that `pane run` typed into is
  *  this process's parent; the foreground pid is this process once the command is up. A hand-run
  *  watch matches neither and comes back `'gone'`. Null means herdr could not say, which is not

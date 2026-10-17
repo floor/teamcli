@@ -125,6 +125,7 @@ describe('the pane display', () => {
       sessionRunning: true,
       seats: [seat],
       watchAlive: true,
+      watchLabel: 'Watch · scratch',
     }));
     expect(plan).toContain("--label 'Priam · coordinator'");
     expect(plan).toContain("pane report-metadata <pane of lead> --source team --display-agent 'Claude Opus 5.5 high'");
@@ -195,6 +196,7 @@ describe('a seat left ready', () => {
       sessionRunning: true,
       seats: [readySeat()],
       watchAlive: true,
+      watchLabel: 'Watch · scratch',
     }));
     expect(plan).toContain("workspace rename w1 'lead · coordinator'");
     expect(plan).toContain("pane report-metadata p1 --source team --display-agent 'Grok 4.7 default'");
@@ -211,6 +213,7 @@ describe('a seat left ready', () => {
       sessionRunning: true,
       seats: [readySeat({ pane: undefined, workspace: undefined })],
       watchAlive: true,
+      watchLabel: 'Watch · scratch',
     }));
     expect(plan).not.toContain('workspace rename');
     expect(plan).not.toContain('report-metadata');

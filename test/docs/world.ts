@@ -264,6 +264,9 @@ export type World = {
   releaseKeyReader(): KeyReader;
   /** The pane a running seat of the fixture is in, or undefined when nothing runs it. */
   paneOf(name: string): string | undefined;
+  /** What the watch a run just started does before a reader types the next line: its pane's
+   *  command is up, so its first pass has run — the pid `team status` and the checks read. */
+  settle(): void;
   setScreen(seat: string, kind: ScreenKind): void;
   setMachine(kind: Spec['machine']): void;
   /** One CLI's installed-and-logged-in state, on top of the fixture's own. */
@@ -290,6 +293,8 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
   let herdr = spec.herdr;
   // A watch that is already alive, or one the plan starts: `up` must not start a second.
   let watchPid: number | null = spec.watch === 'alive' || spec.watch === 'stale' ? WATCH_PID : null;
+  // The pane a run started a watch in, until `settle` records the pass it reaches next.
+  let startedWatch: string | null = null;
   let made = 0;
   const slots: Slot[] = [];
   // What each pane holds once text was typed into it, so a read-back reads the typed text.
@@ -380,15 +385,17 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     paneRun(_session: string, pane: string, command: string) {
       did.runs.push(command);
       const slot = agentOf(pane);
-      // The watchdog pane runs a shell command, not an agent: herdr lists no agent in it.
+      // The watch's pane runs a shell command, not an agent: herdr lists no agent in it.
       const watch = /\bteam watch\b/.test(command);
       if (slot && !watch) slot.agent = true;
-      // A started watch records itself, and its heartbeat, exactly as the real one does.
+      // A watch a run starts is settled once the run is done: its own first pass, which a real
+      // one reaches the moment its command starts, is what records the process beside the pane.
       if (watch) {
         watchPid = WATCH_PID;
+        startedWatch = pane;
         updateState(dir, (state) => {
           const record = (state.sessions[session] ??= emptySession());
-          record.watch = { pid: WATCH_PID, heartbeat: now().toISOString() };
+          record.watch = { pane, heartbeat: now().toISOString() };
         });
       }
       return true;
@@ -439,15 +446,6 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     sessionUp: action.sessionUp,
     createWorkspace: action.createWorkspace,
     paneRun: action.paneRun,
-    spawnWatch(command: string) {
-      did.runs.push(command);
-      watchPid = WATCH_PID;
-      updateState(dir, (state) => {
-        const record = (state.sessions[session] ??= emptySession());
-        record.watch = { pid: WATCH_PID, heartbeat: now().toISOString() };
-      });
-      return WATCH_PID;
-    },
     renameAgent: action.renameAgent,
     closeWorkspace: action.closeWorkspace,
     agentPanes: action.agentPanes,
@@ -628,6 +626,16 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     },
     setHerdr(kind) {
       herdr = kind;
+    },
+    settle() {
+      if (!startedWatch) return;
+      const pane = startedWatch;
+      startedWatch = null;
+      updateState(dir, (state) => {
+        const record = (state.sessions[session] ??= emptySession());
+        const workspace = record.watch?.workspace;
+        record.watch = { pid: WATCH_PID, heartbeat: now().toISOString(), pane, ...(workspace ? { workspace } : {}) };
+      });
     },
     upSources(): UpSources {
       return {
