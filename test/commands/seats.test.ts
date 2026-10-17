@@ -534,7 +534,12 @@ describe('team list --watch and --seats', () => {
 
     const ioBad = testIo(dir, { kind: 'owner' });
     expect(await runList(['--watch', '--json'], ioBad, listSources)).toBe(2);
-    expect(ioBad.err).toContain("--watch and --json can't be used together");
+    expect(ioBad.err).toBe('');
+    assertJsonErrorShape(ioBad.out, {
+      id: 'list.invocation',
+      messageContains: "--watch and --json can't be used together",
+      repair: null,
+    });
 
     let ticks = 0;
     const ioWatch = testIo(dir, { kind: 'owner' });
@@ -586,10 +591,11 @@ describe('team list --watch and --seats', () => {
     expect(ioTable.out).toContain('  lead      seat_111111111111  ready    claude-code  Claude Opus 5.5    pane-1');
     expect(ioTable.out).toContain('  builder   seat_222222222222  working  codex        GPT Sol 6          pane-2');
     expect(ioTable.out).toContain('  reviewer  seat_333333333333  waiting  claude-code  Claude Sonnet 5.5  pane-3');
+    expect(ioTable.out).toContain('2 session(s)');
 
     const ioJson = testIo(dir, { kind: 'owner' });
     expect(await runList(['--all', '--seats', '--json'], ioJson, listSources)).toBe(0);
-    const parsed = JSON.parse(ioJson.out) as ListSeatsRow[];
+    const parsed = (JSON.parse(ioJson.out) as { rows: ListSeatsRow[] }).rows;
     expect(parsed[0]).toMatchObject({
       team: 'acme',
       project: 'acme',

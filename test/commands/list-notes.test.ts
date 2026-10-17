@@ -11,8 +11,8 @@ async function notes(argv: string[], sessions: ListedSession[], team: ListSource
   const io = testIo('/anywhere');
   expect(await runList(argv, io, sources(sessions, team))).toBe(0);
   expect(io.err).toBe('');
-  const rows = JSON.parse(io.out) as Array<{ team: string; note: string }>;
-  return Object.fromEntries(rows.map((row) => [row.team, row.note]));
+  const doc = JSON.parse(io.out) as { rows: Array<{ team: string; note: string }> };
+  return Object.fromEntries(doc.rows.map((row) => [row.team, row.note]));
 }
 
 const found = (root: string, project = 'vlist'): FoundTeam => ({ project, root, seats: 1, unreadable: false });

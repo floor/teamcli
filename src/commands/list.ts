@@ -7,15 +7,20 @@ import { agentList, sessionList, type HerdrSession } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { findTeamFile, type FoundTeam } from '../list/find.ts';
+import { jsonEnvelope, ttyStyle, writeJsonError, type TtyStyle } from '../output/index.ts';
 import { readTeams, teamsFile } from '../registry/teams.ts';
 import { isSeatId, readState } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
+
+const PLAIN_STYLE = ttyStyle();
 
 export const USAGE = `Usage: team list [--all] [--seats] [--watch] [--json]
 
 Run from any folder. Lists the herdr sessions on this machine, the running ones unless --all is given, and changes nothing.
 
 A duplicate is two listed sessions whose team files resolve to the same directory, the real path of the folder that holds .agents. The same project name in two directories is two teams and is not flagged. Session names that match after lowercasing and removing hyphens, underscores and dots are near-duplicates. A pair the directory rule already names is not named again as near.
+
+Exits 0 when the sessions are listed (including when none are running or herdr is down), 2 when the invocation can't be read.
 `;
 
 /** One herdr session, as the list reads it. */
@@ -398,17 +403,30 @@ function registryCells(row: RegistryRow): string[] {
   ];
 }
 
+function padStyled(cell: string, width: number, styled: string): string {
+  const pad = Math.max(0, width - cell.length);
+  return `${styled}${' '.repeat(pad)}`;
+}
+
 /** The registry view's table. `--seats` prints each registered team's roster under its row,
  *  indented two spaces: seat, agent, role. A discovered row has no roster to print. */
-export function registryTable(rows: RegistryRow[], showSeats = false): string {
+export function registryTable(rows: RegistryRow[], showSeats = false, style: TtyStyle = PLAIN_STYLE): string {
   const head = REGISTRY_HEAD;
   const body = rows.map(registryCells);
   const width = head.map((label, index) => Math.max(label.length, ...body.map((cells) => cells[index]?.length ?? 0)));
-  const line = (cells: string[]): string => cells
-    .map((cell, index) => (index === cells.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
-    .join('  ')
-    .trimEnd();
-  const out: string[] = [line(head)];
+  const line = (cells: string[], isHeader = false): string => {
+    const rendered = cells
+      .map((cell, index) => {
+        const isLast = index === cells.length - 1;
+        if (isHeader) return isLast ? cell : cell.padEnd(width[index] ?? 0);
+        const styled = cell === '-' ? style.dim(cell) : cell;
+        return isLast ? styled : padStyled(cell, width[index] ?? 0, styled);
+      })
+      .join('  ')
+      .trimEnd();
+    return isHeader ? style.bold(rendered) : rendered;
+  };
+  const out: string[] = [line(head, true)];
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index]!;
     out.push(line(body[index]!));
@@ -416,9 +434,13 @@ export function registryTable(rows: RegistryRow[], showSeats = false): string {
     const seatCells = row.roster.map((seat) => [seat.seat, seat.agent ?? '-', seat.role ?? '-']);
     const seatWidths = [0, 1, 2].map((col) => Math.max(1, ...seatCells.map((cells) => cells[col]?.length ?? 0)));
     for (const cells of seatCells) {
-      out.push(`  ${cells.map((cell, col) => (col === cells.length - 1 ? cell : cell.padEnd(seatWidths[col] ?? 0))).join('  ').trimEnd()}`);
+      out.push(`  ${cells.map((cell, col) => {
+        const styled = cell === '-' ? style.dim(cell) : cell;
+        return col === cells.length - 1 ? styled : padStyled(cell, seatWidths[col] ?? 0, styled);
+      }).join('  ').trimEnd()}`);
     }
   }
+  out.push(`${rows.length} session(s)`);
   return `${out.join('\n')}\n`;
 }
 
@@ -436,32 +458,58 @@ export function registryJsonOf(rows: RegistryRow[], showSeats = false): string {
     source: row.source,
     ...(showSeats ? { roster: row.roster } : {}),
   }));
-  return `${JSON.stringify(documents, null, 2)}\n`;
+  return `${JSON.stringify(jsonEnvelope('team.list', { format: 1, rows: documents }), null, 2)}\n`;
 }
 
-function table(rows: ListRow[]): string {
+function table(rows: ListRow[], style: TtyStyle = PLAIN_STYLE): string {
   const head = ['TEAM', 'PROJECT', 'STATUS', 'SEATS', 'ACTIVITY', 'NOTE'];
   const body = rows.map((row) => [row.team, row.project, row.status, row.seats, row.activity, row.note]);
   const width = head.map((label, index) => Math.max(label.length, ...body.map((cells) => cells[index]?.length ?? 0)));
-  const line = (cells: string[]): string => cells
-    .map((cell, index) => (index === cells.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
-    .join('  ')
-    .trimEnd();
-  return `${[line(head), ...body.map(line)].join('\n')}\n`;
+  const headerLine = style.bold(
+    head
+      .map((cell, index) => (index === head.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
+      .join('  ')
+      .trimEnd(),
+  );
+  const rowLine = (cells: string[]): string => {
+    const lastNonEmpty = cells[cells.length - 1] === '' ? cells.length - 2 : cells.length - 1;
+    return cells
+      .slice(0, lastNonEmpty + 1)
+      .map((cell, index) => {
+        const styled = index === 2 || cell === '-' ? style.styleState(cell) : cell;
+        return index === lastNonEmpty ? styled : padStyled(cell, width[index] ?? 0, styled);
+      })
+      .join('  ')
+      .trimEnd();
+  };
+  return `${[headerLine, ...body.map(rowLine), `${rows.length} session(s)`].join('\n')}\n`;
 }
 
-function tableWithSeats(rows: ListSeatsRow[]): string {
+function tableWithSeats(rows: ListSeatsRow[], style: TtyStyle = PLAIN_STYLE): string {
   const head = ['TEAM', 'PROJECT', 'STATUS', 'SEATS', 'ACTIVITY', 'NOTE'];
   const body = rows.map((row) => [row.team, row.project, row.status, row.seats, row.activity, row.note]);
   const width = head.map((label, index) => Math.max(label.length, ...body.map((cells) => cells[index]?.length ?? 0)));
-  const line = (cells: string[]): string => cells
-    .map((cell, index) => (index === cells.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
-    .join('  ')
-    .trimEnd();
-  const out: string[] = [line(head)];
+  const headerLine = style.bold(
+    head
+      .map((cell, index) => (index === head.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
+      .join('  ')
+      .trimEnd(),
+  );
+  const rowLine = (cells: string[]): string => {
+    const lastNonEmpty = cells[cells.length - 1] === '' ? cells.length - 2 : cells.length - 1;
+    return cells
+      .slice(0, lastNonEmpty + 1)
+      .map((cell, index) => {
+        const styled = index === 2 || cell === '-' ? style.styleState(cell) : cell;
+        return index === lastNonEmpty ? styled : padStyled(cell, width[index] ?? 0, styled);
+      })
+      .join('  ')
+      .trimEnd();
+  };
+  const out: string[] = [headerLine];
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index]!;
-    out.push(line(body[index]!));
+    out.push(rowLine(body[index]!));
     if (row.roster.length > 0) {
       const seatCells = row.roster.map((seat) => [
         seat.name ?? '-',
@@ -477,13 +525,17 @@ function tableWithSeats(rows: ListSeatsRow[]): string {
       for (const cells of seatCells) {
         out.push(
           `  ${cells
-            .map((cell, col) => (col === cells.length - 1 ? cell : cell.padEnd(seatWidths[col] ?? 0)))
+            .map((cell, col) => {
+              const styled = col === 2 || cell === '-' ? style.styleState(cell) : cell;
+              return col === cells.length - 1 ? styled : padStyled(cell, seatWidths[col] ?? 0, styled);
+            })
             .join('  ')
             .trimEnd()}`,
         );
       }
     }
   }
+  out.push(`${rows.length} session(s)`);
   return `${out.join('\n')}\n`;
 }
 
@@ -496,7 +548,7 @@ function jsonOf(rows: ListRow[]): string {
     activity: row.activity,
     note: row.note,
   }));
-  return `${JSON.stringify(documents, null, 2)}\n`;
+  return `${JSON.stringify(jsonEnvelope('team.list', { format: 1, rows: documents }), null, 2)}\n`;
 }
 
 function jsonWithSeatsOf(rows: ListSeatsRow[]): string {
@@ -510,7 +562,7 @@ function jsonWithSeatsOf(rows: ListSeatsRow[]): string {
     roster: row.roster,
     note: row.note,
   }));
-  return `${JSON.stringify(documents, null, 2)}\n`;
+  return `${JSON.stringify(jsonEnvelope('team.list', { format: 1, rows: documents }), null, 2)}\n`;
 }
 
 export function realListSources(home: string = homedir()): ListSources {
@@ -644,6 +696,7 @@ export default list;
 
 export async function runList(argv: string[], io: Io, sources: ListSources = realListSources()): Promise<number> {
   const args = readArgs(argv, [], ['all', 'seats', 'watch', 'json']);
+  const json = args.flags.has('json') || argv.includes('--json');
   const contradictory = args.flags.has('watch') && args.flags.has('json');
   // An argument this command cannot use stops it before anything outside it is read.
   const early = args.error !== undefined || contradictory;
@@ -660,19 +713,23 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
       ? `unexpected "${args.rest[words]}"`
       : contradictory ? "--watch and --json can't be used together" : null);
   if (why !== null) {
-    io.stderr(`team list: ${why}\n${USAGE}`);
+    if (json) {
+      writeJsonError(io, 'list.invocation', why, null);
+    } else {
+      io.stderr(`team list: ${why}\n${USAGE}`);
+    }
     // exit: list.invocation
     return 2;
   }
   const all = args.flags.has('all');
   const showSeats = args.flags.has('seats');
-  const json = args.flags.has('json');
   const watching = args.flags.has('watch');
+  const style = ttyStyle(io, { json });
   const entity = registry === null ? null : (args.rest[0] ?? null);
   const registryText = (teams: RegistryTeam[]): { text: string; empty: boolean } => {
     const rows = registryRowsOf(teams, ask(() => sources.sessions(), null), sources, all, entity);
-    if (rows.length === 0) return { text: json ? '[]\n' : 'no teams\n', empty: true };
-    return { text: json ? registryJsonOf(rows, showSeats) : registryTable(rows, showSeats), empty: false };
+    if (rows.length === 0) return { text: json ? jsonOf([]) : 'no teams\n', empty: true };
+    return { text: json ? registryJsonOf(rows, showSeats) : registryTable(rows, showSeats, style), empty: false };
   };
   if (watching) {
     const wait = sources.wait ?? waitOrStop;
@@ -688,10 +745,10 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
           body = 'herdr is not running\n';
         } else if (showSeats) {
           const rows = seatRowsOf(listed, sources, all);
-          body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : tableWithSeats(rows);
+          body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : tableWithSeats(rows, style);
         } else {
           const rows = rowsOf(listed, sources, all);
-          body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : table(rows);
+          body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : table(rows, style);
         }
       }
       if (io.stdoutIsTTY) {
@@ -712,15 +769,15 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
     } else {
       const listed = ask(() => sources.sessions(), null);
       if (listed === null) {
-        io.stdout(json ? '[]\n' : 'herdr is not running\n');
+        io.stdout(json ? jsonOf([]) : 'herdr is not running\n');
         // exit: list.herdr-down
         return 0;
       }
       const rows = showSeats ? seatRowsOf(listed, sources, all) : rowsOf(listed, sources, all);
       empty = rows.length === 0;
-      if (empty) text = json ? '[]\n' : all ? 'no sessions\n' : 'no running sessions\n';
-      else if (showSeats) text = json ? jsonWithSeatsOf(rows as ListSeatsRow[]) : tableWithSeats(rows as ListSeatsRow[]);
-      else text = json ? jsonOf(rows) : table(rows);
+      if (empty) text = json ? jsonOf([]) : all ? 'no sessions\n' : 'no running sessions\n';
+      else if (showSeats) text = json ? jsonWithSeatsOf(rows as ListSeatsRow[]) : tableWithSeats(rows as ListSeatsRow[], style);
+      else text = json ? jsonOf(rows) : table(rows, style);
     }
     io.stdout(text);
     if (empty) {
@@ -731,4 +788,5 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
   // exit: list.shown
   return 0;
 }
+
 

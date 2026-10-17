@@ -1,13 +1,15 @@
 import { expect, test } from 'bun:test';
 import { runList, USAGE, type ListSources } from '../../src/commands/list.ts';
+import { LIST_OUTPUT_SCHEMA } from '../../src/output/index.ts';
 import { testIo } from '../helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
 
 const quiet: ListSources = { sessions: () => [], roster: () => [], team: () => null };
 
-test('a positional argument exits 2 on stderr and the session list is not read', async () => {
+test('a positional argument exits 2 and the session list is not read', async () => {
   let asked = false;
   const io = testIo('/anywhere');
-  const code = await runList(['--json', 'extra'], io, {
+  const code = await runList(['extra'], io, {
     sessions() {
       asked = true;
       return [];
@@ -19,6 +21,11 @@ test('a positional argument exits 2 on stderr and the session list is not read',
   expect(asked).toBe(false);
   expect(io.out).toBe('');
   expect(io.err).toBe(`team list: unexpected "extra"\n${USAGE}`);
+
+  const ioJson = testIo('/anywhere');
+  expect(await runList(['--json', 'extra'], ioJson, quiet)).toBe(2);
+  expect(ioJson.err).toBe('');
+  assertJsonErrorShape(ioJson.out, { id: 'list.invocation', messageContains: 'unexpected "extra"', repair: null });
 });
 
 test('empty results go to stdout and leave stderr empty', async () => {
@@ -34,6 +41,8 @@ test('empty results go to stdout and leave stderr empty', async () => {
 
   const json = testIo('/anywhere');
   expect(await runList(['--json'], json, { ...quiet, sessions: () => null })).toBe(0);
-  expect(json.out).toBe('[]\n');
+  const doc = assertMatchesOutputSchema<{ rows: unknown[] }>(json.out, LIST_OUTPUT_SCHEMA);
+  expect(doc.rows).toEqual([]);
   expect(json.err).toBe('');
 });
+
