@@ -771,16 +771,16 @@ test('after an expiry the gated refusal names it, and the command logs it once',
   );
 });
 
-test('after an expiry the bare `deny` stays the page\'s one word', async () => {
+test('after an expiry the bare `deny` is followed by the expiry note', async () => {
   const { root, home } = repo();
   setDevMode(home, root, 'on', { now: new Date('2026-10-15T12:00:00Z'), expiry: '2026-10-16T12:00:00Z' });
   const world = upWorld();
   const io = testIo(root, UNPLACED);
   const sources: UpSources = { ...upSources(home, world.launch), now: () => new Date('2026-10-17T12:00:00Z') };
   expect(await runUp([], io, sources)).toBe(1);
-  // The page promises a real run the one word and nothing else: an expiry is explained on the
-  // dry run's refusal and in the log, never appended to `deny`.
-  expect(io.err).toBe('deny\n');
+  // The page promises a real run the one word and nothing else on its line: the expiry is a
+  // stderr line of its own after it, never appended to `deny`.
+  expect(io.err).toBe('deny\nnote: dev-mode expired at 2026-10-16T12:00:00Z for team; it is off since\n');
   expect(world.runs).toEqual([]);
 });
 
@@ -855,7 +855,7 @@ test('reload: a refused call logs the ignored variable before the gate returns',
   );
 });
 
-test('up: a refused aim logs the expiry and answers with the bare word', async () => {
+test('up: a refused aim logs the expiry and answers with the bare word, then the note', async () => {
   const { root, home } = repo();
   setDevMode(home, root, 'on', { now: new Date('2026-10-15T12:00:00Z'), expiry: '2026-10-16T12:00:00Z' });
   const after = new Date('2026-10-17T12:00:00Z');
@@ -864,7 +864,7 @@ test('up: a refused aim logs the expiry and answers with the bare word', async (
   io.env = { ...io.env, TEAMCLI_DEV_MODE: '1' };
   const sources: UpSources = { ...upSources(home, world.launch), now: () => after };
   expect(await runUp(['--session', 'other'], io, sources)).toBe(1);
-  expect(io.err).toBe('deny\n');
+  expect(io.err).toBe('deny\nnote: dev-mode expired at 2026-10-16T12:00:00Z for team; it is off since\n');
   expect(world.runs).toEqual([]);
   // The aimed branch returns before the main log: it writes the lines where it read them.
   expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toBe(

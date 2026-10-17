@@ -7,7 +7,7 @@ import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
-import { devModeExpiryNote, devModeLevelNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeExpiryLine, devModeExpiryNote, devModeLevelNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
@@ -571,9 +571,12 @@ function restartNote(
   return {};
 }
 
-/** A caller who is not the owner and is not named for `up`. Stderr is the word `deny`. */
-function denyUp(out: { stderr(text: string): void }): number {
+/** A caller who is not the owner and is not named for `up`. Stderr is the word `deny`, and,
+ *  when an expired dev-mode declaration is why the gate is quiet, a note line of its own after
+ *  it — so the word the page promises is exactly the word, alone on its line. */
+function denyUp(out: { stderr(text: string): void }, expiry = ''): number {
   out.stderr('deny\n');
+  if (expiry !== '') out.stderr(`${expiry}\n`);
   // exit: up.deny
   // exit: up.delegate
   // exit: up.delegate-approval
@@ -742,6 +745,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
       } else {
         out.stderr('deny\n');
+        const expiry = devModeExpiryLine(aimedDev);
+        if (expiry !== '') out.stderr(`${expiry}\n`);
       }
       // exit: up.not-owner
       return 1;
@@ -873,7 +878,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   } else if (!named) {
     // Dev mode mounts and says the placement as a warning; a dry run says it beside the plan it
     // would refuse. Anyone else is denied, and the bare word is the whole answer.
-    if (!dev.on && !dry) return denyUp(out);
+    if (!dev.on && !dry) return denyUp(out, devModeExpiryLine(dev));
     refusals.push(placementRefusal(caller));
   }
   // The live file is the record. A verified copy that no longer matches is not a refusal.

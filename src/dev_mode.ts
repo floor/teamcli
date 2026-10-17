@@ -177,6 +177,16 @@ export function devModeExpiryNote(run: DevModeRun): string {
 }
 
 /**
+ * The same expiry as a stderr line of its own: `note: dev-mode expired at <t> for <level>; it
+ * is off since`. A refusal whose contract is a single word (`up`'s bare `deny`) keeps that word
+ * exactly, and names the quieted gate on the line after it. Empty while no `dev-mode`
+ * declaration has expired.
+ */
+export function devModeExpiryLine(run: DevModeRun): string {
+  return run.expired === null ? '' : `note: dev-mode expired at ${run.expired.at} for ${run.expired.level}; it is off since`;
+}
+
+/**
  * The caller gate of `command`, folded: dev mode on answers the warning line the run prints —
  * the refusal's own words, then `; dev mode continues`, and, under a policy, the level that set
  * it — and null otherwise, leaving the gate to refuse. A command outside the list has no call to
