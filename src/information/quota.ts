@@ -24,6 +24,12 @@ export const QUOTA_WINDOW_MS: Record<QuotaWindow, number> = {
 /** A figure older than this describes a window that may have moved on, like a machine reading. */
 export const QUOTA_STALE_MS = 5 * 60 * 1000;
 
+/** The accounts a shipped CLI's own usage command answers for, though no status pattern names
+ *  them: `agy --print /usage` prints the Antigravity subscription's two pools, so a figure for
+ *  `google-antigravity` is one a reader on this machine really makes. A stored reading of an
+ *  account outside this set and every status pattern's own is no reading of anything. */
+export const USAGE_ACCOUNTS = ['google-antigravity'] as const;
+
 /** Where a quota figure was observed: a seat's status line, a CLI's own usage command, a quota
  *  screen (a wall), or the watch's machine-wide reading store. */
 export type QuotaSource = 'status line' | 'cli usage' | 'machine reading' | 'quota screen';
@@ -60,6 +66,11 @@ export type QuotaState = 'ok' | 'near cap' | 'walled' | 'unknown';
 export const NEAR_CAP = 90;
 /** The margin at or above which an account counts as having headroom, in points. */
 export const HEADROOM = 10;
+/** How many points spend may run ahead of the window's own clock before the account reads
+ *  `near cap` however low its used percentage: half a window. The cap has two readings — the
+ *  used figure (`NEAR_CAP`) and the margin — because an account at 89% with a sixth of its
+ *  window gone is nearer the cap than one at 91% with the window almost over. */
+export const AHEAD_CAP = 50;
 
 export type ReportQuotaWindow = {
   window: QuotaWindow;
@@ -178,16 +189,19 @@ function windowsOf(list: readonly QuotaObservation[], now: number): ReportQuotaW
   });
 }
 
-/** The account's state from the newest fresh figure and any live wall: a wall (or a figure at
- *  100) is walled, 90 and above near the cap, anything lower ok. Nothing fresh is unknown — a
- *  stale percentage describes a window that may have reset, and is never grounds for advice. */
+/** The account's state from the newest fresh figures and any live wall: a wall (or a figure at
+ *  100) is walled; near the cap is the used percentage at `NEAR_CAP` or above, OR a fresh margin
+ *  at `-AHEAD_CAP` or below — the spend is half a window ahead of its own clock, so the account
+ *  walls long before the window resets even at a low percentage today. Anything else is ok.
+ *  Nothing fresh is unknown — a stale percentage describes a window that may have reset, and is
+ *  never grounds for advice. */
 function stateOf(windows: readonly ReportQuotaWindow[], walled: boolean): QuotaState {
   if (walled) return 'walled';
   const fresh = windows.filter((one) => !one.stale && one.used !== null);
   if (fresh.length === 0) return 'unknown';
   const used = Math.max(...fresh.map((one) => one.used as number));
   if (used >= 100) return 'walled';
-  if (used >= NEAR_CAP) return 'near cap';
+  if (used >= NEAR_CAP || fresh.some((one) => one.margin !== null && one.margin <= -AHEAD_CAP)) return 'near cap';
   return 'ok';
 }
 
@@ -270,6 +284,11 @@ export function adviceOf(labs: readonly ReportQuotaLab[]): string {
     .filter((one) => one.account.state === 'ok' && one.margin !== null && one.margin >= HEADROOM)
     .sort((a, b) => (b.margin as number) - (a.margin as number) || a.account.account.localeCompare(b.account.account));
   const walled = all.filter((one) => one.account.state === 'walled');
+  // Near the cap on the margin alone is the case the used figure hides: name it, worst margin
+  // first, so an account at 89% and falling fast is never advice-silent.
+  const near = all
+    .filter((one) => one.account.state === 'near cap')
+    .sort((a, b) => (a.margin ?? 0) - (b.margin ?? 0) || a.account.account.localeCompare(b.account.account));
   const describe = (one: { lab: string; account: ReportQuotaAccount; margin: number | null }): string => {
     const figure = one.account.windows.find((w) => w.window === 'weekly' && !w.stale && w.margin !== null)
       ?? one.account.windows.find((w) => !w.stale && w.margin !== null);
@@ -287,6 +306,12 @@ export function adviceOf(labs: readonly ReportQuotaLab[]): string {
         : `swap ${who} off ${named(one.account, one.lab)} (walled) to ${describe(target)}`);
     }
     return moves.join('; ');
+  }
+  // An account near its cap is named before any headroom: the owner's one line must say what is
+  // about to run out, and where the spare capacity is when there is one.
+  if (near.length > 0) {
+    const warn = `near cap on ${near.slice(0, 2).map((one) => describe(one)).join('; ')}`;
+    return targets.length > 0 ? `${warn}; headroom on ${targets.slice(0, 2).map((one) => describe(one)).join('; ')}` : warn;
   }
   if (targets.length > 0) {
     return `headroom on ${targets.slice(0, 2).map((one) => describe(one)).join('; ')}`;

@@ -61,17 +61,19 @@ const READINGS = {
   'openai/weekly/lead': { account: 'openai', window: 'weekly', left: 5, used: 95, changedAt: '2026-10-04T08:58:00Z', resetsAt: '2026-10-04T09:44:00Z', seat: 'lead', source: 'status_line', confirmed: true, was: { left: 10.3, at: '2026-10-04T07:58:00Z' } },
 };
 
-// The report the fixture reads, byte for byte: the machine's counts, one line per account+window
-// with the newest figure any team's reading holds, the caller's own row under each line, the
-// why-lines for the accounts that read unknown everywhere, and the watch clause on every line
-// whose newest team has no watch recording. The pace word rides the machine line after its state
-// clause and every row after its figure: a real pace where the reading carries a point, and the
-// tool's own `pace not known` where there is none — the check line's reading has none, and the
-// daily line's point was dropped with its window. A restricted line whose newest reading is
-// another team's drops the element outright — the pace is that team's, withheld, and nothing
-// stands in its place. A caller who is not the owner reads the same bytes here as the owner does
-// — this fixture has one team.
-const REPORT = [
+// The report the fixture reads by default, byte for byte: the machine's counts, one line per
+// account+window with the newest figure any team's reading holds, the caller's own row under each
+// line, and the why-lines for the accounts that read unknown everywhere, the watch clause on every
+// line whose newest team has no watch recording, the caller's own team block and the machine's
+// count line. The pace word rides the machine line after its state clause and every row after its
+// figure: a real pace where the reading carries a point, and the tool's own `pace not known` where
+// there is none — the check line's reading has none, and the daily line's point was dropped with
+// its window. A restricted line whose newest reading is another team's drops the element outright
+// — the pace is that team's, withheld, and nothing stands in its place. A caller who is not the
+// owner reads the same bytes here as the owner does — this fixture has one team. The quota tree is
+// the second face (`--tree`, `REPORT` below): the default report is this table alone (owner,
+// 2026-10-17).
+const TABLE = [
   'ACCOUNT    WINDOW   LEFT  USED  RESETS   RESERVE             READ                     SOURCE                  STATE',
   'anthropic  -        -     -     -        -                   -                        -                       unknown',
   'openai     session  40%   60%   in 44m   -                   -  read 2m ago           check                   fresh  pace not known  (no watch is recording for acme)',
@@ -82,9 +84,17 @@ const REPORT = [
   '  openai  acme  daily  left 70%  used 30%  resets unknown  lead  last seen 40m ago  status line (fallback)  stale  pace not known',
   '  openai  acme  weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h',
   '',
-  // The quota block: this machine's watch store holds no reading and no live source answers a
-  // test's own run (`observe` is absent from its sources), so both declared accounts read unknown
-  // and the advice says so. The seats are the file's own: the lead pays `anthropic` by its vendor.
+  'acme',
+  '  SEAT  CLI          ACCOUNT',
+  '  lead  claude-code  anthropic',
+  '',
+  'usage on this machine, 1 team, 2 labs, 2 accounts',
+].join('\n');
+
+// The quota block: this machine's watch store holds no reading and no live source answers a
+// test's own run (`observe` is absent from its sources), so both declared accounts read unknown
+// and the advice says so. The seats are the file's own: the lead pays `anthropic` by its vendor.
+const QUOTA = [
   'quota',
   '  anthropic  unknown',
   '    anthropic  unknown  seats: lead',
@@ -93,13 +103,11 @@ const REPORT = [
   '    openai  unknown',
   '      not known: no reading yet',
   'advice: no readings yet: no seat status line and no CLI usage command has answered',
-  '',
-  'acme',
-  '  SEAT  CLI          ACCOUNT',
-  '  lead  claude-code  anthropic',
-  '',
-  'usage on this machine, 1 team, 2 labs, 2 accounts',
 ].join('\n');
+
+/** The same report under `--tree`: the table, one blank line, the quota tree, one blank line, and
+ *  the project block the table already ends with. */
+const REPORT = TABLE.replace('\n\nacme\n', `\n\n${QUOTA}\n\nacme\n`);
 
 /** The zero-config account a lab its seats draw on prints before any reading: one account named
  *  after the lab, `unknown` with no window, and readable by the same rule a declared account's
@@ -400,7 +408,13 @@ describe('team usage', () => {
     withState();
     const mine = await usageAt(root);
     expect(mine.err).toBe('');
-    expect(mine.out).toBe(`${REPORT}\n`);
+    // The default report is the table alone: no quota tree behind it. The tree is the second
+    // face, asked for by name (owner, 2026-10-17).
+    expect(mine.out).toBe(`${TABLE}\n`);
+    expect(mine.out).not.toContain('quota\n');
+    const tree = await usageAt(root, undefined, '--tree');
+    expect(tree.err).toBe('');
+    expect(tree.out).toBe(`${REPORT}\n`);
     expect(mine.code).toBe(0);
 
     // The caller's own rows are `status`'s own, over the same state: the fresh, unknown and
@@ -717,16 +731,16 @@ describe('team usage', () => {
 
   test('a watch whose heartbeat is fresh prints no clause; a stale or odd one says which', async () => {
     withState({ pid: 1, heartbeat: '2026-10-04T08:59:30Z' });
-    const recording = await usageAt(root, SEAT);
+    const recording = await usageAt(root, SEAT, '--tree');
     expect(recording.out).not.toContain('watch');
     expect(recording.out).toBe(`${REPORT.replaceAll('  (no watch is recording for acme)', '')}\n`);
 
     withState({ pid: 1, heartbeat: '2026-10-04T08:55:00Z' });
-    const stale = await usageAt(root, SEAT);
+    const stale = await usageAt(root, SEAT, '--tree');
     expect(stale.out).toBe(`${REPORT}\n`);
 
     withState({ pid: 1, heartbeat: 'not a time' });
-    const odd = await usageAt(root, SEAT);
+    const odd = await usageAt(root, SEAT, '--tree');
     expect(odd.out).toBe(`${REPORT.replaceAll('(no watch is recording for acme)', '(not known whether a watch is recording)')}\n`);
   });
 
@@ -745,7 +759,7 @@ describe('team usage', () => {
 
     // A caller who is not the owner reads the project's own path relative to the project root —
     // and no absolute path at all, the fixture's base included — in the text and in `--json`.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
@@ -789,7 +803,7 @@ describe('team usage', () => {
     // No readings at all: the lab's own account, unknown, with its seat behind it, and the team's
     // own seat breakdown.
     withoutReadings();
-    const bare = await usageAt(root);
+    const bare = await usageAt(root, undefined, '--tree');
     expect(bare.code).toBe(0);
     expect(bare.out).toBe([
       'ACCOUNT    WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE',
@@ -812,7 +826,7 @@ describe('team usage', () => {
     // state's account is not one the file names, so no line and no row is rendered, and one fixed
     // line says so, under the same zero-config account.
     withState();
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(mine.code).toBe(0);
@@ -840,7 +854,7 @@ describe('team usage', () => {
     // The owner reads the zero-config lab account, and the state's account is counted beside it
     // — the report is keyed by declarations, so the state's name gets no line and no lab — and no
     // "not shown" line prints.
-    const owner = await usageAt(root, OWNER);
+    const owner = await usageAt(root, OWNER, '--tree');
     const ownerRaw = (await usageAt(root, OWNER, '--json')).out;
     const held = JSON.parse(ownerRaw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(owner.out).toBe([
@@ -873,12 +887,12 @@ describe('team usage', () => {
     approve(text);
     withoutReadings();
     const gone = testIo(root, { kind: 'owner' });
-    expect(await runUsage([], gone, { home, now: () => NOW, sessions: () => false })).toBe(0);
+    expect(await runUsage(['--tree'], gone, { home, now: () => NOW, sessions: () => false })).toBe(0);
     expect(gone.out).toContain('usage on this machine, 1 team, 0 labs, 0 accounts\n');
     expect(gone.out).not.toContain('anthropic');
     // No evidence either way (`null`) is no removal: the same machine reads its lab again.
     const unasked = testIo(root, { kind: 'owner' });
-    expect(await runUsage([], unasked, { home, now: () => NOW, sessions: () => null })).toBe(0);
+    expect(await runUsage(['--tree'], unasked, { home, now: () => NOW, sessions: () => null })).toBe(0);
     expect(unasked.out).toContain('usage on this machine, 1 team, 1 lab, 1 account\n');
     expect(unasked.out).toContain('  anthropic  unknown\n');
 
@@ -888,7 +902,7 @@ describe('team usage', () => {
     const stopped = text.replace('    launch: claude --model claude-opus-5-5\n', `    launch: claude --model claude-opus-5-5\n${retired}`);
     writeFileSync(file, stopped);
     approve(stopped);
-    const idle = await usageAt(root);
+    const idle = await usageAt(root, undefined, '--tree');
     expect(idle.code).toBe(0);
     expect(idle.out).toContain('usage on this machine, 1 team, 1 lab, 1 account\n');
     expect(idle.out).toContain('  anthropic  unknown\n');
@@ -910,7 +924,7 @@ describe('team usage', () => {
     // it declares — are not in force, and the tool's own why-line for that standing prints.
     rmSync(storePath('acme', root, home), { recursive: true, force: true });
     withoutReadings();
-    const bare = await usageAt(root);
+    const bare = await usageAt(root, undefined, '--tree');
     expect(bare.out).toBe([
       'ACCOUNT    WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE',
       'anthropic  -       -     -     -       -        -     -       unknown',
@@ -932,7 +946,7 @@ describe('team usage', () => {
     // The readings the state holds are not bound to the accounts the file declares: a caller who
     // is not the owner reads no line for them and the one fixed line for the dropped readings.
     withState();
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(mine.out).toBe([
@@ -960,7 +974,7 @@ describe('team usage', () => {
 
     // The owner reads the zero-config lab account and the state's own account beside it under
     // the machine's count, and no "not shown" line.
-    const owner = await usageAt(root, OWNER);
+    const owner = await usageAt(root, OWNER, '--tree');
     expect(owner.out).toBe([
       'ACCOUNT    WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE',
       'anthropic  -       -     -     -       -        -     -       unknown',
@@ -985,7 +999,7 @@ describe('team usage', () => {
     approve(text);
     writeFileSync(file, teamText());
     for (const caller of [SEAT, OWNER]) {
-      const moved = await usageAt(root, caller);
+      const moved = await usageAt(root, caller, '--tree');
       expect(moved.code).toBe(0);
       expect(moved.out).toBe(`${REPORT}\n`);
     }
@@ -1073,7 +1087,7 @@ describe('team usage', () => {
   test('outside any project it is a note and exit 0, in text and in JSON', async () => {
     const elsewhere = join(base, 'elsewhere');
     mkdirSync(elsewhere);
-    const text = await usageAt(elsewhere);
+    const text = await usageAt(elsewhere, undefined, '--tree');
     expect(text.code).toBe(0);
     expect(text.err).toBe('');
     expect(text.out).toBe([
@@ -1124,7 +1138,9 @@ describe('team usage', () => {
     expect(owner.code).toBe(0);
     expect(owner.out).toContain(`note: ${file} line 1: seats is required`);
     expect(owner.out).toContain(`note: ${file} line 1: the file has no seat that leads`);
-    expect(owner.out).toContain('1 team has no figures (its file could not be read)');
+    // The team the machine still records prints by name: its folder in the store is the record
+    // of which team this is (owner, 2026-10-17), never a path.
+    expect(owner.out).toContain('note: acme: its file could not be read');
     expect(owner.out).not.toContain('anthropic');
 
     // A caller who is not the owner reads one fixed sentence per line instead — this project's
@@ -1132,7 +1148,7 @@ describe('team usage', () => {
     // paths outside this project (`trust: must list the lobby <home>/…`). The three problems here
     // all name line 1, so the one sentence prints once; the machine's own counts stand in the
     // header, and no lab or line of this project's is rendered, because none of it can be read.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
       'ACCOUNT  WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE',
@@ -1141,7 +1157,7 @@ describe('team usage', () => {
       '  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
       'advice: no lab is declared on this machine: declare an account first',
       'note: .agents/team.yaml does not load (line 1): the owner reads the reason',
-      'note: 1 team has no figures (its file could not be read)',
+      'note: acme: its file could not be read',
       '',
       'usage on this machine, 1 team, 0 labs, 0 accounts',
     ].join('\n') + '\n');
@@ -1149,7 +1165,7 @@ describe('team usage', () => {
     const doc = JSON.parse(raw) as { mine: string | null; labs: unknown[]; notes: unknown[] };
     expect(doc.mine).toBeNull();
     expect(doc.labs).toEqual([]);
-    expect(doc.notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml does not load (line 1): the owner reads the reason' }, { scope: 'another', why: 'its file could not be read' }]);
+    expect(doc.notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml does not load (line 1): the owner reads the reason' }, { scope: 'acme', why: 'its file could not be read' }]);
     expectNoDerivedPath([mine.out, raw]);
   });
 
@@ -1168,7 +1184,7 @@ describe('team usage', () => {
     const owner = await usageAt(root, OWNER);
     expect(owner.code).toBe(0);
     expect(owner.out).toContain(`note: ${note}\n`);
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
       'ACCOUNT  WINDOW  LEFT  USED  RESETS  RESERVE  READ  SOURCE  STATE',
@@ -1177,12 +1193,12 @@ describe('team usage', () => {
       '  not known: no account declared; declare it in ~/.config/team/accounts.yaml',
       'advice: no lab is declared on this machine: declare an account first',
       'note: .agents/team.yaml cannot be read: the owner reads the reason',
-      'note: 1 team has no figures (its file could not be read)',
+      'note: acme: its file could not be read',
       '',
       'usage on this machine, 1 team, 0 labs, 0 accounts',
     ].join('\n') + '\n');
     const raw = (await usageAt(root, SEAT, '--json')).out;
-    expect((JSON.parse(raw) as { notes: unknown[] }).notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml cannot be read: the owner reads the reason' }, { scope: 'another', why: 'its file could not be read' }]);
+    expect((JSON.parse(raw) as { notes: unknown[] }).notes).toEqual([{ scope: 'mine', why: '.agents/team.yaml cannot be read: the owner reads the reason' }, { scope: 'acme', why: 'its file could not be read' }]);
     expectNoDerivedPath([mine.out, raw]);
   });
 
@@ -1261,7 +1277,7 @@ describe('team usage', () => {
     approve(text);
     withState();
 
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     expect(mine.code).toBe(0);
     expect(mine.out).toContain(`\n${name}  -        -     -     -        -                   -                        -                       not readable from a CLI screen\n`);
@@ -1316,7 +1332,7 @@ describe('team usage', () => {
     // A caller who is not the owner reads no line and no name from the state: the zero-config
     // account of the lab the seat draws on, and one fixed line for the reading that was dropped —
     // `nothing in rows`, as the ruling has it, because the file names no account to bind it to.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(mine.code).toBe(0);
@@ -1378,7 +1394,7 @@ describe('team usage', () => {
     });
 
     // The live seat account binds this name for either view.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; labs: unknown[]; notes: unknown[] };
     expect(mine.code).toBe(0);
@@ -1415,7 +1431,7 @@ describe('team usage', () => {
 
     // The owner reads it the same way: the live vendor's own lab as its zero-config account,
     // unknown with no reading yet, and no "not shown" line.
-    const owner = await usageAt(root, OWNER);
+    const owner = await usageAt(root, OWNER, '--tree');
     const ownerRaw = (await usageAt(root, OWNER, '--json')).out;
     expect(owner.code).toBe(0);
     expect(owner.out).toContain(`${LIVE_VENDOR}  -       -     -     -       -        -     -       unknown\n`);
@@ -1445,7 +1461,7 @@ describe('team usage', () => {
       } as never;
     });
 
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { labs: { accounts: { machine: { seat?: unknown } }[] }[] };
     expect(mine.code).toBe(0);
@@ -1493,7 +1509,7 @@ describe('team usage', () => {
     withState();
 
     // Both views use the live project identity.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     expect(mine.code).toBe(0);
     expect(mine.out).toBe(`${REPORT.replaceAll('acme', LIVE_PROJECT)}\n`);
@@ -1502,7 +1518,7 @@ describe('team usage', () => {
 
     // The owner reads the live name as today: the view this command had before the restricted
     // path, and the name the file has now.
-    const owner = await usageAt(root, OWNER);
+    const owner = await usageAt(root, OWNER, '--tree');
     const ownerRaw = (await usageAt(root, OWNER, '--json')).out;
     expect(owner.code).toBe(0);
     expect(owner.out).toBe(`${REPORT.replaceAll('acme', LIVE_PROJECT)}\n`);
@@ -1617,7 +1633,7 @@ describe('team usage', () => {
     // A caller who is not the owner reads none of those strings. The bound reading prints its
     // figures with no seat — a seat's name is narrower than an account's, it does not hide the
     // figures behind it — and the other two are not rendered at all, one fixed line for both.
-    const mine = await usageAt(root, SEAT);
+    const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { labs: { lab: string; accounts: { machine: { window: string | null; seat?: unknown } }[] }[]; notes: unknown[] };
     expect(mine.code).toBe(0);
@@ -1679,13 +1695,13 @@ describe('team usage', () => {
   test('any caller may run it, and a subfolder of a checkout reads the same project', async () => {
     withState();
     const unplaced: Caller = { kind: 'unplaced', reason: 'it is run by an agent (claude) outside herdr' };
-    expect((await usageAt(root, SEAT)).out).toBe(`${REPORT}\n`);
-    expect((await usageAt(root, unplaced)).out).toBe(`${REPORT}\n`);
+    expect((await usageAt(root, SEAT, '--tree')).out).toBe(`${REPORT}\n`);
+    expect((await usageAt(root, unplaced, '--tree')).out).toBe(`${REPORT}\n`);
 
     execFileSync('git', ['init', root], { env: gitEnv(), stdio: 'ignore' });
     const sub = join(root, 'src', 'deep');
     mkdirSync(sub, { recursive: true });
-    const nested = await usageAt(sub, SEAT);
+    const nested = await usageAt(sub, SEAT, '--tree');
     expect(nested.out).toBe(`${REPORT}\n`);
   });
 
@@ -1776,7 +1792,7 @@ describe('team usage', () => {
 
     const theirs = [theirProject, theirRoot, join(theirRoot, '.agents'), 'zeta-only-3HMV', 'claude-extra', 'scout', 'extra-seat-6RT', `${theirProject}-web`, join(base, 'omega-9PL'), join(base, 'kappa-2VN'), 'omega-9PL', 'kappa-2VN'];
 
-    const seat = await usageAt(mineRoot, SEAT);
+    const seat = await usageAt(mineRoot, SEAT, '--tree');
     const raw = (await usageAt(mineRoot, SEAT, '--json')).out;
     const doc = JSON.parse(raw) as { counts: Record<string, number>; notes: unknown[] };
     expect(seat.code).toBe(0);
@@ -1960,10 +1976,10 @@ describe('team usage', () => {
     // The third entry: whose watch is not recording is the line's business, and it prints only
     // where a figure is — a team with nothing counted has no line to carry it.
     withState({ pid: 1, heartbeat: '2026-10-04T08:55:00Z' });
-    const stale = await usageAt(root, SEAT);
+    const stale = await usageAt(root, SEAT, '--tree');
     expect(stale.out).toBe(`${REPORT}\n`);
     expect(stale.out.split('\n').filter((line) => line.includes('watch')).length).toBe(3);
-    const recording = await usageAt(root, OWNER);
+    const recording = await usageAt(root, OWNER, '--tree');
     expect(recording.out).toBe(`${REPORT}\n`);
 
     // With no readings at all there is no line, and so no clause: the report has nothing to say
@@ -2173,7 +2189,7 @@ describe('team usage', () => {
   test('with no entity key the machine list reads as one unnamed entity and the report is byte for byte what it was', async () => {
     withState();
     writeFileSync(machineAccountsPath(home), 'accounts:\n  - anthropic\n');
-    const mine = await usageAt(root, OWNER);
+    const mine = await usageAt(root, OWNER, '--tree');
     expect(mine.out).toBe(`${REPORT}\n`);
   });
 });

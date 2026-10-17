@@ -11,15 +11,16 @@ import {
   tildify,
   viewFor,
   type MachineUsage,
+  type RunningModels,
   type SessionLiveness,
   type UsageView,
 } from '../information/usage.ts';
 import { realQuotaObservations, type QuotaLive } from '../information/quota-observe.ts';
-import { sessionRunning } from '../herdr.ts';
+import { agentList, sessionRunning } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { writeJson, writeJsonError } from '../output/index.ts';
 
-export const USAGE = `Usage: team usage [--json] [--all]
+export const USAGE = `Usage: team usage [--json] [--all] [--tree]
 
 Exits 0 when the report is printed, 2 when the invocation or store folder can't be read.
 `;
@@ -40,6 +41,10 @@ export type UsageSources = {
    *  sources, which then count every fixture team as live; the real one asks herdr, once per
    *  session name per run below. */
   sessions?(name: string): boolean | null;
+  /** The model line each seat of a session runs, by seat name — herdr's `display_agent`, which
+   *  the watch keeps from the pane itself. Absent from a test's own sources, which then attribute
+   *  every seat from its file. The real one lists herdr once per session name per run. */
+  running?(name: string): ReadonlyMap<string, string> | null;
 };
 
 export const realSources: UsageSources = {
@@ -47,11 +52,33 @@ export const realSources: UsageSources = {
   now: () => new Date(),
   observe: (machine, view, now, sessions) => realQuotaObservations(machine, view, now, sessions),
   sessions: (name) => sessionRunning(name),
+  // The seat's running model, as the pane itself showed it: `agent list` carries the sidebar's
+  // second line (`display_agent`) beside the agent's name (probed 2026-10-17 against herdr
+  // 0.7.1: `Claude Opus 5.5 default`, `DeepSeek V4.1 Flash default`, `Gemini 4 Argon medium`).
+  running: (name) => {
+    const agents = agentList(name);
+    if (agents === null) return null;
+    const models = new Map<string, string>();
+    for (const agent of agents) {
+      if (agent.name !== null && agent.displayAgent !== undefined) models.set(agent.name, agent.displayAgent);
+    }
+    return models;
+  },
 };
 
 /** One answer per session name for the whole run: every team asks, herdr is listed once. */
 function memoized(ask: (name: string) => boolean | null): SessionLiveness {
   const seen = new Map<string, boolean | null>();
+  return (name) => {
+    if (!seen.has(name)) seen.set(name, ask(name));
+    return seen.get(name) ?? null;
+  };
+}
+
+/** The same one-answer-per-session rule for the running models: every team asks, `agent list`
+ *  runs once per session name. */
+function memoizedModels(ask: (name: string) => ReadonlyMap<string, string> | null): RunningModels {
+  const seen = new Map<string, ReadonlyMap<string, string> | null>();
   return (name) => {
     if (!seen.has(name)) seen.set(name, ask(name));
     return seen.get(name) ?? null;
@@ -80,8 +107,11 @@ export default usage;
  * itself unreadable (`usage.store`, § 2.4). Exit 0 whatever the figures.
  */
 export async function runUsage(argv: string[], io: Io, sources: UsageSources): Promise<number> {
-  const args = readArgs(argv, [], ['json', 'all']);
+  const args = readArgs(argv, [], ['json', 'all', 'tree']);
   const json = args.flags.has('json');
+  // The second view: the quota tree. The table is the default report; the tree prints under
+  // `--tree` (owner, 2026-10-17), and the flag changes the text face only.
+  const tree = args.flags.has('tree');
   if (args.error || args.rest.length) {
     const problem = args.error ?? `unexpected "${args.rest[0]}"`;
     if (json) {
@@ -113,10 +143,11 @@ export async function runUsage(argv: string[], io: Io, sources: UsageSources): P
   const view = viewFor(io, mine);
   const restricted = !view.full;
   const sessions = sources.sessions === undefined ? undefined : memoized(sources.sessions);
+  const running = sources.running === undefined ? undefined : memoizedModels(sources.running);
   const mineNotes = mineNotesOf(loaded, loadError, restricted, sources.home);
   let machine: MachineUsage;
   try {
-    machine = machineUsage(sources.home, now.getTime(), view, sessions);
+    machine = machineUsage(sources.home, now.getTime(), view, sessions, running);
   } catch (error) {
     if (!(error instanceof StoreUnreadable)) throw error;
     // The stores folder itself could not be read: the one refusal beside the invocation (§ 2.4).
@@ -139,7 +170,7 @@ export async function runUsage(argv: string[], io: Io, sources: UsageSources): P
     // own keys unchanged — one document, registered under `schema/usage.schema.json`.
     writeJson(io, 'team.usage', report);
   } else {
-    io.stdout(reportText(report));
+    io.stdout(reportText(report, tree));
   }
   // exit: usage.block
   return 0;

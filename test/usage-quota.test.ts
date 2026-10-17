@@ -14,6 +14,7 @@ import { approvalOf } from '../src/approve/approval.ts';
 import type { Caller } from '../src/caller.ts';
 import { runUsage } from '../src/commands/usage.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { saveMachineReadings } from '../src/information/machine-readings.ts';
 import {
   adviceOf,
   marginOf,
@@ -191,6 +192,30 @@ describe('the quota model', () => {
     expect(state(100)).toBe('walled');
     expect(state(90)).toBe('near cap');
     expect(state(89)).toBe('ok');
+  });
+
+  test('a window far ahead of its clock is near the cap under 90% used, and the advice names it', () => {
+    // The live case (2026-10-17): google at 89% weekly with a -71.6% margin — spending far
+    // faster than the window runs down — read `ok` and the advice said nothing. The margin is as
+    // good a sign of a cap about to arrive as the used figure is.
+    const quota = quotaOf({
+      labs: [{ lab: 'google', accounts: [{ account: 'google', seats: [] }] }],
+      observations: [observed({ account: 'google', used: 89, left: 11, margin: -71.6 })],
+      accountsFile: 'accounts.yaml',
+      now: NOW,
+    });
+    expect(quota.labs[0]?.accounts[0]?.state).toBe('near cap');
+    expect(quota.advice).toBe('near cap on google (weekly used 89%, margin -71.6%)');
+    // The threshold is the margin's own: a window exactly at the cap is near it, one a tenth
+    // short of it is ok — the used figure alone decides nothing below NEAR_CAP.
+    const state = (margin: number): string => quotaOf({
+      labs: [{ lab: 'google', accounts: [{ account: 'google', seats: [] }] }],
+      observations: [observed({ account: 'google', used: 89, left: 11, margin })],
+      accountsFile: 'accounts.yaml',
+      now: NOW,
+    }).labs[0]?.accounts[0]?.state as string;
+    expect(state(-50)).toBe('near cap');
+    expect(state(-49.9)).toBe('ok');
   });
 
   test('the advice is one line: headroom, the best target first; the walled seats; or what is missing', () => {
@@ -439,7 +464,7 @@ seats:
   test('the observer’s figures render in both faces, under the caller’s own view', async () => {
     const views: string[] = [];
     const io = testIo(root, SEAT);
-    const code = await runUsage([], io, {
+    const code = await runUsage(['--tree'], io, {
       home,
       now: () => new Date(NOW),
       observe: (machine, view) => {
@@ -478,17 +503,183 @@ seats:
     });
   });
 
+  test('the lab is the model the seat RUNS, never the CLI it runs it with', async () => {
+    // The live machine's case (owner, 2026-10-17): a file whose orchestrator entry still says
+    // zai/GLM while its pane says Opus, DeepSeek builders on the same claude-code CLI, and an
+    // antigravity operator. The running model decides the lab; the launcher decides only what
+    // pays. The last seat pins the other half: an explicit `account:` always wins the account,
+    // while its lab still comes from the model it runs.
+    const text = `format: 1
+project: acme
+session: acme-web
+operator: lead
+trust:
+  - ~/.config/team/lobby
+  - ${root}
+workspace:
+  mode: shared
+budgets:
+  accounts:
+    openai:
+      kind: subscription
+      reserve: 10%
+seats:
+  - role: orchestrator
+    name: lead
+    label: lead
+    leads: true
+    cli: claude-code
+    vendor: zai
+    model: GLM
+    version: "5.3"
+    launch: claude-glm.sh
+  - role: member
+    name: builder-a
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: member
+    name: builder-b
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek
+    version: "4.1"
+    launch: claude-deepseek.sh
+  - role: member
+    name: operator-a
+    cli: antigravity
+    vendor: google
+    model: Gemini
+    version: "4"
+    launch: agy --model gemini
+  - role: member
+    name: pinned
+    cli: claude-code
+    vendor: anthropic
+    account: openai
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+    writeFileSync(join(root, '.agents', 'team.yaml'), text);
+    const checked = validateTeamFile(text, { home, root });
+    if (!checked.ok) throw new Error(`the fixture does not validate: ${JSON.stringify(checked.errors)}`);
+    writeApproval(storePath('acme', root, home), { approval: approvalOf(checked.team, root, new Date(NOW)), file: text }, [], home);
+
+    // What herdr's `agent list` says each seat runs (`display_agent`): the live machine's lines.
+    const models = new Map([
+      ['lead', 'Claude Opus 5.5 default'],
+      ['builder-a', 'DeepSeek V4.1 Flash default'],
+      ['builder-b', 'DeepSeek V4.1 Flash default'],
+      ['operator-a', 'Gemini 4 Argon medium'],
+      ['pinned', 'DeepSeek V4.1 Flash default'],
+    ]);
+    const runningSeat = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme-web' } as const;
+    const io = testIo(root, runningSeat);
+    expect(await runUsage(['--tree'], io, { home, now: () => new Date(NOW), running: (session) => (session === 'acme-web' ? models : null) })).toBe(0);
+    // Every seat under the lab of the model it runs: the DeepSeek builders only under deepseek,
+    // never under anthropic; the file's stale zai vendor names nothing at all.
+    expect(io.out).toContain('    anthropic  unknown  seats: lead\n');
+    expect(io.out).toContain('    deepseek  unknown  seats: builder-a, builder-b, pinned\n');
+    expect(io.out).toContain('    google  unknown  seats: operator-a\n');
+    expect(io.out).not.toContain('zai');
+    // The account is what pays: the pinned seat's explicit account stands, whatever it runs.
+    const json = testIo(root, runningSeat);
+    expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), running: () => models })).toBe(0);
+    const doc = JSON.parse(json.out) as { teams: { seats: { seat: string; cli: string; account: string; pool?: string }[] }[] };
+    expect(doc.teams[0]?.seats).toEqual([
+      { seat: 'lead', cli: 'claude-code', account: 'anthropic' },
+      { seat: 'builder-a', cli: 'claude-code', account: 'deepseek' },
+      { seat: 'builder-b', cli: 'claude-code', account: 'deepseek' },
+      { seat: 'operator-a', cli: 'antigravity', account: 'google-antigravity', pool: 'gemini' },
+      { seat: 'pinned', cli: 'claude-code', account: 'openai' },
+    ]);
+
+    // No running source at all (a test's own run, or herdr unreachable): the file decides, and
+    // the same machine shows the defect the fix exists for — builder-a under anthropic, and the
+    // stale zai lab named by the orchestrator's launcher.
+    const idle = testIo(root, runningSeat);
+    expect(await runUsage(['--tree'], idle, { home, now: () => new Date(NOW) })).toBe(0);
+    expect(idle.out).toContain('    anthropic  unknown  seats: builder-a, pinned\n');
+    expect(idle.out).toContain('    zai  unknown  seats: lead\n');
+  });
+
+  test('a stored reading under an account no reader measures is not that account’s figure', async () => {
+    // The defect (owner, 2026-10-17): every running seat's status bar was stored under the
+    // account that PAID for the seat, so a DeepSeek seat on Claude Code left a `deepseek session
+    // 9%` reading that was the Claude subscription's own figure shown twice. A machine reading
+    // is shown only under an account a shipped screen or usage print measures — here anthropic's
+    // own bar is shown, and the deepseek row reads `not known`.
+    const text = `format: 1
+project: acme
+session: acme-web
+operator: lead
+trust:
+  - ~/.config/team/lobby
+  - ${root}
+workspace:
+  mode: shared
+budgets:
+  accounts:
+    anthropic:
+      kind: subscription
+      reserve: 10%
+seats:
+  - role: orchestrator
+    name: lead
+    label: lead
+    leads: true
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: member
+    name: builder
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek
+    version: "4.1"
+    launch: claude-deepseek.sh
+`;
+    writeFileSync(join(root, '.agents', 'team.yaml'), text);
+    const checked = validateTeamFile(text, { home, root });
+    if (!checked.ok) throw new Error(`the fixture does not validate: ${JSON.stringify(checked.errors)}`);
+    writeApproval(storePath('acme', root, home), { approval: approvalOf(checked.team, root, new Date(NOW)), file: text }, [], home);
+    saveMachineReadings(home, [
+      { account: 'anthropic', window: 'session', left: 64, used: 36, resets: null },
+      { account: 'deepseek', window: 'session', left: 91, used: 9, resets: null },
+    ], NOW);
+
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUsage(['--tree'], io, { home, now: () => new Date(NOW) })).toBe(0);
+    expect(io.out).toContain('anthropic  session  64%   36%');
+    expect(io.out).toContain('  deepseek  unknown\n');
+    expect(io.out).toContain('    deepseek  unknown  seats: builder\n');
+    expect(io.out).not.toMatch(/^deepseek\s+session/m);
+    const json = testIo(root, { kind: 'owner' });
+    expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW) })).toBe(0);
+    const doc = JSON.parse(json.out) as { labs: { lab: string; accounts: { account: string; machine: { state: string; window: string | null } }[] }[] };
+    const entry = doc.labs.flatMap((lab) => lab.accounts).find((one) => one.account === 'deepseek');
+    expect(entry?.machine).toMatchObject({ state: 'unknown', window: null });
+  });
+
   test('a live read of an undeclared account lands under its own lab; a machine-wide one only where the caller pays', async () => {
     // Zero-config: the file declares anthropic and openai, and a live seat's own screen names
     // `zai` — an account no file names. It lands under its own lab, with its seats and figures,
     // and the closing counts grow by the lab and the account it made.
     const read = observed({ account: 'zai', window: 'weekly', used: 12, left: 88, resetsAt: NOW + 125 * HOUR + 26 * 60_000, seat: 'lead' });
     const seat = testIo(root, SEAT);
-    expect(await runUsage([], seat, { home, now: () => new Date(NOW), observe: () => ({ observations: [read], notes: [] }) })).toBe(0);
+    expect(await runUsage(['--tree'], seat, { home, now: () => new Date(NOW), observe: () => ({ observations: [read], notes: [] }) })).toBe(0);
     expect(seat.out).toMatch(/^zai\s+weekly\s+88%\s+12%\s+in 125h26m/m);
+    // The account is the figure's own, but the seat stands under what PAYS for it: this seat's
+    // file and launcher name Anthropic, and its screen's account names only the subscription
+    // whose bar the screen printed — so no seat of this view lists under zai.
     expect(seat.out).toContain([
       '  zai  ok',
-      '    zai  ok  seats: lead',
+      '    zai  ok',
       '      weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)',
     ].join('\n'));
     expect(seat.out).toContain('advice: headroom on zai (weekly used 12%, margin +13.3%)\n');

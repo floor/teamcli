@@ -1,7 +1,8 @@
 # Usage readings and account ownership
 
 `team usage` reads subscriptions and their latest recorded figures. Its default output starts
-with the machine account rows, then shows the caller's team and the account each seat draws on.
+with the machine account rows, then shows the caller's team and the account each seat draws on;
+the quota view below is the same report under `--tree`, and `--json` always carries it.
 `--all` includes every team's rows and seat breakdown for the owner. The existing restricted view
 still hides other teams' names, paths and seat rows from agents.
 
@@ -65,6 +66,14 @@ and launcher:
 Antigravity seats also carry a model pool: `gemini` or `claude-gpt`. The store keeps pool readings
 separate; unknown models have no inferred pool.
 
+The paying account is not the lab. A seat's lab is the model its pane says it runs: herdr's
+`display_agent` line for the agent of that name, which the watch keeps from the pane itself. A
+Claude Code seat whose line names another lab (`DeepSeek V4.1 Flash default`, `GLM 5.3`) belongs
+to that lab, whatever its file's `vendor:` still says; a stale file entry cannot put a DeepSeek
+builder under `anthropic`, and it cannot name a lab no seat runs in. Only a seat whose pane gives
+no model line falls back to the file's vendor-and-launcher rule, which is also the whole rule for
+CLI kinds with no model line of their own. An explicit `account:` still wins the account.
+
 ## Screen observations
 
 The watch reads only a running CLI's recognized composer status row. Quota-looking text in the
@@ -96,7 +105,12 @@ The watch merges observations into `~/.config/team/usage/readings.json` under a 
 replaces the file atomically. Each record contains account, optional pool, window, left/used
 percentages, reset time if known, and observation time. It stores no team name, seat, path or
 raw screen text. Different accounts and pools survive concurrent updates. A later observation
-refreshes its age even when the percentage stays unchanged.
+refreshes its age even when the percentage stays unchanged. A figure is stored under the account
+that measures it, never under the account that pays for the seat: a DeepSeek seat on the Claude
+Code CLI prints the Claude subscription's own `L:`/`W:` bar, and that bar is stored as an
+Anthropic reading. When the report reads the cache, it shows a figure only under an account some
+shipped screen or usage print measures; a record under any other account is ignored, and that
+account reads `unknown` rather than showing another subscription's figure.
 
 Machine observations are displayed from first sight. They do not replace the budget gate's
 separate confirmation, source-order or reserve rules. Existing team check readings still
@@ -105,8 +119,9 @@ reading. Machine observations older than five minutes or past their reset are ma
 
 ## The quota view
 
-After the account blocks the report prints `quota`: one block per visible lab, one line per
-account under it, one line per window, and one `advice:` line. The model lives in
+With `--tree`, after the account blocks the report prints `quota`: one block per visible lab, one
+line per account under it, one line per window, and one `advice:` line. Without the flag the text
+face is the table only; the flag changes no JSON key. The model lives in
 `information/quota.ts`; the live readers in `information/quota-observe.ts`; `reportOf` builds the
 block from the labs it already shows, so a lab or account this view hides can never reach it.
 
@@ -121,14 +136,17 @@ Antigravity usage print names as `Five Hour Limit`); the weekly window is seven 
 that prints its own margin — Claude Code's `W: 12% (+13.3%)` — is believed as printed; otherwise
 the figure is computed from the reset when it is known and still ahead. A reading older than five
 minutes, or one whose reset has passed, is `stale`: it prints marked and carries no margin. States
-are `walled` (a live wall screen, or 100% used), `near cap` (90% and above), `ok` below that, and
-`unknown` when nothing fresh is observed.
+are `walled` (a live wall screen, or 100% used), `near cap` (90% used or above, or a fresh margin
+at or below −50%), `ok` below both, and `unknown` when nothing fresh is observed. The margin test
+matters as much as the used figure: an account 89% used with a −71.6% margin is spending far ahead
+of its window and prints `near cap`, not `ok`.
 
 The advice line is built only from what the block already shows. With walls, it names the seats
 on each walled account (up to two) and the account with the best fresh margin at or above +10% as
-the destination, or says that no other account has headroom. With no walls, it names the accounts
-with that headroom; when figures exist but none has it, it says so; when nothing has answered, it
-says that. A restricted caller's advice can only name accounts and seats the restricted view
+the destination, or says that no other account has headroom. With no walls, it names the
+near-cap accounts, worst margin first (up to two), with a headroom account as the destination when
+one exists; failing a near cap, it names the accounts with that headroom. When figures exist but
+none has headroom and none is near cap, it says so; when nothing has answered, it says that. A restricted caller's advice can only name accounts and seats the restricted view
 already shows: another team's seats are counted (`+N on another team`), never named.
 
 The live readers are observable only, and none opens a credential, key or CLI session file:
@@ -173,5 +191,7 @@ with no `accounts.yaml` counts one account per lab its seats draw on.
 `usage` itself is read-only: it runs no check, writes no state, and opens no credential, key or
 CLI session file. It reads the seat panes herdr records, and it starts the CLI's own usage print
 only for a seat that already runs that CLI, bounded by a timeout. Missing project data is a note
-and exit 0. Invalid arguments or an unreadable store directory return exit 2. A missing or
-malformed machine reading cache supplies no figures.
+and exit 0. A team whose own file cannot be read is named in its note by the team's name, never
+by its path; a team folder that is gone reads as moved, a single sentence. Invalid arguments or an
+unreadable store directory return exit 2. A missing or malformed machine reading cache supplies no
+figures.
