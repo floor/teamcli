@@ -72,6 +72,12 @@
             "string",
             "null"
           ]
+        },
+        "notice": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

@@ -295,6 +295,43 @@ describe('team proc list', () => {
     expect(await runProc(['list', '--pid', String(LIVE)], flagged, sources(where))).toBe(2);
     expect(flagged.err).toContain('team proc: list takes no --pid or --note');
   });
+
+  // The reading falls back to the last copy that validated, the way `team status` does. The
+  // notice that says so is a document member under `--json`: stdout stays one parseable JSON
+  // value, and the action envelopes carry it too.
+  test('an invalid team file: the fallback notice is the notice member, never a line before the JSON', async () => {
+    const where = place();
+    // Remembering is what writes the copy: one read with `remember` on. The scene's own reads
+    // pass `false`, like the command's.
+    const remembered = currentTeam(where.root, undefined, new Date(AT), where.home, true);
+    expect(remembered.ok).toBe(true);
+    seed(where, { build: { by: 'owner', at: new Date(AT).toISOString() } });
+    writeFileSync(where.file, TEAM.replace('format: 1', 'format: 9'));
+    const notice = 'team.yaml is invalid (line 1: format must be 1: this version of team reads no other); using the copy of 2026-10-04T09:00:00.000Z';
+
+    const json = owner(where);
+    expect(await runProc(['list', '--json'], json, sources(where))).toBe(0);
+    expect(json.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(json.out, PROC_OUTPUT_SCHEMA);
+    expect(doc.notice).toBe(notice);
+    expect(doc).toMatchObject({ procs: [{ name: 'build' }], summary: { processes: 1 } });
+
+    const plain = owner(where);
+    expect(await runProc(['list'], plain, sources(where))).toBe(0);
+    expect(plain.out.split('\n')[0]).toBe(notice);
+
+    const added = owner(where);
+    expect(await runProc(['add', 'job', '--json'], added, sources(where))).toBe(0);
+    expect(added.err).toBe('');
+    const addedDoc = assertMatchesOutputSchema<Record<string, unknown>>(added.out, PROC_OUTPUT_SCHEMA);
+    expect(addedDoc).toMatchObject({ status: 'added', notice });
+
+    const done = owner(where);
+    expect(await runProc(['done', 'job', '--json'], done, sources(where))).toBe(0);
+    expect(done.err).toBe('');
+    const doneDoc = assertMatchesOutputSchema<Record<string, unknown>>(done.out, PROC_OUTPUT_SCHEMA);
+    expect(doneDoc).toMatchObject({ status: 'done', notice });
+  });
 });
 
 describe('team proc done', () => {
