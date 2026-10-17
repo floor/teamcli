@@ -54,7 +54,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   const sub = args.rest[0];
   const task = args.rest[1];
   if (args.error) {
-    refuse(io, json, 'worktree', { id: 'worktree.invocation', message: args.error, repair: null, usage: USAGE, code: 2 });
+    refuse(io, json, 'worktree', { id: 'worktree.invocation', message: args.error, repair: null, usage: USAGE });
     // exit: worktree.invocation
     return 2;
   }
@@ -63,7 +63,6 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
       id: 'worktree.subcommand',
       message: sub ? `unknown subcommand "${sub}"` : 'a subcommand is required',
       repair: null,
-      code: 2,
       usage: USAGE,
     });
     // exit: worktree.subcommand
@@ -71,12 +70,12 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   }
   const detached = detachedRefusal(walkCaller(io));
   if (detached !== undefined) {
-    refuse(io, json, 'worktree', { id: 'worktree.detached', message: detached, repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.detached', message: detached, repair: null });
     // exit: worktree.detached
     return 1;
   }
   if (sub !== 'list' && !task) {
-    refuse(io, json, 'worktree', { id: 'worktree.task-required', message: 'a task name is required', repair: null, usage: USAGE, code: 2 });
+    refuse(io, json, 'worktree', { id: 'worktree.task-required', message: 'a task name is required', repair: null, usage: USAGE });
     // exit: worktree.task-required
     return 2;
   }
@@ -85,19 +84,18 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
       id: 'worktree.extra',
       message: `unexpected "${sub === 'list' ? args.rest[1] : args.rest[2]}"`,
       repair: null,
-      code: 2,
       usage: USAGE,
     });
     // exit: worktree.extra
     return 2;
   }
   if ((sub === 'remove' || sub === 'list') && (args.values.kind || args.values.seat)) {
-    refuse(io, json, 'worktree', { id: 'worktree.remove-flags', message: `${sub} takes no --kind or --seat`, repair: null, usage: USAGE, code: 2 });
+    refuse(io, json, 'worktree', { id: 'worktree.remove-flags', message: `${sub} takes no --kind or --seat`, repair: null, usage: USAGE });
     // exit: worktree.remove-flags
     return 2;
   }
   if (sub !== 'remove' && args.values.branch !== undefined) {
-    refuse(io, json, 'worktree', { id: 'worktree.branch-flags', message: `${sub} takes no --branch`, repair: null, usage: USAGE, code: 2 });
+    refuse(io, json, 'worktree', { id: 'worktree.branch-flags', message: `${sub} takes no --branch`, repair: null, usage: USAGE });
     // exit: worktree.branch-flags
     return 2;
   }
@@ -109,7 +107,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   // load below.
   const fileRefusal = fileOwnerRefusal(io, args.values.file);
   if (fileRefusal !== undefined) {
-    refuse(io, json, 'worktree', { id: 'worktree.file-owner', message: fileRefusal, repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.file-owner', message: fileRefusal, repair: null });
     // exit: worktree.file-owner
     return 1;
   }
@@ -121,7 +119,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   if (args.values.session !== undefined) {
     const walked = walkCaller(io);
     if (!isOwner(walked)) {
-      refuse(io, json, 'worktree', { id: 'worktree.session-owner', message: sessionOwnerRefusal(walked), repair: null, code: 1 });
+      refuse(io, json, 'worktree', { id: 'worktree.session-owner', message: sessionOwnerRefusal(walked), repair: null });
       // exit: worktree.session-owner
       return 1;
     }
@@ -141,7 +139,6 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
         id: fileProblemId(problems),
         message: problems.map(problemLine).join('; '),
         repair: null,
-        code: 2,
       });
     } else {
       for (const problem of problems) io.stderr(`team worktree: ${problemLine(problem)}\n`);
@@ -168,7 +165,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   const session = judged.session;
   const verdict = mayChangeTeamVerdict(caller, reading, standingOf(dir, session, caller));
   if (verdict.kind === 'no-pane') {
-    refuse(io, json, 'worktree', { id: 'worktree.no-pane', message: noPaneRefusal(verdict.name), repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.no-pane', message: noPaneRefusal(verdict.name), repair: null });
     // exit: worktree.no-pane
     return 1;
   }
@@ -177,7 +174,6 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
       id: 'worktree.another-pane',
       message: anotherPaneRefusal(verdict.name, verdict.recordedPane),
       repair: null,
-      code: 1,
     });
     // exit: worktree.another-pane
     return 1;
@@ -187,19 +183,18 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
       id: 'worktree.caller',
       message: `only the owner, the orchestrator or the operator runs it; this call is ${describeCaller(shown)}`,
       repair: null,
-      code: 1,
       rule: 'owner-or-leads',
     });
     // exit: worktree.caller
     return 1;
   }
   if (session === 'default') {
-    refuse(io, json, 'worktree', { id: 'worktree.default-session', message: 'session can\'t be "default", herdr\'s own session', repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.default-session', message: 'session can\'t be "default", herdr\'s own session', repair: null });
     // exit: worktree.default-session
     return 1;
   }
   if (standing.kind !== 'verified') {
-    refuse(io, json, 'worktree', { id: 'worktree.never-approved', message: notInForce(standing), repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.never-approved', message: notInForce(standing), repair: null });
     // exit: worktree.never-approved
     return 1;
   }
@@ -264,12 +259,12 @@ function create(
 ): number {
   const named = taskProblem(task);
   if (named) {
-    refuse(io, json, 'worktree', { id: 'worktree.task', message: named, repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.task', message: named, repair: null });
     // exit: worktree.task
     return 1;
   }
   if (kind !== undefined && taskProblem(kind)) {
-    refuse(io, json, 'worktree', { id: 'worktree.kind', message: `--kind: ${taskProblem(kind)}`, repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.kind', message: `--kind: ${taskProblem(kind)}`, repair: null });
     // exit: worktree.kind
     return 1;
   }
@@ -278,7 +273,6 @@ function create(
       id: 'worktree.shared',
       message: 'workspace.mode is shared: this team keeps one checkout, so there is no task worktree to create',
       repair: null,
-      code: 1,
     });
     // exit: worktree.shared
     return 1;
@@ -286,12 +280,12 @@ function create(
   const pathPattern = team.workspace.path;
   const base = team.workspace.base;
   if (!pathPattern || !base) {
-    refuse(io, json, 'worktree', { id: 'worktree.config', message: 'workspace.path and workspace.base are required', repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.config', message: 'workspace.path and workspace.base are required', repair: null });
     // exit: worktree.config
     return 1;
   }
   if (pathPattern.includes('{kind}')) {
-    refuse(io, json, 'worktree', { id: 'worktree.path-kind', message: 'workspace.path fills {repo} and {task} only', repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.path-kind', message: 'workspace.path fills {repo} and {task} only', repair: null });
     // exit: worktree.path-kind
     return 1;
   }
@@ -301,7 +295,6 @@ function create(
       id: 'worktree.kind-required',
       message: `--kind is required: the branch pattern is ${JSON.stringify(branchPattern)}`,
       repair: null,
-      code: 1,
     });
     // exit: worktree.kind-required
     return 1;
@@ -311,7 +304,6 @@ function create(
       id: 'worktree.kind-nowhere',
       message: `--kind has nowhere to go: the branch pattern is ${JSON.stringify(branchPattern)}`,
       repair: null,
-      code: 1,
     });
     // exit: worktree.kind-nowhere
     return 1;
@@ -323,19 +315,18 @@ function create(
       id: 'worktree.placeholder',
       message: 'the branch or path pattern has a placeholder other than {kind}, {task} or {repo}',
       repair: null,
-      code: 1,
     });
     // exit: worktree.placeholder
     return 1;
   }
   const hit = publicNameHit(team, [task, kind, branch, basename(folder)].filter((name): name is string => Boolean(name)));
   if (hit) {
-    refuse(io, json, 'worktree', { id: 'worktree.forbidden', message: `${hit}; a public project refuses that name`, repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.forbidden', message: `${hit}; a public project refuses that name`, repair: null });
     // exit: worktree.forbidden
     return 1;
   }
   if (!insideTrust(folder, team.trust, root, sources.home)) {
-    refuse(io, json, 'worktree', { id: 'worktree.trust', message: `${folder} is outside the file's trust paths`, repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.trust', message: `${folder} is outside the file's trust paths`, repair: null });
     // exit: worktree.trust
     return 1;
   }
@@ -347,14 +338,13 @@ function create(
         id: 'worktree.symlink',
         message: `${folder} follows a symlink to ${landing.real}, which is outside the file's trust paths`,
         repair: null,
-        code: 1,
       });
       // exit: worktree.symlink
       return 1;
     }
   }
   if (seatName !== undefined && !team.seats.some((seat) => seat.name === seatName)) {
-    refuse(io, json, 'worktree', { id: 'worktree.seat', message: `--seat ${JSON.stringify(seatName)} names no declared seat`, repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.seat', message: `--seat ${JSON.stringify(seatName)} names no declared seat`, repair: null });
     // exit: worktree.seat
     return 1;
   }
@@ -414,7 +404,7 @@ function create(
   });
   if (refused || !outcome) {
     const failure = refused ?? { id: 'worktree.create-failed', message: 'nothing was created' };
-    refuse(io, json, 'worktree', { id: failure.id, message: failure.message, repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: failure.id, message: failure.message, repair: null });
     // exit: worktree.limit
     // exit: worktree.recorded
     // exit: worktree.recorded-elsewhere
@@ -435,7 +425,6 @@ function create(
       id: 'worktree.setup',
       message: `setup failed on command ${outcome.setup.at} of ${team.workspace.setup.length}; the worktree is kept and recorded as setup: failed`,
       repair: null,
-      code: 1,
     });
     if (!json) io.stdout(`${contextLine(team.project, session)}\n${line}\n`);
     // exit: worktree.setup
@@ -477,7 +466,7 @@ export function removeWorktree(
 ): number {
   const named = taskProblem(task);
   if (named) {
-    refuse(io, json, 'worktree', { id: 'worktree.remove-task', message: named, repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: 'worktree.remove-task', message: named, repair: null });
     // exit: worktree.remove-task
     return 1;
   }
@@ -556,7 +545,7 @@ export function removeWorktree(
   });
   if (refused || removed === false) {
     const failure = refused ?? { id: 'worktree.remove-failed', message: 'nothing was removed' };
-    refuse(io, json, 'worktree', { id: failure.id, message: failure.message, repair: null, code: 1 });
+    refuse(io, json, 'worktree', { id: failure.id, message: failure.message, repair: null });
     // exit: worktree.missing
     // exit: worktree.elsewhere
     // exit: worktree.occupied

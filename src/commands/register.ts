@@ -102,26 +102,26 @@ export const register: Command = (argv, io) => runRegister(argv, io, realSources
 export default register;
 
 function usage(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'register', { id: 'register.usage', message, repair: null, code: 2, usage: USAGE });
+  refuse(out, json, 'register', { id: 'register.usage', message, repair: null, usage: USAGE });
   // exit: register.usage
   return 2;
 }
 
 function configuration(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'register', { id: 'register.file', message, repair: null, code: 2 });
+  refuse(out, json, 'register', { id: 'register.file', message, repair: null });
   // exit: register.file
   return 2;
 }
 
 function detachedExit(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'register', { id: 'register.detached', message, repair: null, code: 1 });
+  refuse(out, json, 'register', { id: 'register.detached', message, repair: null });
   // exit: register.detached
   return 1;
 }
 
 function callerRefused(out: Io, json: boolean, message: string, dry = false, unblock?: string): number {
   if (json) {
-    refuse(out, true, 'register', { id: 'register.caller', message, repair: null, code: 1 });
+    refuse(out, true, 'register', { id: 'register.caller', message, repair: null });
   } else if (dry) {
     // A dry run is never denied bare: what would refuse it is said as what it is, and the
     // command that unblocks it is named beside it — `up`'s own dry words.
@@ -135,13 +135,13 @@ function callerRefused(out: Io, json: boolean, message: string, dry = false, unb
 }
 
 function delegateRefused(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'register', { id: 'register.delegate', message, repair: null, code: 1 });
+  refuse(out, json, 'register', { id: 'register.delegate', message, repair: null });
   // exit: register.delegate
   return 1;
 }
 
 function grantRefused(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'register', { id: 'register.grant', message, repair: null, code: 1 });
+  refuse(out, json, 'register', { id: 'register.grant', message, repair: null });
   // exit: register.grant
   return 1;
 }
@@ -151,7 +151,6 @@ function grantFlagRefused(out: Io, json: boolean): number {
     id: 'register.grant-flag',
     message: "--session is the owner's; the granted seat cannot use it",
     repair: null,
-    code: 1,
   });
   // exit: register.grant-flag
   return 1;
@@ -166,7 +165,7 @@ function notOwnerLine(caller: Caller): string {
 function notOwnerRefused(out: Io, json: boolean, caller: Caller, dry = false, unblock?: string, note = ''): number {
   const line = `${notOwnerLine(caller)}${note}`;
   if (json) {
-    refuse(out, true, 'register', { id: 'register.not-owner', message: line, repair: null, code: 1 });
+    refuse(out, true, 'register', { id: 'register.not-owner', message: line, repair: null });
   } else if (dry) {
     out.stdout(`! register would refuse: ${plainText(line)}\n`);
     if (unblock !== undefined) out.stdout(`! to unblock: ${plainText(unblock)}\n`);
@@ -182,7 +181,6 @@ function unknownRefused(out: Io, json: boolean, name: string): number {
     id: 'register.no-seat',
     message: `the file has no seat ${JSON.stringify(name)}`,
     repair: null,
-    code: 1,
   });
   // exit: register.no-seat
   return 1;
@@ -193,20 +191,19 @@ function stoppedRefused(out: Io, json: boolean, name: string): number {
     id: 'register.stopped',
     message: `${plainLine(name)} is stopped in this file; the owner clears \`stopped\` and starts the team`,
     repair: null,
-    code: 1,
   });
   // exit: register.stopped
   return 1;
 }
 
 function noProfileRefused(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'register', { id: 'register.no-profile', message, repair: null, code: 1 });
+  refuse(out, json, 'register', { id: 'register.no-profile', message, repair: null });
   // exit: register.no-profile
   return 1;
 }
 
 function herdrRefused(out: Io, json: boolean): number {
-  refuse(out, json, 'register', { id: 'register.herdr', message: "herdr doesn't answer", repair: null, code: 1 });
+  refuse(out, json, 'register', { id: 'register.herdr', message: "herdr doesn't answer", repair: null });
   // exit: register.herdr
   return 1;
 }
@@ -216,7 +213,6 @@ function noSessionRefused(out: Io, json: boolean, session: string): number {
     id: 'register.no-session',
     message: `session "${plainLine(session)}" is not running; run team up first`,
     repair: 'team up',
-    code: 1,
   });
   // exit: register.no-session
   return 1;
@@ -227,7 +223,6 @@ function teamFileRefused(out: Io, json: boolean, session: string, file: string):
     id: 'register.session-file',
     message: `session "${plainLine(session)}" was launched from ${plainLine(file)}; a seat is registered into its own team's session`,
     repair: null,
-    code: 1,
   });
   // exit: register.session-file
   return 1;
@@ -238,7 +233,6 @@ function noAgentRefused(out: Io, json: boolean, name: string, session: string): 
     id: 'register.no-agent',
     message: `no agent named ${plainLine(name)} is running in session "${plainLine(session)}"; nothing was registered`,
     repair: null,
-    code: 1,
   });
   // exit: register.no-agent
   return 1;
@@ -249,7 +243,6 @@ function ambiguousRefused(out: Io, json: boolean, name: string, session: string,
     id: 'register.many-agents',
     message: `session "${plainLine(session)}" has ${count} agents named ${plainLine(name)}; registering one would guess`,
     repair: null,
-    code: 1,
   });
   // exit: register.many-agents
   return 1;
@@ -261,7 +254,6 @@ function recordedRefused(out: Io, json: boolean, name: string, pane: string, rec
     id: 'register.recorded',
     message: `${plainLine(name)} is already recorded on ${on}, not on ${plainLine(pane)}; the owner stops the team and starts it again (\`team down\`, then \`team up\`)`,
     repair: 'the owner runs `team down`, then `team up`',
-    code: 1,
   });
   // exit: register.recorded
   return 1;
@@ -272,7 +264,6 @@ function noPaneRefused(out: Io, json: boolean, pane: string, session: string): n
     id: 'register.no-pane',
     message: `no pane ${plainLine(pane)} in session "${plainLine(session)}"; nothing was registered`,
     repair: null,
-    code: 1,
   });
   // exit: register.no-pane
   return 1;
@@ -283,7 +274,6 @@ function paneTakenRefused(out: Io, json: boolean, pane: string, other: string, s
     id: 'register.pane-taken',
     message: `pane ${plainLine(pane)} is ${plainLine(other)}'s in session "${plainLine(session)}"; nothing was registered`,
     repair: null,
-    code: 1,
   });
   // exit: register.pane-taken
   return 1;
@@ -294,7 +284,6 @@ function paneNamedRefused(out: Io, json: boolean, pane: string, other: string, s
     id: 'register.pane-named',
     message: `pane ${plainLine(pane)} is named ${plainLine(other)} in session "${plainLine(session)}"; --pane names a pane herdr never named, nothing was registered`,
     repair: null,
-    code: 1,
   });
   // exit: register.pane-named
   return 1;
@@ -305,7 +294,6 @@ function noCliRefused(out: Io, json: boolean, name: string, pane: string): numbe
     id: 'register.no-cli',
     message: `${plainLine(name)}: pane ${plainLine(pane)} holds no process in front of its shell; nothing was registered`,
     repair: null,
-    code: 1,
   });
   // exit: register.no-cli
   return 1;
@@ -316,7 +304,6 @@ function cliRefused(out: Io, json: boolean, name: string, pane: string, cli: str
     id: 'register.cli',
     message: `${plainLine(name)}: pane ${plainLine(pane)} holds no \`${plainLine(cli)}\` process; nothing was registered`,
     repair: null,
-    code: 1,
   });
   // exit: register.cli
   return 1;
@@ -327,7 +314,6 @@ function screenRefused(out: Io, json: boolean, name: string, kind: string): numb
     id: 'register.screen',
     message: `${plainLine(name)}: its pane is not the seat at its prompt (${plainLine(kind)}); nothing was registered`,
     repair: null,
-    code: 1,
   });
   // exit: register.screen
   return 1;

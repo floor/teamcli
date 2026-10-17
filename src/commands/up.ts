@@ -589,7 +589,7 @@ function denyUp(
   rule: string | null = 'no-record',
   expiry = '',
 ): number {
-  if (json) refuse(io, true, 'up', { id, message: 'deny', repair: null, code: 1, rule });
+  if (json) refuse(io, true, 'up', { id, message: 'deny', repair: null, rule });
   else {
     out.stderr('deny\n');
     if (expiry !== '') out.stderr(`${expiry}\n`);
@@ -679,7 +679,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       id: 'up.invocation',
       message: plainText(args.error ?? `unexpected "${args.rest[0]}"`),
       repair: null,
-      code: 2,
       usage: USAGE,
     });
     // exit: up.invocation
@@ -727,7 +726,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const aimed = otherFile || args.values.session !== undefined;
   if (detached !== undefined && aimed) {
-    refuse(io, json, 'up', { id: 'up.detached', message: detached, repair: null, code: 1 });
+    refuse(io, json, 'up', { id: 'up.detached', message: detached, repair: null });
     // exit: up.detached
     return 1;
   }
@@ -777,7 +776,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         id: 'up.grant-flag',
         message: `--${flag} is the owner's; the granted seat cannot use it`,
         repair: null,
-        code: 1,
       });
       // exit: up.grant-flag
       return 1;
@@ -793,7 +791,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // refusal names the expiry, while a real run keeps the page's bare word.
       if (!dry) logDevModeState(aimedDir, 'up', callerLabel(walked), aimedDev, sources.now?.() ?? new Date());
       if (json) {
-        refuse(io, true, 'up', { id: 'up.not-owner', message: 'deny', repair: null, code: 1, rule: 'no-record' });
+        refuse(io, true, 'up', { id: 'up.not-owner', message: 'deny', repair: null, rule: 'no-record' });
       } else if (dry) {
         out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}${devModeExpiryNote(aimedDev)}\n`);
         out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
@@ -810,7 +808,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         id: 'up.delegate-flag',
         message: plainText(gates.verdict.text),
         repair: null,
-        code: 1,
       });
       // exit: up.delegate-flag
       return 1;
@@ -870,7 +867,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       const id = loaded.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
         ? 'up.not-a-repo'
         : loaded.errors.some((problem) => problem.line > 0) ? 'up.file-invalid' : 'up.file';
-      refuse(io, true, 'up', { id, message: said.join('; '), repair: null, code: 2 });
+      refuse(io, true, 'up', { id, message: said.join('; '), repair: null });
     } else {
       for (const problem of said) {
         if (dry) out.stdout(`! up would refuse: ${problem}\n`);
@@ -1352,7 +1349,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     if (json) {
       const first = refusals[0]!;
       const message = folded ? `${plainText(folded)}; ${plainText(first.message)}` : plainText(first.message);
-      refuse(io, true, 'up', { id: first.id, message, repair: first.repair ?? null, code: 1 });
+      refuse(io, true, 'up', { id: first.id, message, repair: first.repair ?? null });
     } else if (!dry) {
       if (folded) out.stderr(`team up: ${plainText(folded)}\n`);
       for (const refusal of uniqueRefusals(refusals)) out.stderr(`team up: ${plainText(refusal.message)}\n`);
@@ -1397,7 +1394,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       id: 'up.no-launch',
       message: 'this call has no way to reach herdr',
       repair: null,
-      code: 1,
     });
     // exit: up.no-launch
     return 1;
@@ -1416,7 +1412,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       id: 'up.run-lock',
       message: plainText(runLockText(runLock.held, session, dir)),
       repair: null,
-      code: 1,
     });
     // exit: up.run-lock
     return 1;
@@ -1439,7 +1434,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // make cannot land on another run's — which is what the read-only pass exists for.
       const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby });
       if (!gate.ok) {
-        refuse(io, json, 'up', { id: 'up.lobby', message: plainText(gate.text), repair: null, code: 1 });
+        refuse(io, json, 'up', { id: 'up.lobby', message: plainText(gate.text), repair: null });
         // exit: up.lobby
         return 1;
       }
@@ -1459,7 +1454,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           id: 'up.clear',
           message: `session ${session} is stopped and did not clear`,
           repair: null,
-          code: 1,
         });
         // exit: up.clear
         return 1;
@@ -1862,7 +1856,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           ? `${pending.length} seat${pending.length === 1 ? '' : 's'} not ready: ${pending.map((seat) => seat.name).join(', ')}`
           : report.serverFailed ? 'the herdr server did not start'
             : report.watchFailed ? 'the watch did not start' : 'a step was held';
-        refuse(io, true, 'up', { id, message, repair: null, code: 1 });
+        refuse(io, true, 'up', { id, message, repair: null });
       } else {
         writeJson(io, 'team.up', {
           format: 1,

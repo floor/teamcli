@@ -879,19 +879,19 @@ function where(problem: Problem): string {
 }
 
 function usage(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'restart', { id: 'restart.usage', message, repair: null, code: 2, usage: USAGE });
+  refuse(out, json, 'restart', { id: 'restart.usage', message, repair: null, usage: USAGE });
   // exit: restart.usage
   return 2;
 }
 
 function configuration(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'restart', { id: 'restart.configuration', message, repair: null, code: 2 });
+  refuse(out, json, 'restart', { id: 'restart.configuration', message, repair: null });
   // exit: restart.configuration
   return 2;
 }
 
 function detachedExit(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'restart', { id: 'restart.detached', message, repair: null, code: 1 });
+  refuse(out, json, 'restart', { id: 'restart.detached', message, repair: null });
   // exit: restart.detached
   return 1;
 }
@@ -926,7 +926,6 @@ function callerRefused(
       id: 'restart.caller',
       message,
       repair: repair ?? null,
-      code: 1,
       ...(rule !== undefined ? { rule } : {}),
     });
   } else if (dryAnswer === undefined) out.stderr(`team restart: ${plainText(message)}\n`);
@@ -940,7 +939,6 @@ function selfRefused(out: Io, json: boolean, callerName: string): number {
     id: 'restart.self',
     message: `the ${callerName} cannot restart its own recorded pane; the owner must do it`,
     repair: null,
-    code: 1,
   });
   // exit: restart.self
   return 1;
@@ -951,7 +949,6 @@ function temporaryRefused(out: Io, json: boolean, name: string, like: string): n
     id: 'restart.temporary',
     message: `${name} is a temporary copy; use team remove ${name} then team add --temporary --like ${like}`,
     repair: `team remove ${name} then team add --temporary --like ${like}`,
-    code: 1,
   });
   // exit: restart.temporary
   return 1;
@@ -962,7 +959,6 @@ function unknownRefused(out: Io, json: boolean, name: string): number {
     id: 'restart.unknown',
     message: `${name} is not a signed declared seat`,
     repair: 'team seats lists the seats the file declares',
-    code: 1,
   });
   // exit: restart.unknown
   return 1;
@@ -973,7 +969,6 @@ function leadRefused(out: Io, json: boolean, callerText: string): number {
     id: 'restart.lead',
     message: `a seat caller does not abandon the orchestrator's or the operator's seat; this call is ${callerText}`,
     repair: null,
-    code: 1,
   });
   // exit: restart.lead
   return 1;
@@ -984,14 +979,13 @@ function signedOffRefused(out: Io, json: boolean, name: string): number {
     id: 'restart.signed-off',
     message: `${name} is signed off; the owner approves the seat back and runs team up`,
     repair: 'the owner approves the seat back, then runs team up',
-    code: 1,
   });
   // exit: restart.signed-off
   return 1;
 }
 
 function herdrRefused(out: Io, json: boolean): number {
-  refuse(out, json, 'restart', { id: 'restart.herdr', message: "herdr doesn't answer", repair: null, code: 1 });
+  refuse(out, json, 'restart', { id: 'restart.herdr', message: "herdr doesn't answer", repair: null });
   // exit: restart.herdr
   return 1;
 }
@@ -1001,7 +995,6 @@ function noSessionRefused(out: Io, json: boolean, session: string): number {
     id: 'restart.no-session',
     message: `session "${session}" is not running; run team up first`,
     repair: 'team up',
-    code: 1,
   });
   // exit: restart.no-session
   return 1;
@@ -1012,7 +1005,6 @@ function replacedRefused(out: Io, json: boolean, name: string): number {
     id: 'restart.replaced',
     message: `${name} has a process in its old pane that is not the signed seat; left as it is`,
     repair: null,
-    code: 1,
   });
   // exit: restart.replaced
   return 1;
@@ -1023,26 +1015,25 @@ function abandonWorkingRefused(out: Io, json: boolean, name: string): number {
     id: 'restart.abandon-working',
     message: `${name} is working; a seat's --abandon leaves it (the owner's --abandon closes it)`,
     repair: null,
-    code: 1,
   });
   // exit: restart.abandon-working
   return 1;
 }
 
 function busyRefused(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'restart', { id: 'restart.busy', message, repair: null, code: 1 });
+  refuse(out, json, 'restart', { id: 'restart.busy', message, repair: null });
   // exit: restart.busy
   return 1;
 }
 
 function notReadyRefused(out: Io, json: boolean, message: string): number {
-  refuse(out, json, 'restart', { id: 'restart.not-ready', message, repair: null, code: 1 });
+  refuse(out, json, 'restart', { id: 'restart.not-ready', message, repair: null });
   // exit: restart.not-ready
   return 1;
 }
 
 function runLockRefused(out: Io, json: boolean, held: number, session: string, dir: string): number {
-  refuse(out, json, 'restart', { id: 'restart.run-lock', message: runLockText(held, session, dir), repair: null, code: 1 });
+  refuse(out, json, 'restart', { id: 'restart.run-lock', message: runLockText(held, session, dir), repair: null });
   // exit: restart.run-lock
   return 1;
 }

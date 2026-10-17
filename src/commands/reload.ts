@@ -179,7 +179,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         id: 'reload.grant-file',
         message: said.text,
         repair: null,
-        code: 1,
       });
       // exit: reload.grant-file
       return 1;
@@ -193,7 +192,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   });
   if (!loaded.ok) {
     const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
-    if (json) refuse(io, json, 'reload', { id: 'reload.file', message: said.join('; '), repair: null, code: 2 });
+    if (json) refuse(io, json, 'reload', { id: 'reload.file', message: said.join('; '), repair: null });
     else for (const line of said) out.stderr(`team reload: ${line}\n`);
     // exit: reload.file
     return 2;
@@ -245,7 +244,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           id,
           message: `${refusal}${liftable ? devModeExpiryNote(dev) : ''}`,
           repair: null,
-          code: 1,
         });
         // exit: reload.grant-another-pane
         // exit: reload.grant-approval
@@ -264,7 +262,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       id: 'reload.grant-flag',
       message: "--file is the owner's; the granted seat cannot use it",
       repair: null,
-      code: 1,
     });
     // exit: reload.grant-flag
     return 1;
@@ -279,7 +276,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       id: 'reload.absent',
       message: 'no seat of that name',
       repair: 'team seats lists the seats the file declares',
-      code: 1,
     });
     // exit: reload.absent
     return 1;
@@ -289,7 +285,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       id: 'reload.self',
       message: "a reload does not close the caller's seat",
       repair: null,
-      code: 1,
     });
     // exit: reload.self
     return 1;
@@ -301,7 +296,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       id: 'reload.not-running',
       message: `${seat.name} has no ready pane to close`,
       repair: `team up launches ${seat.name}; team reload needs a seat already at its idle prompt`,
-      code: 1,
     });
     // exit: reload.not-running
     return 1;
@@ -359,7 +353,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       id: 'reload.run-lock',
       message: runLockText(runLock.held, session, dir),
       repair: null,
-      code: 1,
     });
     // exit: reload.run-lock
     return 1;
@@ -407,7 +400,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           id: 'reload.untested',
           message: `${seat.name}: ${plainLine(profile.binary)} ${plainLine(printed)} is ${verdict} than the tested ${plainLine(testedRange(profile.tested))}; its ready screen may not be recognised, so nothing closed`,
           repair: null,
-          code: 1,
         });
         // exit: reload.untested
         return 1;
@@ -419,12 +411,12 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       const text = sources.launch.paneText(session, recorded.pane);
       const kind = readScreen(seat.cli, text ?? undefined).kind;
       if (listed.status === 'working' || kind === 'working') {
-        refuse(io, json, 'reload', { id: 'reload.working', message: `${seat.name} is working; nothing closed`, repair: null, code: 1 });
+        refuse(io, json, 'reload', { id: 'reload.working', message: `${seat.name} is working; nothing closed`, repair: null });
         // exit: reload.working
         return 1;
       }
       if (kind === 'unsent') {
-        refuse(io, json, 'reload', { id: 'reload.unsent', message: `${seat.name} holds unsent text; nothing closed`, repair: null, code: 1 });
+        refuse(io, json, 'reload', { id: 'reload.unsent', message: `${seat.name} holds unsent text; nothing closed`, repair: null });
         // exit: reload.unsent
         return 1;
       }
@@ -432,7 +424,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       // idle or done is closed without typing into it, and the advice says so. A working seat
       // was refused above; anything else unread stays the refusal it was.
       if (!(unreadIdle(listed.status) && (kind === 'idle' || kind === 'unknown'))) {
-        refuse(io, json, 'reload', { id: 'reload.not-idle', message: `${seat.name} is not at an idle prompt; nothing closed`, repair: null, code: 1 });
+        refuse(io, json, 'reload', { id: 'reload.not-idle', message: `${seat.name} is not at an idle prompt; nothing closed`, repair: null });
         // exit: reload.not-idle
         return 1;
       }
@@ -651,7 +643,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         id: 'reload.changed',
         message: 'the seat changed before it closed; nothing relaunched',
         repair: null,
-        code: 1,
       });
       // exit: reload.changed
       return 1;
@@ -667,7 +658,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       id: 'reload.launch',
       message: 'the close happened and the new launch did not reach ready',
       repair: null,
-      code: 1,
     });
     // exit: reload.launch
     return 1;
@@ -714,7 +704,7 @@ function mentioned(shown: Running | null, compared: SeatState, recorded: SeatSta
 }
 
 function invocation(io: Io, json: boolean, message: string): number {
-  refuse(io, json, 'reload', { id: 'reload.invocation', message, repair: null, code: 2, usage: USAGE });
+  refuse(io, json, 'reload', { id: 'reload.invocation', message, repair: null, usage: USAGE });
   // exit: reload.invocation
   return 2;
 }

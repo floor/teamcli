@@ -72,7 +72,7 @@ export const USAGE = 'Usage: team remove <name> [--keep] [--abandon] [--session 
  *  and the verdict's own contract row under `--json`. Both delegate branches print it — the
  *  caller rule's below and the owner-only flags' — so the exit ids sit at one site. */
 function delegateRefused(io: Io, json: boolean, verdict: { id: string; text: string }): number {
-  refuse(io, json, 'remove', { id: verdict.id, message: verdict.text, repair: null, code: 1 });
+  refuse(io, json, 'remove', { id: verdict.id, message: verdict.text, repair: null });
   // exit: remove.delegate-approval
   // exit: remove.delegate-evidence
   // exit: remove.delegate-placement
@@ -144,7 +144,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       id: 'remove.invocation',
       message: args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : 'a seat name is required'),
       repair: null,
-      code: 2,
       usage: USAGE,
     });
     // exit: remove.invocation
@@ -166,7 +165,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
   }
   if (detached !== undefined && !runnerGranted) {
-    refuse(io, json, 'remove', { id: 'remove.detached', message: detached, repair: null, code: 1 });
+    refuse(io, json, 'remove', { id: 'remove.detached', message: detached, repair: null });
     // exit: remove.detached
     return 1;
   }
@@ -203,7 +202,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       id: fileFlagRefusal !== undefined ? 'remove.file-owner' : 'remove.session-owner',
       message: flagRefusal,
       repair: null,
-      code: 1,
     });
     // exit: remove.file-owner
     // exit: remove.session-owner
@@ -219,7 +217,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         : loaded.errors.some((problem) => problem.line > 0) ? 'remove.file-invalid' : 'remove.file',
       message: said.join('\n'),
       repair: null,
-      code: 2,
     });
     // exit: remove.not-a-repo
     // exit: remove.file
@@ -298,7 +295,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     delegatePane = decided.pane;
   }
   if (verdict.kind === 'no-pane' && delegatePane === null) {
-    refuse(io, json, 'remove', { id: 'remove.no-pane', message: noPaneRefusal(verdict.name), repair: null, code: 1 });
+    refuse(io, json, 'remove', { id: 'remove.no-pane', message: noPaneRefusal(verdict.name), repair: null });
     // exit: remove.no-pane
     return 1;
   }
@@ -307,7 +304,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       id: 'remove.another-pane',
       message: anotherPaneRefusal(verdict.name, verdict.recordedPane),
       repair: null,
-      code: 1,
     });
     // exit: remove.another-pane
     return 1;
@@ -320,7 +316,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     const said = `only the owner or \`leads\` removes a seat; this call is ${describeCaller(shown)}${devModeExpiryNote(dev)}`;
     const folded = devModeCallerGate(dev, said);
     if (folded === null) {
-      refuse(io, json, 'remove', { id: 'remove.caller', message: said, repair: null, code: 1 });
+      refuse(io, json, 'remove', { id: 'remove.caller', message: said, repair: null });
       // exit: remove.caller
       return 1;
     }
@@ -329,7 +325,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     logDevMode(dir, 'remove', describeCaller(shown), folded, sources.now());
   }
   if (session === 'default') {
-    refuse(io, json, 'remove', { id: 'remove.default-session', message: 'session can\'t be "default", herdr\'s own session', repair: null, code: 1 });
+    refuse(io, json, 'remove', { id: 'remove.default-session', message: 'session can\'t be "default", herdr\'s own session', repair: null });
     // exit: remove.default-session
     return 1;
   }
@@ -337,7 +333,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   if (abandon && caller.kind !== 'owner') {
     // Owner-only in every mode: abandoning is not the caller gate dev mode lifts, so the
     // caller gate above may have been folded and this one still refuses.
-    refuse(io, json, 'remove', { id: 'remove.abandon', message: 'only the owner abandons a seat, from a terminal outside herdr', repair: null, code: 1 });
+    refuse(io, json, 'remove', { id: 'remove.abandon', message: 'only the owner abandons a seat, from a terminal outside herdr', repair: null });
     // exit: remove.abandon
     return 1;
   }
@@ -352,7 +348,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         id: 'remove.coordinator',
         message: `only the owner removes the orchestrator's or the operator's seat; this call is ${describeCaller(caller)}`,
         repair: null,
-        code: 1,
       });
       // exit: remove.coordinator
       return 1;
@@ -362,7 +357,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         id: 'remove.swap-self',
         message: `${name} can't swap its own seat: closing its pane would end this call before the new agent starts; the owner, the granted seat or an approved delegate swaps it`,
         repair: null,
-        code: 1,
       });
       // exit: remove.swap-self
       return 1;
@@ -374,7 +368,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
           id: 'remove.swap-grant',
           message: `only the owner, the granted seat or an approved delegate swaps the orchestrator's or the operator's seat: ${said.text}`,
           repair: null,
-          code: 1,
         });
         // exit: remove.swap-grant
         return 1;
@@ -388,14 +381,14 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const recorded = readState(dir).sessions[session]?.seats[name];
   const declared = team.seats.find((seat) => seat.name === name);
   if (!declared && !recorded) {
-    refuse(io, json, 'remove', { id: 'remove.no-seat', message: `the team has no seat ${JSON.stringify(name)}`, repair: null, code: 1 });
+    refuse(io, json, 'remove', { id: 'remove.no-seat', message: `the team has no seat ${JSON.stringify(name)}`, repair: null });
     // exit: remove.no-seat
     return 1;
   }
 
   const live = sources.sessionRunning(session);
   if (live === null) {
-    refuse(io, json, 'remove', { id: 'remove.herdr', message: "herdr doesn't answer; nothing was changed", repair: null, code: 1 });
+    refuse(io, json, 'remove', { id: 'remove.herdr', message: "herdr doesn't answer; nothing was changed", repair: null });
     // exit: remove.herdr
     return 1;
   }
@@ -405,7 +398,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       id: 'remove.agents',
       message: `session ${session} runs, and its agents can't be read; nothing was changed`,
       repair: null,
-      code: 1,
     });
     // exit: remove.agents
     return 1;
@@ -416,7 +408,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const home = sources.home ?? homedir();
   const standing = sources.standing?.(root) ?? approvalStanding(root, home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    refuse(io, json, 'remove', { id: 'remove.never-approved', message: notInForce(standing), repair: null, code: 1 });
+    refuse(io, json, 'remove', { id: 'remove.never-approved', message: notInForce(standing), repair: null });
     // exit: remove.never-approved
     return 1;
   }
@@ -424,7 +416,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const copySeat = team.seats.find((seat) => seat.name === name);
   const temporary = Boolean(recorded?.temporary) && copySeat === undefined;
   if (args.flags.has('keep') && temporary) {
-    refuse(io, json, 'remove', { id: 'remove.keep-temporary', message: 'a temporary seat is not in the file; there is nothing to keep', repair: null, code: 1 });
+    refuse(io, json, 'remove', { id: 'remove.keep-temporary', message: 'a temporary seat is not in the file; there is nothing to keep', repair: null });
     // exit: remove.keep-temporary
     return 1;
   }
@@ -457,7 +449,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         id: 'remove.unverified',
         message: `${name}: its record is not a declared seat; left as it is (the owner cleans it: team remove ${name} --abandon)`,
         repair: `team remove ${name} --abandon`,
-        code: 1,
       });
       // exit: remove.unverified
       return 1;
@@ -468,7 +459,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       id: 'remove.ambiguous',
       message: `${name}: herdr lists more than one agent of this name; left as it is`,
       repair: null,
-      code: 1,
     });
     // exit: remove.ambiguous
     return 1;
@@ -531,13 +521,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
           : LEFT[where];
       busy = `${name} ${held}${way}`;
     } else if (!profile && !abandon && !leave) {
-      refuse(io, json, 'remove', { id: 'remove.no-profile', message: `no launch profile for \`${cli}\`; left as it is`, repair: null, code: 1 });
+      refuse(io, json, 'remove', { id: 'remove.no-profile', message: `no launch profile for \`${cli}\`; left as it is`, repair: null });
       // exit: remove.no-profile
       return 1;
     }
   }
   if (busy !== undefined) {
-    refuse(io, json, 'remove', { id: 'remove.busy', message: busy, repair: null, code: 1 });
+    refuse(io, json, 'remove', { id: 'remove.busy', message: busy, repair: null });
     // exit: remove.busy
     return 1;
   }
@@ -551,7 +541,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         id: 'remove.edit',
         message: ahead.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`).join('\n'),
         repair: null,
-        code: 2,
       });
       // exit: remove.edit
       return 2;
@@ -564,7 +553,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // got past the gate. The lock is released on every exit path (`launch/run-lock.ts`).
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
-    refuse(io, json, 'remove', { id: 'remove.run-lock', message: runLockText(runLock.held, session, dir), repair: null, code: 1 });
+    refuse(io, json, 'remove', { id: 'remove.run-lock', message: runLockText(runLock.held, session, dir), repair: null });
     // exit: remove.run-lock
     return 1;
   }
@@ -611,7 +600,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
               ? `${name} could not be stopped; left as it is`
               : 'this call has no way to reach herdr',
             repair: null,
-            code: 1,
           });
         }
         // exit: remove.no-launch
@@ -638,7 +626,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
           id: 'remove.locked',
           message: refused.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`).join('\n'),
           repair: null,
-          code: 2,
         });
         // exit: remove.locked
         return 2;

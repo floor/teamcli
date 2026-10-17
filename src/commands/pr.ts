@@ -37,7 +37,7 @@ export function bodyText(file: string, cwd: string): string {
 export function bodyRefused(io: Io, error: unknown, json = false): number {
   const message = `can't read the pull request body: ${(error as Error).message}`;
   if (json) {
-    refuse(io, true, 'pr check', { id: 'pr.body', message, repair: null, code: 2 });
+    refuse(io, true, 'pr check', { id: 'pr.body', message, repair: null });
   } else {
     io.stderr(`team pr check: ${message}\n`);
   }
@@ -58,11 +58,12 @@ function loadProblemId(errors: Problem[]): 'pr.not-a-repo' | 'pr.file' | 'pr.fil
 export async function pr(argv: string[], io: Io, load: LoadConfig = loadConfig): Promise<number> {
   const args = readArgs(argv, ['file'], ['json']);
   // Read from the raw argv before the parser runs: a bad option before `--json`, or a
-  // malformed `--json=<value>`, still asks for the structured refusal.
-  const json = hasJsonFlag(argv);
+  // malformed `--json=<value>`, still asks for the structured refusal. A `--json` that is the
+  // value of `--file` is that option's value — a path, not the flag.
+  const json = hasJsonFlag(argv, ['file']);
   const sub = args.rest[0];
   const fail = (message: string): number => {
-    refuse(io, json, 'pr check', { id: 'pr.invocation', message, repair: null, usage: USAGE, code: 2 });
+    refuse(io, json, 'pr check', { id: 'pr.invocation', message, repair: null, usage: USAGE });
     // exit: pr.invocation
     return 2;
   };
@@ -79,7 +80,6 @@ export async function pr(argv: string[], io: Io, load: LoadConfig = loadConfig):
         id: loadProblemId(loaded.errors),
         message: loaded.errors.map((problem) => place(problem, loaded.path)).join('; '),
         repair: null,
-        code: 2,
       });
     } else {
       for (const problem of loaded.errors) io.stderr(`team pr check: ${place(problem, loaded.path)}\n`);

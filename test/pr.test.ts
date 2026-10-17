@@ -141,6 +141,30 @@ describe('team pr check follows the output contract', () => {
     }
   });
 
+  // The rule `team release` documents and pins: an option's value is taken as given, whatever
+  // it looks like, so only a `--json` that is not some option's value selects the JSON output.
+  test('--json as the value of --file is a path; a free --json beside it still writes the document', async () => {
+    const seen: (string | undefined)[] = [];
+    const missing: LoadConfig = (cwd, file) => {
+      seen.push(file);
+      const path = join(cwd, file ?? '.agents/team.yaml');
+      return { ok: false, errors: [{ line: 0, message: `no team file at ${file ?? '.agents/team.yaml'}` }], path };
+    };
+    const consumed = await run(['pass.md', '--file', '--json'], missing);
+    expect(consumed.code).toBe(2);
+    expect(consumed.out).toBe('');
+    expect(consumed.err).toBe(`team pr check: ${join(folder, '--json')}: no team file at --json\n`);
+
+    const free = await run(['pass.md', '--json', '--file', '--json'], missing);
+    expect(free.code).toBe(2);
+    expect(free.err).toBe('');
+    assertJsonErrorShape(free.out, {
+      id: 'pr.file',
+      messageContains: `${join(folder, '--json')}: no team file at --json`,
+    });
+    expect(seen).toEqual(['--json', '--json']);
+  });
+
   test('--json: a load refusal is the team.error document for its row', async () => {
     const failing: LoadConfig = () => ({ ok: false, errors: [{ line: 0, message: NOT_A_REPO }] });
     const result = await run(['body.md', '--json'], failing);

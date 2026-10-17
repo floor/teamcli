@@ -30,7 +30,7 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
   if (args.error || args.rest.length !== 1) {
     const extra = args.rest[1];
     const message = args.error ?? (extra !== undefined ? `unexpected "${extra}"` : 'a word is required');
-    refuse(io, json, 'tempo', { id: 'tempo.invocation', message, repair: null, usage: USAGE, code: 2 });
+    refuse(io, json, 'tempo', { id: 'tempo.invocation', message, repair: null, usage: USAGE });
     // exit: tempo.invocation
     return 2;
   }
@@ -40,7 +40,6 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
       id: 'tempo.word',
       message: `"${word}" must be ${WORDS}`,
       repair: null,
-      code: 2,
       usage: USAGE,
     });
     // exit: tempo.word
@@ -49,7 +48,7 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
   const caller = callerOf(io);
   const detached = detachedRefusal(caller);
   if (detached !== undefined) {
-    refuse(io, json, 'tempo', { id: 'tempo.detached', message: detached, repair: null, code: 1 });
+    refuse(io, json, 'tempo', { id: 'tempo.detached', message: detached, repair: null });
     // exit: tempo.detached
     return 1;
   }
@@ -59,7 +58,7 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
     // Dev mode does not reach this gate: setting the tempo is never a dev-mode command
     // (`dev_mode.ts`), so every non-owner call is refused, the orchestrator's and the
     // operator's included.
-    refuse(io, json, 'tempo', { id: 'tempo.not-owner', message: placement, repair: null, rule: 'owner-only', code: 1 });
+    refuse(io, json, 'tempo', { id: 'tempo.not-owner', message: placement, repair: null, rule: 'owner-only' });
     // exit: tempo.not-owner
     return 1;
   }
@@ -87,7 +86,6 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
     id: failed === NOT_A_REPO ? 'tempo.not-a-repo' : 'tempo.file',
     message: failed,
     repair: null,
-    code: 2,
   });
   // exit: tempo.not-a-repo
   // exit: tempo.file

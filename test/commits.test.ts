@@ -167,6 +167,30 @@ describe('team commits check follows the output contract', () => {
     }
   });
 
+  // The rule `team release` documents and pins: an option's value is taken as given, whatever
+  // it looks like, so only a `--json` that is not some option's value selects the JSON output.
+  test('--json as the value of --file is a path; a free --json beside it still writes the document', async () => {
+    const seen: (string | undefined)[] = [];
+    const missing: LoadConfig = (cwd, file) => {
+      seen.push(file);
+      const path = join(cwd, file ?? '.agents/team.yaml');
+      return { ok: false, errors: [{ line: 0, message: `no team file at ${file ?? '.agents/team.yaml'}` }], path };
+    };
+    const consumed = await run(['main', '--file', '--json'], missing);
+    expect(consumed.code).toBe(2);
+    expect(consumed.out).toBe('');
+    expect(consumed.err).toBe(`team commits check: ${join(repo.path, '--json')}: no team file at --json\n`);
+
+    const free = await run(['main', '--json', '--file', '--json'], missing);
+    expect(free.code).toBe(2);
+    expect(free.err).toBe('');
+    assertJsonErrorShape(free.out, {
+      id: 'commits.file',
+      messageContains: `${join(repo.path, '--json')}: no team file at --json`,
+    });
+    expect(seen).toEqual(['--json', '--json']);
+  });
+
   test('--json: a git failure is the team.error document for its row', async () => {
     const folder = mkdtempSync(join(tmpdir(), 'team-commits-plain-'));
     try {

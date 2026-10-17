@@ -198,7 +198,6 @@ export async function runInit(
       id: 'init.invocation',
       message: args.error ?? `unexpected "${args.rest[0]}"`,
       repair: null,
-      code: 2,
       usage: USAGE,
     });
     // exit: init.invocation
@@ -219,7 +218,7 @@ export async function runInit(
   // outside herdr is the one detached caller the grant may name.
   const detached = detachedRefusal(caller);
   if (detached !== undefined && !createGranted) {
-    refuse(io, json, 'init', { id: 'init.detached', message: detached, repair: null, code: 1 });
+    refuse(io, json, 'init', { id: 'init.detached', message: detached, repair: null });
     // exit: init.detached
     return 1;
   }
@@ -259,7 +258,6 @@ export async function runInit(
         id: 'init.not-owner',
         message: ownerLine,
         repair: 'the owner runs `team init` from a terminal outside herdr',
-        code: 1,
         rule: 'owner-only',
       });
       // exit: init.not-owner
@@ -270,7 +268,7 @@ export async function runInit(
     else io.stderr(`team init: ${devOwnerLine}\n`);
   }
   if (!root) {
-    refuse(io, json, 'init', { id: 'init.not-a-repo', message: 'not inside a git repository', repair: null, code: 2 });
+    refuse(io, json, 'init', { id: 'init.not-a-repo', message: 'not inside a git repository', repair: null });
     // exit: init.not-a-repo
     return 2;
   }
@@ -281,7 +279,6 @@ export async function runInit(
       id: 'init.tracked',
       message: `${TEAM_FILE} is tracked by git, and a team file is private`,
       repair: `git rm --cached ${TEAM_FILE}, then run team init again; history is not rewritten`,
-      code: 1,
       plain: `${TEAM_FILE} is tracked by git, and a team file is private. Untrack it, keeping the file:\n  git rm --cached ${TEAM_FILE}\nthen run team init again. History is not rewritten.`,
     });
     // exit: init.tracked
@@ -293,7 +290,6 @@ export async function runInit(
       id: 'init.exists',
       message: `${TEAM_FILE} exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.`,
       repair: null,
-      code: 1,
     });
     // exit: init.exists
     return 1;
@@ -313,7 +309,6 @@ export async function runInit(
         id: 'init.legacy',
         message: `nothing was restored: the record for this folder was ${LEGACY_LINE}.`,
         repair: null,
-        code: 1,
       });
       // exit: init.legacy
       return 1;
@@ -323,7 +318,6 @@ export async function runInit(
         id: 'init.refused',
         message: `nothing was restored: ${standing.why}.`,
         repair: null,
-        code: 1,
       });
       // exit: init.refused
       return 1;
@@ -334,7 +328,6 @@ export async function runInit(
         id: 'init.nothing',
         message: 'nothing to restore: no team file was approved for this folder on this machine',
         repair: 'team init writes a skeleton',
-        code: 1,
         plain: 'nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.',
       });
       // exit: init.nothing
@@ -349,7 +342,6 @@ export async function runInit(
         id: 'init.skeleton',
         message: `the skeleton doesn't validate: ${check.errors[0]?.message}`,
         repair: null,
-        code: 1,
       });
       // exit: init.skeleton
       return 1;

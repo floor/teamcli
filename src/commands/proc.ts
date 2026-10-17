@@ -65,7 +65,7 @@ export async function runProc(argv: string[], io: Io, sources: ProcSources = rea
 }
 
 function invocation(io: Io, json: boolean, message: string): number {
-  refuse(io, json, 'proc', { id: 'proc.invocation', message, repair: null, usage: USAGE, code: 2 });
+  refuse(io, json, 'proc', { id: 'proc.invocation', message, repair: null, usage: USAGE });
   // exit: proc.invocation
   return 2;
 }
@@ -92,7 +92,6 @@ function fileProblems(io: Io, json: boolean, problems: Problem[]): number {
       id: fileProblemId(problems),
       message: problems.map(problemLine).join('; '),
       repair: null,
-      code: 2,
     });
   } else {
     for (const problem of problems) io.stderr(`team proc: ${problemLine(problem)}\n`);
@@ -103,13 +102,13 @@ function fileProblems(io: Io, json: boolean, problems: Problem[]): number {
 }
 
 function refuseDetached(io: Io, json: boolean, sentence: string): number {
-  refuse(io, json, 'proc', { id: 'proc.detached', message: sentence, repair: null, code: 1 });
+  refuse(io, json, 'proc', { id: 'proc.detached', message: sentence, repair: null });
   // exit: proc.detached
   return 1;
 }
 
 function refuseNotYours(io: Io, json: boolean): number {
-  refuse(io, json, 'proc', { id: 'proc.not-yours', message: 'this team is not yours to read', repair: null, code: 2 });
+  refuse(io, json, 'proc', { id: 'proc.not-yours', message: 'this team is not yours to read', repair: null });
   // exit: proc.not-yours
   return 2;
 }
@@ -119,26 +118,25 @@ function refuseCaller(io: Io, json: boolean, shown: string): number {
     id: 'proc.caller',
     message: `only a seat of this team or the owner records a process; this call is ${shown}`,
     repair: null,
-    code: 1,
   });
   // exit: proc.caller
   return 1;
 }
 
 function refusePid(io: Io, json: boolean, pid: number): number {
-  refuse(io, json, 'proc', { id: 'proc.pid', message: `pid ${pid} is not running`, repair: null, code: 1 });
+  refuse(io, json, 'proc', { id: 'proc.pid', message: `pid ${pid} is not running`, repair: null });
   // exit: proc.pid
   return 1;
 }
 
 function refuseTaken(io: Io, json: boolean, name: string, by: string, at: string): number {
-  refuse(io, json, 'proc', { id: 'proc.taken', message: `"${name}" is ${by}'s, live since ${at}`, repair: null, code: 1 });
+  refuse(io, json, 'proc', { id: 'proc.taken', message: `"${name}" is ${by}'s, live since ${at}`, repair: null });
   // exit: proc.taken
   return 1;
 }
 
 function refuseUnknown(io: Io, json: boolean, name: string): number {
-  refuse(io, json, 'proc', { id: 'proc.unknown', message: `no process named "${name}"`, repair: null, code: 1 });
+  refuse(io, json, 'proc', { id: 'proc.unknown', message: `no process named "${name}"`, repair: null });
   // exit: proc.unknown
   return 1;
 }
@@ -150,7 +148,6 @@ function refuseOtherSeat(io: Io, json: boolean, name: string, by: string): numbe
       ? `"${name}" is the owner's; only the owner clears it`
       : `"${name}" is ${by}'s; only ${by}, a lead or the owner clears it`,
     repair: null,
-    code: 1,
   });
   // exit: proc.other-seat
   return 1;

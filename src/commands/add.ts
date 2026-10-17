@@ -140,7 +140,7 @@ Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is ref
 function delegateRefused(io: Io, json: boolean, verdict: { id: string; text: string }): number {
   // The gate names the row it refused on (`add.delegate-flag`, `add.delegate-approval`, …): the
   // document carries that id, the plain line the same sentence it always printed.
-  refuse(io, json, 'add', { id: verdict.id, message: verdict.text, repair: null, code: 1 });
+  refuse(io, json, 'add', { id: verdict.id, message: verdict.text, repair: null });
   // exit: add.delegate-approval
   // exit: add.delegate-evidence
   // exit: add.delegate-placement
@@ -173,7 +173,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file'], ['temporary', 'dry-run', 'json']);
   const json = wantsJson;
   if (args.error) {
-    refuse(io, json, 'add', { id: 'add.invocation', message: args.error, repair: null, code: 2, usage: USAGE });
+    refuse(io, json, 'add', { id: 'add.invocation', message: args.error, repair: null, usage: USAGE });
     // exit: add.invocation
     return 2;
   }
@@ -193,7 +193,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
   }
   if (detached !== undefined && !runnerGranted) {
-    refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null, code: 1 });
+    refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null });
     // exit: add.detached
     return 1;
   }
@@ -204,7 +204,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       id: temporary ? 'add.temporary-unexpected' : 'add.seat-name',
       message: temporary ? `unexpected "${args.rest[0]}"` : 'a seat name is required',
       repair: null,
-      code: 2,
       usage: USAGE,
     });
     // exit: add.seat-name
@@ -212,7 +211,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 2;
   }
   if (!temporary && (args.values.like || args.values.until || args.values.worktree)) {
-    refuse(io, json, 'add', { id: 'add.temporary-flags', message: '--like, --until and --worktree are for --temporary', repair: null, code: 2 });
+    refuse(io, json, 'add', { id: 'add.temporary-flags', message: '--like, --until and --worktree are for --temporary', repair: null });
     // exit: add.temporary-flags
     return 2;
   }
@@ -250,7 +249,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       id: fileFlag !== undefined ? 'add.file-owner' : 'add.session-owner',
       message: flagRefusal,
       repair: null,
-      code: 1,
     });
     // exit: add.file-owner
     // exit: add.session-owner
@@ -273,7 +271,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         id,
         message: loaded.errors.map((problem) => `${where(problem)}${problem.message}`).join('; '),
         repair: null,
-        code: 2,
       });
     } else for (const problem of loaded.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
     // exit: add.not-a-repo
@@ -370,7 +367,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
           id: 'add.caller',
           message: mayRun,
           repair: 'the owner runs `team add …` from a terminal outside herdr',
-          code: 1,
           rule: 'owner-only',
         });
       } else if (dry) {
@@ -381,7 +377,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
   }
   if (session === 'default') {
-    refuse(io, json, 'add', { id: 'add.default-session', message: 'session can\'t be "default", herdr\'s own session', repair: null, code: 1 });
+    refuse(io, json, 'add', { id: 'add.default-session', message: 'session can\'t be "default", herdr\'s own session', repair: null });
     // exit: add.default-session
     return 1;
   }
@@ -396,7 +392,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       id: 'add.ceilings',
       message: notInForce(standing),
       repair: null,
-      code: 1,
     });
     // exit: add.never-approved
     // exit: add.ceilings
@@ -406,7 +401,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
   const live = sources.sessionState(session);
   if (live === null) {
-    refuse(io, json, 'add', { id: 'add.herdr', message: 'herdr doesn\'t answer', repair: null, code: 1 });
+    refuse(io, json, 'add', { id: 'add.herdr', message: 'herdr doesn\'t answer', repair: null });
     // exit: add.herdr
     return 1;
   }
@@ -415,7 +410,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       id: 'add.stopped',
       message: `session ${plainLine(session)} is stopped; clear it with \`herdr session delete ${plainLine(session)}\``,
       repair: `herdr session delete ${plainLine(session)}`,
-      code: 1,
     });
     // exit: add.stopped
     return 1;
@@ -424,7 +418,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Read so a session whose workspace list can't be read is refused. The title is not a key.
   const workspaces = live === 'running' ? sources.workspaces(session) : [];
   if (agents === null || workspaces === null) {
-    refuse(io, json, 'add', { id: 'add.agents', message: `session ${plainLine(session)} runs, and its agents can't be read`, repair: null, code: 1 });
+    refuse(io, json, 'add', { id: 'add.agents', message: `session ${plainLine(session)} runs, and its agents can't be read`, repair: null });
     // exit: add.agents
     return 1;
   }
@@ -439,7 +433,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   if ('error' in built) {
     // The builder names the row its refusal is (`add.no-seat`, `add.until`, `add.branch-missing`,
     // …); the plain line is the sentence it always printed.
-    refuse(io, json, 'add', { id: built.id, message: built.error, repair: null, code: 1 });
+    refuse(io, json, 'add', { id: built.id, message: built.error, repair: null });
     // exit: add.no-seat
     // exit: add.not-restored
     // exit: add.no-like
@@ -488,7 +482,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       id: 'add.session-doubt',
       message: `${built.name}: its pane holds a process this record cannot tie to the launch`,
       repair: null,
-      code: 1,
     });
     // exit: add.session-doubt
     return 1;
@@ -506,7 +499,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         id: 'add.already-running',
         message: alreadyRunningText(built.name, owner, unknown),
         repair: null,
-        code: 1,
       });
     } else out.stderr(alreadyRunningLine(built.name, owner, unknown));
     // exit: add.already-running
@@ -524,7 +516,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const stanza = fingerprints(team).seats[built.name];
     const inCopy = standing.kind === 'verified' ? approvedFingerprints(standing.record).seats[built.name] : undefined;
     if (built.edited !== original || inCopy === undefined || inCopy !== stanza) {
-      refuse(io, json, 'add', { id: 'add.delegate-edit', message: ADD_DELEGATE_EDIT.text, repair: null, code: 1 });
+      refuse(io, json, 'add', { id: 'add.delegate-edit', message: ADD_DELEGATE_EDIT.text, repair: null });
       // exit: add.delegate-edit
       return 1;
     }
@@ -535,7 +527,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       id: 'add.no-profile',
       message: `no launch profile for \`${plainLine(built.seat.cli)}\` in this version`,
       repair: null,
-      code: 1,
     });
     // exit: add.no-profile
     return 1;
@@ -545,7 +536,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       id: 'add.override-owner',
       message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
       repair: null,
-      code: 1,
     });
     // exit: add.override-owner
     return 1;
@@ -558,7 +548,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       id: 'add.model',
       message: `${plainLine(built.name)}: unknown model ${JSON.stringify(args.values.model)} for ${plainLine(built.seat.cli)}`,
       repair: null,
-      code: 2,
     });
     // exit: add.model
     return 2;
@@ -571,7 +560,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       id: 'add.effort',
       message: `${plainLine(built.name)}: ${plainText(resolvedEffort.error)}`,
       repair: null,
-      code: 2,
     });
     // exit: add.effort
     return 2;
@@ -602,7 +590,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         id: 'add.prepared',
         message: prepared.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('; '),
         repair: null,
-        code: 2,
       });
     } else for (const problem of prepared.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
     // exit: add.prepared
@@ -615,7 +602,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         id: 'add.placed',
         message: placed.map((problem) => plainText(problem.message)).join('; '),
         repair: null,
-        code: 1,
       });
     } else for (const problem of placed) out.stderr(`team add: ${plainText(problem.message)}\n`);
     // exit: add.placed
@@ -639,7 +625,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     ? { problem: startProblem }
     : seatStart(runTeam, built.seat, root, sources.home, verifiedLobby ?? undefined);
   if ('problem' in start) {
-    refuse(io, json, 'add', { id: 'add.start', message: start.problem, repair: null, code: 1 });
+    refuse(io, json, 'add', { id: 'add.start', message: start.problem, repair: null });
     // exit: add.start
     return 1;
   }
@@ -745,7 +731,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       if (json) {
         // Under `--json` a dry run's refusal is the error envelope too: the plan it would
         // otherwise print is no document, and the row is the same one the real run takes.
-        refuse(io, true, 'add', { id: 'add.doctor', message: finding.text, repair: null, code: 1 });
+        refuse(io, true, 'add', { id: 'add.doctor', message: finding.text, repair: null });
       } else if (dry && launchProblem && !stray && finding.text === launchText) {
         const starting = seatPlan(standing, prepared.team, built.seat, start, root, sources.home);
         const planned = repair ? { ...starting, repair } : starting;
@@ -782,21 +768,21 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // decision. Every caller refusal above returns before this gate, so a line is only ever
     // written for a call that was allowed this far; a dry run decides nothing and writes none.
     if (!dry) logLine(dir, 'add', describeCaller(caller), `refused: ${first.problem} — readings: ${readingsText(first.machine)}`, sources.now());
-    refuse(io, json, 'add', { id: 'add.machine', message: first.problem, repair: null, code: 1 });
+    refuse(io, json, 'add', { id: 'add.machine', message: first.problem, repair: null });
     // exit: add.machine
     return 1;
   }
   const running = runningOf(agents, prepared.team, recorded);
   const room = ceilingProblem(ceilings, running, built.seat, Boolean(built.temporary));
   if (room) {
-    refuse(io, json, 'add', { id: 'add.ceiling', message: room, repair: null, code: 1 });
+    refuse(io, json, 'add', { id: 'add.ceiling', message: room, repair: null });
     // exit: add.ceiling
     return 1;
   }
   const again = crossed();
   if (again?.problem) {
     if (!dry) logLine(dir, 'add', describeCaller(caller), `refused: ${again.problem} — readings: ${readingsText(again.machine)}`, sources.now());
-    refuse(io, json, 'add', { id: 'add.machine-again', message: again.problem, repair: null, code: 1 });
+    refuse(io, json, 'add', { id: 'add.machine-again', message: again.problem, repair: null });
     // exit: add.machine-again
     return 1;
   }
@@ -820,7 +806,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   };
   if (decision.kind === 'refuse' && wouldLaunch) {
     if (json) {
-      refuse(io, true, 'add', { id: 'add.budget', message: decision.why, repair: null, code: 1 });
+      refuse(io, true, 'add', { id: 'add.budget', message: decision.why, repair: null });
     } else if (dry) {
       out.stdout(`${plainLine(built.name)}: would refuse: ${plainText(decision.why)}\ndry run: nothing was run\n`);
     } else {
@@ -890,7 +876,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       id: 'add.run-lock',
       message: runLockText(runLock.held, session, dir),
       repair: null,
-      code: 1,
     });
     // exit: add.run-lock
     return 1;
@@ -930,7 +915,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
           id: 'add.changed',
           message: 'the file changed while add was checking; nothing was written',
           repair: null,
-          code: 1,
         });
         // exit: add.changed
         return 1;
@@ -941,7 +925,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
             id: 'add.locked',
             message: written.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('; '),
             repair: null,
-            code: 2,
           });
         } else for (const problem of written.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
         // exit: add.locked
@@ -1012,7 +995,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
           id: 'add.already-running',
           message: alreadyRunningText(built.name, caller.kind === 'owner', outcome.unknown),
           repair: null,
-          code: 1,
         });
       } else if (launched && !report.serverFailed) {
         writeJson(io, 'team.add', {
@@ -1033,14 +1015,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
           id: 'add.server',
           message: "the session's server did not start",
           repair: null,
-          code: 1,
         });
       } else {
         refuse(io, true, 'add', {
           id: 'add.not-ready',
           message: 'the launch finished without a ready seat',
           repair: null,
-          code: 1,
         });
       }
     }
@@ -1501,7 +1481,7 @@ function withoutOutputFlags(argv: string[]): string[] {
 
 function refusePretrust(io: Io, json: boolean, name: string, line: string, dry: boolean): number {
   if (json) {
-    refuse(io, true, 'add', { id: 'add.pretrust', message: line, repair: null, code: 1 });
+    refuse(io, true, 'add', { id: 'add.pretrust', message: line, repair: null });
   } else if (dry) io.stdout(`${plainLine(name)}: would refuse: ${plainText(line)}\ndry run: nothing was run\n`);
   else io.stderr(`team add: refused: ${plainText(line)}\n`);
   // exit: add.pretrust
@@ -1510,7 +1490,7 @@ function refusePretrust(io: Io, json: boolean, name: string, line: string, dry: 
 
 function refuseLobby(io: Io, json: boolean, name: string, text: string, dry: boolean): number {
   if (json) {
-    refuse(io, true, 'add', { id: 'add.lobby', message: text, repair: null, code: 1 });
+    refuse(io, true, 'add', { id: 'add.lobby', message: text, repair: null });
   } else if (dry) io.stdout(`${plainLine(name)}: would refuse: ${plainText(text)}\ndry run: nothing was run\n`);
   else io.stderr(`team add: ${plainText(text)}\n`);
   // exit: add.lobby

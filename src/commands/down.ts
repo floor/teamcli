@@ -431,7 +431,6 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       id: 'down.invocation',
       message: args.error ?? `unexpected "${args.rest[0]}"`,
       repair: null,
-      code: 2,
       usage: USAGE,
     });
     // exit: down.invocation
@@ -451,7 +450,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
   }
   if (detached !== undefined && !runnerGranted) {
-    refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null, code: 1 });
+    refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
     // exit: down.detached
     return 1;
   }
@@ -520,7 +519,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (said?.kind === 'refused' && placed) {
       refusals.push({ id: said.id, message: said.text });
     } else {
-      refuse(io, json, 'down', { id: 'down.file-owner', message: fileRefusal, repair: null, code: 1 });
+      refuse(io, json, 'down', { id: 'down.file-owner', message: fileRefusal, repair: null });
       // exit: down.file-owner
       return 1;
     }
@@ -538,7 +537,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       if (said?.kind === 'refused' && placed) {
         refusals.push({ id: said.id, message: said.text });
       } else {
-        refuse(io, json, 'down', { id: 'down.session-owner', message: sessionOwnerRefusal(walked), repair: null, code: 1 });
+        refuse(io, json, 'down', { id: 'down.session-owner', message: sessionOwnerRefusal(walked), repair: null });
         // exit: down.session-owner
         return 1;
       }
@@ -571,7 +570,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     const id = current.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
       ? 'down.not-a-repo'
       : current.errors.some((problem) => problem.line > 0) ? 'down.file-invalid' : 'down.file';
-    if (json) refuse(io, json, 'down', { id, message: said.join('; '), repair: null, code: 2 });
+    if (json) refuse(io, json, 'down', { id, message: said.join('; '), repair: null });
     else for (const line of said) io.stderr(`team down: ${line}\n`);
     // exit: down.not-a-repo
     // exit: down.file
@@ -714,7 +713,6 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       id: 'down.herdr',
       message: "herdr doesn't answer; is it installed and running?",
       repair: null,
-      code: 2,
     });
     remember();
     // exit: down.herdr
@@ -747,7 +745,6 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       id: 'down.agents',
       message: `the agents of session ${session} can't be read`,
       repair: null,
-      code: 2,
     });
     remember();
     // exit: down.agents
@@ -833,7 +830,6 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         id: standing.kind === 'legacy' ? 'down.legacy' : 'down.refused',
         message: notInForce(standing),
         repair: null,
-        code: 1,
       });
       // exit: down.never-approved
       // exit: down.legacy
@@ -1002,7 +998,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if (refusals.length) {
     const first = refusals[0] as DownRefusal;
     if (json) {
-      refuse(io, json, 'down', { id: first.id, message: first.message, repair: first.repair ?? null, code: 1 });
+      refuse(io, json, 'down', { id: first.id, message: first.message, repair: first.repair ?? null });
     } else if (!dry) {
       if (warning) io.stderr(`team down: ${warning}\n`);
       for (const refusal of refusals) io.stderr(`team down: ${refusal.message}\n`);
@@ -1052,7 +1048,6 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       id: 'down.no-launch',
       message: 'this call has no way to reach herdr',
       repair: null,
-      code: 1,
     });
     // exit: down.no-launch
     return 1;
@@ -1068,7 +1063,6 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       id: 'down.run-lock',
       message: runLockText(runLock.held, session, dir),
       repair: null,
-      code: 1,
     });
     // exit: down.run-lock
     return 1;
@@ -1203,7 +1197,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       const summary = lines.at(-1) ?? `session ${session}: stopped`;
       const notes = [...jsonNotes, ...lines.slice(0, -1)];
       if (report.held) {
-        refuse(io, true, 'down', { id: 'down.held', message: summary, repair: null, code: 1 });
+        refuse(io, true, 'down', { id: 'down.held', message: summary, repair: null });
       } else {
         writeJson(io, 'team.down', {
           format: 1 as const,
