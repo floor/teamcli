@@ -26,7 +26,8 @@ import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from 
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { deliveryOrder, type DeliveryLeg, type SettingLevel } from '../settings/inherit.ts';
+import { type DeliveryLeg, type SettingLevel } from '../settings/inherit.ts';
+import { deliveryOrder } from '../settings/resolve.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]

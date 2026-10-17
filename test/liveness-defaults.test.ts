@@ -19,9 +19,8 @@ import {
   LIVENESS_RULE,
   livenessOf,
   sayThreshold,
-  stateThresholds,
-  thresholdRefusals,
 } from '../src/settings/inherit.ts';
+import { stateThresholds, thresholdRefusals } from '../src/settings/resolve.ts';
 import { emptySession } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';

@@ -1,68 +1,36 @@
 // Settings (Layer 3): one value per seat, inherited machine → entity → project → team → seat. A
 // level below may tighten a setting freely — closing is always legal — and may loosen it only
 // where the setting itself allows that level to, so a project can open what an entity left
-// closed, while a team inside it keeps the power to close the door again for itself. Phase 0b
-// ships the mechanism and its first setting, `seats_cross_teams`; the rest follow.
+// closed, while a team inside it keeps the power to close the door again for itself. Every setting
+// names an enforced policy of the 0.5.0 catalogue (Kernel amendment 02), and `resolve.ts` reads it
+// through that policy's values, ordering and default; the declarations and defaults stay here,
+// where the catalogue reads them too.
 
 export type SettingLevel = 'machine' | 'entity' | 'project' | 'team' | 'seat';
 
 /** The inheritance order, outermost first. */
 export const SETTING_LEVELS: readonly SettingLevel[] = ['machine', 'entity', 'project', 'team', 'seat'];
 
-/** One level's word on a setting: the level that holds it, and the value it declares. */
-export type Declaration = { level: SettingLevel; value: boolean };
+/** One level's word on a setting: the level that holds it, the value it declares, and when the
+ *  word stops counting (an expired word is unset at its level, Atlas ruling 5). */
+export type Declaration = { level: SettingLevel; value: boolean; expiry?: string | null };
 
 /**
- * A boolean setting, declared once per feature: the value when no level declares one, which of the
- * two values is the permissive one, and the levels allowed to loosen — to declare the permissive
- * value where the inherited one is stricter. Tightening is allowed at every level and needs no
- * listing.
+ * A boolean setting, declared once per feature: the catalogue policy it is, the value when no
+ * level declares one, and the levels allowed to loosen it. Which word tightens and which loosens
+ * is the catalogue policy's to say (its `isWithin`); tightening is allowed at every level and
+ * needs no listing.
  */
 export type SettingSpec = {
-  /** The name the setting is written under, for reports. */
+  /** The spelling the setting is written under in a team file and a report — the policy's alias. */
   name: string;
+  /** The catalogue policy this setting is, in canonical kebab-case. */
+  policy: string;
   /** The value when nothing declares it. */
   fallback: boolean;
-  /** The permissive value: the one a level may declare anew only where it may loosen. */
-  permissive: boolean;
   /** The levels allowed to loosen this setting. */
   looseningLevels: readonly SettingLevel[];
 };
-
-/**
- * What a seat ends up with, and what it cost: the value in force, the level whose word set it —
- * null when the fallback stands — and every declaration set aside because its level may not
- * loosen this setting.
- */
-export type Resolution = {
-  value: boolean;
-  source: SettingLevel | null;
-  refused: Declaration[];
-};
-
-/**
- * The inheritance itself. Levels are read outermost first, and within a level the last word wins.
- * A word that would loosen the setting is honoured only at a level the spec lists; one set aside
- * changes nothing and the inherited value stands. A word equal to the value already in force is no
- * word at all — neither loosening nor tightening — so it passes at every level.
- */
-export function resolveSetting(spec: SettingSpec, declared: readonly Declaration[]): Resolution {
-  let value = spec.fallback;
-  let source: SettingLevel | null = null;
-  const refused: Declaration[] = [];
-  for (const level of SETTING_LEVELS) {
-    for (const declaration of declared) {
-      if (declaration.level !== level || declaration.value === value) continue;
-      if (declaration.value === spec.permissive && !spec.looseningLevels.includes(level)) {
-        refused.push(declaration);
-        continue;
-      }
-      value = declaration.value;
-      source = level;
-    }
-  }
-  return { value, source, refused };
-}
 
 /** The declarations a chain of per-level values holds, in inheritance order; a level the chain
  *  says nothing about is left out, and so is a level given `undefined`. */
@@ -83,62 +51,31 @@ export function declarationsOf(declared: Partial<Record<SettingLevel, boolean | 
  */
 export const SEATS_CROSS_TEAMS: SettingSpec = {
   name: 'seats_cross_teams',
+  policy: 'seats-cross-teams',
   fallback: false,
-  permissive: true,
   looseningLevels: ['project'],
 };
 
-/** The one call admission makes: the asker's chain in, the effective answer out. */
-export function seatsCrossTeams(declared: Partial<Record<SettingLevel, boolean | undefined>>): boolean {
-  return resolveSetting(SEATS_CROSS_TEAMS, declarationsOf(declared)).value;
-}
-
 /**
- * A number setting, in the boolean one's shape: the value when no level declares one, which side
- * of the inherited value is the permissive one, and the levels allowed to loosen — to declare a
- * permissive value where the inherited one is stricter. Tightening is allowed at every level and
- * needs no listing. A word equal to the value in force is no word at all.
+ * A number setting, in the boolean one's shape: the catalogue policy it is, the value when no
+ * level declares one, and the levels allowed to loosen it. Which side of the inherited value is
+ * the looser one is the catalogue policy's to say (its `isWithin`); tightening is allowed at every
+ * level and needs no listing. A word equal to the value in force is no word at all.
  */
 export type NumberSettingSpec = {
-  /** The name the setting is written under, for reports. */
+  /** The spelling the setting is written under in a team file and a report — the policy's alias. */
   name: string;
+  /** The catalogue policy this setting is, in canonical kebab-case. */
+  policy: string;
   /** The value when nothing declares it. */
   fallback: number;
-  /** The permissive side: the side of the inherited value a level may move to only where it
-   *  may loosen. */
-  permissive: 'higher' | 'lower';
   /** The levels allowed to loosen this setting. */
   looseningLevels: readonly SettingLevel[];
 };
 
-/** One level's word on a number setting: the level that holds it, and the value it declares. */
-export type NumberDeclaration = { level: SettingLevel; value: number };
-
-/** A word the resolver set aside, with the value it would have replaced: a report names both. */
-export type RefusedNumberDeclaration = NumberDeclaration & { inherited: number };
-
-export type NumberResolution = { value: number; source: SettingLevel | null; refused: RefusedNumberDeclaration[] };
-
-/** The inheritance itself, number-valued: the same order, the same loosen-only-where-listed
- *  rule, and a word equal to the value in force counting as none. */
-export function resolveNumberSetting(spec: NumberSettingSpec, declared: readonly NumberDeclaration[]): NumberResolution {
-  let value = spec.fallback;
-  let source: SettingLevel | null = null;
-  const refused: RefusedNumberDeclaration[] = [];
-  for (const level of SETTING_LEVELS) {
-    for (const declaration of declared) {
-      if (declaration.level !== level || declaration.value === value) continue;
-      const looser = spec.permissive === 'higher' ? declaration.value > value : declaration.value < value;
-      if (looser && !spec.looseningLevels.includes(level)) {
-        refused.push({ ...declaration, inherited: value });
-        continue;
-      }
-      value = declaration.value;
-      source = level;
-    }
-  }
-  return { value, source, refused };
-}
+/** One level's word on a number setting: the level that holds it, the value it declares, and when
+ *  the word stops counting (an expired word is unset at its level, Atlas ruling 5). */
+export type NumberDeclaration = { level: SettingLevel; value: number; expiry?: string | null };
 
 /** The declarations a chain of per-level numbers holds, in inheritance order; a level the chain
  *  says nothing about is left out, like one given `undefined`. */
@@ -160,8 +97,8 @@ export function numberDeclarationsOf(declared: Partial<Record<SettingLevel, numb
  */
 const BLIND_AFTER_SECONDS: NumberSettingSpec = {
   name: 'state_blind_after_seconds',
+  policy: 'state-blind-after-seconds',
   fallback: 300,
-  permissive: 'higher',
   looseningLevels: ['project'],
 };
 
@@ -172,8 +109,8 @@ const BLIND_AFTER_SECONDS: NumberSettingSpec = {
  */
 const IDLE_LEAD_SECONDS: NumberSettingSpec = {
   name: 'liveness_idle_lead_seconds',
+  policy: 'liveness-idle-lead-seconds',
   fallback: 300,
-  permissive: 'higher',
   looseningLevels: [],
 };
 
@@ -183,8 +120,8 @@ const IDLE_LEAD_SECONDS: NumberSettingSpec = {
  */
 const IDLE_OWNER_SECONDS: NumberSettingSpec = {
   name: 'liveness_idle_owner_seconds',
+  policy: 'liveness-idle-owner-seconds',
   fallback: 900,
-  permissive: 'higher',
   looseningLevels: [],
 };
 
@@ -214,14 +151,14 @@ export const STATE_THRESHOLDS: { [K in keyof StateThresholds]: NumberSettingSpec
   blind_after_seconds: BLIND_AFTER_SECONDS,
   trace_window_seconds: {
     name: 'state_trace_window_seconds',
+    policy: 'state-trace-window-seconds',
     fallback: 120,
-    permissive: 'higher',
     looseningLevels: ['project'],
   },
   hook_working_seconds: {
     name: 'state_hook_working_seconds',
+    policy: 'state-hook-working-seconds',
     fallback: 120,
-    permissive: 'higher',
     looseningLevels: ['project'],
   },
 };
@@ -253,16 +190,6 @@ export function livenessOf(thresholds: StateThresholds): LivenessThresholds {
   };
 }
 
-/** One declaration set aside, in the words a report names it by. */
-export type ThresholdRefusal = {
-  setting: keyof LivenessThresholds;
-  level: SettingLevel;
-  value: number;
-  inherited: number;
-  /** The rule the word broke, with the setting, the level and both values in it. */
-  text: string;
-};
-
 /** A threshold said the way a report says it: 90s, 5m, 2h. */
 export function sayThreshold(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -273,126 +200,25 @@ export function sayThreshold(seconds: number): string {
 /** The rule a refused liveness word broke, as the report says it. */
 export const LIVENESS_RULE = 'a liveness threshold may be tightened, never loosened, unless the level above allows it';
 
-/** The words one chain holds, one level at a time, for one threshold. */
-function thresholdDeclarations<K extends keyof StateThresholds>(
-  declared: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>,
-  name: K,
-): NumberDeclaration[] {
-  const out: NumberDeclaration[] = [];
-  for (const level of SETTING_LEVELS) {
-    const value = declared[level]?.[name];
-    if (value !== undefined) out.push({ level, value });
-  }
-  return out;
-}
-
 /**
- * The one call the state reading makes — and the one the watch makes: the chain in, every
- * threshold out, each resolved on its own through the inheritance rule. A word that would
- * loosen a threshold no level allows is set aside here, the value in force standing; `status`,
- * `check` and the watch name those words through `thresholdRefusals`.
- */
-export function stateThresholds(declared: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>): StateThresholds {
-  return {
-    idle_lead_seconds: resolveNumberSetting(STATE_THRESHOLDS.idle_lead_seconds, thresholdDeclarations(declared, 'idle_lead_seconds')).value,
-    idle_owner_seconds: resolveNumberSetting(STATE_THRESHOLDS.idle_owner_seconds, thresholdDeclarations(declared, 'idle_owner_seconds')).value,
-    blind_after_seconds: resolveNumberSetting(STATE_THRESHOLDS.blind_after_seconds, thresholdDeclarations(declared, 'blind_after_seconds')).value,
-    trace_window_seconds: resolveNumberSetting(STATE_THRESHOLDS.trace_window_seconds, thresholdDeclarations(declared, 'trace_window_seconds')).value,
-    hook_working_seconds: resolveNumberSetting(STATE_THRESHOLDS.hook_working_seconds, thresholdDeclarations(declared, 'hook_working_seconds')).value,
-  };
-}
-
-/**
- * Every liveness word the chain set aside, each with the rule it broke. The values themselves
- * come from the same `stateThresholds` call the reading makes, so a report never disagrees with
- * the number in force: a looser word changes nothing, and a project may only open a window the
- * setting allows that level to open.
- */
-export function thresholdRefusals(declared: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>): ThresholdRefusal[] {
-  const refused: ThresholdRefusal[] = [];
-  for (const setting of LIVENESS_KEYS) {
-    const spec = STATE_THRESHOLDS[setting];
-    const resolution = resolveNumberSetting(spec, thresholdDeclarations(declared, setting));
-    for (const word of resolution.refused) {
-      refused.push({
-        setting,
-        level: word.level,
-        value: word.value,
-        inherited: word.inherited,
-        text: `${spec.name}: the ${word.level} declared ${sayThreshold(word.value)}, longer than the ${sayThreshold(word.inherited)} in force — ${LIVENESS_RULE}`,
-      });
-    }
-  }
-  return refused;
-}
-
-/**
- * An order setting: a list of legs, declared once per feature with the order in force when no
- * level declares one. There is no permissive side here — a level below the one that set the order
- * may always drop a leg from it or put the legs it keeps in a different order, and may never add
- * one nor empty it: an order with no leg takes nothing at all. A word naming a leg the order in
- * force does not have — or naming one twice, or naming none — is set aside and the order in force
- * stands. A word equal to the order in force is no word at all.
+ * An order setting: a list of legs, declared once per feature with the catalogue policy it is and
+ * the order in force when no level declares one. An order only ever tightens: the catalogue
+ * policy's `isWithin` honours a word that drops a leg or reorders the ones it keeps, and sets aside
+ * one that adds a leg, names one twice, or names none — an order with no leg takes nothing at all.
+ * A word equal to the order in force is no word at all.
  */
 export type OrderSettingSpec<L extends string> = {
-  /** The name the setting is written under, for reports. */
+  /** The spelling the setting is written under in a team file and a report — the policy's alias. */
   name: string;
+  /** The catalogue policy this setting is, in canonical kebab-case. */
+  policy: string;
   /** The order when nothing declares it. */
   fallback: readonly L[];
 };
 
-/** One level's word on an order setting: the level that holds it, and the order it declares. */
-export type OrderDeclaration<L extends string = string> = { level: SettingLevel; value: readonly L[] };
-
-export type OrderResolution<L extends string = string> = {
-  value: readonly L[];
-  source: SettingLevel | null;
-  refused: OrderDeclaration<L>[];
-};
-
-/** Whether every leg of `word` is a leg of `order`, each at most once, and there is at least one:
- *  the one form a word on an order setting may take. A word with no leg is no form at all — an
- *  order that names no leg takes no send, and the loaders that read an order from a file refuse
- *  an empty one the same way (`src/file/sections/delivery_order.ts`,
- *  `src/registry/projects.ts`). */
-function dropsOrReorders<L extends string>(word: readonly L[], order: readonly L[]): boolean {
-  if (word.length === 0) return false;
-  const seen = new Set<L>();
-  for (const leg of word) {
-    if (seen.has(leg) || !order.includes(leg)) return false;
-    seen.add(leg);
-  }
-  return true;
-}
-
-function sameOrder<L extends string>(left: readonly L[], right: readonly L[]): boolean {
-  return left.length === right.length && left.every((leg, at) => leg === right[at]);
-}
-
-/**
- * The inheritance itself, order-valued: levels are read outermost first, and within a level the
- * last word wins. A word that drops or reorders the order in force is honoured; one that names a
- * leg the order in force does not have, or names none at all, is set aside and the order stands.
- * A word equal to the order in force is no word at all — the order it keeps may be declared at
- * every level.
- */
-export function resolveOrderSetting<L extends string>(spec: OrderSettingSpec<L>, declared: readonly OrderDeclaration<L>[]): OrderResolution<L> {
-  let value = spec.fallback;
-  let source: SettingLevel | null = null;
-  const refused: OrderDeclaration<L>[] = [];
-  for (const level of SETTING_LEVELS) {
-    for (const declaration of declared) {
-      if (declaration.level !== level || sameOrder(declaration.value, value)) continue;
-      if (!dropsOrReorders(declaration.value, value)) {
-        refused.push(declaration);
-        continue;
-      }
-      value = declaration.value;
-      source = level;
-    }
-  }
-  return { value, source, refused };
-}
+/** One level's word on an order setting: the level that holds it, the order it declares, and when
+ *  the word stops counting (an expired word is unset at its level, Atlas ruling 5). */
+export type OrderDeclaration<L extends string = string> = { level: SettingLevel; value: readonly L[]; expiry?: string | null };
 
 /** The declarations a chain of per-level orders holds, in inheritance order; a level the chain
  *  says nothing about is left out, and so is a level given `undefined`. */
@@ -422,10 +248,6 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'ty
  */
 export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   name: 'delivery_order',
+  policy: 'delivery-order',
   fallback: DELIVERY_LEGS,
 };
-
-/** The one call a send makes: the receiving seat's chain in, the order its delivery walks out. */
-export function deliveryOrder(declared: Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>): readonly DeliveryLeg[] {
-  return resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf(declared)).value;
-}

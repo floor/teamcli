@@ -19,7 +19,8 @@
 // exactly as a pair the registry never knew.
 
 import type { Agent } from '../registry/agents.ts';
-import { declarationsOf, resolveSetting, seatsCrossTeams, type SettingLevel, type SettingSpec } from '../settings/inherit.ts';
+import { declarationsOf, type SettingLevel, type SettingSpec } from '../settings/inherit.ts';
+import { resolveSetting, seatsCrossTeams } from '../settings/resolve.ts';
 
 /** What admission needs of a team: its identity and its roster. The team registry's own record
  *  is wider, and satisfies this shape as it stands. */
@@ -357,8 +358,8 @@ function leadsMayWrite(
  */
 const LEADS_ACROSS_TEAMS: SettingSpec = {
   name: 'seats_cross_teams',
+  policy: 'seats-cross-teams',
   fallback: true,
-  permissive: true,
   looseningLevels: ['project'],
 };
 

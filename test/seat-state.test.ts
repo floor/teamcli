@@ -6,7 +6,8 @@
 import { describe, expect, test } from 'bun:test';
 import { observedSeatState, sayThreshold, seatState } from '../src/labels/state.ts';
 import { renderSeatsTable, type SeatRegistryRow } from '../src/commands/seats.ts';
-import { DEFAULT_STATE_THRESHOLDS, resolveNumberSetting, stateThresholds, STATE_THRESHOLDS } from '../src/settings/inherit.ts';
+import { DEFAULT_STATE_THRESHOLDS, STATE_THRESHOLDS } from '../src/settings/inherit.ts';
+import { resolveNumberSetting, stateThresholds } from '../src/settings/resolve.ts';
 import { CLAUDE_IDLE } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
