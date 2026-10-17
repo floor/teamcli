@@ -637,13 +637,15 @@ describe('team send: --timeout', () => {
 
 describe('team send: --list', () => {
   test("the file's seats print with their cli, their role and the project they sit in", async () => {
-    const { root, sockets } = world();
+    const { root, dir, sockets } = world();
     const io = owner(root);
 
     const code = await runSend(['--list'], io, fake(sockets));
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
+    // A listing reads the roster and writes nothing, so it adds no line to the log.
+    expect(existsSync(join(dir, LOG_FILE))).toBe(false);
     // No project source is handed in: each seat's project is its team's own (a team the registry
     // places in none is its own project). The table is the contract's: the seat, its role, the
     // project it sits in, and the reach a send would take.
@@ -1039,6 +1041,8 @@ describe('team send: native drop', () => {
     const waited = owner(root);
     expect(await runSend(['lead', 'hello', '--wait', '--dry-run'], waited, fake(sockets))).toBe(0);
     expect(waited.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
+    // No dry run above wrote a line: the log records writes, and a dry run writes nothing.
+    expect(existsSync(join(dir, LOG_FILE))).toBe(false);
   });
 
   test('a seat the file marks stopped is refused before anything is written, and plans once un-stopped', async () => {

@@ -533,7 +533,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (order[0] !== 'native') {
       const leads = order.length === 0 ? 'empty' : order.join(', ');
       const why = `--wait needs the native leg first, and its delivery order is ${leads}; nothing was sent`;
-      if (dry) return dryRun(io, dir, who, to.seat, `${to.cli} ${why}`, host, report);
+      if (dry) return dryRun(io, to.seat, `${to.cli} ${why}`, report);
       return refuse(io, dir, who, `${to.seat}: ${why}`, host, report);
     }
     return deliverSocket(io, dir, who, from, to, body, dry, timeoutS, host, report, startedAt);
@@ -547,7 +547,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
   const dropPath = join(dropDir, msgId);
   if (dry) {
-    return dryRun(io, dir, who, to.seat, `${to.cli} via ${walkPhrase(order, to.cli)}; nothing was written`, host, report);
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(order, to.cli)}; nothing was written`, report);
   }
 
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
@@ -862,7 +862,7 @@ async function deliverSocket(
   // on. The dry run prints the same sentence; nothing dials either way.
   if (!SOCKET_SEND) {
     const reason = '--wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent';
-    if (dry) return dryRun(io, dir, who, to.seat, `${to.cli} ${reason}`, host, report);
+    if (dry) return dryRun(io, to.seat, `${to.cli} ${reason}`, report);
     return refuse(io, dir, who, `${to.seat}: ${reason}`, host, report);
   }
   // One JSON line, exactly the frame the probe measured: `type:"user"`, the content, and a
@@ -879,7 +879,7 @@ async function deliverSocket(
     return refuse(io, dir, who, `${to.seat}: the message is too large for this channel: the frame is ${String(frame.length)} characters and the socket's measured limit is ${String(FRAME_LIMIT)}; nothing was sent`, host, report);
   }
   if (dry) {
-    return dryRun(io, dir, who, to.seat, 'claude-code via the cross-session socket; nothing was sent', host, report);
+    return dryRun(io, to.seat, 'claude-code via the cross-session socket; nothing was sent', report);
   }
 
   const daemonSock = host.daemonSocket ?? daemonSocketPath(to.project, to.root, host.home);
@@ -1162,11 +1162,11 @@ function sealDropTree(dir: string, session: string, seat: string): void {
   chmodSync(leaf, 0o700);
 }
 
-/** The seat and channel. No drop file and nothing typed. One team.log line. Exit 0, always. */
-function dryRun(io: Io, dir: string, who: string, seat: string, what: string, host: SendHost, report: Report): number {
+/** The seat and channel. No drop file, nothing typed and no team.log line: a dry run writes
+ *  nothing, and the log records writes. Exit 0, always. */
+function dryRun(io: Io, seat: string, what: string, report: Report): number {
   report.sent = null;
   const summary = `${seat}: dry-run: ${what}`;
-  logLine(dir, 'send', who, summary, host.now());
   const plan: PlanStep[] = [{ step: 'send', seat, detail: what, prefix: '+' }];
   if (report.json) {
     writeAction(io, report, { status: 'dry-run', summary, dryRun: true, channel: null, plan });

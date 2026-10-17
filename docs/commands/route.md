@@ -59,9 +59,11 @@ seat, agent, recipient_session, cli, pane, address, socket_state, native, rule}`
 A route is one record before it is one answer: one JSON line is appended to the receiving project's
 `routes.jsonl`, beside its `messages.jsonl` in the state folder, naming the pair, the rule, the
 address and its state and when. A record that cannot be written is a refusal — an address this CLI
-handed out is accountable, or it is not handed out. `--dry-run` answers the same, prints the one
-plan step — `+ record: <seat>: append the route to <path>` — then `dry run: nothing was run`, and
-writes nothing.
+handed out is accountable, or it is not handed out. A recorded route writes one line to the
+receiving team's `.agents/team.log` — `looked up <seat>: <state>, native <yes|no>` — a lookup and
+never a delivery word: reading an address is not a message arriving. `--dry-run` answers the same,
+prints the one plan step — `+ record: <seat>: append the route to <path>` — then `dry run: nothing
+was run`, and writes nothing, no log line included.
 
 ## Telling a seat to use it
 

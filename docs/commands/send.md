@@ -107,8 +107,8 @@ build can actually walk, none it cannot — a drop file and one trigger line for
 of this build, since the socket write is skipped; a waited Claude Code send is named as the
 refusal it is, and a waited send whose order leads elsewhere as that refusal. A `--wait` to a
 native-CLI seat is refused as the real run is, with the same sentence and exit 1. It
-writes no drop file and types nothing; it appends one line to
-`.agents/team.log`.
+writes no drop file, types nothing and appends no line to `.agents/team.log`: a dry run
+writes nothing, and the log records writes.
 
 ## Addressing
 
@@ -500,7 +500,7 @@ team send: refused: gpt-reviewer runs codex: this build confirms that a native C
 exit 1
 ```
 
-`--dry-run` names the channel. It writes no drop file and types nothing; it appends one line to `.agents/team.log`:
+`--dry-run` names the channel. It writes no drop file, types nothing and appends no line to `.agents/team.log`:
 
 ```console
 $ team send gpt-reviewer "hello" --dry-run ; echo "exit $?"

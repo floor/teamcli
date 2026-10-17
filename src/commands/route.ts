@@ -153,7 +153,9 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   }
   const written = appendRoute(resolved.team.project, resolved.team.root, host.home, record);
   if (!written.ok) return unrecorded(io, dir, who, written.reason, host, report);
-  logLine(toDir, 'route', who, `${at.seat}: routed (${socketStateText(address)})`, host.now());
+  // A lookup, not a delivery: the line says what was read — the address's state and whether the
+  // recipient carries the native channel — never a word a seat reads as a message arriving.
+  logLine(toDir, 'route', who, `looked up ${at.seat}: ${socketStateText(address)}, native ${native ? 'yes' : 'no'}`, host.now());
   return routed(io, context, at, address, native, admission.rule, report);
 }
 
