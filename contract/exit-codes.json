@@ -660,6 +660,13 @@
       "trigger": "team check"
     },
     {
+      "code": 0,
+      "command": "check",
+      "id": "check.repaired",
+      "meaning": "the owner's --repair dropped the state's leftovers, and nothing else needs acting on",
+      "trigger": "team check --repair"
+    },
+    {
       "code": 1,
       "command": "check",
       "id": "check.file-owner",
@@ -672,6 +679,13 @@
       "id": "check.findings",
       "meaning": "something needs acting on",
       "trigger": "team check"
+    },
+    {
+      "code": 1,
+      "command": "check",
+      "id": "check.repair-owner",
+      "meaning": "--repair is the owner's",
+      "trigger": "team check --repair"
     },
     {
       "code": 1,

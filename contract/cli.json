@@ -226,6 +226,12 @@
         },
         {
           "hidden": false,
+          "name": "--repair",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -254,7 +260,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team check [--session <name>] [--file <path>]",
+        "team check [--session <name>] [--file <path>] [--repair]",
         "team check <ref> [--pr <file>] [--since <ref>] [--file <path>]"
       ]
     },

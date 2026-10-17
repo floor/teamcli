@@ -1,8 +1,10 @@
 // Bare `team check`: one answer to "is anything wrong with this team that someone should act on",
 // for the callers who may see it — the owner, a seat of the team, and a pane the team's approved
-// file names (design note §3, §4). It needs no git, it reads, and it changes nothing: the file is
-// resolved with `remember` false for every caller, nothing of the watch's pass, report, readings
-// or nudge path is called, and the one screen reading (§3.3a) is read-only.
+// file names (design note §3, §4). It needs no git, it reads, and it changes nothing but the two
+// leftovers the owner's `--repair` drops — a state record for a seat the file no longer declares, a
+// state record for a session herdr no longer runs: the file is resolved with `remember` false for
+// every caller, nothing of the watch's pass, report, readings or nudge path is called, and the
+// one screen reading (§3.3a) is read-only.
 //
 // The caller decides, not the flags. The walk classifies the caller before any target is opened,
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
@@ -10,7 +12,7 @@
 // and every caller detail among them (the two-phase rule, §4).
 import { join } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
-import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { blindDifferences } from '../commands/seats.ts';
 import { approvalCaseRow, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
@@ -22,6 +24,7 @@ import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
+import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
 import { rosterOf } from '../permissions/who.ts';
@@ -30,7 +33,7 @@ import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
 import { byName, ofTeam, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
-import { emptySession, liveHold, readState, type SessionState, type State } from '../state.ts';
+import { emptySession, liveHold, readState, seatOfFile, updateState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
 import { modelDiffers, seatModel } from '../status/statusline.ts';
@@ -39,8 +42,8 @@ import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen } from '../watch/screen.ts';
 
-/** The team check's own arguments: both flags are the owner's, and both are optional. */
-export type TeamCheckArgs = { session?: string; file?: string };
+/** The team check's own arguments: all three flags are the owner's, and all are optional. */
+export type TeamCheckArgs = { session?: string; file?: string; repair?: boolean };
 
 // What the check reads from outside the file and the state, so tests and the docs harness can
 // stand in for it: the same reads `status` makes, except that the live read is narrowed to the
@@ -55,6 +58,10 @@ export type CheckSources = {
   home?: string;
   /** The approved pane's read gate's own reads; the real ones when absent. */
   gate?: DelegateSources;
+  /** Whether herdr runs a session, for the state's sessions other than the one the check
+   *  addresses: a record for one it does not run is a leftover the check names and `--repair`
+   *  drops. Absent in a test that does not set one: no session is read as stale then. */
+  sessionRuns?(session: string): boolean | null;
 };
 
 /**
@@ -102,6 +109,7 @@ export const realCheckSources: CheckSources = {
   standing: realSources.standing,
   now: realSources.now,
   home: realSources.home,
+  sessionRuns: (name) => sessionRunning(name),
 };
 
 /**
@@ -140,6 +148,13 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       // exit: check.session-owner
       return 1;
     }
+    // `--repair` writes the state: the one act the check has, and the owner's alone, as the two
+    // aimed flags are.
+    if (args.repair === true) {
+      io.stderr("team check: --repair is the owner's\n");
+      // exit: check.repair-owner
+      return 1;
+    }
   }
   const { team, root, dir } = current;
   const session = owner ? (args.session ?? team.session) : team.session;
@@ -153,6 +168,24 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     io.stderr(`team check: ${error instanceof Error ? error.message : String(error)}\n`);
     // exit: check.state
     return 2;
+  }
+  // The state's leftovers, read before anything is compared: a record for a seat the file no
+  // longer declares, and a record for a session herdr no longer runs. They are named as
+  // differences below; with the owner's `--repair` they are dropped first, so the comparison runs
+  // on the state the file would have written. The file is the truth: nothing is ever guessed
+  // back into it.
+  let stale = staleState(team, session, whole, sources);
+  const repaired: string[] = [];
+  if (args.repair === true && (stale.seats.length > 0 || stale.sessions.length > 0)) {
+    // A write that fails throws, as every other command's state write does: the failure is
+    // `team.command-threw`'s, not a second reading of the state.
+    repaired.push(...dropStale(dir, session, stale));
+    for (const line of repaired) {
+      io.stdout(`repaired: ${line}\n`);
+      logLine(dir, 'check', callerLabel(walked), `repaired: ${line}`, sources.now());
+    }
+    whole = readState(dir);
+    stale = staleState(team, session, whole, sources);
   }
   const state = whole.sessions[session] ?? emptySession();
   const live = sources.live(session, team, state);
@@ -176,6 +209,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...approvalCaseRow(standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null),
     ...overrideDrift(overrides),
     ...rulesFileDifferences(standing, team, root, sources.home),
+    ...staleDifferences(stale),
     // A blind seat — unknown past the blind threshold — counts as not working, and is
     // a must-fix here exactly as it is in `team status`.
     ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir }),
@@ -201,9 +235,18 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // does not close are named here, never left to be discovered
   // (decided-grants-minimum-2026-10-17, "What 0.5.0 must not pretend").
   for (const line of NOT_PRETENDED) io.stdout(`${line}\n`);
-  // exit: check.findings
+  if (differences.length > 0) {
+    // exit: check.findings
+    return 1;
+  }
+  // The owner's own repair ran and left nothing to act on: the state now says what the file
+  // does, and the run ends as a clean check with the dropped records named above.
+  if (repaired.length > 0) {
+    // exit: check.repaired
+    return 0;
+  }
   // exit: check.ok
-  return differences.length > 0 ? 1 : 0;
+  return 0;
 }
 
 // The one sentence a caller that does not pass gets, whatever failed underneath it: it names no
@@ -212,6 +255,90 @@ function notYours(io: Io): number {
   io.stderr('team check: this team is not yours to check\n');
   // exit: check.not-yours
   return 2;
+}
+
+/** A state seat record the file no longer declares, with the pane it claims when it expects one. */
+type StaleSeat = { name: string; pane?: string };
+
+/** What the state keeps that the file does not: seats the file no longer declares (a temporary
+ *  seat excepted — the file never lists one), and sessions herdr no longer runs. */
+type Stale = { seats: StaleSeat[]; sessions: string[] };
+
+/**
+ * The state's leftovers, read against the file and herdr. The addressed session's seats are
+ * compared with the file's own: a record for a name the file no longer declares names no pane
+ * of this team's, and only a temporary seat — which the file never lists — keeps its record.
+ * The state's other sessions are read through herdr alone: one it does not run is a leftover.
+ * A session herdr cannot answer for is not named — a read that failed is not a finding.
+ */
+function staleState(team: TeamFile, session: string, whole: State, sources: CheckSources): Stale {
+  const declared = new Set(team.seats.map((seat) => seat.name));
+  const seats: StaleSeat[] = [];
+  for (const [name, seat] of Object.entries(whole.sessions[session]?.seats ?? {})) {
+    if (seatOfFile(name, seat, declared)) continue;
+    seats.push({ name, ...(seat.pane !== undefined ? { pane: seat.pane } : {}) });
+  }
+  const sessions: string[] = [];
+  for (const name of Object.keys(whole.sessions)) {
+    if (name === session) continue;
+    if (sources.sessionRuns?.(name) !== false) continue;
+    sessions.push(name);
+  }
+  return { seats, sessions };
+}
+
+/** One difference per leftover, the owner's to drop: the check names them and `--repair` is the
+ *  repair — never an edit of the file, and never a guess at which record is right. */
+function staleDifferences(stale: Stale): Difference[] {
+  const repair = 'drop its record from the state (team check --repair)';
+  const out: Difference[] = [];
+  for (const seat of stale.seats) {
+    out.push({
+      what: seat.pane === undefined
+        ? `${seat.name}: a state seat not in the file`
+        : `${seat.name}: a state seat not in the file claims pane ${seat.pane}`,
+      repair,
+      owner: true,
+    });
+  }
+  for (const name of stale.sessions) {
+    out.push({
+      what: `the state records the session "${name}", and herdr does not run it`,
+      repair,
+      owner: true,
+    });
+  }
+  return out;
+}
+
+/**
+ * The owner's repair: the leftovers `staleState` named, dropped from the state in one locked
+ * write, each one re-checked against the record now on disk — a temporary seat, or a record
+ * gone already, is left alone. The lines returned are the ones actually dropped, each printed
+ * as a `repaired:` line and written to the log; a write that fails throws, as every command's
+ * state write does.
+ */
+function dropStale(dir: string, session: string, stale: Stale): string[] {
+  return updateState(dir, (state) => {
+    const lines: string[] = [];
+    for (const name of stale.sessions) {
+      if (!Object.hasOwn(state.sessions, name)) continue;
+      delete state.sessions[name];
+      lines.push(`the state's session "${name}" is not running; its record is dropped`);
+    }
+    const current = state.sessions[session];
+    if (current !== undefined) {
+      for (const seat of stale.seats) {
+        const held = current.seats[seat.name];
+        if (held === undefined || held.temporary !== undefined) continue;
+        delete current.seats[seat.name];
+        lines.push(seat.pane === undefined
+          ? `${seat.name}: a state seat not in the file; its record is dropped`
+          : `${seat.name}: a state seat not in the file claimed pane ${seat.pane}; its record is dropped`);
+      }
+    }
+    return lines;
+  });
 }
 
 /**

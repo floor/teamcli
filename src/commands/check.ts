@@ -1,5 +1,5 @@
 // Two commands share this name through 0.3.3 (design note §2.3, §3). An invocation made only of
-// the team check's own options (`--session`, `--file`) — or of nothing at all — is the team check
+// the team check's own options (`--session`, `--file`, `--repair`) — or of nothing at all — is the team check
 // (`runTeamCheck`): is anything wrong with this team that someone should act on. Anything else —
 // a `<ref>`, `--pr`, `--since`, any other word or option — is the old spelling of `team commits
 // check` and `team pr check`: one notice line per half on stderr, then the shared run
@@ -14,10 +14,12 @@ import { runCommits, type CommitsRun } from './commits.ts';
 export { loadConfig };
 export type { LoadConfig };
 
-export const USAGE = `Usage: team check [--session <name>] [--file <path>]
+export const USAGE = `Usage: team check [--session <name>] [--file <path>] [--repair]
 
   --session <name>  the session to read; the file's own when absent
   --file <path>     the team file, instead of .agents/team.yaml
+  --repair          drop the state's leftovers: a record for a seat the file no longer
+                    declares, and one for a session herdr no longer runs
 
 Exits 0 when nothing needs acting on, 1 when something does, 2 when the check
 can't run.
@@ -53,20 +55,27 @@ Exits 0 when every commit passes, 1 when one is refused, 2 when the check
 can't run.
 `;
 
-// Every option either spelling names: the contract reads this list. Each spelling's parse reads
-// its own subset, hand-written here because the old spelling's refusals keep their exact bytes.
+// Every option either spelling names: the contract reads this list, and FLAG_OPTIONS beside it
+// for the switch that takes no value. Each spelling's parse reads its own subset, hand-written
+// here because the old spelling's refusals keep their exact bytes.
 const VALUE_OPTIONS = ['pr', 'since', 'session', 'file'] as const;
+// The team check's own switches: taken with no value, and only by the team check — the old
+// spelling meets `--repair` with its unknown-option refusal.
+const FLAG_OPTIONS = ['repair'] as const;
 type Option = (typeof VALUE_OPTIONS)[number];
+type FlagOption = (typeof FLAG_OPTIONS)[number];
 const OLD_OPTIONS: readonly Option[] = ['pr', 'since', 'file'];
 const NEW_OPTIONS: readonly Option[] = ['session', 'file'];
 
 interface Parsed {
   values: Partial<Record<Option, string>>;
+  flags: Set<FlagOption>;
   positional: string[];
 }
 
-function parse(argv: string[], options: readonly Option[]): Parsed | string {
+function parse(argv: string[], options: readonly Option[], flags: readonly FlagOption[]): Parsed | string {
   const values: Partial<Record<Option, string>> = {};
+  const taken = new Set<FlagOption>();
   const positional: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index] as string;
@@ -75,36 +84,44 @@ function parse(argv: string[], options: readonly Option[]): Parsed | string {
       continue;
     }
     const [name, inline] = argument.slice(2).split(/=(.*)/s, 2) as [string, string | undefined];
+    const flag = flags.find((known) => known === name);
+    if (flag) {
+      if (inline !== undefined) return `--${flag} takes no value`;
+      taken.add(flag);
+      continue;
+    }
     const option = options.find((known) => known === name);
     if (!option) return `unknown option ${argument}`;
     const value = inline ?? argv[++index];
     if (value === undefined || value === '') return `--${option} needs a value`;
     values[option] = value;
   }
-  return { values, positional };
+  return { values, flags: taken, positional };
 }
 
-// Which spelling the typed line is: the team check's when every argument is one of its own two
-// options, and the old spelling's for every other word or option.
+// Which spelling the typed line is: the team check's when every argument is one of its own
+// options or its switch, and the old spelling's for every other word or option.
 function spelledForTheTeam(argv: string[]): boolean {
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index] as string;
     if (!argument.startsWith('--')) return false;
     const name = argument.slice(2).split('=', 1)[0] as string;
-    if (name !== 'session' && name !== 'file') return false;
-    if (!argument.includes('=')) index += 1;
+    const valued = name === 'session' || name === 'file';
+    if (!valued && name !== 'repair') return false;
+    // Only a valued option takes the next word; `--repair` stands alone.
+    if (valued && !argument.includes('=')) index += 1;
   }
   return true;
 }
 
 type Dispatched =
-  | { kind: 'team'; args: { session?: string; file?: string } }
+  | { kind: 'team'; args: { session?: string; file?: string; repair?: boolean } }
   | { kind: 'commits'; args: CommitsRun }
   | { kind: 'refused'; text: string; usage: string };
 
 function dispatch(argv: string[]): Dispatched {
   const forTheTeam = spelledForTheTeam(argv);
-  const parsed = parse(argv, forTheTeam ? NEW_OPTIONS : OLD_OPTIONS);
+  const parsed = parse(argv, forTheTeam ? NEW_OPTIONS : OLD_OPTIONS, forTheTeam ? FLAG_OPTIONS : []);
   if (typeof parsed === 'string') return { kind: 'refused', text: parsed, usage: forTheTeam ? USAGE : OLD_USAGE };
   if (forTheTeam) {
     return {
@@ -112,6 +129,7 @@ function dispatch(argv: string[]): Dispatched {
       args: {
         ...(parsed.values.session !== undefined ? { session: parsed.values.session } : {}),
         ...(parsed.values.file !== undefined ? { file: parsed.values.file } : {}),
+        ...(parsed.flags.has('repair') ? { repair: true } : {}),
       },
     };
   }
