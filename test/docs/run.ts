@@ -23,6 +23,7 @@ import { runInit } from '../../src/commands/init.ts';
 import { runMcp } from '../../src/commands/mcp.ts';
 import { runRegister } from '../../src/commands/register.ts';
 import { runRemove } from '../../src/commands/remove.ts';
+import { runRename } from '../../src/commands/rename.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
@@ -251,6 +252,12 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRegister(rest, io, world.registerSources());
     case 'remove':
       return runRemove(rest, io, world.removeSources());
+    case 'rename':
+      return runRename(rest, io, {
+        home: fixture.home,
+        now: () => new Date(spec.now),
+        renameAgent: (_session, _pane, _name) => true,
+      });
     case 'restart':
       return runRestart(rest, io, world.restartSources());
     case 'send': {
