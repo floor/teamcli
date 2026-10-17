@@ -84,7 +84,8 @@ project <name>  <id>  entity <entity>  lead <lead>
 When `project.entity` is `null`, the `entity <entity>` segment is omitted (`project <name>  <id>  lead <lead>`). When `project.id` or `project.lead` is `null` or `undefined`, it renders as `-` (`lead -`). All interpolated values are cleaned with `plainLine` first.
 
 **Home-relative paths in human output (`displayPath(text, home)`)**:
-- Human-readable lines replace the user's `$HOME` prefix with `~` (e.g., `the lobby ~/.config/team/lobby`, `mcp ~/.config/team/lobbies/acme`), while `--json` documents retain full absolute paths.
+- Human-readable prose lines replace the user's `$HOME` prefix with `~` (e.g., `the lobby ~/.config/team/lobby`, `mcp ~/.config/team/lobbies/acme`, `+ record: <seat>: append the route to ~/.config/team/<project>-<id>/routes.jsonl`), while `--json` documents retain full absolute paths.
+- **Exemption for exact `herdr` command lines in `--dry-run` plans**: literal command lines printed by a `--dry-run` plan (`+ herdr …`, such as `add`'s `--cwd <home>/.config/team/lobby`) stay literal because they are exact commands a user may copy and run.
 
 ### 1.3 Tables and Column Headers
 

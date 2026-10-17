@@ -454,7 +454,7 @@ process.stdout.write(JSON.stringify(out));
 
         const humanCombined = `${entry!.human.stdout}${entry!.human.stderr}`;
         expect(humanCombined.trim().length, `${smokeCase.command} human non-empty`).toBeGreaterThan(0);
-        assertCleanHumanOutput(humanCombined, smokeCase.args.includes('--dry-run') ? undefined : { home });
+        assertCleanHumanOutput(humanCombined, { home });
       }
     } finally {
       rmSync(base, { recursive: true, force: true });

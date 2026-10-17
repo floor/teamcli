@@ -18,7 +18,8 @@ export function assertNoAnsi(text: string): void {
 /**
  * Assert that human-mode command output is free of HTML-escaped entities
  * (`&lt;`, `&gt;`, `&amp;`), `(s)` template plurals, `--    ` mystery prefix rows,
- * and raw `$HOME` paths (when `opts.home` is provided).
+ * and raw `$HOME` paths (when `opts.home` is provided; exact `+ herdr ` dry-run
+ * command lines are exempt because they are literal commands a user may copy).
  */
 export function assertCleanHumanOutput(text: string, opts?: { home?: string }): void {
   const plain = stripAnsi(text);
@@ -27,7 +28,11 @@ export function assertCleanHumanOutput(text: string, opts?: { home?: string }): 
   expect(plain).not.toContain('(es)');
   expect(plain).not.toMatch(/^--\s{2,}/m);
   if (opts?.home) {
-    expect(plain).not.toContain(opts.home);
+    const prose = plain
+      .split('\n')
+      .filter((line) => !line.startsWith('+ herdr '))
+      .join('\n');
+    expect(prose).not.toContain(opts.home);
   }
 }
 

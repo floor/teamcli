@@ -498,7 +498,7 @@ describe('route: the address the native channel answers', () => {
         `socket ${address} (live)\n` +
         'native yes\n' +
         'admitted by: the owner\n' +
-        `+ record: lead: append the route to ${target}\n` +
+        `+ record: lead: append the route to ~/.config/team/acme-${id}/routes.jsonl\n` +
         'dry run: nothing was run\n',
     );
     expect(existsSync(routesPath('acme', w.root, w.home))).toBe(false);
