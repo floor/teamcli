@@ -46,6 +46,7 @@ export type PolicyLoadRefusal =
       policy: string;
       why: string;
       message: string;
+      unsigned?: boolean;
     }
   | {
       kind: 'loosening';
@@ -55,6 +56,7 @@ export type PolicyLoadRefusal =
       lowerValue: PolicyValue;
       higherValue: PolicyValue;
       message: string;
+      unsigned?: boolean;
     };
 
 /** Effective resolved state of one policy across the chain. */
@@ -153,6 +155,7 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
     const level = POLICY_LEVELS[i]!;
     const levelDecls = declarations.filter((d) => d.level === level);
     for (const decl of levelDecls) {
+      const unsigned = decl.setter === null && !decl.signature;
       if (spec) {
         if (!spec.levels.includes(level)) {
           refusals.push({
@@ -161,6 +164,7 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
             policy: name,
             why: `policy "${name}" may not be set at level ${level}`,
             message: `${level}: policy "${name}" may not be set at level ${level} (allowed: ${spec.levels.join(', ')})`,
+            ...(unsigned ? { unsigned: true } : {}),
           });
           continue;
         }
@@ -171,6 +175,7 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
             policy: name,
             why: `policy "${name}" is ${spec.kind}, not ${decl.kind}`,
             message: `${level}: policy "${name}" has kind ${spec.kind}, not ${decl.kind}`,
+            ...(unsigned ? { unsigned: true } : {}),
           });
           continue;
         }
@@ -184,6 +189,7 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
             policy: name,
             why,
             message: `${level}: ${why}`,
+            ...(unsigned ? { unsigned: true } : {}),
           });
           continue;
         }
@@ -194,6 +200,7 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
             policy: name,
             why: `invalid expiry "${decl.expiry}" for policy "${name}"`,
             message: `${level}: invalid expiry "${decl.expiry}" for policy "${name}"`,
+            ...(unsigned ? { unsigned: true } : {}),
           });
           continue;
         }
@@ -218,6 +225,7 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
               lowerValue: normalizedDecl.value,
               higherValue: activeDeclaration.value,
               message: `policy "${name}" at level ${level} ("${formatPolicyValue(normalizedDecl.value)}") loosens level ${activeDeclaration.level} ("${formatPolicyValue(activeDeclaration.value)}")`,
+              ...(unsigned ? { unsigned: true } : {}),
             });
             continue;
           }
@@ -238,6 +246,7 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
             lowerValue: decl.value,
             higherValue: activeDeclaration.value,
             message: `policy "${name}" at level ${level} ("${formatPolicyValue(decl.value)}") loosens level ${activeDeclaration.level} ("${formatPolicyValue(activeDeclaration.value)}")`,
+            ...(unsigned ? { unsigned: true } : {}),
           });
           continue;
         }
