@@ -13,7 +13,7 @@ import { setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { findAgent, readAgents, updateAgent } from '../src/registry/agents.ts';
 import { get as getProject, projectIdOf, readProjects } from '../src/registry/projects.ts';
-import { getTeam, teamIdOf, teamsFile } from '../src/registry/teams.ts';
+import { getTeam, setRoster, teamIdOf, teamsFile } from '../src/registry/teams.ts';
 import { readState, STATE_FILE } from '../src/state.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
@@ -148,6 +148,36 @@ describe('registering a seat the pane already holds ready', () => {
     // `project_lead: true`: the project's lead is the agent of the seat the file marks as its
     // lead, re-resolved from the file on the refresh run.
     expect(project?.lead).toBe(recordOf(w)?.id);
+  });
+
+  test('a seat held ready and missing from the roster gets its line', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+    const held = recordOf(w);
+    expect(held).toBeDefined();
+    // The record lost the seat's line after the launch — a registry that never got it, the case
+    // operator-3's P1 named — while the state still holds the seat ready on the pane.
+    setRoster(w.home, teamId(w), []);
+    expect(getTeam(w.home, teamId(w))?.roster).toEqual([]);
+    const state = readFileSync(join(w.dir, STATE_FILE), 'utf8');
+
+    const second = await register(w, ['lead']);
+
+    expect(second.code).toBe(0);
+    // The run names the gap the check names: the roster did not list the seat, and the line a
+    // launch writes was written — the merged path's own words for the case.
+    expect(second.out).toContain("the team registry's roster did not list it, and was written");
+    // The line the launch's own write would have made: the same agent, the file's role, and the
+    // lead's capability re-resolved to the file's lead seat.
+    expect(getTeam(w.home, teamId(w))?.roster).toEqual([
+      { agent: held!.id, seat: 'lead', role: 'coordinator', leads: true },
+    ]);
+    expect(readFileSync(teamsFile(w.home), 'utf8')).toContain(
+      `- { agent: ${held!.id}, seat: lead, role: coordinator, leads: true }`,
+    );
+    expect(recordOf(w)?.id).toBe(held?.id);
+    // Nothing relaunched: the session's own record stands as it was.
+    expect(readFileSync(join(w.dir, STATE_FILE), 'utf8')).toBe(state);
   });
 
   test('--dry-run says what would be refreshed and writes nothing', async () => {

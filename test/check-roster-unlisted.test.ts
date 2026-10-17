@@ -242,16 +242,24 @@ describe('the repair the check names writes the roster line', () => {
     expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('lead: roster line written — pane w1:p1');
   });
 
-  test('the line once written, a second run leaves the bytes where they were', async () => {
+  test('the line once written, a second run re-records the same content, the stamp the only move', async () => {
     const w = world();
     ready(w);
     record(w);
     await register(w, ['lead']);
-    const before = readFileSync(teamsFile(w.home), 'utf8');
+    const id = teamIdOf(w.root);
+    const sansStamp = (): Record<string, unknown> => {
+      const { provenance: _stamp, ...rest } = getTeam(w.home, id)!;
+      return rest;
+    };
+    const before = sansStamp();
     const second = await register(w, ['lead']);
     expect(second.code).toBe(0);
-    expect(second.out).toContain('lead: already registered — pane w1:p1; nothing was written');
-    expect(readFileSync(teamsFile(w.home), 'utf8')).toBe(before);
+    // The merged path re-records from the file on every run: the second run says so, and what
+    // stands is what stood — the roster line among it — with only the write's own provenance
+    // stamp moving, as every launch's write moves it.
+    expect(second.out).toContain('lead: already registered — pane w1:p1; the record was refreshed from the file, nothing relaunched');
+    expect(sansStamp()).toEqual(before);
   });
 
   test('--dry-run says what would be written and writes no registry at all', async () => {
