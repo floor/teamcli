@@ -150,7 +150,12 @@ describe('team next', () => {
     expect(lease()).toMatchObject({ format: 1, id: 'm1', seat: 'lead', pane: 'w1:p1' });
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(0);
-    expect(listed.out).toBe('m1  the task title\n');
+    expect(listed.out).toBe(
+      'team acme, session "acme"\n' +
+        '  ID  STATE  ASSIGNEE  TITLE\n' +
+        '  m1  open   -         the task title\n' +
+        '1 issue(s)\n',
+    );
   });
 
   test('team plan is a command, and the owner is refused', async () => {
@@ -272,7 +277,7 @@ describe('team next', () => {
     expect(leaseNames()).toEqual([]);
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(0);
-    expect(listed.out).toContain('blocked-by: m0');
+    expect(listed.out).toContain('m1  blocked  -         the task title');
     list('- id: m1\n  title: the task title\n  blocked-by: []\n');
     expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
 
@@ -280,8 +285,8 @@ describe('team next', () => {
     expect(await run()).toEqual({ code: 0, out: 'team next: nothing is takeable\n', err: '' });
     const shown = testIo(root);
     expect(await runIssues([], shown, { home })).toBe(0);
-    expect(shown.out).toContain('repos: other');
-    expect(shown.out).toContain('needs: review');
+    expect(shown.out).toContain('m1  blocked');
+    expect(shown.out).toContain('m2  blocked');
   });
 
   test('an expired lease can be taken, a live one renews, and release frees the next id', async () => {
@@ -319,7 +324,12 @@ describe('team next', () => {
     expect(Date.parse(renewed.until)).toBe(Date.parse(first.until) + 1000);
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(1);
-    expect(listed.out).toBe(block);
+    expect(listed.out).toBe(
+      'team acme, session "acme"\n' +
+        '  ID  STATE  ASSIGNEE  TITLE\n' +
+        '  m1  open   -         first version\n' +
+        '1 issue(s)\n',
+    );
     expect(listed.err).toBe('team issues: m1 is not a task: its id repeats an earlier record\n');
     expect(await run(['--release'])).toEqual({ code: 0, out: 'team next: released m1\n', err: '' });
     expect(leaseNames()).toEqual([]);
