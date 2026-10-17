@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { readState, updateState } from '../state.ts';
 import { loadTeamFile } from './load.ts';
-import type { Problem, TeamFile } from './types.ts';
+import type { Deprecation, Problem, TeamFile } from './types.ts';
 import { validateTeamFile } from './validate.ts';
 
 // The team as the commands that must keep working read it: `status`, `watch`, `down`. A valid
@@ -13,7 +13,17 @@ import { validateTeamFile } from './validate.ts';
 // anywhere, so the command passes the walk's verdict as `remember` and everything else here —
 // the load, the fallback, the notice — is a read either way.
 export type Current =
-  | { ok: true; team: TeamFile; root: string; dir: string; warnings: Problem[]; notice?: string; path?: string }
+  | {
+      ok: true;
+      team: TeamFile;
+      root: string;
+      dir: string;
+      warnings: Problem[];
+      /** Deprecated fields the file still reads; only `team check` prints them. */
+      deprecations?: Deprecation[];
+      notice?: string;
+      path?: string;
+    }
   | { ok: false; errors: Problem[] };
 
 export function currentTeam(
@@ -34,7 +44,7 @@ export function currentTeam(
   if (loaded.ok) {
     const dir = dirname(loaded.path);
     if (remember) rememberLastValid(dir, loaded.path, now);
-    return { ok: true, team: loaded.team, root: loaded.root, dir, warnings: loaded.warnings, path: loaded.path };
+    return { ok: true, team: loaded.team, root: loaded.root, dir, warnings: loaded.warnings, deprecations: loaded.deprecations ?? [], path: loaded.path };
   }
   if (!loaded.path || !existsSync(loaded.path)) return { ok: false, errors: loaded.errors };
   const dir = dirname(loaded.path);

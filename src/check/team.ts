@@ -11,7 +11,7 @@
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, isAbsolute, relative } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { blindDifferences } from '../commands/seats.ts';
@@ -219,6 +219,13 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
   ]);
   const differences = comparison.differences;
+  // A deprecated field the file still reads: the check is the one command that names it, with
+  // the repair its record carries. It is not a difference and does not change the exit — the
+  // file works, it just carries a key this build no longer acts on.
+  const shown = shownTeamFile(current.path, root);
+  for (const deprecation of current.deprecations ?? []) {
+    io.stdout(`warning: team.yaml line ${deprecation.line}: ${deprecation.message}; repair: ${deprecation.repair.replace('{file}', shown)}\n`);
+  }
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
   for (const note of delegateNotes(team)) io.stdout(`note: ${note}\n`);
@@ -259,6 +266,14 @@ function notYours(io: Io): number {
   io.stderr('team check: this team is not yours to check\n');
   // exit: check.not-yours
   return 2;
+}
+
+/** The team file as a repair names it: `.agents/team.yaml` under the root the load found, or
+ *  the path itself when `--file` aimed the run at another folder. */
+function shownTeamFile(path: string | undefined, root: string): string {
+  if (path === undefined) return TEAM_FILE;
+  const rel = relative(root, path);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) ? rel : path;
 }
 
 /** A state seat record the file no longer declares, with the pane it claims when it expects one. */

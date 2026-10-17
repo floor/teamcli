@@ -37,8 +37,14 @@ export function validateTeamFile(text: string, options: { home?: string; fs?: Fs
   // Warnings read in file order, as errors do: secrets are pushed before the sections run and
   // the sections push in the order they run, so without this a warning late in the file can
   // print before one written above it. Sorting is stable, so two warnings on one line keep
-  // the order they were pushed in.
-  return { ok: true, team, warnings: check.warnings.sort((a, b) => a.line - b.line) };
+  // the order they were pushed in. Deprecations keep the same order, for the same reason: the
+  // check prints them in the order the file writes them.
+  return {
+    ok: true,
+    team,
+    warnings: check.warnings.sort((a, b) => a.line - b.line),
+    deprecations: check.deprecations.sort((a, b) => a.line - b.line),
+  };
 }
 
 function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, rootDir?: string): TeamFile | null {

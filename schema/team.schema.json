@@ -51,6 +51,10 @@
       },
       "$comment": "absolute paths the seats may work in, including the team's lobby (the default ~/.config/team/lobby) and the project root"
     },
+    "dialogs": {
+      "deprecated": true,
+      "$comment": "the 0.4 line's trust-dialog setting: read and ignored, and it grants nothing — trust answering is the owner's team grant"
+    },
     "limits": {
       "type": "object",
       "additionalProperties": false,

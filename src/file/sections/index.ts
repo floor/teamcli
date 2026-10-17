@@ -5,6 +5,7 @@ import { projectLead } from './project_lead.ts';
 import { entity } from './entity.ts';
 import { lobby } from './lobby.ts';
 import { trust } from './trust.ts';
+import { dialogs } from './dialogs.ts';
 import { limits } from './limits.ts';
 import { machine } from './machine.ts';
 import { rules } from './rules.ts';
@@ -49,6 +50,10 @@ export const SECTIONS: readonly Section[] = [
   entity,
   lobby,
   trust,
+  // The 0.4 line's trust-dialog setting, kept as a known deprecated field: read and ignored, so
+  // it grants nothing and changes no approval digest. It runs without an `after` and its report
+  // is printed by `team check` alone.
+  dialogs,
   limits,
   machine,
   rules,

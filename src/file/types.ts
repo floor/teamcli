@@ -5,6 +5,13 @@ import type { Delegates } from '../delegate-types.ts';
 import type { DeliveryLeg } from '../settings/inherit.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
+/**
+ * A field the file still reads and no longer acts on. Kept apart from `warnings`, which every
+ * command that loads the file prints: a deprecation is printed by `team check` alone, with the
+ * repair its record carries.
+ */
+export type Deprecation = { line: number; message: string; repair: string };
+
 /** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation.
  *  `swap` lets the granted seat stop another lead seat for a replacement (`team remove <lead>
  *  --keep`, then `team add <lead>`); never its own seat. */
@@ -242,9 +249,9 @@ export type TeamFile = {
 };
 
 export type ValidateResult =
-  | { ok: true; team: TeamFile; warnings: Problem[] }
+  | { ok: true; team: TeamFile; warnings: Problem[]; deprecations: Deprecation[] }
   | { ok: false; errors: Problem[] };
 
 export type LoadResult =
-  | { ok: true; team: TeamFile; root: string; path: string; warnings: Problem[]; text: string }
+  | { ok: true; team: TeamFile; root: string; path: string; warnings: Problem[]; deprecations?: Deprecation[]; text: string }
   | { ok: false; errors: Problem[]; path?: string };

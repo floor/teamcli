@@ -1,11 +1,13 @@
 import type { YamlEntry, YamlNode } from '../yaml.ts';
-import type { Problem } from './types.ts';
+import type { Deprecation, Problem } from './types.ts';
 
 export type Fields = Map<string, YamlEntry>;
 
 export class Check {
   problems: Problem[] = [];
   warnings: Problem[] = [];
+  /** Fields the file still reads and no longer acts on; `team check` prints them, nothing else. */
+  deprecations: Deprecation[] = [];
 
   fail(line: number, message: string): void {
     this.problems.push({ line, message });
